@@ -245,6 +245,7 @@ const getDefaultEquipmentCreateForm = (bodyOfWaterId = '') => ({
     manualPdfLink: '',
     dateInstalled: '',
     cleanFilterPressure: '',
+    lastServiceDate: '',
     needsService: false,
     serviceFrequency: '6',
     serviceFrequencyEvery: 'Month',
@@ -259,12 +260,13 @@ const isActiveEquipment = (equipment = {}) => (
 const applyEquipmentDefaults = (current = {}, next = {}) => {
     const merged = { ...current, ...next };
     const shouldDefaultNeedsService = equipmentDefaultsToNeedsService(merged);
+    const shouldHaveServiceSchedule = shouldDefaultNeedsService || merged.needsService;
 
     return {
         ...merged,
         needsService: shouldDefaultNeedsService ? true : merged.needsService,
-        serviceFrequency: shouldDefaultNeedsService && !merged.serviceFrequency ? '6' : merged.serviceFrequency,
-        serviceFrequencyEvery: shouldDefaultNeedsService && !merged.serviceFrequencyEvery ? 'Month' : merged.serviceFrequencyEvery,
+        serviceFrequency: shouldHaveServiceSchedule && !merged.serviceFrequency ? '6' : merged.serviceFrequency,
+        serviceFrequencyEvery: shouldHaveServiceSchedule && !merged.serviceFrequencyEvery ? 'Month' : merged.serviceFrequencyEvery,
     };
 };
 
@@ -1676,7 +1678,7 @@ const ServiceLocationsTab = ({ customer }) => {
     const selectedLocationPhotos = Array.isArray(selectedLocation?.photoUrls) ? selectedLocation.photoUrls : [];
 
     return (
-        <div className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] lg:items-start lg:gap-5">
+        <div className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[minmax(440px,560px)_minmax(0,1fr)] lg:items-start lg:gap-5">
             <div className="space-y-3 sm:space-y-4">
                 <InfoCard
                     title="Service Locations"
@@ -2282,6 +2284,15 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             equipmentEditForm.serviceFrequencyEvery
         ));
     }, [equipmentEditForm]);
+    const equipmentCreateNextServiceDate = useMemo(() => {
+        if (!equipmentCreateForm.needsService) return '';
+
+        return toDateInputValue(computeNextEquipmentServiceDate(
+            dateInputToLocalDate(equipmentCreateForm.lastServiceDate),
+            equipmentCreateForm.serviceFrequency,
+            equipmentCreateForm.serviceFrequencyEvery
+        ));
+    }, [equipmentCreateForm]);
     const equipmentCreateIsFilter = useMemo(
         () => isFilterEquipment(equipmentCreateForm),
         [equipmentCreateForm]
@@ -2391,10 +2402,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
     };
 
     const updateEquipmentCreateField = (field, value) => {
-        setEquipmentCreateForm((current) => ({
-            ...current,
-            [field]: value,
-        }));
+        setEquipmentCreateForm((current) => applyEquipmentDefaults(current, { [field]: value }));
     };
 
     const copyCatalogPartsToEquipment = async (equipmentId, catalogEquipmentId, equipmentData) => {
@@ -2463,6 +2471,24 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         const customerName = getCustomerName(customer) || location.customerName || '';
         const finalNeedsService = equipmentCreateForm.needsService || equipmentDefaultsToNeedsService(equipmentCreateForm);
         const finalIsFilter = isFilterEquipment(equipmentCreateForm);
+        const lastServiceDate = finalNeedsService ? dateInputToLocalDate(equipmentCreateForm.lastServiceDate) : null;
+        const nextServiceDate = finalNeedsService
+            ? computeNextEquipmentServiceDate(
+                lastServiceDate,
+                equipmentCreateForm.serviceFrequency,
+                equipmentCreateForm.serviceFrequencyEvery
+            )
+            : null;
+
+        if (finalNeedsService && !lastServiceDate) {
+            toast.error('Add a last service date before saving equipment that needs service.');
+            return;
+        }
+
+        if (finalNeedsService && (!Number.isFinite(numericServiceFrequency) || numericServiceFrequency <= 0 || !equipmentCreateForm.serviceFrequencyEvery || !nextServiceDate)) {
+            toast.error('Add a valid service frequency so the next service date can be calculated.');
+            return;
+        }
 
         const equipmentId = "com_equ_" + uuidv4();
         const newEquipment = {
@@ -2482,17 +2508,15 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             cleanFilterPressure: !finalIsFilter || equipmentCreateForm.cleanFilterPressure === '' || !Number.isFinite(numericCleanFilterPressure)
                 ? null
                 : numericCleanFilterPressure,
-            serviceFrequency: finalNeedsService && equipmentCreateForm.serviceFrequency !== '' && Number.isFinite(numericServiceFrequency)
-                ? numericServiceFrequency
-                : null,
+            serviceFrequency: finalNeedsService ? numericServiceFrequency : null,
             serviceFrequencyEvery: finalNeedsService ? equipmentCreateForm.serviceFrequencyEvery || 'Month' : null,
             notes: equipmentCreateForm.notes,
             customerId,
             customerName,
             serviceLocationId: location.id,
             bodyOfWaterId: selectedBodyOfWater?.id || '',
-            lastServiceDate: null,
-            nextServiceDate: null,
+            lastServiceDate,
+            nextServiceDate,
             isActive: true,
             active: true,
             dateUninstalled: null,
@@ -2546,10 +2570,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
     };
 
     const updateEquipmentEditField = (field, value) => {
-        setEquipmentEditForm((current) => ({
-            ...current,
-            [field]: value,
-        }));
+        setEquipmentEditForm((current) => applyEquipmentDefaults(current, { [field]: value }));
     };
 
     const handleSaveEquipmentEdit = async (event) => {
@@ -2562,13 +2583,24 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         const lastServiceDate = dateInputToLocalDate(equipmentEditForm.lastServiceDate);
         const finalNeedsService = equipmentEditForm.needsService || equipmentDefaultsToNeedsService(equipmentEditForm);
         const finalIsFilter = isFilterEquipment(equipmentEditForm);
+        const numericServiceFrequency = Number(equipmentEditForm.serviceFrequency);
         const nextServiceDate = finalNeedsService
             ? computeNextEquipmentServiceDate(
                 lastServiceDate,
-                equipmentEditForm.serviceFrequency,
+                numericServiceFrequency,
                 equipmentEditForm.serviceFrequencyEvery
             )
             : null;
+
+        if (finalNeedsService && !lastServiceDate) {
+            toast.error('Add a last service date before saving equipment that needs service.');
+            return;
+        }
+
+        if (finalNeedsService && (!Number.isFinite(numericServiceFrequency) || numericServiceFrequency <= 0 || !equipmentEditForm.serviceFrequencyEvery || !nextServiceDate)) {
+            toast.error('Add a valid service frequency so the next service date can be calculated.');
+            return;
+        }
 
         const equipmentUpdates = {
             type: equipmentEditForm.type,
@@ -2590,9 +2622,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             isActive: equipmentEditForm.isActive,
             active: equipmentEditForm.isActive,
             needsService: finalNeedsService,
-            serviceFrequency: finalNeedsService && equipmentEditForm.serviceFrequency !== ''
-                ? Number(equipmentEditForm.serviceFrequency)
-                : null,
+            serviceFrequency: finalNeedsService ? numericServiceFrequency : null,
             serviceFrequencyEvery: finalNeedsService ? equipmentEditForm.serviceFrequencyEvery || '' : '',
             status: equipmentEditForm.status,
             notes: equipmentEditForm.notes,
@@ -3351,29 +3381,54 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
 	                                </label>
 
 	                                {equipmentCreateForm.needsService && (
-	                                    <label className="space-y-1 text-xs font-semibold text-slate-600 md:col-span-2">
-	                                        Service Frequency
-	                                        <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
-	                                            <input
-	                                                type="number"
-	                                                min="1"
-	                                                value={equipmentCreateForm.serviceFrequency}
-	                                                onChange={(event) => updateEquipmentCreateField('serviceFrequency', event.target.value)}
-	                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-	                                            />
-	                                            <select
-	                                                value={equipmentCreateForm.serviceFrequencyEvery}
-	                                                onChange={(event) => updateEquipmentCreateField('serviceFrequencyEvery', event.target.value)}
-	                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-	                                            >
-	                                                <option value="Day">Days</option>
-	                                                <option value="Week">Weeks</option>
-	                                                <option value="Month">Months</option>
-	                                                <option value="Year">Years</option>
-	                                            </select>
-	                                        </div>
-	                                    </label>
-	                                )}
+		                                    <>
+		                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+		                                            Last Service Date
+		                                            <input
+		                                                type="date"
+		                                                value={equipmentCreateForm.lastServiceDate}
+		                                                onChange={(event) => updateEquipmentCreateField('lastServiceDate', event.target.value)}
+		                                                required
+		                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+		                                            />
+		                                        </label>
+
+		                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+		                                            Next Service Date
+		                                            <input
+		                                                type="date"
+		                                                value={equipmentCreateNextServiceDate}
+		                                                readOnly
+		                                                className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-700"
+		                                            />
+		                                        </label>
+
+		                                        <label className="space-y-1 text-xs font-semibold text-slate-600 md:col-span-2">
+		                                            Service Frequency
+		                                            <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+		                                                <input
+		                                                    type="number"
+		                                                    min="1"
+		                                                    value={equipmentCreateForm.serviceFrequency}
+		                                                    onChange={(event) => updateEquipmentCreateField('serviceFrequency', event.target.value)}
+		                                                    required
+		                                                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+		                                                />
+		                                                <select
+		                                                    value={equipmentCreateForm.serviceFrequencyEvery}
+		                                                    onChange={(event) => updateEquipmentCreateField('serviceFrequencyEvery', event.target.value)}
+		                                                    required
+		                                                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+		                                                >
+		                                                    <option value="Day">Days</option>
+		                                                    <option value="Week">Weeks</option>
+		                                                    <option value="Month">Months</option>
+		                                                    <option value="Year">Years</option>
+		                                                </select>
+		                                            </div>
+		                                        </label>
+		                                    </>
+		                                )}
 
 	                                <label className="space-y-1 text-xs font-semibold text-slate-600 md:col-span-3">
 	                                    Notes
@@ -3544,6 +3599,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                                 type="date"
                                                 value={equipmentEditForm.lastServiceDate}
                                                 onChange={(event) => updateEquipmentEditField('lastServiceDate', event.target.value)}
+                                                required
                                                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                             />
                                         </label>
@@ -3562,9 +3618,10 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                             Service Frequency
                                             <input
                                                 type="number"
-                                                min="0"
+                                                min="1"
                                                 value={equipmentEditForm.serviceFrequency}
                                                 onChange={(event) => updateEquipmentEditField('serviceFrequency', event.target.value)}
+                                                required
                                                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                             />
                                         </label>
@@ -3574,6 +3631,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                             <select
                                                 value={equipmentEditForm.serviceFrequencyEvery}
                                                 onChange={(event) => updateEquipmentEditField('serviceFrequencyEvery', event.target.value)}
+                                                required
                                                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                             >
                                                 <option value="">Select</option>

@@ -10,6 +10,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
+import { COMPANY_WIDE_MESSAGES_PERMISSION_ID } from '../../../utils/companyPermissions';
 import {
   getChatAvatarText,
   getChatAudienceLabel,
@@ -32,6 +33,8 @@ const ChatConversationView = ({ audience = 'company', backPath = '/companies-cha
     dataBaseUser,
     recentlySelectedCompany,
     recentlySelectedCompanyName,
+    companyRoleLoaded,
+    hasCompanyPermission,
   } = useContext(Context);
   const [chat, setChat] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -41,10 +44,17 @@ const ChatConversationView = ({ audience = 'company', backPath = '/companies-cha
   const [isModalOpen, setIsModalOpen] = useState(false);
   const messagesEndRef = useRef(null);
   const companyId = audience === 'company' ? recentlySelectedCompany : '';
+  const includeCompanyWide = audience === 'company'
+    && companyRoleLoaded
+    && hasCompanyPermission(COMPANY_WIDE_MESSAGES_PERMISSION_ID);
 
   useEffect(() => {
     if (!chatId || !user?.uid) {
       navigate(backPath);
+      return undefined;
+    }
+
+    if (companyId && !companyRoleLoaded) {
       return undefined;
     }
 
@@ -57,7 +67,7 @@ const ChatConversationView = ({ audience = 'company', backPath = '/companies-cha
       }
 
       const chatData = { id: snapshot.id, ...snapshot.data() };
-      if (!isChatVisibleTo(chatData, user.uid, companyId)) {
+      if (!isChatVisibleTo(chatData, user.uid, companyId, { includeCompanyWide })) {
         console.error('You are not a participant in this chat.');
         navigate(backPath);
         return;
@@ -80,7 +90,7 @@ const ChatConversationView = ({ audience = 'company', backPath = '/companies-cha
     });
 
     return () => unsubscribe();
-  }, [audience, backPath, chatId, companyId, navigate, user]);
+  }, [audience, backPath, chatId, companyId, companyRoleLoaded, includeCompanyWide, navigate, user]);
 
   useEffect(() => {
     if (!chatId || !user?.uid) return undefined;

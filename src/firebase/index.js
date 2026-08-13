@@ -27,7 +27,7 @@ const useProductionFirebase = ['production', 'prod'].includes(requestedFirebaseE
 const firebaseEnvironment = useProductionFirebase ? 'production' : 'development';
 const firebaseConfig = useProductionFirebase ? prodConfig : devConfig;
 const useFirebaseEmulators = process.env.REACT_APP_USE_FIREBASE_EMULATORS === 'true';
-const usePersistentFirestoreCache = process.env.REACT_APP_FIRESTORE_PERSISTENT_CACHE === 'true';
+const usePersistentFirestoreCache = process.env.REACT_APP_FIRESTORE_PERSISTENT_CACHE !== 'false';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);

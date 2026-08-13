@@ -7,6 +7,7 @@ import { normalizeEmail } from "../utils/email";
 import { isCompanyAccessInactive } from "../utils/invites";
 import { FIREBASE_NETWORK_FALLBACK_MS, isFirebaseNetworkError } from "../utils/firebaseNetwork";
 import { normalizeCustomerTag } from "../utils/customerTags";
+import { normalizeAccountType } from "../utils/accountTypes";
 
 export const Context = createContext();
 
@@ -135,14 +136,19 @@ export function AuthContext({ children }) {
                     console.log("currentUser.uid ", currentUser.uid)
                     if (docSnap.exists()) {
                         const dbUser = docSnap.data();
-                        setDataBaseUser(dbUser);
-                        setAccountType(dbUser.accountType);
-                        setRole(dbUser.accountType);
+                        const normalizedAccountType = normalizeAccountType(dbUser.accountType);
+                        const appUser = {
+                            ...dbUser,
+                            accountType: normalizedAccountType || dbUser.accountType || null,
+                        };
+                        setDataBaseUser(appUser);
+                        setAccountType(normalizedAccountType);
+                        setRole(normalizedAccountType);
                         setName(`${dbUser.firstName} ${dbUser.lastName}`);
                         setPhotoUrl(dbUser.photoUrl);
                         setStripeId(getStripeCustomerId(dbUser));
 
-                        if (dbUser.accountType === 'Company') {
+                        if (normalizedAccountType === 'Company') {
                             setRecentlySelectedCompany(dbUser.recentlySelectedCompany);
 
                             if (dbUser.recentlySelectedCompany) {

@@ -103,6 +103,7 @@ const RecurringServiceStopDetails = () => {
 
   const [newTask, setNewTask] = useState({
     name: "",
+    description: "",
     type: "",
     contractedRate: "",
     estimatedTime: "",
@@ -764,6 +765,7 @@ const RecurringServiceStopDetails = () => {
   const resetNewTaskForm = () => {
     setNewTask({
       name: "",
+      description: "",
       type: "",
       contractedRate: "",
       estimatedTime: "",
@@ -914,10 +916,50 @@ const RecurringServiceStopDetails = () => {
       ? "Manual"
       : "Default";
   const durationActionInProgress = Boolean(durationAction);
+  const CompactServiceStopSection = ({ title, subtitle, stops, emptyMessage }) => (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div>
+        <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+        <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+      </div>
+
+      <div className="mt-4 max-h-[28rem] overflow-y-auto rounded-md border border-slate-200 bg-white">
+        {stops?.length ? (
+          stops.map((serviceStop) => (
+            <button
+              key={serviceStop.id}
+              type="button"
+              onClick={() => navigate(`/company/serviceStops/detail/${serviceStop.id}`)}
+              className="block w-full border-b border-slate-100 px-3 py-3 text-left transition last:border-b-0 hover:bg-slate-50"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">
+                    {serviceStop.internalId || "—"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">{serviceStop.date || "N/A"}</p>
+                </div>
+                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                  {serviceStop.operationStatus || "Scheduled"}
+                </span>
+              </div>
+              <p className="mt-2 truncate text-xs font-medium text-slate-600">
+                {serviceStop.tech || "Unassigned"}
+              </p>
+            </button>
+          ))
+        ) : (
+          <div className="px-3 py-5 text-sm text-slate-500">
+            {emptyMessage}
+          </div>
+        )}
+      </div>
+    </section>
+  );
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+      <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
         <div className="max-w-screen-xl mx-auto">
           <div className="bg-white shadow-lg rounded-xl p-6">
             <div className="animate-pulse space-y-4">
@@ -932,554 +974,446 @@ const RecurringServiceStopDetails = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <Link
-              to="/company/recurringServiceStop"
-              className="app-back-link"
-            >
-              &larr; Back to Recurring Service Stops
-            </Link>
-            <h1 className="text-3xl font-bold text-gray-800">Recurring Service Stop Detail</h1>
-            <p className="text-gray-600 mt-1">
-              <span className="font-semibold text-gray-800">
-                {recurringServiceStop.internalId || "—"}
-              </span>{" "}
-              <span className="text-gray-400">•</span>{" "}
-              {recurringServiceStop.customerName || "—"}
-            </p>
-          </div>
-
-          {!edit ? (
-            <div className="flex items-center gap-2">
-              <ShareItemButton
-                type="recurringServiceStop"
-                recordId={recurringServiceStopId}
-                title={recurringServiceStop.type || recurringServiceStop.serviceStopType || "Recurring Service Stop"}
-                subtitle={[recurringServiceStop.customerName, recurringServiceStop.internalId, recurringServiceStop.frequency].filter(Boolean).join(" - ")}
-                companyId={recentlySelectedCompany}
-                customerId={recurringServiceStop.customerId}
-                collectionPath={`companies/${recentlySelectedCompany}/recurringServiceStop`}
-                webPath={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
-              />
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-5">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
               <Link
                 to="/company/recurringServiceStop"
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl shadow-sm hover:bg-gray-100 transition"
+                className="app-back-link"
               >
-                Back
+                &larr; Back to Recurring Service Stops
               </Link>
-              <button
-                onClick={editRSS}
-                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-              >
-                Edit
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={saveEdits}
-                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-              >
-                Save
-              </button>
-              <button
-                onClick={cancelEdit}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl shadow-sm hover:bg-gray-100 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={deleteRSS}
-                className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
-              >
-                Delete
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="bg-white shadow-lg rounded-xl p-6">
-          <div className="flex items-start justify-between gap-4 mb-4">
-            <div>
-              <h2 className="text-xl font-bold text-gray-800">Details</h2>
-              <p className="text-sm text-gray-600">Core recurring stop information</p>
+              <h1 className="text-3xl font-bold text-slate-950">Recurring Service Stop Detail</h1>
+              <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                <span className="font-semibold text-slate-900">
+                  {recurringServiceStop.internalId || "—"}
+                </span>{" "}
+                <span className="text-slate-400">•</span>{" "}
+                {recurringServiceStop.customerName || "—"}
+              </p>
             </div>
 
-            <button
-              onClick={openInMaps}
-              className="py-2 px-4 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition"
-              title="Open in Google Maps"
-            >
-              Open in Maps
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <Field label="Internal Id" value={recurringServiceStop.internalId} />
-            <Field label="Customer" value={recurringServiceStop.customerName} />
-            <Field label="Street Address" value={recurringServiceStop.streetAddress} />
-            <Field label="Tech" value={recurringServiceStop.tech} />
-            <Field label="Start Date" value={startDate} />
-            <Field label="End Date" value={recurringServiceStop.noEndDate ? "No End Date" : endDate} />
-
-            <Field label="Frequency">
-              {!edit ? (
-                <p className="text-gray-800">{recurringServiceStop.frequency || "—"}</p>
-              ) : (
-                <Select
-                  value={selectedFrequency}
-                  options={frequencyOptions}
-                  onChange={setSelectedFrequency}
-                  isSearchable
-                  placeholder="Select frequency"
-                  theme={selectTheme}
-                  styles={selectStyles}
+            {!edit ? (
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                <ShareItemButton
+                  type="recurringServiceStop"
+                  recordId={recurringServiceStopId}
+                  title={recurringServiceStop.type || recurringServiceStop.serviceStopType || "Recurring Service Stop"}
+                  subtitle={[recurringServiceStop.customerName, recurringServiceStop.internalId, recurringServiceStop.frequency].filter(Boolean).join(" - ")}
+                  companyId={recentlySelectedCompany}
+                  customerId={recurringServiceStop.customerId}
+                  collectionPath={`companies/${recentlySelectedCompany}/recurringServiceStop`}
+                  webPath={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
                 />
-              )}
-            </Field>
-
-            <Field label="Day of Week">
-              {!edit ? (
-                <p className="text-gray-800">
-                  {recurringServiceStop.daysOfWeek || recurringServiceStop.day || "—"}
-                </p>
-              ) : (
-                <Select
-                  value={selectedDays}
-                  options={daysOptions}
-                  onChange={setSelectedDays}
-                  isMulti
-                  placeholder="Select days"
-                  theme={selectTheme}
-                  styles={selectStyles}
-                />
-              )}
-            </Field>
-
-            <Field label="Estimated Time" value={formatMinutes(recurringServiceStop.estimatedTime)} />
-          </div>
-        </div>
-
-        <div className="bg-white shadow-lg rounded-xl p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h3 className="text-xl font-bold text-gray-800">Adaptive Duration</h3>
-              <p className="text-sm text-gray-600">Historic stop timing and current estimate</p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={resetDurationToAverage}
-                disabled={durationActionInProgress}
-                className="px-4 py-2 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Reset to Average
-              </button>
-              <button
-                type="button"
-                onClick={clearDurationHistory}
-                disabled={durationActionInProgress || durationHistory.length === 0}
-                className="px-4 py-2 text-sm font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Clear History
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Current Estimate" value={formatMinutes(currentEstimateMinutes)} />
-            <Field label="Historic Average" value={formatMinutes(historicAverageMinutes)} />
-            <Field label="Data Points" value={String(durationSampleCount)} />
-            <Field label="Estimate Source" value={durationSourceLabel} />
-          </div>
-
-          <div className="mt-5 grid grid-cols-1 gap-3 border-y border-gray-200 py-4 md:grid-cols-[minmax(180px,260px)_auto] md:items-end">
-            <div>
-              <label className="block text-sm font-semibold text-gray-600 mb-1">
-                Estimated Duration (mins)
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={estimatedTimeInput}
-                onChange={(e) => setEstimatedTimeInput(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={saveManualEstimatedDuration}
-              disabled={durationActionInProgress}
-              className="w-fit px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {durationAction === "saveEstimate" ? "Saving..." : "Save Estimate"}
-            </button>
-          </div>
-
-          <div className="mt-5 overflow-x-auto">
-            <table className="min-w-full bg-white">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Service Stop
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Completed
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Tech
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Duration
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Action
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-gray-200">
-                {loadingDurationHistory ? (
-                  <tr>
-                    <td colSpan={5} className="p-6 text-gray-500">
-                      Loading duration history...
-                    </td>
-                  </tr>
-                ) : durationHistory.length ? (
-                  durationHistory.map((point) => (
-                    <tr key={point.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="p-4 whitespace-nowrap text-gray-700">
-                        {point.serviceStopId ? (
-                          <Link
-                            to={`/company/serviceStops/detail/${point.serviceStopId}`}
-                            className="font-medium text-blue-600 hover:underline"
-                          >
-                            {point.serviceStopInternalId || point.serviceStopId}
-                          </Link>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="p-4 whitespace-nowrap text-gray-700">
-                        {formatDateValue(point.completedAt || point.serviceDate, "MMM d, yyyy h:mm a")}
-                      </td>
-                      <td className="p-4 whitespace-nowrap text-gray-700">{point.techName || "—"}</td>
-                      <td className="p-4 whitespace-nowrap text-gray-800 font-medium">
-                        {formatMinutes(point.durationMinutes)}
-                      </td>
-                      <td className="p-4 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => deleteDurationPoint(point)}
-                          disabled={durationActionInProgress}
-                          className="px-3 py-1.5 text-sm font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {durationAction === `delete-${point.id}` ? "Deleting..." : "Delete"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="p-6 text-gray-500">
-                      No duration history found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="bg-white shadow-lg rounded-xl p-6">
-          <div className="flex items-start justify-between gap-3 mb-4">
-            <div>
-              <h3 className="text-xl font-bold text-gray-800">Recurring Service Stop Tasks</h3>
-              <p className="text-sm text-gray-600">Tasks configured for this recurring stop</p>
-            </div>
-
-            {!showAddTask && (
-              <button
-                onClick={() => setShowAddTask(true)}
-                className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition"
-              >
-                Add Task
-              </button>
-            )}
-          </div>
-
-          {showAddTask && (
-            <form
-              onSubmit={saveNewRecurringTask}
-              className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4"
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-600 mb-1">
-                    Task Name
-                  </label>
-                  <input
-                    type="text"
-                    value={newTask.name}
-                    onChange={(e) => handleNewTaskChange("name", e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                    placeholder="Brush walls"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-600 mb-1">
-                    Type
-                  </label>
-                  <select
-                    value={newTask.type}
-                    onChange={(e) => handleNewTaskChange("type", e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white"
-                  >
-                    <option value="">Select task type</option>
-                    {jobTaskTypeOptions.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-600 mb-1">
-                    Contracted Rate (cents)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={newTask.contractedRate}
-                    onChange={(e) => handleNewTaskChange("contractedRate", e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                    placeholder="2500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-600 mb-1">
-                    Estimated Time (mins)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={newTask.estimatedTime}
-                    onChange={(e) => handleNewTaskChange("estimatedTime", e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                    placeholder="30"
-                  />
-                </div>
-              </div>
-
-              <div className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700">
-                Saving this task will also add it to all future service stops tied to this recurring service stop.
-              </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <button
-                  type="submit"
-                  disabled={savingTask}
-                  className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+                <Link
+                  to="/company/recurringServiceStop"
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
-                  {savingTask ? "Saving..." : "Save Task"}
-                </button>
-
+                  Back
+                </Link>
                 <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddTask(false);
-                    resetNewTaskForm();
-                  }}
-                  className="px-4 py-2 bg-gray-200 text-gray-800 text-sm font-semibold rounded-lg hover:bg-gray-300 transition"
+                  onClick={editRSS}
+                  className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                >
+                  Edit
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                <button
+                  onClick={saveEdits}
+                  className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={cancelEdit}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
                   Cancel
                 </button>
+                <button
+                  onClick={deleteRSS}
+                  className="inline-flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                >
+                  Delete
+                </button>
               </div>
-            </form>
-          )}
+            )}
+          </div>
+        </section>
 
-          {!!recurringServiceStopTasks?.length ? (
-            <div className="overflow-x-auto">
-              <table className="min-w-full bg-white">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                      Task Name
-                    </th>
-                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                      Type
-                    </th>
-                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                      Contracted Rate
-                    </th>
-                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                      Estimated Time
-                    </th>
-                  </tr>
-                </thead>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
+          <main className="space-y-5">
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-950">Details</h2>
+                  <p className="text-sm text-slate-600">Core recurring stop information</p>
+                </div>
 
-                <tbody className="divide-y divide-gray-200">
-                  {recurringServiceStopTasks.map((task, index) => (
-                    <tr key={task.id || `${task.name}-${index}`} className="hover:bg-gray-50 transition-colors">
-                      <td className="p-4 whitespace-nowrap text-gray-800 font-medium">
-                        {task.name || "—"}
-                      </td>
-                      <td className="p-4 whitespace-nowrap text-gray-700">
-                        {task.type || "—"}
-                      </td>
-                      <td className="p-4 whitespace-nowrap text-gray-700">
-                        {formatCurrencyFromCents(task.contractedRate)}
-                      </td>
-                      <td className="p-4 whitespace-nowrap text-gray-700">
-                        {formatMinutes(task.estimatedTime)}
-                      </td>
+                <button
+                  onClick={openInMaps}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  title="Open in Google Maps"
+                >
+                  Open in Maps
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                <Field label="Internal Id" value={recurringServiceStop.internalId} />
+                <Field label="Customer" value={recurringServiceStop.customerName} />
+                <Field label="Street Address" value={recurringServiceStop.streetAddress} />
+                <Field label="Tech" value={recurringServiceStop.tech} />
+                <Field label="Start Date" value={startDate} />
+                <Field label="End Date" value={recurringServiceStop.noEndDate ? "No End Date" : endDate} />
+
+                <Field label="Frequency">
+                  {!edit ? (
+                    <p className="text-gray-800">{recurringServiceStop.frequency || "—"}</p>
+                  ) : (
+                    <Select
+                      value={selectedFrequency}
+                      options={frequencyOptions}
+                      onChange={setSelectedFrequency}
+                      isSearchable
+                      placeholder="Select frequency"
+                      theme={selectTheme}
+                      styles={selectStyles}
+                    />
+                  )}
+                </Field>
+
+                <Field label="Day of Week">
+                  {!edit ? (
+                    <p className="text-gray-800">
+                      {recurringServiceStop.daysOfWeek || recurringServiceStop.day || "—"}
+                    </p>
+                  ) : (
+                    <Select
+                      value={selectedDays}
+                      options={daysOptions}
+                      onChange={setSelectedDays}
+                      isMulti
+                      placeholder="Select days"
+                      theme={selectTheme}
+                      styles={selectStyles}
+                    />
+                  )}
+                </Field>
+
+                <Field label="Estimated Time" value={formatMinutes(recurringServiceStop.estimatedTime)} />
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-950">Tasks</h3>
+                  <p className="text-sm text-slate-600">Tasks configured for this recurring stop</p>
+                </div>
+
+                {!showAddTask && (
+                  <button
+                    onClick={() => setShowAddTask(true)}
+                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                  >
+                    Add Task
+                  </button>
+                )}
+              </div>
+
+              {showAddTask && (
+                <form
+                  onSubmit={saveNewRecurringTask}
+                  className="mb-6 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold text-slate-600">
+                        Task Name
+                      </label>
+                      <input
+                        type="text"
+                        value={newTask.name}
+                        onChange={(e) => handleNewTaskChange("name", e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2"
+                        placeholder="Brush walls"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold text-slate-600">
+                        Type
+                      </label>
+                      <select
+                        value={newTask.type}
+                        onChange={(e) => handleNewTaskChange("type", e.target.value)}
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+                      >
+                        <option value="">Select task type</option>
+                        {jobTaskTypeOptions.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold text-slate-600">
+                        Contracted Rate (cents)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={newTask.contractedRate}
+                        onChange={(e) => handleNewTaskChange("contractedRate", e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2"
+                        placeholder="2500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold text-slate-600">
+                        Estimated Time (mins)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={newTask.estimatedTime}
+                        onChange={(e) => handleNewTaskChange("estimatedTime", e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2"
+                        placeholder="30"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                    Saving this task will also add it to all future service stops tied to this recurring service stop.
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      type="submit"
+                      disabled={savingTask}
+                      className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {savingTask ? "Saving..." : "Save Task"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddTask(false);
+                        resetNewTaskForm();
+                      }}
+                      className="inline-flex items-center justify-center rounded-md bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-300"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {!!recurringServiceStopTasks?.length ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white">
+                    <thead className="bg-slate-100">
+                      <tr>
+                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                          Task Name
+                        </th>
+                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                          Type
+                        </th>
+                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                          Contracted Rate
+                        </th>
+                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                          Estimated Time
+                        </th>
+                      </tr>
+                    </thead>
+
+                    <tbody className="divide-y divide-slate-200">
+                      {recurringServiceStopTasks.map((task, index) => (
+                        <tr key={task.id || `${task.name}-${index}`} className="transition-colors hover:bg-slate-50">
+                          <td className="whitespace-nowrap p-4 font-medium text-slate-900">
+                            {task.name || "—"}
+                          </td>
+                          <td className="whitespace-nowrap p-4 text-slate-700">
+                            {task.type || "—"}
+                          </td>
+                          <td className="whitespace-nowrap p-4 text-slate-700">
+                            {formatCurrencyFromCents(task.contractedRate)}
+                          </td>
+                          <td className="whitespace-nowrap p-4 text-slate-700">
+                            {formatMinutes(task.estimatedTime)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
+                  No tasks found.
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-950">Adaptive Duration</h3>
+                  <p className="text-sm text-slate-600">Historic stop timing and current estimate</p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={resetDurationToAverage}
+                    disabled={durationActionInProgress}
+                    className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Reset to Average
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearDurationHistory}
+                    disabled={durationActionInProgress || durationHistory.length === 0}
+                    className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Clear History
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Field label="Current Estimate" value={formatMinutes(currentEstimateMinutes)} />
+                <Field label="Historic Average" value={formatMinutes(historicAverageMinutes)} />
+                <Field label="Data Points" value={String(durationSampleCount)} />
+                <Field label="Estimate Source" value={durationSourceLabel} />
+              </div>
+
+              <div className="mt-5 grid grid-cols-1 gap-3 border-y border-slate-200 py-4 md:grid-cols-[minmax(180px,260px)_auto] md:items-end">
+                <div>
+                  <label className="mb-1 block text-sm font-semibold text-slate-600">
+                    Estimated Duration (mins)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={estimatedTimeInput}
+                    onChange={(e) => setEstimatedTimeInput(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={saveManualEstimatedDuration}
+                  disabled={durationActionInProgress}
+                  className="w-fit rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {durationAction === "saveEstimate" ? "Saving..." : "Save Estimate"}
+                </button>
+              </div>
+
+              <div className="mt-5 overflow-x-auto">
+                <table className="min-w-full bg-white">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        Service Stop
+                      </th>
+                      <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        Completed
+                      </th>
+                      <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        Tech
+                      </th>
+                      <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        Duration
+                      </th>
+                      <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        Action
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-gray-500">
-              No recurring service stop tasks found.
-            </div>
-          )}
-        </div>
+                  </thead>
 
-        <div className="bg-white shadow-lg rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-xl font-bold text-gray-800">Upcoming Service</h3>
-              <p className="text-sm text-gray-600">
-                {serviceStopList.length} future service stop{serviceStopList.length === 1 ? "" : "s"}
-              </p>
-            </div>
-          </div>
+                  <tbody className="divide-y divide-slate-200">
+                    {loadingDurationHistory ? (
+                      <tr>
+                        <td colSpan={5} className="p-6 text-slate-500">
+                          Loading duration history...
+                        </td>
+                      </tr>
+                    ) : durationHistory.length ? (
+                      durationHistory.map((point) => (
+                        <tr key={point.id} className="transition-colors hover:bg-slate-50">
+                          <td className="whitespace-nowrap p-4 text-slate-700">
+                            {point.serviceStopId ? (
+                              <Link
+                                to={`/company/serviceStops/detail/${point.serviceStopId}`}
+                                className="font-medium text-blue-600 hover:underline"
+                              >
+                                {point.serviceStopInternalId || point.serviceStopId}
+                              </Link>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap p-4 text-slate-700">
+                            {formatDateValue(point.completedAt || point.serviceDate, "MMM d, yyyy h:mm a")}
+                          </td>
+                          <td className="whitespace-nowrap p-4 text-slate-700">{point.techName || "—"}</td>
+                          <td className="whitespace-nowrap p-4 font-medium text-slate-900">
+                            {formatMinutes(point.durationMinutes)}
+                          </td>
+                          <td className="whitespace-nowrap p-4">
+                            <button
+                              type="button"
+                              onClick={() => deleteDurationPoint(point)}
+                              disabled={durationActionInProgress}
+                              className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {durationAction === `delete-${point.id}` ? "Deleting..." : "Delete"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={5} className="p-6 text-slate-500">
+                          No duration history found.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </main>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Internal Id
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Date
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Tech
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Customer Name
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Street Address
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Status
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-gray-200">
-                {serviceStopList?.map((serviceStop) => (
-                  <tr
-                    key={serviceStop.id}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer"
-                    onClick={() => navigate(`/company/serviceStops/detail/${serviceStop.id}`)}
-                  >
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.internalId}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.date}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.tech}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-800 font-medium">
-                      {serviceStop.customerName}
-                    </td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.streetAddress}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">
-                      {serviceStop.operationStatus || "—"}
-                    </td>
-                  </tr>
-                ))}
-
-                {!serviceStopList?.length && (
-                  <tr>
-                    <td colSpan={7} className="p-6 text-gray-500">
-                      No upcoming jobs found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="bg-white shadow-lg rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xl font-bold text-gray-800">Most Recent Service</h3>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Internal Id
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Date
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Tech
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Customer Name
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Street Address
-                  </th>
-                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                    Status
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-gray-200">
-                {pastServiceStopList?.map((serviceStop) => (
-                  <tr
-                    key={serviceStop.id}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer"
-                    onClick={() => navigate(`/company/serviceStops/detail/${serviceStop.id}`)}
-                  >
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.internalId}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.date}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.tech}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-800 font-medium">
-                      {serviceStop.customerName}
-                    </td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">{serviceStop.streetAddress}</td>
-                    <td className="p-4 whitespace-nowrap text-gray-700">
-                      {serviceStop.operationStatus || "—"}
-                    </td>
-                  </tr>
-                ))}
-
-                {!pastServiceStopList?.length && (
-                  <tr>
-                    <td colSpan={7} className="p-6 text-gray-500">
-                      No recent jobs found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <aside className="space-y-5 lg:sticky lg:top-6 lg:self-start">
+            <CompactServiceStopSection
+              title="Upcoming Service"
+              subtitle={`${serviceStopList.length} future service stop${serviceStopList.length === 1 ? "" : "s"}`}
+              stops={serviceStopList}
+              emptyMessage="No upcoming service stops found."
+            />
+            <CompactServiceStopSection
+              title="Recent Service"
+              subtitle={`${pastServiceStopList.length} recent service stop${pastServiceStopList.length === 1 ? "" : "s"}`}
+              stops={pastServiceStopList}
+              emptyMessage="No recent service stops found."
+            />
+          </aside>
         </div>
       </div>
     </div>

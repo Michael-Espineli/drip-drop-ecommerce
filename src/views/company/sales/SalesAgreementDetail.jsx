@@ -46,6 +46,7 @@ import {
   SalesInvoiceLineItem,
   SalesAgreementStatus,
   SalesAutopayStatus,
+  SalesInvoiceDeliveryMethod,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
@@ -857,6 +858,9 @@ const createEditDraft = (agreement) => ({
   billingFrequencyCount: String(agreement?.billingFrequencyCount || agreement?.billingCadenceCount || agreement?.invoiceFrequencyCount || 1),
   rateType: agreement?.rateType || 'perMonth',
   paymentTerms: agreement?.paymentTerms || 'dueOnReceipt',
+  invoiceDeliveryMethod: agreement?.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
+  firstInvoiceSendAt: toInputDate(agreement?.firstInvoiceSendAt || agreement?.manualBillingNextInvoiceAt || agreement?.startDate),
+  manualBillingAutoSendEnabled: agreement?.manualBillingAutoSendEnabled === true,
   pnlIncludeInReports: agreement?.pnlIncludeInReports !== false,
   pnlChemicalCostMode: agreement?.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
   pnlExcludedChemicalKeywords: normalizeCommaList(agreement?.pnlExcludedChemicalKeywords),
@@ -1612,8 +1616,11 @@ const SalesAgreementDetail = () => {
         billingFrequency: billingFrequencyForAgreement(agreement),
         billingFrequencyCount: Math.max(Number(agreement.billingFrequencyCount || 1), 1),
         paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
-        invoiceDeliveryMethod: agreement.invoiceDeliveryMethod,
-        receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod,
+        invoiceDeliveryMethod: agreement.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
+        firstInvoiceSendAt: agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt || nextAgreementStartDate(agreement),
+        manualBillingNextInvoiceAt: agreement.manualBillingNextInvoiceAt || agreement.firstInvoiceSendAt || nextAgreementStartDate(agreement),
+        manualBillingAutoSendEnabled: agreement.manualBillingAutoSendEnabled === true,
+        receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
         receiptsEnabled: agreement.receiptsEnabled !== false,
         pnlIncludeInReports: agreement.pnlIncludeInReports !== false,
         pnlChemicalCostMode: agreement.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
@@ -2120,6 +2127,10 @@ const SalesAgreementDetail = () => {
         billingFrequencyCount: Math.max(Number(editDraft.billingFrequencyCount) || 1, 1),
         rateType: editDraft.rateType,
         paymentTerms: editDraft.paymentTerms,
+        invoiceDeliveryMethod: editDraft.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
+        firstInvoiceSendAt: dateFromInput(editDraft.firstInvoiceSendAt),
+        manualBillingNextInvoiceAt: dateFromInput(editDraft.firstInvoiceSendAt),
+        manualBillingAutoSendEnabled: editDraft.manualBillingAutoSendEnabled === true,
         ...pnlReportingFields,
         ...chemicalBillingFields,
         terms: editDraft.terms.trim(),
@@ -2599,7 +2610,18 @@ const SalesAgreementDetail = () => {
                 <dl className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{agreement.customerName || 'Customer'}</dd>
+                    <dd className="mt-1 font-semibold text-slate-900">
+                      {agreement.customerId ? (
+                        <Link
+                          to={`/company/customers/details/${agreement.customerId}`}
+                          className="text-blue-700 hover:text-blue-900"
+                        >
+                          {agreement.customerName || 'Customer'}
+                        </Link>
+                      ) : (
+                        agreement.customerName || 'Customer'
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Email</dt>
@@ -2883,6 +2905,14 @@ const SalesAgreementDetail = () => {
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-slate-500">Payment Terms</dt>
                     <dd className="font-semibold text-slate-900">{labelize(agreement.paymentTerms)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-slate-500">First Invoice Send</dt>
+                    <dd className="font-semibold text-slate-900">{formatDate(agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-slate-500">Auto Email Invoices</dt>
+                    <dd className="font-semibold text-slate-900">{agreement.manualBillingAutoSendEnabled ? 'Enabled' : 'Disabled'}</dd>
                   </div>
                   <div className="space-y-2 border-t border-slate-200 pt-3">
                     <div className="flex items-center justify-between gap-3">
@@ -3381,6 +3411,44 @@ const SalesAgreementDetail = () => {
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementInvoiceDeliveryMethod">
+                      Invoice Delivery
+                    </label>
+                    <select
+                      id="agreementInvoiceDeliveryMethod"
+                      value={editDraft.invoiceDeliveryMethod}
+                      onChange={(event) => updateEditField('invoiceDeliveryMethod', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {Object.values(SalesInvoiceDeliveryMethod).map((method) => (
+                        <option key={method} value={method}>{labelize(method)}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementFirstInvoiceSendAt">
+                      First Invoice Send
+                    </label>
+                    <input
+                      id="agreementFirstInvoiceSendAt"
+                      type="date"
+                      value={editDraft.firstInvoiceSendAt}
+                      onChange={(event) => updateEditField('firstInvoiceSendAt', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 lg:self-end">
+                    <input
+                      type="checkbox"
+                      checked={editDraft.manualBillingAutoSendEnabled}
+                      onChange={(event) => updateEditField('manualBillingAutoSendEnabled', event.target.checked)}
+                    />
+                    Email invoices automatically
+                  </label>
                 </div>
 
                 <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">

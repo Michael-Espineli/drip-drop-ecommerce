@@ -23,6 +23,43 @@ const getDateFromReplacementContext = (value) => {
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 };
 
+const dateInputToLocalDate = (value) => {
+    if (!value) return null;
+    const [year, month, day] = String(value).split('-').map(Number);
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+};
+
+const formatDateInput = (value) => {
+    if (!value) return '';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFrequencyEvery) => {
+    if (!lastServiceDate) return null;
+
+    const amount = Number(serviceFrequency);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    const next = new Date(lastServiceDate);
+    if (Number.isNaN(next.getTime())) return null;
+
+    if (serviceFrequencyEvery === 'Day') next.setDate(next.getDate() + amount);
+    else if (serviceFrequencyEvery === 'Week') next.setDate(next.getDate() + (amount * 7));
+    else if (serviceFrequencyEvery === 'Month') next.setMonth(next.getMonth() + amount);
+    else if (serviceFrequencyEvery === 'Year') next.setFullYear(next.getFullYear() + amount);
+    else return null;
+
+    return next;
+};
+
 const CUSTOM_CATEGORY_OPTION = { value: 'Other', label: 'Custom Category' };
 const CUSTOM_MAKE_OPTION = { value: 'Other', label: 'Custom Make' };
 const CUSTOM_MODEL_OPTION = { value: 'Other', label: 'Custom Equipment' };
@@ -50,6 +87,7 @@ const CreateNewEquipment = () => {
     const [dateInstalled, setDateInstalled] = useState('');
     const [cleanFilterPressure, setCleanFilterPressure] = useState('');
     const [needsService, setNeedsService] = useState(false);
+    const [lastServiceDate, setLastServiceDate] = useState('');
     const [serviceFrequency, setServiceFrequency] = useState('Month');
     const [serviceFrequencyEvery, setServiceFrequencyEvery] = useState(6);
     const [notes, setNotes] = useState('');
@@ -75,6 +113,13 @@ const CreateNewEquipment = () => {
         model: customModel || model?.model || model?.name || model?.label || '',
     };
     const selectedEquipmentIsFilter = isFilterEquipment(selectedEquipmentDraft);
+    const nextServiceDatePreview = needsService
+        ? formatDateInput(computeNextServiceDate(
+            dateInputToLocalDate(lastServiceDate),
+            serviceFrequencyEvery,
+            serviceFrequency
+        ))
+        : '';
 
     // Fetch initial data for selects
     useEffect(() => {
@@ -207,6 +252,17 @@ const CreateNewEquipment = () => {
         if (equipmentDefaultsToNeedsService({ type: selected?.label || selected?.value || '' })) {
             setNeedsService(true);
         }
+    };
+
+    const handleNameChange = (value) => {
+        setName(value);
+        if (equipmentDefaultsToNeedsService({ ...selectedEquipmentDraft, name: value })) {
+            setNeedsService(true);
+        }
+    };
+
+    const handleNeedsServiceChange = (value) => {
+        setNeedsService(value || equipmentDefaultsToNeedsService(selectedEquipmentDraft));
     };
 
     const handleMakeChange = (selected) => {
@@ -355,6 +411,22 @@ const CreateNewEquipment = () => {
                 make: finalMake,
                 model: finalModel,
             });
+            const numericServiceFrequency = Number(serviceFrequencyEvery);
+            const finalLastServiceDate = finalNeedsService ? dateInputToLocalDate(lastServiceDate) : null;
+            const finalNextServiceDate = finalNeedsService
+                ? computeNextServiceDate(finalLastServiceDate, numericServiceFrequency, serviceFrequency)
+                : null;
+
+            if (finalNeedsService && !finalLastServiceDate) {
+                await appAlert('Add a last service date before saving equipment that needs service.');
+                return;
+            }
+
+            if (finalNeedsService && (!Number.isFinite(numericServiceFrequency) || numericServiceFrequency <= 0 || !serviceFrequency || !finalNextServiceDate)) {
+                await appAlert('Add a valid service frequency so the next service date can be calculated.');
+                return;
+            }
+
             const newEquipment = {
                 id: equipmentId,
                 name,
@@ -372,15 +444,15 @@ const CreateNewEquipment = () => {
                 cleanFilterPressure: finalIsFilter && cleanFilterPressure !== '' && Number.isFinite(numericCleanFilterPressure)
                     ? numericCleanFilterPressure
                     : null,
-                serviceFrequency: finalNeedsService && serviceFrequencyEvery !== '' ? Number(serviceFrequencyEvery) : null,
+                serviceFrequency: finalNeedsService ? numericServiceFrequency : null,
                 serviceFrequencyEvery: finalNeedsService ? serviceFrequency : null,
                 notes,
                 customerId: selectedCustomer?.value || '',
                 customerName: selectedCustomer?.label || '',
                 serviceLocationId: selectedLocation?.value || '',
                 bodyOfWaterId: selectedBodyOfWater?.value || '',
-                lastServiceDate: null,
-                nextServiceDate: null,
+                lastServiceDate: finalLastServiceDate,
+                nextServiceDate: finalNextServiceDate,
                 isActive: true,
                 active: true,
                 dateUninstalled: null,
@@ -507,7 +579,7 @@ const CreateNewEquipment = () => {
                         <h3 className="text-lg font-semibold text-gray-700 md:col-span-3">Service & Installation</h3>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Equipment Nickname</label>
-                            <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" placeholder="e.g., Main Pool Pump" required />
+                            <input type="text" value={name} onChange={e => handleNameChange(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" placeholder="e.g., Main Pool Pump" required />
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Date Installed</label>
@@ -522,27 +594,48 @@ const CreateNewEquipment = () => {
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Will This Equipment Need Service?</label>
                             <select
-                                value={needsService ? 'yes' : 'no'}
-                                onChange={e => setNeedsService(e.target.value === 'yes')}
-                                className="w-full p-2 border border-gray-300 rounded-lg bg-white"
-                            >
+	                                value={needsService ? 'yes' : 'no'}
+	                                onChange={e => handleNeedsServiceChange(e.target.value === 'yes')}
+	                                className="w-full p-2 border border-gray-300 rounded-lg bg-white"
+	                            >
                                 <option value="no">No</option>
                                 <option value="yes">Yes</option>
                             </select>
                         </div>
                         {needsService && (
-                            <div className="md:col-span-3">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Service Frequency</label>
-                                <div className='flex gap-4'>
-                                    <input type="number" min="1" value={serviceFrequencyEvery} onChange={e => setServiceFrequencyEvery(e.target.value)} className="w-1/3 p-2 border border-gray-300 rounded-lg" />
-                                    <select value={serviceFrequency} onChange={e => setServiceFrequency(e.target.value)} className="w-2/3 p-2 border border-gray-300 rounded-lg bg-white">
-                                        <option value="Day">Days</option>
-                                        <option value="Week">Weeks</option>
-                                        <option value="Month">Months</option>
-                                        <option value="Year">Years</option>
-                                    </select>
+                            <>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Last Service Date</label>
+                                    <input
+                                        type="date"
+                                        value={lastServiceDate}
+                                        onChange={e => setLastServiceDate(e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded-lg"
+                                        required
+                                    />
                                 </div>
-                            </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Next Service Date</label>
+                                    <input
+                                        type="date"
+                                        value={nextServiceDatePreview}
+                                        readOnly
+                                        className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Service Frequency</label>
+                                    <div className='flex gap-4'>
+                                        <input type="number" min="1" value={serviceFrequencyEvery} onChange={e => setServiceFrequencyEvery(e.target.value)} className="w-1/3 p-2 border border-gray-300 rounded-lg" required />
+                                        <select value={serviceFrequency} onChange={e => setServiceFrequency(e.target.value)} className="w-2/3 p-2 border border-gray-300 rounded-lg bg-white" required>
+                                            <option value="Day">Days</option>
+                                            <option value="Week">Weeks</option>
+                                            <option value="Month">Months</option>
+                                            <option value="Year">Years</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </>
                         )}
                         <div className='md:col-span-3'>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>

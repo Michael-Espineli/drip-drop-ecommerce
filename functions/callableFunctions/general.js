@@ -1150,6 +1150,69 @@ const mapHomeownerEquipmentToCompanyDraft = (equipment = {}) => ({
   linkedHomeownerEquipmentId: equipment.id || "",
 });
 
+const toEquipmentDate = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value.toDate === "function") return value.toDate();
+  if (typeof value === "object" && typeof value.seconds === "number") {
+    return new Date(value.seconds * 1000);
+  }
+  if (typeof value === "object" && typeof value._seconds === "number") {
+    return new Date(value._seconds * 1000);
+  }
+
+  if (typeof value === "string") {
+    const dateOnlyMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnlyMatch) {
+      const [, year, month, day] = dateOnlyMatch;
+      return new Date(Number(year), Number(month) - 1, Number(day));
+    }
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const computeEquipmentNextServiceDate = (lastServiceDate, serviceFrequency, serviceFrequencyEvery) => {
+  const base = toEquipmentDate(lastServiceDate);
+  const amount = Number(serviceFrequency);
+  if (!base || !Number.isFinite(amount) || amount <= 0) return null;
+
+  const next = new Date(base);
+  if (serviceFrequencyEvery === "Day") next.setDate(next.getDate() + amount);
+  else if (serviceFrequencyEvery === "Week") next.setDate(next.getDate() + (amount * 7));
+  else if (serviceFrequencyEvery === "Month") next.setMonth(next.getMonth() + amount);
+  else if (serviceFrequencyEvery === "Year") next.setFullYear(next.getFullYear() + amount);
+  else return null;
+
+  return next;
+};
+
+const normalizeEquipmentServiceSchedule = (equipment = {}) => {
+  const needsService = Boolean(equipment.needsService);
+  if (!needsService) {
+    return {
+      needsService,
+      lastServiceDate: null,
+      nextServiceDate: null,
+      serviceFrequency: null,
+      serviceFrequencyEvery: "",
+    };
+  }
+
+  const lastServiceDate = toEquipmentDate(equipment.lastServiceDate);
+  const serviceFrequency = Number(equipment.serviceFrequency);
+  const serviceFrequencyEvery = equipment.serviceFrequencyEvery || "Month";
+
+  return {
+    needsService,
+    lastServiceDate,
+    nextServiceDate: computeEquipmentNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery),
+    serviceFrequency,
+    serviceFrequencyEvery,
+  };
+};
+
 const isDefaultLeadConversionEquipment = (equipmentList = []) => {
   if (!equipmentList.length) return true;
 
@@ -3631,7 +3694,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         "40", "42", "44", "46", "50", "52", "54", "56", "60", "62", "64", "66",
         "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
         "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296",
+        "290", "292", "294", "296", "310",
         "400", "410", "412", "414", "416", "420",
         "600", "610", "612", "614", "616", "620", "622", "624", "626",
         "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
@@ -3676,7 +3739,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
         "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
         "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296",
+        "290", "292", "294", "296", "310",
         "400",
         "600", "610", "612", "614", "616", "620", "622", "624", "626",
         "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
@@ -3698,7 +3761,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         "40", "42", "44", "46", "50", "52", "54", "56", "60", "62", "64", "66",
         "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
         "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296",
+        "290", "292", "294", "296", "310",
         "400", "410", "412", "414", "416",
         "600", "610", "612", "614", "616", "620", "622", "624", "626",
         "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
@@ -4105,6 +4168,7 @@ const isCompanyAccessActive = (access = {}) => {
 };
 
 const COMPANY_USER_MANAGER_ROLE_NAMES = new Set(["owner", "admin", "manager"]);
+const COMPANY_USER_VIEW_PERMISSION_ID = "260";
 const COMPANY_USER_ACCESS_PERMISSION_ID = "264";
 const COMPANY_USER_ACCESS_ARRAY_FIELDS = new Set([
   "customerRegionTags",
@@ -4123,6 +4187,14 @@ const COMPANY_USER_ACCESS_STRING_FIELDS = new Set([
   "regionalAccessMode",
   "customerRegionAccessMode",
   "dashboardScopeAccessMode",
+  "workOrderAdminId",
+  "workOrderAdminName",
+  "assignedWorkOrderAdminId",
+  "assignedWorkOrderAdminName",
+  "defaultWorkOrderAdminId",
+  "defaultWorkOrderAdminName",
+  "jobAdminId",
+  "jobAdminName",
   "roleId",
   "roleName",
   "status",
@@ -4198,6 +4270,37 @@ const userCanUpdateCompanyUsers = async (firestore, userId, companyId) => {
       const permissionIds = roleSnap.data()?.permissionIdList;
       if (!Array.isArray(permissionIds)) return true;
       return permissionIds.map(String).includes(COMPANY_USER_ACCESS_PERMISSION_ID);
+    }
+  }
+
+  return COMPANY_USER_MANAGER_ROLE_NAMES.has(String(access.roleName || "").trim().toLowerCase());
+};
+
+const userCanViewCompanyUsers = async (firestore, userId, companyId) => {
+  if (!userId || !companyId) return false;
+
+  const [userSnap, accessSnap] = await Promise.all([
+    firestore.collection("users").doc(userId).get(),
+    firestore.collection("users").doc(userId).collection("userAccess").doc(companyId).get(),
+  ]);
+
+  const userData = userSnap.exists ? userSnap.data() || {} : {};
+  if (userData.accountType === "Admin") return true;
+  if (!accessSnap.exists) return false;
+
+  const access = accessSnap.data() || {};
+  if (!isCompanyAccessActive(access)) return false;
+
+  const roleId = String(access.roleId || "").trim();
+  if (roleId) {
+    const roleSnap = await firestore.collection("companies").doc(companyId).collection("roles").doc(roleId).get();
+    if (roleSnap.exists) {
+      const permissionIds = roleSnap.data()?.permissionIdList;
+      if (!Array.isArray(permissionIds)) return true;
+
+      const selectedPermissionIds = permissionIds.map(String);
+      return selectedPermissionIds.includes(COMPANY_USER_VIEW_PERMISSION_ID)
+        || selectedPermissionIds.includes(COMPANY_USER_ACCESS_PERMISSION_ID);
     }
   }
 
@@ -4301,6 +4404,14 @@ exports.updateCompanyUserAccess = functions.https.onCall(async (data, context) =
         "dashboardScopeAccessMode",
         "dashboardScopeAccess",
         "allowedDashboardScopes",
+        "workOrderAdminId",
+        "workOrderAdminName",
+        "assignedWorkOrderAdminId",
+        "assignedWorkOrderAdminName",
+        "defaultWorkOrderAdminId",
+        "defaultWorkOrderAdminName",
+        "jobAdminId",
+        "jobAdminName",
         "roleId",
         "roleName",
         "status",
@@ -4329,6 +4440,91 @@ exports.updateCompanyUserAccess = functions.https.onCall(async (data, context) =
       ...updates,
     },
     userAccess: userAccessResponse,
+  };
+});
+
+exports.getCompanyUserContactInfo = functions.https.onCall(async (data, context) => {
+  const payload = getCallablePayload(data);
+  const authContext = await getVerifiedCallableAuth(payload, context);
+  const authUserId = authContext?.uid;
+  const companyId = String(payload.companyId || "").trim();
+  const companyUserId = String(payload.companyUserId || payload.companyUserDocId || "").trim();
+
+  if (!authUserId) {
+    throw new functions.https.HttpsError("unauthenticated", "You must be signed in to view company user contact info.");
+  }
+
+  if (!companyId || !companyUserId) {
+    throw new functions.https.HttpsError("invalid-argument", "companyId and companyUserId are required.");
+  }
+
+  const firestore = getFirestore();
+  const canView = await userCanViewCompanyUsers(firestore, authUserId, companyId);
+  if (!canView) {
+    throw new functions.https.HttpsError("permission-denied", "You do not have permission to view company users.");
+  }
+
+  const companyUsersRef = firestore.collection("companies").doc(companyId).collection("companyUsers");
+  let companyUserSnap = await companyUsersRef.doc(companyUserId).get();
+
+  if (!companyUserSnap.exists) {
+    const userQuerySnap = await companyUsersRef.where("userId", "==", companyUserId).limit(1).get();
+    if (!userQuerySnap.empty) {
+      companyUserSnap = userQuerySnap.docs[0];
+    }
+  }
+
+  if (!companyUserSnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Company user not found.");
+  }
+
+  const companyUser = companyUserSnap.data() || {};
+  const linkedUserId = firstNonEmptyString(
+    companyUser.userId,
+    companyUser.uid,
+    companyUser.authUserId,
+    payload.linkedUserId,
+    companyUser.id
+  );
+  let linkedUser = {};
+
+  if (linkedUserId) {
+    const linkedUserSnap = await firestore.collection("users").doc(linkedUserId).get();
+    linkedUser = linkedUserSnap.exists ? linkedUserSnap.data() || {} : {};
+  }
+
+  const email = firstNonEmptyString(
+    linkedUser.email,
+    linkedUser.userEmail,
+    linkedUser.contactEmail,
+    companyUser.email,
+    companyUser.userEmail,
+    companyUser.contactEmail
+  );
+  const phoneNumber = firstNonEmptyString(
+    linkedUser.phoneNumber,
+    linkedUser.phone,
+    linkedUser.mobilePhone,
+    linkedUser.mobile,
+    linkedUser.cellPhone,
+    linkedUser.telephone,
+    companyUser.phoneNumber,
+    companyUser.phone,
+    companyUser.mobilePhone,
+    companyUser.mobile,
+    companyUser.cellPhone,
+    companyUser.telephone
+  );
+
+  return {
+    status: 200,
+    companyId,
+    companyUserId: companyUserSnap.id,
+    linkedUserId,
+    contact: {
+      email,
+      phoneNumber,
+    },
   };
 });
 
@@ -5557,6 +5753,19 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
               equipment.sourceHomeownerEquipmentId ||
               equipment.id ||
               (bodyIndex === 0 ? homeownerEquipmentId : "");
+            const serviceSchedule = normalizeEquipmentServiceSchedule(equipment);
+            if (serviceSchedule.needsService && !serviceSchedule.lastServiceDate) {
+              throw new Error(`Add a last service date for ${equipment.name || "equipment"}.`);
+            }
+            if (
+              serviceSchedule.needsService &&
+              (!Number.isFinite(serviceSchedule.serviceFrequency) ||
+                serviceSchedule.serviceFrequency <= 0 ||
+                !serviceSchedule.serviceFrequencyEvery ||
+                !serviceSchedule.nextServiceDate)
+            ) {
+              throw new Error(`Add a valid service frequency for ${equipment.name || "equipment"}.`);
+            }
             equipmentIds.push(equipmentId);
 
             const equipmentRecord = removeUndefinedDeep({
@@ -5573,8 +5782,8 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
               dateInstalled: equipment.dateInstalled || now,
               cleanFilterPressure: equipment.cleanFilterPressure ?? null,
               currentPressure: equipment.currentPressure ?? null,
-              serviceFrequency: equipment.serviceFrequency ?? null,
-              serviceFrequencyEvery: equipment.serviceFrequencyEvery || "",
+              serviceFrequency: serviceSchedule.serviceFrequency,
+              serviceFrequencyEvery: serviceSchedule.serviceFrequencyEvery,
               notes: equipment.notes || "",
               customerId,
               customerName,
@@ -5587,10 +5796,10 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
               sourceHomeownerEquipmentId,
               source: "homeownerServiceRequest",
               sourceHomeownerServiceRequestId: leadId,
-              lastServiceDate: equipment.lastServiceDate || null,
-              nextServiceDate: equipment.nextServiceDate || null,
+              lastServiceDate: serviceSchedule.lastServiceDate,
+              nextServiceDate: serviceSchedule.nextServiceDate,
               isActive: true,
-              needsService: Boolean(equipment.needsService),
+              needsService: serviceSchedule.needsService,
               status: equipment.status || "Operational",
               verified: Boolean(equipment.verified),
               photoUrls: Array.isArray(equipment.photoUrls) ? equipment.photoUrls : [],

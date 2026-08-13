@@ -35,11 +35,12 @@ const DEFAULT_EQUIPMENT = [
         model: '',
         modelId: '',
         universalEquipmentId: '',
-        manualPdfLink: '',
-        needsService: false,
-        serviceFrequency: '',
-        serviceFrequencyEvery: '',
-    },
+	        manualPdfLink: '',
+	        needsService: false,
+	        lastServiceDate: '',
+	        serviceFrequency: '',
+	        serviceFrequencyEvery: '',
+	    },
     {
         name: 'Filter 1',
         type: 'Filter',
@@ -50,16 +51,62 @@ const DEFAULT_EQUIPMENT = [
         model: '',
         modelId: '',
         universalEquipmentId: '',
-        manualPdfLink: '',
-        needsService: true,
-        serviceFrequency: 6,
-        serviceFrequencyEvery: 'Month',
-    },
+	        manualPdfLink: '',
+	        needsService: true,
+	        lastServiceDate: '',
+	        serviceFrequency: 6,
+	        serviceFrequencyEvery: 'Month',
+	    },
 ];
 
 const inputClass =
     'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100';
 const WATER_TYPE_OPTIONS = ['Fresh Water', 'Salt Water'];
+
+const dateInputToLocalDate = (value) => {
+    if (!value) return null;
+    const [year, month, day] = String(value).split('-').map(Number);
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+};
+
+const formatDateInput = (value) => {
+    if (!value) return '';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFrequencyEvery) => {
+    if (!lastServiceDate) return null;
+
+    const amount = Number(serviceFrequency);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    const next = new Date(lastServiceDate);
+    if (Number.isNaN(next.getTime())) return null;
+
+    if (serviceFrequencyEvery === 'Day') next.setDate(next.getDate() + amount);
+    else if (serviceFrequencyEvery === 'Week') next.setDate(next.getDate() + (amount * 7));
+    else if (serviceFrequencyEvery === 'Month') next.setMonth(next.getMonth() + amount);
+    else if (serviceFrequencyEvery === 'Year') next.setFullYear(next.getFullYear() + amount);
+    else return null;
+
+    return next;
+};
+
+const getEquipmentNextServiceDateInput = (equipment = {}) => (
+    formatDateInput(computeNextServiceDate(
+        dateInputToLocalDate(equipment.lastServiceDate),
+        equipment.serviceFrequency,
+        equipment.serviceFrequencyEvery || 'Month'
+    ))
+);
 
 const Field = ({ label, children }) => (
     <label className="space-y-1">
@@ -184,6 +231,28 @@ const CreateBodyOfWater = () => {
             return;
         }
 
+        if (createDefaultEquipment) {
+            for (const equipment of defaultEquipment) {
+                const finalNeedsService = !!equipment.needsService || equipmentDefaultsToNeedsService(equipment);
+                const lastServiceDate = finalNeedsService ? dateInputToLocalDate(equipment.lastServiceDate) : null;
+                const serviceFrequency = finalNeedsService ? Number(equipment.serviceFrequency) : null;
+                const serviceFrequencyEvery = finalNeedsService ? (equipment.serviceFrequencyEvery || 'Month') : null;
+                const calculatedNextServiceDate = finalNeedsService
+                    ? computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
+                    : null;
+
+                if (finalNeedsService && !lastServiceDate) {
+                    toast.error(`Add a last service date for ${equipment.name}.`);
+                    return;
+                }
+
+                if (finalNeedsService && (!Number.isFinite(serviceFrequency) || serviceFrequency <= 0 || !serviceFrequencyEvery || !calculatedNextServiceDate)) {
+                    toast.error(`Add a valid service frequency for ${equipment.name}.`);
+                    return;
+                }
+            }
+        }
+
         setLoading(true);
         const toastId = toast.loading('Creating body of water...');
 
@@ -217,9 +286,15 @@ const CreateBodyOfWater = () => {
 
             if (createDefaultEquipment) {
                 await Promise.all(defaultEquipment.map(async (equipment) => {
-                    const equipmentId = `com_equ_${uuidv4()}`;
-                    const finalNeedsService = !!equipment.needsService || equipmentDefaultsToNeedsService(equipment);
-                    const equipmentPayload = {
+	                    const equipmentId = `com_equ_${uuidv4()}`;
+	                    const finalNeedsService = !!equipment.needsService || equipmentDefaultsToNeedsService(equipment);
+	                    const lastServiceDate = finalNeedsService ? dateInputToLocalDate(equipment.lastServiceDate) : null;
+	                    const serviceFrequency = finalNeedsService ? Number(equipment.serviceFrequency) : null;
+	                    const serviceFrequencyEvery = finalNeedsService ? (equipment.serviceFrequencyEvery || 'Month') : null;
+	                    const calculatedNextServiceDate = finalNeedsService
+	                        ? computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
+	                        : null;
+	                    const equipmentPayload = {
                         id: equipmentId,
                         name: equipment.name,
                         type: equipment.type,
@@ -236,13 +311,13 @@ const CreateBodyOfWater = () => {
                         serviceLocationId: selectedLocationId,
                         bodyOfWaterId,
                         dateInstalled: new Date(),
-                        active: true,
-                        isActive: true,
-                        needsService: finalNeedsService,
-                        lastServiceDate: finalNeedsService ? new Date() : null,
-                        nextServiceDate: null,
-                        serviceFrequency: finalNeedsService ? (equipment.serviceFrequency || 6) : null,
-                        serviceFrequencyEvery: finalNeedsService ? (equipment.serviceFrequencyEvery || 'Month') : null,
+	                        active: true,
+	                        isActive: true,
+	                        needsService: finalNeedsService,
+	                        lastServiceDate,
+	                        nextServiceDate: calculatedNextServiceDate,
+	                        serviceFrequency,
+	                        serviceFrequencyEvery,
                         cleanFilterPressure: null,
                         currentPressure: null,
                         status: 'Operational',
@@ -291,6 +366,12 @@ const CreateBodyOfWater = () => {
                     };
                 })()
                 : equipment
+        )));
+    };
+
+    const updateDefaultEquipmentField = (index, field, value) => {
+        setDefaultEquipment((currentEquipment) => currentEquipment.map((equipment, currentIndex) => (
+            currentIndex === index ? { ...equipment, [field]: value } : equipment
         )));
     };
 
@@ -465,11 +546,52 @@ const CreateBodyOfWater = () => {
                                                 gridClassName="grid gap-3"
                                             />
                                         </div>
-                                        {equipment.needsService && (
-                                            <p className="mt-3 text-sm text-slate-500">
-                                                Service every {equipment.serviceFrequency} {equipment.serviceFrequencyEvery}
-                                            </p>
-                                        )}
+	                                        {equipment.needsService && (
+	                                            <div className="mt-3 grid gap-3">
+	                                                <Field label="Last Service Date">
+	                                                    <input
+	                                                        type="date"
+	                                                        value={equipment.lastServiceDate || ''}
+	                                                        onChange={(event) => updateDefaultEquipmentField(index, 'lastServiceDate', event.target.value)}
+	                                                        required
+	                                                        className={inputClass}
+	                                                    />
+	                                                </Field>
+	                                                <Field label="Next Service Date">
+	                                                    <input
+	                                                        type="date"
+	                                                        value={getEquipmentNextServiceDateInput(equipment)}
+	                                                        readOnly
+	                                                        className={`${inputClass} bg-slate-50`}
+	                                                    />
+	                                                </Field>
+	                                                <div className="grid gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
+	                                                    <Field label="Frequency">
+	                                                        <input
+	                                                            type="number"
+	                                                            min="1"
+	                                                            value={equipment.serviceFrequency || ''}
+	                                                            onChange={(event) => updateDefaultEquipmentField(index, 'serviceFrequency', event.target.value)}
+	                                                            required
+	                                                            className={inputClass}
+	                                                        />
+	                                                    </Field>
+	                                                    <Field label="Unit">
+	                                                        <select
+	                                                            value={equipment.serviceFrequencyEvery || 'Month'}
+	                                                            onChange={(event) => updateDefaultEquipmentField(index, 'serviceFrequencyEvery', event.target.value)}
+	                                                            required
+	                                                            className={inputClass}
+	                                                        >
+	                                                            <option value="Day">Day</option>
+	                                                            <option value="Week">Week</option>
+	                                                            <option value="Month">Month</option>
+	                                                            <option value="Year">Year</option>
+	                                                        </select>
+	                                                    </Field>
+	                                                </div>
+	                                            </div>
+	                                        )}
                                     </div>
                                 ))}
                             </div>

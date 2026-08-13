@@ -33,4 +33,11 @@ describe("jobStatusFilters", () => {
       billingStatus: "Paid",
     })).toBe(false);
   });
+
+  it("does not treat customer-resolved jobs as outstanding", () => {
+    expect(isFinishedOutstandingJob({
+      operationStatus: "Finished",
+      billingStatus: "Customer Resolved",
+    })).toBe(false);
+  });
 });

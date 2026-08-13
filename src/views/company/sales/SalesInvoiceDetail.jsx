@@ -562,7 +562,17 @@ const SalesInvoiceDetail = () => {
                 {invoice?.invoiceNumber || 'Invoice'}
               </h1>
               <p className="mt-2 text-sm text-slate-600">
-                {invoice?.customerName || invoice?.email || 'Customer'} - Balance {formatCurrency(balanceCents)}
+                {invoice?.customerId ? (
+                  <Link
+                    to={`/company/customers/details/${invoice.customerId}`}
+                    className="font-semibold text-blue-700 hover:text-blue-900"
+                  >
+                    {invoice?.customerName || invoice?.email || 'Customer'}
+                  </Link>
+                ) : (
+                  invoice?.customerName || invoice?.email || 'Customer'
+                )}
+                {' - '}Balance {formatCurrency(balanceCents)}
               </p>
             </div>
 

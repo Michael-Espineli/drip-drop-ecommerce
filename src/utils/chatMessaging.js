@@ -204,13 +204,20 @@ export const companyParticipantFromCompany = (company = {}) => (
   })
 );
 
-export const isChatVisibleTo = (chat = {}, userId, companyId = '') => {
+export const isChatVisibleTo = (chat = {}, userId, companyId = '', { includeCompanyWide = false } = {}) => {
   const participantIds = Array.isArray(chat.participantIds) ? chat.participantIds : [];
   const participantCompanyIds = Array.isArray(chat.participantCompanyIds) ? chat.participantCompanyIds : [];
 
+  if (userId && participantIds.includes(userId)) {
+    return true;
+  }
+
+  if (!includeCompanyWide) {
+    return false;
+  }
+
   return Boolean(
-    (userId && participantIds.includes(userId))
-    || (companyId && participantCompanyIds.includes(companyId))
+    (companyId && participantCompanyIds.includes(companyId))
     || (companyId && chat.companyId === companyId)
     || (companyId && chat.receiverCompanyId === companyId)
     || (companyId && chat.senderCompanyId === companyId)
@@ -1185,7 +1192,7 @@ const docsFromSnapshot = (snapshot) => (
   snapshot.docs.map((chatDoc) => ({ id: chatDoc.id, ...chatDoc.data() }))
 );
 
-export const listenVisibleChats = ({ db, userId, companyId = '', onChange, onError = noop }) => {
+export const listenVisibleChats = ({ db, userId, companyId = '', includeCompanyWide = false, onChange, onError = noop }) => {
   if (!db || !userId) return noop;
 
   const buckets = new Map();
@@ -1196,7 +1203,7 @@ export const listenVisibleChats = ({ db, userId, companyId = '', onChange, onErr
 
     buckets.forEach((items) => {
       items.forEach((item) => {
-        if (isChatVisibleTo(item, userId, companyId)) merged.set(item.id, item);
+        if (isChatVisibleTo(item, userId, companyId, { includeCompanyWide })) merged.set(item.id, item);
       });
     });
 
@@ -1204,23 +1211,23 @@ export const listenVisibleChats = ({ db, userId, companyId = '', onChange, onErr
   };
 
   const chatsRef = collection(db, 'chats');
-  if (!companyId) {
-    const directQuery = query(chatsRef, where('participantIds', 'array-contains', userId));
+  const directQuery = query(chatsRef, where('participantIds', 'array-contains', userId));
 
-    unsubscribers.push(onSnapshot(
-      directQuery,
-      (snapshot) => {
-        buckets.set('direct', docsFromSnapshot(snapshot));
-        emit();
-      },
-      (error) => {
-        console.error('Error listening to direct chats:', error);
-        buckets.set('direct', []);
-        onError(error);
-        emit();
-      },
-    ));
-  } else {
+  unsubscribers.push(onSnapshot(
+    directQuery,
+    (snapshot) => {
+      buckets.set('direct', docsFromSnapshot(snapshot));
+      emit();
+    },
+    (error) => {
+      console.error('Error listening to direct chats:', error);
+      buckets.set('direct', []);
+      onError(error);
+      emit();
+    },
+  ));
+
+  if (companyId && includeCompanyWide) {
     const companyOwnerQuery = query(chatsRef, where('companyId', '==', companyId));
     const companyReceiverQuery = query(chatsRef, where('receiverCompanyId', '==', companyId));
 
@@ -1838,24 +1845,29 @@ export const findVisibleChatWithParticipant = async ({
   db,
   currentUserId,
   selectedCompanyId = '',
+  includeCompanyWide = false,
   participantId,
   participantCompanyId = '',
 }) => {
   if (!db || !currentUserId || !participantId) return null;
 
   const chatsRef = collection(db, 'chats');
-  const snapshots = selectedCompanyId
-    ? await Promise.all([
+  const directSnapshot = await getDocs(query(chatsRef, where('participantIds', 'array-contains', currentUserId)));
+  const snapshots = [directSnapshot];
+
+  if (selectedCompanyId && includeCompanyWide) {
+    snapshots.push(...(await Promise.all([
       getDocs(query(chatsRef, where('companyId', '==', selectedCompanyId))),
       getDocs(query(chatsRef, where('receiverCompanyId', '==', selectedCompanyId))),
-    ])
-    : [await getDocs(query(chatsRef, where('participantIds', 'array-contains', currentUserId)))];
+    ])));
+  }
+
   const docs = snapshots.flatMap((snapshot) => snapshot.docs);
 
   const match = docs
     .map((chatDoc) => ({ id: chatDoc.id, ...chatDoc.data() }))
     .find((chat) => {
-      const visible = isChatVisibleTo(chat, currentUserId, selectedCompanyId);
+      const visible = isChatVisibleTo(chat, currentUserId, selectedCompanyId, { includeCompanyWide });
       const hasUser = Array.isArray(chat.participantIds) && chat.participantIds.includes(participantId);
       const hasCompany = participantCompanyId
         && Array.isArray(chat.participantCompanyIds)

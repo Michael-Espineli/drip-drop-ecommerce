@@ -12,6 +12,7 @@ export const JOB_BILLING_STATUS = {
   invoiced: "Invoiced",
   paid: "Paid",
   comped: "Comped",
+  customerResolved: "Customer Resolved",
   expired: "Expired",
   rejected: "Rejected",
 };
@@ -20,6 +21,7 @@ const FINISHED_BILLING_STATUSES = [
   JOB_BILLING_STATUS.invoiced,
   JOB_BILLING_STATUS.paid,
   JOB_BILLING_STATUS.comped,
+  JOB_BILLING_STATUS.customerResolved,
 ];
 
 const getOperationStatus = (job = {}) => job.operationStatus ?? job.status;

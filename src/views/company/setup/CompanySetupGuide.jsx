@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc, Timestamp, where, writeBatch } from "firebase/firestore";
+import { collection, doc, getCountFromServer, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc, Timestamp, where, writeBatch } from "firebase/firestore";
 import toast from "react-hot-toast";
 import {
   FaArrowRight,
@@ -80,8 +80,8 @@ const safeGetDocs = async (ref, label) => {
 
 const countSnapshot = async (ref, label = "collection") => {
   try {
-    const snapshot = await getDocs(ref);
-    return snapshot.size;
+    const snapshot = await getCountFromServer(ref);
+    return snapshot.data().count || 0;
   } catch (err) {
     console.debug(`Unable to load setup count for ${label}:`, err);
     return 0;

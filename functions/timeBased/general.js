@@ -1576,6 +1576,7 @@ function paymentTermsDueDays(paymentTerms = "") {
   const key = normalizeSalesStatus(paymentTerms);
   if (key === "net7") return 7;
   if (key === "net14") return 14;
+  if (key === "net15") return 15;
   if (key === "net30") return 30;
   return 0;
 }
@@ -1686,7 +1687,6 @@ function shouldSkipScheduledManualInvoice(subscription = {}, now = new Date()) {
     null
   );
 
-  if (subscription.manualBillingAutoSendEnabled !== true) return "autoSendDisabled";
   if (subscription.manualBillingEnabled === false) return "manualBillingDisabled";
   if (statusKey === "canceled" || statusKey === "superseded" || statusKey === "paused") return "subscriptionNotBillable";
   if (subscription.autopayEnabled === true) return "autopayEnabled";
@@ -1726,7 +1726,8 @@ async function createScheduledManualSubscriptionInvoice(db, subscription = {}) {
 
     if (!invoiceSnap.exists) {
       created = true;
-      shouldSendEmail = ["email", "customerPortal"].includes(subscription.invoiceDeliveryMethod || "email");
+      shouldSendEmail = subscription.manualBillingAutoSendEnabled === true &&
+        ["email", "customerPortal"].includes(subscription.invoiceDeliveryMethod || "email");
 
       transaction.set(invoiceRef, {
         id: period.invoiceId,
@@ -1782,7 +1783,9 @@ async function createScheduledManualSubscriptionInvoice(db, subscription = {}) {
       });
     } else {
       const invoiceData = invoiceSnap.data() || {};
-      shouldSendEmail = ["email", "customerPortal"].includes(invoiceData.deliveryMethod || subscription.invoiceDeliveryMethod || "email") && !invoiceData.sentAt;
+      shouldSendEmail = subscription.manualBillingAutoSendEnabled === true &&
+        ["email", "customerPortal"].includes(invoiceData.deliveryMethod || subscription.invoiceDeliveryMethod || "email") &&
+        !invoiceData.sentAt;
     }
 
     transaction.set(subscriptionRef, {
@@ -1798,7 +1801,7 @@ async function createScheduledManualSubscriptionInvoice(db, subscription = {}) {
       manualBillingNextDueDate: toTimestamp(period.nextDueDate),
       billingCollectionMethod: subscription.billingCollectionMethod || "manualUntilAutopay",
       manualBillingEnabled: true,
-      manualBillingAutoSendEnabled: true,
+      manualBillingAutoSendEnabled: subscription.manualBillingAutoSendEnabled === true,
       manualBillingStatus: created ? "invoiceCreated" : "invoiceAlreadyExisted",
       manualBillingReason: subscription.manualBillingReason || "scheduledManualRecurringInvoice",
       manualBillingUpdatedAt: now,
@@ -1820,8 +1823,8 @@ async function createScheduledManualSubscriptionInvoice(db, subscription = {}) {
   };
 }
 
-exports.hourlySalesManualInvoiceSend = onSchedule(
-  { schedule: "every 60 minutes", timeZone: "America/New_York" },
+exports.dailySalesManualInvoiceCreate = onSchedule(
+  { schedule: "every day 06:00", timeZone: "America/New_York" },
   async () => {
     const db = getFirestore();
     const now = new Date();
@@ -1856,6 +1859,7 @@ exports.hourlySalesManualInvoiceSend = onSchedule(
 
         if (!result.shouldSendEmail) {
           await docSnap.ref.set({
+            manualBillingStatus: result.created ? "invoiceCreated" : "invoiceAlreadyExisted",
             manualBillingLastAutoRunStatus: result.created ? "invoiceCreatedEmailSkipped" : "invoiceAlreadyExistedEmailSkipped",
             manualBillingLastAutoRunAt: FieldValue.serverTimestamp(),
           }, { merge: true });
@@ -1907,7 +1911,7 @@ exports.hourlySalesManualInvoiceSend = onSchedule(
       }
     }
 
-    console.log("Hourly sales manual invoice send finished", {
+    console.log("Daily sales manual invoice create finished", {
       scannedCount: snapshot.size,
       processedCount,
       createdCount,

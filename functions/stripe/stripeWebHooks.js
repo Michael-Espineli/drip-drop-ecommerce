@@ -303,6 +303,8 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
 
     if (!subscriptionRef) return false;
 
+    const existingSubscriptionSnap = await subscriptionRef.get();
+    const existingSubscription = existingSubscriptionSnap.exists ? existingSubscriptionSnap.data() || {} : {};
     const item = subscription.items?.data?.[0] || {};
     const stripeStatus = subscription.status || '';
     const status = mapStripeSubscriptionStatus(stripeStatus);
@@ -352,7 +354,7 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
         autopayStatus,
         autopayEnabled: autopayIsActive,
         manualBillingEnabled: !stripeManagedBilling,
-        manualBillingAutoSendEnabled: !stripeManagedBilling,
+        manualBillingAutoSendEnabled: !stripeManagedBilling && existingSubscription.manualBillingAutoSendEnabled === true,
         manualBillingStatus: autopayIsActive
             ? 'disabledAutopayActive'
             : stripeManagedBilling

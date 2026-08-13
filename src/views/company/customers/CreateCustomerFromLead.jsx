@@ -9,6 +9,7 @@ import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 import { normalizeAddress as normalizeCustomerLocationAddress } from '../../../utils/customerLocationData';
+import { equipmentDefaultsToNeedsService } from '../../../utils/models/Equipment';
 
 const firstText = (...values) => {
     for (const value of values) {
@@ -70,6 +71,69 @@ const formatAddress = (address = {}) => [
     address.zip || address.zipCode,
 ].filter(Boolean).join(', ');
 
+const toDateValue = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+    if (typeof value.toDate === 'function') return value.toDate();
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const dateInputToLocalDate = (value) => {
+    if (!value) return null;
+    const [year, month, day] = String(value).split('-').map(Number);
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+};
+
+const formatDateInput = (value) => {
+    const date = toDateValue(value);
+    if (!date) return '';
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFrequencyEvery) => {
+    const base = toDateValue(lastServiceDate);
+    const amount = Number(serviceFrequency);
+    if (!base || !Number.isFinite(amount) || amount <= 0) return null;
+
+    const next = new Date(base);
+    if (serviceFrequencyEvery === 'Day') next.setDate(next.getDate() + amount);
+    else if (serviceFrequencyEvery === 'Week') next.setDate(next.getDate() + (amount * 7));
+    else if (serviceFrequencyEvery === 'Month') next.setMonth(next.getMonth() + amount);
+    else if (serviceFrequencyEvery === 'Year') next.setFullYear(next.getFullYear() + amount);
+    else return null;
+
+    return next;
+};
+
+const getEquipmentNextServiceDateInput = (equipment = {}) => (
+    formatDateInput(computeNextServiceDate(
+        dateInputToLocalDate(equipment.lastServiceDate),
+        equipment.serviceFrequency,
+        equipment.serviceFrequencyEvery || 'Month'
+    ))
+);
+
+const withEquipmentServiceDefaults = (equipment = {}) => ({
+    ...equipment,
+    needsService: true,
+    serviceFrequency: equipment.serviceFrequency || 6,
+    serviceFrequencyEvery: equipment.serviceFrequencyEvery || 'Month',
+});
+
+const applyEquipmentServiceDefaults = (equipment = {}) => (
+    equipmentDefaultsToNeedsService(equipment) || equipment.needsService
+        ? withEquipmentServiceDefaults(equipment)
+        : equipment
+);
+
 const normalizeDogName = (value) => (
     Array.isArray(value) ? value.filter(Boolean).join(', ') : String(value || '')
 );
@@ -93,8 +157,8 @@ const mapHomeownerEquipmentToForm = (equipment = {}) => ({
     serviceFrequency: equipment.serviceFrequency ?? null,
     serviceFrequencyEvery: equipment.serviceFrequencyEvery || '',
     dateInstalled: equipment.dateInstalled || null,
-    lastServiceDate: equipment.lastServiceDate || null,
-    nextServiceDate: equipment.nextServiceDate || null,
+    lastServiceDate: formatDateInput(equipment.lastServiceDate),
+    nextServiceDate: formatDateInput(equipment.nextServiceDate),
     notes: equipment.notes || '',
     needsService: Boolean(equipment.needsService),
     status: equipment.status || 'Operational',
@@ -111,8 +175,8 @@ const defaultBodyOfWaterData = {
 };
 
 const defaultEquipmentData = [
-    { name: 'Pump', type: 'Pump', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: false },
-    { name: 'Filter', type: 'Filter', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: true },
+    { name: 'Pump', type: 'Pump', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: false, lastServiceDate: '', serviceFrequency: '', serviceFrequencyEvery: '' },
+    { name: 'Filter', type: 'Filter', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: true, lastServiceDate: '', serviceFrequency: 6, serviceFrequencyEvery: 'Month' },
 ];
 
 const blankEquipmentData = {
@@ -127,6 +191,9 @@ const blankEquipmentData = {
     manualPdfLink: '',
     notes: '',
     needsService: false,
+    lastServiceDate: '',
+    serviceFrequency: '',
+    serviceFrequencyEvery: '',
 };
 
 const mapPublicEquipmentToForm = (equipment = {}) => ({
@@ -142,6 +209,9 @@ const mapPublicEquipmentToForm = (equipment = {}) => ({
     manualPdfLink: equipment.manualPdfLink || '',
     notes: equipment.notes || equipment.description || '',
     needsService: Boolean(equipment.needsService),
+    lastServiceDate: formatDateInput(equipment.lastServiceDate),
+    serviceFrequency: equipment.serviceFrequency || '',
+    serviceFrequencyEvery: equipment.serviceFrequencyEvery || '',
 });
 
 const mapPublicBodyOfWaterToForm = (bodyOfWater = {}, index = 0) => {
@@ -530,7 +600,8 @@ const CreateCustomerFromLead = () => {
             const nextEquipmentData = entry.equipmentData.map((equipment, currentEquipmentIndex) => {
                 if (currentEquipmentIndex !== equipmentIndex) return equipment;
 
-                return { ...equipment, [name]: fieldValue };
+                const updatedEquipment = { ...equipment, [name]: fieldValue };
+                return applyEquipmentServiceDefaults(updatedEquipment);
             });
 
             return {
@@ -546,11 +617,12 @@ const CreateCustomerFromLead = () => {
 
             return {
                 ...entry,
-                equipmentData: entry.equipmentData.map((equipment, currentEquipmentIndex) => (
-                    currentEquipmentIndex === equipmentIndex
-                        ? { ...equipment, ...nextCatalogEquipment }
-                        : equipment
-                )),
+                equipmentData: entry.equipmentData.map((equipment, currentEquipmentIndex) => {
+                    if (currentEquipmentIndex !== equipmentIndex) return equipment;
+
+                    const mergedEquipment = { ...equipment, ...nextCatalogEquipment };
+                    return applyEquipmentServiceDefaults(mergedEquipment);
+                }),
             };
         }));
     };
@@ -571,10 +643,36 @@ const CreateCustomerFromLead = () => {
 
             const authPayload = await getCallableAuthPayload();
             const convertLead = httpsCallable(functions, 'convertHomeownerServiceRequestToCompanyCustomer');
+            const buildEquipmentPayload = (equipment = {}) => {
+                const finalNeedsService = !!equipment.needsService || equipmentDefaultsToNeedsService(equipment);
+                const lastServiceDate = finalNeedsService ? dateInputToLocalDate(equipment.lastServiceDate) : null;
+                const serviceFrequency = finalNeedsService ? Number(equipment.serviceFrequency) : null;
+                const serviceFrequencyEvery = finalNeedsService ? (equipment.serviceFrequencyEvery || 'Month') : '';
+                const calculatedNextServiceDate = finalNeedsService
+                    ? computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
+                    : null;
+
+                if (finalNeedsService && !lastServiceDate) {
+                    throw new Error(`Add a last service date for ${equipment.name || 'equipment'}.`);
+                }
+
+                if (finalNeedsService && (!Number.isFinite(serviceFrequency) || serviceFrequency <= 0 || !serviceFrequencyEvery || !calculatedNextServiceDate)) {
+                    throw new Error(`Add a valid service frequency for ${equipment.name || 'equipment'}.`);
+                }
+
+                return {
+                    ...equipment,
+                    needsService: finalNeedsService,
+                    lastServiceDate: finalNeedsService ? formatDateInput(lastServiceDate) : null,
+                    nextServiceDate: finalNeedsService ? formatDateInput(calculatedNextServiceDate) : null,
+                    serviceFrequency: finalNeedsService ? serviceFrequency : null,
+                    serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery : '',
+                };
+            };
             const bodyOfWaterEntriesPayload = addBodyOfWater
                 ? bodyOfWaterEntries.map((entry) => ({
                     ...entry.data,
-                    equipmentData: addEquipment ? entry.equipmentData : [],
+                    equipmentData: addEquipment ? entry.equipmentData.map(buildEquipmentPayload) : [],
                 }))
                 : [];
             const primaryBodyOfWaterEntry = bodyOfWaterEntriesPayload[0] || {};
@@ -855,11 +953,62 @@ const CreateCustomerFromLead = () => {
                                                                         gridClassName="grid grid-cols-1 gap-2 md:grid-cols-3"
                                                                     />
                                                                     <textarea placeholder="Notes" name="notes" value={equipment.notes} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md" />
-                                                                    <label className="flex items-center">
-                                                                        <input type="checkbox" name="needsService" checked={equipment.needsService} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="mr-2 h-4 w-4" />
-                                                                        Needs Service
-                                                                    </label>
-                                                                </div>
+	                                                                    <label className="flex items-center">
+	                                                                        <input type="checkbox" name="needsService" checked={equipment.needsService} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="mr-2 h-4 w-4" />
+	                                                                        Needs Service
+	                                                                    </label>
+	                                                                    {equipment.needsService && (
+	                                                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+	                                                                            <label className="block text-xs font-semibold uppercase text-gray-500">
+	                                                                                Last Service Date
+	                                                                                <input
+	                                                                                    type="date"
+	                                                                                    name="lastServiceDate"
+	                                                                                    value={equipment.lastServiceDate || ''}
+	                                                                                    onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)}
+	                                                                                    required
+	                                                                                    className="mt-1 w-full rounded-md border p-2 text-sm font-normal normal-case text-gray-800"
+	                                                                                />
+	                                                                            </label>
+	                                                                            <label className="block text-xs font-semibold uppercase text-gray-500">
+	                                                                                Next Service Date
+	                                                                                <input
+	                                                                                    type="date"
+	                                                                                    value={getEquipmentNextServiceDateInput(equipment)}
+	                                                                                    readOnly
+	                                                                                    className="mt-1 w-full rounded-md border bg-gray-50 p-2 text-sm font-normal normal-case text-gray-800"
+	                                                                                />
+	                                                                            </label>
+	                                                                            <label className="block text-xs font-semibold uppercase text-gray-500">
+	                                                                                Service Frequency
+	                                                                                <input
+	                                                                                    type="number"
+	                                                                                    min="1"
+	                                                                                    name="serviceFrequency"
+	                                                                                    value={equipment.serviceFrequency || ''}
+	                                                                                    onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)}
+	                                                                                    required
+	                                                                                    className="mt-1 w-full rounded-md border p-2 text-sm font-normal normal-case text-gray-800"
+	                                                                                />
+	                                                                            </label>
+	                                                                            <label className="block text-xs font-semibold uppercase text-gray-500">
+	                                                                                Frequency Unit
+	                                                                                <select
+	                                                                                    name="serviceFrequencyEvery"
+	                                                                                    value={equipment.serviceFrequencyEvery || 'Month'}
+	                                                                                    onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)}
+	                                                                                    required
+	                                                                                    className="mt-1 w-full rounded-md border p-2 text-sm font-normal normal-case text-gray-800"
+	                                                                                >
+	                                                                                    <option value="Day">Day</option>
+	                                                                                    <option value="Week">Week</option>
+	                                                                                    <option value="Month">Month</option>
+	                                                                                    <option value="Year">Year</option>
+	                                                                                </select>
+	                                                                            </label>
+	                                                                        </div>
+	                                                                    )}
+	                                                                </div>
                                                         ))}
                                                     </div>
                                                 )}

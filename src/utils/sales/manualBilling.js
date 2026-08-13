@@ -73,6 +73,7 @@ const paymentTermsDueDays = (paymentTerms = '') => {
   const key = normalizeStatus(paymentTerms);
   if (key === 'net7') return 7;
   if (key === 'net14') return 14;
+  if (key === 'net15') return 15;
   if (key === 'net30') return 30;
   return 0;
 };

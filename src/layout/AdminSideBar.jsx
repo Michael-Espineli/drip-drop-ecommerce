@@ -4,8 +4,9 @@ import { Context } from '../context/AuthContext';
 import { getNav } from '../navigation/index';
 import { ArrowLeftOnRectangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from 'firebase/auth';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where } from 'firebase/firestore';
 import { db } from '../utils/config';
+import { getServerCount, listenForForegroundRefresh } from '../utils/firestoreCounts';
 
 const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
   const ADMIN_YELLOW = '#efb12f';
@@ -55,37 +56,56 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
   }, [role, user]);
 
   useEffect(() => {
-    if (!recentlySelectedCompany || !user) return;
-    if (!leadsQuery || !messagesQuery) return;
+    if (!recentlySelectedCompany || !user || !leadsQuery || !messagesQuery) {
+      setCounts((prev) => ({ ...prev, leads: 0, messages: 0 }));
+      return undefined;
+    }
 
-    const unsubscribeLeads = onSnapshot(leadsQuery, (snapshot) => {
-      setCounts((prev) => ({ ...prev, leads: snapshot.size }));
-    });
+    let cancelled = false;
+    const loadCounts = async () => {
+      try {
+        const [leads, messages] = await Promise.all([
+          getServerCount(leadsQuery),
+          getServerCount(messagesQuery),
+        ]);
 
-    const unsubscribeMessages = onSnapshot(messagesQuery, (snapshot) => {
-      setCounts((prev) => ({ ...prev, messages: snapshot.size }));
-    });
+        if (!cancelled) setCounts((prev) => ({ ...prev, leads, messages }));
+      } catch (error) {
+        console.error('Error loading admin sidebar counts:', error);
+        if (!cancelled) setCounts((prev) => ({ ...prev, leads: 0, messages: 0 }));
+      }
+    };
+
+    loadCounts();
+    const removeForegroundRefresh = listenForForegroundRefresh(loadCounts);
 
     return () => {
-      unsubscribeLeads();
-      unsubscribeMessages();
+      cancelled = true;
+      removeForegroundRefresh();
     };
   }, [recentlySelectedCompany, user, leadsQuery, messagesQuery]);
 
   useEffect(() => {
     if (!errorsQuery) return undefined;
 
-    const unsubscribeErrors = onSnapshot(
-      errorsQuery,
-      (snapshot) => {
-        setCounts((prev) => ({ ...prev, errors: snapshot.size }));
-      },
-      (error) => {
+    let cancelled = false;
+    const loadErrorCount = async () => {
+      try {
+        const errors = await getServerCount(errorsQuery);
+        if (!cancelled) setCounts((prev) => ({ ...prev, errors }));
+      } catch (error) {
         console.error('Error loading app error count:', error);
+        if (!cancelled) setCounts((prev) => ({ ...prev, errors: 0 }));
       }
-    );
+    };
 
-    return () => unsubscribeErrors();
+    loadErrorCount();
+    const removeForegroundRefresh = listenForForegroundRefresh(loadErrorCount);
+
+    return () => {
+      cancelled = true;
+      removeForegroundRefresh();
+    };
   }, [errorsQuery]);
 
   const logout = async () => {

@@ -25,6 +25,7 @@ import {
   SalesCatalogSourceType,
   SalesAgreementChemicalBillingMode,
   SalesAgreementPnlChemicalCostMode,
+  SalesInvoiceDeliveryMethod,
   SalesInvoiceLineItem,
   SalesAgreementStatus,
   salesCollectionNames,
@@ -335,6 +336,9 @@ const createEditDraft = (agreement) => ({
   billingFrequencyCount: String(agreement?.billingFrequencyCount || agreement?.billingCadenceCount || agreement?.invoiceFrequencyCount || 1),
   rateType: agreement?.rateType || 'perMonth',
   paymentTerms: agreement?.paymentTerms || 'dueOnReceipt',
+  invoiceDeliveryMethod: agreement?.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
+  firstInvoiceSendAt: toInputDate(agreement?.firstInvoiceSendAt || agreement?.manualBillingNextInvoiceAt || agreement?.startDate),
+  manualBillingAutoSendEnabled: agreement?.manualBillingAutoSendEnabled === true,
   pnlIncludeInReports: agreement?.pnlIncludeInReports !== false,
   pnlChemicalCostMode: agreement?.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
   pnlExcludedChemicalKeywords: normalizeCommaList(agreement?.pnlExcludedChemicalKeywords),
@@ -1032,6 +1036,10 @@ const SalesAgreementEditorModal = ({
         billingFrequencyCount: Math.max(Number(editDraft.billingFrequencyCount) || 1, 1),
         rateType: editDraft.rateType,
         paymentTerms: editDraft.paymentTerms,
+        invoiceDeliveryMethod: editDraft.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
+        firstInvoiceSendAt: dateFromInput(editDraft.firstInvoiceSendAt),
+        manualBillingNextInvoiceAt: dateFromInput(editDraft.firstInvoiceSendAt),
+        manualBillingAutoSendEnabled: editDraft.manualBillingAutoSendEnabled === true,
         ...pnlReportingFields,
         ...chemicalBillingFields,
         terms: editDraft.terms.trim(),
@@ -1187,6 +1195,36 @@ const SalesAgreementEditorModal = ({
               )}
 
               <section className="grid gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTemplateSelector">
+                    Agreement Template
+                  </label>
+                  <select
+                    id="agreementTemplateSelector"
+                    value={editDraft.termsTemplateId || ''}
+                    onChange={(event) => applyTermsTemplate(event.target.value)}
+                    disabled={loadingTermsTemplates || applyingTermsTemplate}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                  >
+                    <option value="">
+                      {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
+                    </option>
+                    {editDraft.termsTemplateId && !selectedEditTermsTemplate && (
+                      <option value={editDraft.termsTemplateId}>
+                        {editDraft.termsTemplateName || 'Current template'}
+                      </option>
+                    )}
+                    {termsTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                  {applyingTermsTemplate && (
+                    <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
+                  )}
+                </div>
+
                 <div className="sm:col-span-2">
                   <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTitle">
                     Title
@@ -1360,6 +1398,44 @@ const SalesAgreementEditorModal = ({
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementInvoiceDeliveryMethod">
+                      Invoice Delivery
+                    </label>
+                    <select
+                      id="agreementInvoiceDeliveryMethod"
+                      value={editDraft.invoiceDeliveryMethod}
+                      onChange={(event) => updateEditField('invoiceDeliveryMethod', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {Object.values(SalesInvoiceDeliveryMethod).map((method) => (
+                        <option key={method} value={method}>{labelize(method)}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementFirstInvoiceSendAt">
+                      First Invoice Send
+                    </label>
+                    <input
+                      id="agreementFirstInvoiceSendAt"
+                      type="date"
+                      value={editDraft.firstInvoiceSendAt}
+                      onChange={(event) => updateEditField('firstInvoiceSendAt', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 lg:self-end">
+                    <input
+                      type="checkbox"
+                      checked={editDraft.manualBillingAutoSendEnabled}
+                      onChange={(event) => updateEditField('manualBillingAutoSendEnabled', event.target.checked)}
+                    />
+                    Email invoices automatically
+                  </label>
                 </div>
 
                 <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1662,36 +1738,6 @@ const SalesAgreementEditorModal = ({
                       Manage Templates
                     </Link>
                   </div>
-                </div>
-
-                <div className="mt-3">
-                  <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTermsTemplate">
-                    Terms Template
-                  </label>
-                  <select
-                    id="agreementTermsTemplate"
-                    value={editDraft.termsTemplateId || ''}
-                    onChange={(event) => applyTermsTemplate(event.target.value)}
-                    disabled={loadingTermsTemplates || applyingTermsTemplate}
-                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                  >
-                    <option value="">
-                      {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
-                    </option>
-                    {editDraft.termsTemplateId && !selectedEditTermsTemplate && (
-                      <option value={editDraft.termsTemplateId}>
-                        {editDraft.termsTemplateName || 'Current template'}
-                      </option>
-                    )}
-                    {termsTemplates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name}
-                      </option>
-                    ))}
-                  </select>
-                  {applyingTermsTemplate && (
-                    <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
-                  )}
                 </div>
 
                 <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">

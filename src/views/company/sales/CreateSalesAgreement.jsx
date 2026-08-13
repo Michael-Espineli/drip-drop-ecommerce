@@ -43,6 +43,19 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 
 const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
 
+const centsToInput = (amountCents = 0) => ((Number(amountCents) || 0) / 100).toFixed(2);
+
+const moneyInputToCents = (value) => Math.round((Number(value) || 0) * 100);
+
+const labelize = (value) => {
+  if (!value) return 'Unknown';
+  return String(value)
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/[_-]/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 const chemicalBillingModeOptions = [
   { value: SalesAgreementChemicalBillingMode.includedAll, label: 'Chemicals Included In Service' },
   { value: SalesAgreementChemicalBillingMode.billAllSeparately, label: 'Bill All Chemicals Separately' },
@@ -81,6 +94,116 @@ const dosageTemplateKeys = (template = {}) => (
     template.universalTemplateId,
   ].map((value) => String(value || '').trim()).filter(Boolean)
 );
+
+const termDescription = (term) => {
+  if (typeof term === 'string') return term;
+  return getTermDescription(term);
+};
+
+const termLineId = () => `term_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+const normalizeAgreementTerms = (terms = []) => {
+  if (!Array.isArray(terms)) return [];
+
+  return terms
+    .map((term, index) => ({
+      id: typeof term === 'object' && term?.id ? term.id : `agreement_term_${index}`,
+      description: termDescription(term),
+    }))
+    .filter((term) => term.description.trim());
+};
+
+const blankLineItem = () => ({
+  id: `sili_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+  catalogItemId: '',
+  sourceType: 'manual',
+  sourceId: '',
+  name: '',
+  description: '',
+  quantity: '1',
+  unitAmount: '0.00',
+  taxable: false,
+  type: 'manual',
+  stripeProductId: '',
+  stripePriceId: '',
+  metadata: {},
+});
+
+const lineItemUnitAmountCents = (item = {}) => (
+  item.unitAmount === undefined ? Number(item.unitAmountCents || 0) : moneyInputToCents(item.unitAmount)
+);
+
+const lineItemTotalCents = (item = {}) => {
+  const quantity = Math.max(Number(item.quantity) || 0, 0);
+  return Math.round(lineItemUnitAmountCents(item) * quantity);
+};
+
+const lineItemDraftForSave = (item = {}) => {
+  const quantity = Math.max(Number(item.quantity) || 0, 0);
+  const unitAmountCents = lineItemUnitAmountCents(item);
+
+  return {
+    id: item.id,
+    catalogItemId: item.catalogItemId || '',
+    sourceType: item.sourceType || 'manual',
+    sourceId: item.sourceId || '',
+    name: (item.name || item.description || 'Service').trim(),
+    description: (item.description || '').trim(),
+    quantity,
+    unitAmountCents,
+    totalAmountCents: Math.round(unitAmountCents * quantity),
+    taxable: Boolean(item.taxable),
+    type: item.type || 'manual',
+    stripeProductId: item.stripeProductId || '',
+    stripePriceId: item.stripePriceId || '',
+    metadata: item.metadata || {},
+  };
+};
+
+const normalizeLineItemsForSave = (items = []) => (
+  (Array.isArray(items) ? items : [])
+    .map(lineItemDraftForSave)
+    .filter((item) => item.name && item.quantity > 0)
+);
+
+const catalogLineItemDraft = (catalogItem, quantityValue) => {
+  const quantity = Math.max(Number(quantityValue || catalogItem.defaultQuantity || 1), 0);
+  const unitAmountCents = Number(catalogItem.unitAmountCents || 0);
+  const lineItem = new SalesInvoiceLineItem({
+    catalogItemId: catalogItem.id,
+    sourceType: catalogItem.sourceType || '',
+    sourceId: catalogItem.sourceId || '',
+    name: catalogItem.name || '',
+    description: catalogItem.description || '',
+    quantity,
+    unitAmountCents,
+    totalAmountCents: Math.round(unitAmountCents * quantity),
+    taxable: Boolean(catalogItem.taxable),
+    type: catalogItem.type || '',
+    stripeProductId: catalogItem.stripeProductId || '',
+    stripePriceId: catalogItem.stripePriceId || '',
+    metadata: {
+      billingBehavior: catalogItem.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+      currency: catalogItem.currency || 'usd',
+    },
+  });
+
+  return {
+    id: lineItem.id,
+    catalogItemId: lineItem.catalogItemId,
+    sourceType: lineItem.sourceType,
+    sourceId: lineItem.sourceId,
+    name: lineItem.name,
+    description: lineItem.description,
+    quantity: String(lineItem.quantity || 1),
+    unitAmount: centsToInput(lineItem.unitAmountCents),
+    taxable: lineItem.taxable,
+    type: lineItem.type,
+    stripeProductId: lineItem.stripeProductId,
+    stripePriceId: lineItem.stripePriceId,
+    metadata: lineItem.metadata,
+  };
+};
 
 const deriveChemicalBillingFields = (form = {}) => {
   const selectedChemicalBillingMode = form.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
@@ -393,13 +516,13 @@ const CreateSalesAgreement = () => {
   const [catalogItems, setCatalogItems] = useState([]);
   const [dosageTemplates, setDosageTemplates] = useState([]);
   const [termsTemplates, setTermsTemplates] = useState([]);
-  const [selectedTerms, setSelectedTerms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [termsLoading, setTermsLoading] = useState(false);
   const [loadingDosageTemplates, setLoadingDosageTemplates] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedCatalogItemId, setSelectedCatalogItemId] = useState('');
   const [selectedCatalogQuantity, setSelectedCatalogQuantity] = useState('1');
+  const [showCatalogItemSelector, setShowCatalogItemSelector] = useState(false);
   const [lineItems, setLineItems] = useState([]);
   const [sourceLead, setSourceLead] = useState(null);
   const [sourceServiceStop, setSourceServiceStop] = useState(null);
@@ -413,6 +536,10 @@ const CreateSalesAgreement = () => {
     email: '',
     serviceLocationIds: [],
     termsTemplateId: '',
+    termsTemplateName: '',
+    termsTemplateDescription: '',
+    terms: '',
+    termsList: [],
     serviceCadence: 'weekly',
     serviceCadenceCount: '1',
     billingFrequency: 'monthly',
@@ -420,6 +547,8 @@ const CreateSalesAgreement = () => {
     rateType: 'perMonth',
     paymentTerms: 'dueOnReceipt',
     invoiceDeliveryMethod: SalesInvoiceDeliveryMethod.email,
+    firstInvoiceSendAt: toInputDate(new Date()),
+    manualBillingAutoSendEnabled: false,
     chemicalBillingMode: SalesAgreementChemicalBillingMode.includedAll,
     chemicalBillingMixedSelectionMode: ChemicalBillingMixedSelectionMode.separatelyBilled,
     includedChemicalIds: [],
@@ -621,17 +750,26 @@ const CreateSalesAgreement = () => {
       recentlySelectedCompany,
       (templates) => {
         setTermsTemplates(templates);
-        setForm((current) => ({
-          ...applyTermsTemplateAgreementDefaults(
-            {
-              ...current,
-              termsTemplateId: current.termsTemplateId || templates[0]?.id || '',
-            },
-            current.termsTemplateId
-              ? {}
-              : templates.find((template) => template.id === templates[0]?.id) || {}
-          ),
-        }));
+        setForm((current) => {
+          const nextTemplateId = current.termsTemplateId || templates[0]?.id || '';
+          const nextTemplate = templates.find((template) => template.id === nextTemplateId) || null;
+          const shouldApplyTemplate = !current.termsTemplateId && nextTemplate;
+
+          return {
+            ...applyTermsTemplateAgreementDefaults(
+              {
+                ...current,
+                termsTemplateId: nextTemplateId,
+                termsTemplateName: shouldApplyTemplate ? nextTemplate.name || '' : current.termsTemplateName,
+                termsTemplateDescription: shouldApplyTemplate
+                  ? nextTemplate.description || ''
+                  : current.termsTemplateDescription,
+                terms: shouldApplyTemplate ? nextTemplate.content || '' : current.terms,
+              },
+              shouldApplyTemplate ? nextTemplate : {}
+            ),
+          };
+        });
       },
       (error) => {
         console.error('Unable to load terms templates for agreement', error);
@@ -642,16 +780,28 @@ const CreateSalesAgreement = () => {
 
   useEffect(() => {
     if (!recentlySelectedCompany || !form.termsTemplateId) {
-      setSelectedTerms([]);
+      setForm((current) => ({
+        ...current,
+        termsList: [],
+      }));
+      setTermsLoading(false);
       return undefined;
     }
 
     let isActive = true;
+    const templateId = form.termsTemplateId;
     setTermsLoading(true);
 
-    getTerms(recentlySelectedCompany, form.termsTemplateId)
+    getTerms(recentlySelectedCompany, templateId)
       .then((terms) => {
-        if (isActive) setSelectedTerms(terms);
+        if (!isActive) return;
+        setForm((current) => {
+          if (current.termsTemplateId !== templateId) return current;
+          return {
+            ...current,
+            termsList: normalizeAgreementTerms(terms),
+          };
+        });
       })
       .catch((error) => {
         console.error('Unable to load selected agreement terms', error);
@@ -711,11 +861,15 @@ const CreateSalesAgreement = () => {
     [catalogItems, selectedCatalogItemId]
   );
   const termsContent = useMemo(
-    () => buildTermsContent(selectedTemplate, selectedTerms),
-    [selectedTemplate, selectedTerms]
+    () => buildTermsContent({ content: form.terms }, form.termsList),
+    [form.terms, form.termsList]
+  );
+  const saveReadyLineItems = useMemo(
+    () => normalizeLineItemsForSave(lineItems),
+    [lineItems]
   );
   const subtotalAmountCents = useMemo(
-    () => lineItems.reduce((total, item) => total + (Number(item.totalAmountCents) || 0), 0),
+    () => lineItems.reduce((total, item) => total + lineItemTotalCents(item), 0),
     [lineItems]
   );
   const taxAmountCents = 0;
@@ -729,13 +883,34 @@ const CreateSalesAgreement = () => {
   };
 
   const applyTermsTemplateToForm = (templateId) => {
-    const template = termsTemplates.find((item) => item.id === templateId) || {};
+    const template = termsTemplates.find((item) => item.id === templateId) || null;
+
+    if (!templateId) {
+      setForm((current) => ({
+        ...current,
+        termsTemplateId: '',
+        termsTemplateName: '',
+        termsTemplateDescription: '',
+        terms: '',
+        termsList: [],
+      }));
+      return;
+    }
+
+    if (!template) {
+      toast.error('Select a saved terms template.');
+      return;
+    }
 
     setForm((current) => (
       applyTermsTemplateAgreementDefaults(
         {
           ...current,
           termsTemplateId: templateId,
+          termsTemplateName: template.name || '',
+          termsTemplateDescription: template.description || '',
+          terms: template.content || '',
+          termsList: [],
         },
         template
       )
@@ -817,60 +992,62 @@ const CreateSalesAgreement = () => {
     });
   };
 
-  const addCatalogLineItem = () => {
-    if (!selectedCatalogItem) {
+  const updateLineItem = (lineItemId, field, value) => {
+    setLineItems((current) => current.map((item) => (
+      item.id === lineItemId ? { ...item, [field]: value } : item
+    )));
+  };
+
+  const addManualLineItem = () => {
+    setLineItems((current) => [...current, blankLineItem()]);
+    setShowCatalogItemSelector(false);
+  };
+
+  const addCatalogLineItem = (catalogItem = selectedCatalogItem, quantityValue = selectedCatalogQuantity) => {
+    if (!catalogItem) {
       toast.error('Select a catalog item first.');
       return;
     }
 
-    const quantity = Math.max(Number(selectedCatalogQuantity || selectedCatalogItem.defaultQuantity || 1), 0);
+    const quantity = Math.max(Number(quantityValue || catalogItem.defaultQuantity || 1), 0);
 
     if (!quantity) {
       toast.error('Quantity must be greater than zero.');
       return;
     }
 
-    const unitAmountCents = Number(selectedCatalogItem.unitAmountCents || 0);
-    const lineItem = new SalesInvoiceLineItem({
-      catalogItemId: selectedCatalogItem.id,
-      sourceType: selectedCatalogItem.sourceType || '',
-      sourceId: selectedCatalogItem.sourceId || '',
-      name: selectedCatalogItem.name || '',
-      description: selectedCatalogItem.description || '',
-      quantity,
-      unitAmountCents,
-      totalAmountCents: Math.round(unitAmountCents * quantity),
-      taxable: Boolean(selectedCatalogItem.taxable),
-      type: selectedCatalogItem.type || '',
-      stripeProductId: selectedCatalogItem.stripeProductId || '',
-      stripePriceId: selectedCatalogItem.stripePriceId || '',
-      metadata: {
-        billingBehavior: selectedCatalogItem.billingBehavior || SalesCatalogBillingBehavior.oneTime,
-        currency: selectedCatalogItem.currency || 'usd',
-      },
-    });
-
-    setLineItems((current) => [...current, lineItem]);
-    setSelectedCatalogQuantity(String(selectedCatalogItem.defaultQuantity || 1));
-  };
-
-  const updateLineItemQuantity = (lineItemId, value) => {
-    const quantity = Math.max(Number(value || 0), 0);
-    setLineItems((current) =>
-      current.map((item) => (
-        item.id === lineItemId
-          ? {
-            ...item,
-            quantity,
-            totalAmountCents: Math.round((Number(item.unitAmountCents) || 0) * quantity),
-          }
-          : item
-      ))
-    );
+    setLineItems((current) => [...current, catalogLineItemDraft(catalogItem, quantity)]);
+    setSelectedCatalogQuantity(String(catalogItem.defaultQuantity || 1));
   };
 
   const removeLineItem = (lineItemId) => {
     setLineItems((current) => current.filter((item) => item.id !== lineItemId));
+  };
+
+  const updateTermLine = (termId, value) => {
+    setForm((current) => ({
+      ...current,
+      termsList: (current.termsList || []).map((term) => (
+        term.id === termId ? { ...term, description: value } : term
+      )),
+    }));
+  };
+
+  const addTermLine = () => {
+    setForm((current) => ({
+      ...current,
+      termsList: [
+        ...(current.termsList || []),
+        { id: termLineId(), description: '' },
+      ],
+    }));
+  };
+
+  const removeTermLine = (termId) => {
+    setForm((current) => ({
+      ...current,
+      termsList: (current.termsList || []).filter((term) => term.id !== termId),
+    }));
   };
 
   const serviceLocationSnapshot = (location) => {
@@ -891,7 +1068,7 @@ const CreateSalesAgreement = () => {
     form.customerId &&
     form.serviceLocationIds.length > 0 &&
     form.title.trim() &&
-    lineItems.length > 0
+    saveReadyLineItems.length > 0
   );
 
   const handleSubmit = async (event) => {
@@ -913,6 +1090,9 @@ const CreateSalesAgreement = () => {
       const agreementSourceId = sourceServiceStopId || sourceLeadId || '';
       const chemicalBillingFields = deriveChemicalBillingFields(form);
       const pnlReportingFields = deriveInternalPnlFields(chemicalBillingFields);
+      const nextTermsList = (form.termsList || [])
+        .map((term) => String(term.description || '').trim())
+        .filter(Boolean);
       const agreement = new SalesAgreement({
         companyId: recentlySelectedCompany,
         companyName: selectedCompanyName,
@@ -936,8 +1116,8 @@ const CreateSalesAgreement = () => {
         termsTemplateId: selectedTemplate?.id || '',
         termsTemplateName: selectedTemplate?.name || '',
         termsTemplateDescription: selectedTemplate?.description || '',
-        termsList: selectedTerms.map((term) => getTermDescription(term)).filter(Boolean),
-        lineItems,
+        termsList: nextTermsList,
+        lineItems: saveReadyLineItems,
         status: SalesAgreementStatus.draft,
         rateAmountCents: totalAmountCents,
         subtotalAmountCents,
@@ -951,6 +1131,9 @@ const CreateSalesAgreement = () => {
         billingFrequencyCount: Number(form.billingFrequencyCount || 1),
         paymentTerms: form.paymentTerms,
         invoiceDeliveryMethod: form.invoiceDeliveryMethod,
+        firstInvoiceSendAt: dateFromInput(form.firstInvoiceSendAt),
+        manualBillingNextInvoiceAt: dateFromInput(form.firstInvoiceSendAt),
+        manualBillingAutoSendEnabled: Boolean(form.manualBillingAutoSendEnabled),
         ...pnlReportingFields,
         ...chemicalBillingFields,
         startDate: dateFromInput(form.startDate),
@@ -1135,6 +1318,26 @@ const CreateSalesAgreement = () => {
               <h2 className="text-lg font-bold text-slate-950">Agreement Details</h2>
               <div className="mt-4 space-y-4">
                 <div>
+                  <label htmlFor="termsTemplateId" className="block text-sm font-semibold text-slate-700">
+                    Agreement Template
+                  </label>
+                  <select
+                    id="termsTemplateId"
+                    value={form.termsTemplateId}
+                    onChange={(event) => applyTermsTemplateToForm(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  >
+                    <option value="">No template selected</option>
+                    {termsTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>{template.name}</option>
+                    ))}
+                  </select>
+                  {form.termsTemplateId && selectedTemplate?.description && (
+                    <p className="mt-2 text-xs text-slate-500">{selectedTemplate.description}</p>
+                  )}
+                </div>
+
+                <div>
                   <label htmlFor="title" className="block text-sm font-semibold text-slate-700">
                     Agreement Title
                   </label>
@@ -1199,7 +1402,7 @@ const CreateSalesAgreement = () => {
 
                 <div>
                   <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Billing Schedule</h3>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                     <div>
                       <label htmlFor="billingFrequency" className="block text-sm font-semibold text-slate-700">
                         Billing Frequency
@@ -1245,6 +1448,28 @@ const CreateSalesAgreement = () => {
                         ))}
                       </select>
                     </div>
+
+                    <div>
+                      <label htmlFor="firstInvoiceSendAt" className="block text-sm font-semibold text-slate-700">
+                        First Invoice Send
+                      </label>
+                      <input
+                        id="firstInvoiceSendAt"
+                        type="date"
+                        value={form.firstInvoiceSendAt}
+                        onChange={(event) => handleFieldChange('firstInvoiceSendAt', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+
+                    <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 lg:self-end">
+                      <input
+                        type="checkbox"
+                        checked={form.manualBillingAutoSendEnabled}
+                        onChange={(event) => handleFieldChange('manualBillingAutoSendEnabled', event.target.checked)}
+                      />
+                      Email invoices automatically
+                    </label>
                   </div>
                 </div>
 
@@ -1345,7 +1570,7 @@ const CreateSalesAgreement = () => {
                   </div>
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
                     <label htmlFor="startDate" className="block text-sm font-semibold text-slate-700">
                       Start Date
@@ -1387,144 +1612,251 @@ const CreateSalesAgreement = () => {
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label htmlFor="invoiceDeliveryMethod" className="block text-sm font-semibold text-slate-700">
+                      Invoice Delivery
+                    </label>
+                    <select
+                      id="invoiceDeliveryMethod"
+                      value={form.invoiceDeliveryMethod}
+                      onChange={(event) => handleFieldChange('invoiceDeliveryMethod', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {Object.values(SalesInvoiceDeliveryMethod).map((method) => (
+                        <option key={method} value={method}>{method.replace(/([A-Z])/g, ' $1').replace(/^./, (char) => char.toUpperCase())}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             </section>
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-bold text-slate-950">Catalog Line Items</h2>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">Line Items</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Customer-facing pricing rows for this service agreement.
+                  </p>
+                </div>
                 <Link to="/company/sales/catalog-items" className="text-sm font-semibold text-blue-700 hover:text-blue-800">
                   Manage catalog
                 </Link>
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_auto]">
-                <select
-                  value={selectedCatalogItemId}
-                  onChange={(event) => setSelectedCatalogItemId(event.target.value)}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                >
-                  <option value="">{catalogItems.length ? 'Select catalog item' : 'No catalog items yet'}</option>
-                  {catalogItems.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} · {formatCurrency(item.unitAmountCents)}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={selectedCatalogQuantity}
-                  onChange={(event) => setSelectedCatalogQuantity(event.target.value)}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  aria-label="Line item quantity"
-                />
-                <button
-                  type="button"
-                  onClick={addCatalogLineItem}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-                >
-                  <FaPlus className="text-xs" />
-                  Add
-                </button>
+              <div className="mt-4 space-y-3">
+                {lineItems.map((item) => {
+                  const quantity = Number(item.quantity) || 0;
+                  const itemTotal = lineItemUnitAmountCents(item) * quantity;
+
+                  return (
+                    <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_130px_130px_auto]">
+                        <input
+                          value={item.name}
+                          onChange={(event) => updateLineItem(item.id, 'name', event.target.value)}
+                          placeholder="Item name"
+                          className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={item.quantity}
+                          onChange={(event) => updateLineItem(item.id, 'quantity', event.target.value)}
+                          className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          aria-label={`Quantity for ${item.name || 'line item'}`}
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={item.unitAmount}
+                          onChange={(event) => updateLineItem(item.id, 'unitAmount', event.target.value)}
+                          className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          aria-label={`Unit amount for ${item.name || 'line item'}`}
+                        />
+                        <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
+                          {formatCurrency(itemTotal)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeLineItem(item.id)}
+                          className="rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <textarea
+                        value={item.description}
+                        onChange={(event) => updateLineItem(item.id, 'description', event.target.value)}
+                        placeholder="Description"
+                        rows={2}
+                        className="mt-3 min-h-[72px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+                  );
+                })}
+
+                {lineItems.length === 0 && (
+                  <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                    Add pricing from the Sales Catalog or create a one-off manual row.
+                  </div>
+                )}
               </div>
 
-              <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-                {lineItems.length === 0 ? (
-                  <div className="bg-slate-50 p-5 text-sm text-slate-500">
-                    Add catalog items to build the customer-facing price snapshot.
+              <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-950">Add Line Item</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Add pricing from the Sales Catalog or create a one-off manual row.
+                    </p>
                   </div>
-                ) : (
-                  <table className="min-w-full divide-y divide-slate-200 text-sm">
-                    <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <tr>
-                        <th className="px-4 py-3">Item</th>
-                        <th className="px-4 py-3">Qty</th>
-                        <th className="px-4 py-3">Unit</th>
-                        <th className="px-4 py-3">Total</th>
-                        <th className="px-4 py-3" aria-label="Actions" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {lineItems.map((item) => (
-                        <tr key={item.id}>
-                          <td className="px-4 py-3">
-                            <p className="font-semibold text-slate-900">{item.name || item.description}</p>
-                            {item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.quantity}
-                              onChange={(event) => updateLineItemQuantity(item.id, event.target.value)}
-                              className="w-24 rounded-md border border-slate-300 px-2 py-1 text-sm"
-                              aria-label={`Quantity for ${item.name}`}
-                            />
-                          </td>
-                          <td className="px-4 py-3 text-slate-600">{formatCurrency(item.unitAmountCents)}</td>
-                          <td className="px-4 py-3 font-semibold text-slate-900">{formatCurrency(item.totalAmountCents)}</td>
-                          <td className="px-4 py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => removeLineItem(item.id)}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-500 transition hover:bg-slate-50 hover:text-rose-600"
-                              aria-label={`Remove ${item.name}`}
-                            >
-                              <FaTimes className="text-xs" />
-                            </button>
-                          </td>
-                        </tr>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => setShowCatalogItemSelector((current) => !current)}
+                      className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                    >
+                      <FaPlus className="text-xs" />
+                      Add Catalog Item
+                    </button>
+                    <button
+                      type="button"
+                      onClick={addManualLineItem}
+                      className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <FaPlus className="text-xs" />
+                      Add Manual Item
+                    </button>
+                  </div>
+                </div>
+
+                {showCatalogItemSelector && (
+                  <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_120px_auto]">
+                    <select
+                      value={selectedCatalogItemId}
+                      onChange={(event) => {
+                        const nextItemId = event.target.value;
+                        const nextItem = catalogItems.find((item) => item.id === nextItemId);
+                        setSelectedCatalogItemId(nextItemId);
+                        setSelectedCatalogQuantity(String(nextItem?.defaultQuantity || 1));
+                      }}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      aria-label="Select sales catalog item"
+                    >
+                      <option value="">{catalogItems.length ? 'Select catalog item' : 'No catalog items yet'}</option>
+                      {catalogItems.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name} - {formatCurrency(item.unitAmountCents)} - {labelize(item.billingBehavior)}
+                        </option>
                       ))}
-                    </tbody>
-                  </table>
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={selectedCatalogQuantity}
+                      onChange={(event) => setSelectedCatalogQuantity(event.target.value)}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      aria-label="Catalog item quantity"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => addCatalogLineItem()}
+                      disabled={!selectedCatalogItem}
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <FaPlus className="text-xs" />
+                      Add Selected
+                    </button>
+                  </div>
                 )}
               </div>
             </section>
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-bold text-slate-950">Terms Snapshot</h2>
-                <FaFileSignature className="text-slate-400" />
-              </div>
-              <div className="mt-4">
-                <label htmlFor="termsTemplateId" className="block text-sm font-semibold text-slate-700">
-                  Terms Template
-                </label>
-                <select
-                  id="termsTemplateId"
-                  value={form.termsTemplateId}
-                  onChange={(event) => applyTermsTemplateToForm(event.target.value)}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-bold text-slate-950">Terms</h2>
+                    <FaFileSignature className="text-slate-400" />
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Add or adjust agreement-specific terms before saving the draft.
+                  </p>
+                </div>
+                <Link
+                  to="/company/settings/terms-templates"
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
-                  <option value="">No template selected</option>
-                  {termsTemplates.map((template) => (
-                    <option key={template.id} value={template.id}>{template.name}</option>
-                  ))}
-                </select>
+                  Manage Templates
+                </Link>
               </div>
 
-              <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <div className="mt-4">
+                <label htmlFor="agreementTermsContent" className="block text-sm font-semibold text-slate-700">
+                  Template Default Content
+                </label>
+                <textarea
+                  id="agreementTermsContent"
+                  value={form.terms}
+                  onChange={(event) => handleFieldChange('terms', event.target.value)}
+                  rows={4}
+                  className="mt-1 min-h-[120px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  placeholder="Default agreement terms content"
+                />
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-bold text-slate-950">Terms Lines</h3>
+                <button
+                  type="button"
+                  onClick={addTermLine}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <FaPlus className="text-xs" />
+                  Add Line
+                </button>
+              </div>
+
+              <div className="mt-3 space-y-3">
                 {termsLoading ? (
-                  <p className="text-slate-500">Loading terms...</p>
-                ) : termsContent ? (
-                  <div className="max-h-72 space-y-2 overflow-y-auto whitespace-pre-wrap">
-                    {termsContent}
+                  <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                    Loading template term lines...
                   </div>
                 ) : (
-                  <p className="text-slate-500">No terms selected. You can still save a draft, but the agreement should have terms before sending.</p>
+                  (form.termsList || []).map((term, index) => (
+                    <div key={term.id} className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto]">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-sm font-bold text-slate-500">
+                        {index + 1}
+                      </div>
+                      <textarea
+                        value={term.description}
+                        onChange={(event) => updateTermLine(term.id, event.target.value)}
+                        rows={2}
+                        placeholder="Agreement term line"
+                        className="min-h-[72px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeTermLine(term.id)}
+                        className="inline-flex h-9 items-center justify-center rounded-md border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))
+                )}
+
+                {!termsLoading && (!form.termsList || form.termsList.length === 0) && (
+                  <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                    Select a template or add agreement-specific terms lines.
+                  </div>
                 )}
               </div>
-
-              <Link
-                to="/company/settings/terms-templates"
-                className="mt-3 inline-flex text-sm font-semibold text-blue-700 hover:text-blue-800"
-              >
-                Manage terms templates
-              </Link>
             </section>
           </main>
 
@@ -1542,7 +1874,7 @@ const CreateSalesAgreement = () => {
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <dt className="text-slate-500">Line Items</dt>
-                  <dd className="font-semibold text-slate-900">{lineItems.length}</dd>
+                  <dd className="font-semibold text-slate-900">{saveReadyLineItems.length}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <dt className="text-slate-500">Service Frequency</dt>

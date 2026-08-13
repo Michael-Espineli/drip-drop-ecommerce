@@ -19,6 +19,7 @@ import {
     findDuplicateCustomerMatches,
 } from '../../../utils/customerDuplicates';
 import { queueUniversalEquipmentSuggestion } from '../../../utils/universalEquipmentSuggestions';
+import { equipmentDefaultsToNeedsService } from '../../../utils/models/Equipment';
 
 const InfoSection = ({ title, children }) => (
     <div className="border-b border-gray-200 pb-6 mb-6">
@@ -27,10 +28,10 @@ const InfoSection = ({ title, children }) => (
     </div>
 );
 
-const FormInput = ({ label, name, value, onChange, required = false, type = 'text' }) => (
+const FormInput = ({ label, name, value, onChange, required = false, type = 'text', ...props }) => (
     <div>
         <label className="block text-sm font-medium text-gray-700">{label}</label>
-        <input type={type} name={name} value={value} onChange={onChange} required={required} className="w-full mt-1 p-2 border border-gray-300 rounded-lg" />
+        <input type={type} name={name} value={value} onChange={onChange} required={required} className="w-full mt-1 p-2 border border-gray-300 rounded-lg" {...props} />
     </div>
 );
 
@@ -41,13 +42,71 @@ const FormTextarea = ({ label, name, value, onChange }) => (
     </div>
 );
 
-const FormSelect = ({ label, name, value, onChange, children }) => (
+const FormSelect = ({ label, name, value, onChange, children, ...props }) => (
     <div>
         <label className="block text-sm font-medium text-gray-700">{label}</label>
-        <select name={name} value={value} onChange={onChange} className="w-full mt-1 p-2 border border-gray-300 rounded-lg">
+        <select name={name} value={value} onChange={onChange} className="w-full mt-1 p-2 border border-gray-300 rounded-lg" {...props}>
             {children}
         </select>
     </div>
+);
+
+const dateInputToLocalDate = (value) => {
+    if (!value) return null;
+    const [year, month, day] = String(value).split('-').map(Number);
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+};
+
+const formatDateInput = (value) => {
+    if (!value) return '';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFrequencyEvery) => {
+    if (!lastServiceDate) return null;
+
+    const amount = Number(serviceFrequency);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    const next = new Date(lastServiceDate);
+    if (Number.isNaN(next.getTime())) return null;
+
+    if (serviceFrequencyEvery === 'Day') next.setDate(next.getDate() + amount);
+    else if (serviceFrequencyEvery === 'Week') next.setDate(next.getDate() + (amount * 7));
+    else if (serviceFrequencyEvery === 'Month') next.setMonth(next.getMonth() + amount);
+    else if (serviceFrequencyEvery === 'Year') next.setFullYear(next.getFullYear() + amount);
+    else return null;
+
+    return next;
+};
+
+const getEquipmentNextServiceDateInput = (equipment = {}) => (
+    formatDateInput(computeNextServiceDate(
+        dateInputToLocalDate(equipment.lastServiceDate),
+        equipment.serviceFrequency,
+        equipment.serviceFrequencyEvery || 'Month'
+    ))
+);
+
+const withEquipmentServiceDefaults = (equipment = {}) => ({
+    ...equipment,
+    needsService: true,
+    serviceFrequency: equipment.serviceFrequency || 6,
+    serviceFrequencyEvery: equipment.serviceFrequencyEvery || 'Month',
+});
+
+const applyEquipmentServiceDefaults = (equipment = {}) => (
+    equipmentDefaultsToNeedsService(equipment) || equipment.needsService
+        ? withEquipmentServiceDefaults(equipment)
+        : equipment
 );
 
 const CreateNewCustomer = () => {
@@ -71,8 +130,8 @@ const CreateNewCustomer = () => {
 
     const [bodyOfWater, setBodyOfWater] = useState({ name: 'Main', gallons: '16000', waterType: 'Chlorine', material: 'Plaster', notes: '', shape: '' });
     const [equipment, setEquipment] = useState([
-        { name: 'Pump', category: 'Pump', type: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', universalEquipmentId: '', manualPdfLink: '', notes: '', needsService: false },
-        { name: 'Filter', category: 'Filter', type: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', universalEquipmentId: '', manualPdfLink: '', notes: '', needsService: true }
+        { name: 'Pump', category: 'Pump', type: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', universalEquipmentId: '', manualPdfLink: '', notes: '', needsService: false, lastServiceDate: '', serviceFrequency: '', serviceFrequencyEvery: '' },
+        { name: 'Filter', category: 'Filter', type: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', universalEquipmentId: '', manualPdfLink: '', notes: '', needsService: true, lastServiceDate: '', serviceFrequency: 6, serviceFrequencyEvery: 'Month' }
     ]);
 
     // Generic handler for simple state updates
@@ -81,7 +140,8 @@ const CreateNewCustomer = () => {
     const handleEquipmentChange = (index, field, value) => {
         setEquipment(prev => {
             const next = [...prev];
-            next[index] = { ...next[index], [field]: value };
+            const updatedEquipment = { ...next[index], [field]: value };
+            next[index] = applyEquipmentServiceDefaults(updatedEquipment);
             return next;
         });
     };
@@ -89,7 +149,8 @@ const CreateNewCustomer = () => {
     const handleEquipmentCatalogChange = (index, nextEquipment) => {
         setEquipment(prev => {
             const next = [...prev];
-            next[index] = nextEquipment;
+            const mergedEquipment = { ...next[index], ...nextEquipment };
+            next[index] = applyEquipmentServiceDefaults(mergedEquipment);
             return next;
         });
     };
@@ -117,6 +178,29 @@ const CreateNewCustomer = () => {
     const handleCreate = async (e) => {
         e.preventDefault();
         if (!recentlySelectedCompany) return;
+
+        for (const eq of equipment) {
+            if (!eq.name) continue;
+
+            const finalCategory = eq.type || eq.category || '';
+            const finalNeedsService = !!eq.needsService || equipmentDefaultsToNeedsService({ ...eq, type: finalCategory });
+            const lastServiceDate = finalNeedsService ? dateInputToLocalDate(eq.lastServiceDate) : null;
+            const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency) : null;
+            const serviceFrequencyEvery = finalNeedsService ? (eq.serviceFrequencyEvery || 'Month') : null;
+            const calculatedNextServiceDate = finalNeedsService
+                ? computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
+                : null;
+
+            if (finalNeedsService && !lastServiceDate) {
+                toast.error(`Add a last service date for ${eq.name}.`);
+                return;
+            }
+
+            if (finalNeedsService && (!Number.isFinite(serviceFrequency) || serviceFrequency <= 0 || !serviceFrequencyEvery || !calculatedNextServiceDate)) {
+                toast.error(`Add a valid service frequency for ${eq.name}.`);
+                return;
+            }
+        }
 
         const toastId = toast.loading('Creating customer...');
         try {
@@ -190,8 +274,15 @@ const CreateNewCustomer = () => {
                 if (eq.name) {
                     const equipmentId = 'com_equ_' + uuidv4();
                     const finalCategory = eq.type || eq.category || '';
+                    const finalNeedsService = !!eq.needsService || equipmentDefaultsToNeedsService({ ...eq, type: finalCategory });
+                    const lastServiceDate = finalNeedsService ? dateInputToLocalDate(eq.lastServiceDate) : null;
+                    const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency) : null;
+                    const serviceFrequencyEvery = finalNeedsService ? (eq.serviceFrequencyEvery || 'Month') : null;
+                    const calculatedNextServiceDate = finalNeedsService
+                        ? computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
+                        : null;
                     const equipmentPayload = {
-                        id: equipmentId, name: eq.name, notes: eq.notes, needsService: eq.needsService,
+                        id: equipmentId, name: eq.name, notes: eq.notes, needsService: finalNeedsService,
                         type: finalCategory,
                         typeId: eq.typeId || "",
                         make: eq.make || "",
@@ -204,7 +295,16 @@ const CreateNewCustomer = () => {
                         serviceLocationId,
                         bodyOfWaterId,
                         customerName,
-                        dateInstalled: new Date(), active: true, status: 'Operational'
+                        dateInstalled: new Date(),
+                        lastServiceDate,
+                        nextServiceDate: calculatedNextServiceDate,
+                        serviceFrequency,
+                        serviceFrequencyEvery,
+                        active: true,
+                        isActive: true,
+                        status: 'Operational',
+                        cleanFilterPressure: null,
+                        currentPressure: null,
                     };
 
                     await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), equipmentPayload);
@@ -334,8 +434,21 @@ const CreateNewCustomer = () => {
                                     }}
                                 />
 
-                                <FormTextarea label="Notes" name="notes" value={eq.notes} onChange={(e) => handleEquipmentChange(index, 'notes', e.target.value)} />
-                                <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={(e) => handleEquipmentChange(index, 'needsService', e.target.checked)} className="mr-2 h-4 w-4" />Needs Service</label>
+	                                <FormTextarea label="Notes" name="notes" value={eq.notes} onChange={(e) => handleEquipmentChange(index, 'notes', e.target.value)} />
+	                                <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={(e) => handleEquipmentChange(index, 'needsService', e.target.checked)} className="mr-2 h-4 w-4" />Needs Service</label>
+	                                {eq.needsService && (
+	                                    <div className="grid md:grid-cols-2 gap-4">
+	                                        <FormInput label="Last Service Date" type="date" value={eq.lastServiceDate || ''} onChange={(e) => handleEquipmentChange(index, 'lastServiceDate', e.target.value)} required />
+	                                        <FormInput label="Next Service Date" type="date" value={getEquipmentNextServiceDateInput(eq)} readOnly />
+	                                        <FormInput label="Service Frequency" type="number" min="1" value={eq.serviceFrequency || ''} onChange={(e) => handleEquipmentChange(index, 'serviceFrequency', e.target.value)} required />
+	                                        <FormSelect label="Frequency Unit" value={eq.serviceFrequencyEvery || 'Month'} onChange={(e) => handleEquipmentChange(index, 'serviceFrequencyEvery', e.target.value)} required>
+	                                            <option value="Day">Day</option>
+	                                            <option value="Week">Week</option>
+	                                            <option value="Month">Month</option>
+	                                            <option value="Year">Year</option>
+	                                        </FormSelect>
+	                                    </div>
+	                                )}
                             </div>
                         ))}
                     </InfoSection>

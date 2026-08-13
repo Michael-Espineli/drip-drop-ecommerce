@@ -6,6 +6,7 @@ import { MdHistory, MdOutlineSchedule } from "react-icons/md";
 import { Link, useSearchParams } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import { TODO_ALL_BOARDS_PERMISSION_ID } from "../../../utils/companyPermissions";
 import {
   TODO_DONE_BOARD_LOOKBACK_DAYS,
   TODO_PRIORITY_LABELS,
@@ -17,8 +18,11 @@ import {
   normalizeTodoHistoryDateRange,
   toDate,
   toMillis,
+  todoBoardVisibleToUser,
   todoCompletedInDateRange,
   todoCompletionDate,
+  todoUserIdSet,
+  todoVisibleToUser,
 } from "../../../utils/models/TodoItem";
 
 const BOARD_FILTER_ALL = "all";
@@ -106,7 +110,16 @@ const StatCard = ({ icon: Icon, label, value, helper, tone = "slate" }) => {
 };
 
 const TodoHistory = () => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    recentlySelectedCompanyName,
+    user,
+    dataBaseUser,
+    companyUserAccess,
+    companyRoleLoading,
+    companyRoleLoaded,
+    hasCompanyPermission,
+  } = useContext(Context);
   const [searchParams, setSearchParams] = useSearchParams();
   const [todoItems, setTodoItems] = useState([]);
   const [todoBoards, setTodoBoards] = useState([]);
@@ -174,23 +187,70 @@ const TodoHistory = () => {
     };
   }, [recentlySelectedCompany]);
 
+  const currentTodoUserIds = useMemo(() => todoUserIdSet([
+    user?.uid,
+    user?.id,
+    dataBaseUser?.id,
+    dataBaseUser?.uid,
+    dataBaseUser?.userId,
+    companyUserAccess?.uid,
+    companyUserAccess?.userId,
+    companyUserAccess?.companyUserId,
+    companyUserAccess?.companyUserDocId,
+  ]), [
+    companyUserAccess?.companyUserId,
+    companyUserAccess?.companyUserDocId,
+    companyUserAccess?.uid,
+    companyUserAccess?.userId,
+    dataBaseUser?.id,
+    dataBaseUser?.uid,
+    dataBaseUser?.userId,
+    user?.id,
+    user?.uid,
+  ]);
+
+  const canViewAllTodoBoards = useMemo(() => (
+    companyRoleLoaded &&
+    !companyRoleLoading &&
+    hasCompanyPermission(TODO_ALL_BOARDS_PERMISSION_ID)
+  ), [companyRoleLoaded, companyRoleLoading, hasCompanyPermission]);
+
+  const visibleTodoBoards = useMemo(() => (
+    canViewAllTodoBoards
+      ? todoBoards
+      : todoBoards.filter((board) => todoBoardVisibleToUser(board, currentTodoUserIds))
+  ), [canViewAllTodoBoards, currentTodoUserIds, todoBoards]);
+
+  const visibleTodoBoardIds = useMemo(() => (
+    new Set(visibleTodoBoards.map((board) => board.id))
+  ), [visibleTodoBoards]);
+
+  const visibleTodoItems = useMemo(() => (
+    canViewAllTodoBoards
+      ? todoItems
+      : todoItems.filter((todo) => (
+        todoVisibleToUser(todo, currentTodoUserIds) ||
+        visibleTodoBoardIds.has(todoBoardId(todo))
+      ))
+  ), [canViewAllTodoBoards, currentTodoUserIds, todoItems, visibleTodoBoardIds]);
+
   const boardById = useMemo(() => (
-    new Map(todoBoards.map((board) => [board.id, board]))
-  ), [todoBoards]);
+    new Map(visibleTodoBoards.map((board) => [board.id, board]))
+  ), [visibleTodoBoards]);
 
   useEffect(() => {
     if (
       selectedBoardId !== BOARD_FILTER_ALL &&
       selectedBoardId !== BOARD_FILTER_UNASSIGNED &&
-      !todoBoards.some((board) => board.id === selectedBoardId)
+      !visibleTodoBoards.some((board) => board.id === selectedBoardId)
     ) {
       setSelectedBoardId(BOARD_FILTER_ALL);
     }
-  }, [selectedBoardId, todoBoards]);
+  }, [selectedBoardId, visibleTodoBoards]);
 
   const dateScopedTodos = useMemo(() => (
-    todoItems.filter((todo) => todoCompletedInDateRange(todo, dateRange.startDate, dateRange.endDate))
-  ), [dateRange.endDate, dateRange.startDate, todoItems]);
+    visibleTodoItems.filter((todo) => todoCompletedInDateRange(todo, dateRange.startDate, dateRange.endDate))
+  ), [dateRange.endDate, dateRange.startDate, visibleTodoItems]);
 
   const filteredTodos = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
@@ -247,7 +307,7 @@ const TodoHistory = () => {
   const boardOptions = [
     { id: BOARD_FILTER_ALL, label: "All boards" },
     { id: BOARD_FILTER_UNASSIGNED, label: "No board" },
-    ...todoBoards.map((board) => ({ id: board.id, label: board.name })),
+    ...visibleTodoBoards.map((board) => ({ id: board.id, label: board.name })),
   ];
 
   if (loading) {

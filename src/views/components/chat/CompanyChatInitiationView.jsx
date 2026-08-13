@@ -4,6 +4,7 @@ import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firesto
 import { ArrowLeftIcon, ChatBubbleLeftRightIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
+import { COMPANY_WIDE_MESSAGES_PERMISSION_ID } from '../../../utils/companyPermissions';
 import {
   createCompanyChat,
   findVisibleChatWithParticipant,
@@ -75,6 +76,8 @@ const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
     dataBaseUser,
     recentlySelectedCompany,
     recentlySelectedCompanyName,
+    companyRoleLoaded,
+    hasCompanyPermission,
   } = useContext(Context);
   const [newMessage, setNewMessage] = useState('');
   const [participantInfo, setParticipantInfo] = useState(null);
@@ -168,6 +171,7 @@ const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
           db,
           currentUserId: user.uid,
           selectedCompanyId: recentlySelectedCompany,
+          includeCompanyWide: companyRoleLoaded && hasCompanyPermission(COMPANY_WIDE_MESSAGES_PERMISSION_ID),
           participantId: nextParticipant.ownerId || nextParticipant.userId || nextParticipant.id,
           participantCompanyId: nextParticipant.type === 'company' ? nextParticipant.companyId : '',
         });
@@ -187,7 +191,7 @@ const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
     };
 
     findOrCreateChat();
-  }, [participantId, recentlySelectedCompany, recentlySelectedCompanyName, user, navigate]);
+  }, [companyRoleLoaded, hasCompanyPermission, participantId, recentlySelectedCompany, recentlySelectedCompanyName, user, navigate]);
 
   const handleSendFirstMessage = async (event) => {
     event.preventDefault();

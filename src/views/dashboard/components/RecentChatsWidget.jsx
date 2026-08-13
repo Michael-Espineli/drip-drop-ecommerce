@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { timeSince } from '../../../utils/timeFormatter';
+import { COMPANY_WIDE_MESSAGES_PERMISSION_ID } from '../../../utils/companyPermissions';
 import {
     getChatAvatarText,
     getChatDisplayTitle,
@@ -21,7 +22,7 @@ const RecentChatsWidget = ({
     unreadOnly = false,
     customerIds = EMPTY_CUSTOMER_IDS,
 }) => {
-    const { user, recentlySelectedCompany, companyUserAccess, companyRoleLoaded } = useContext(Context);
+    const { user, recentlySelectedCompany, companyUserAccess, companyRoleLoaded, hasCompanyPermission } = useContext(Context);
     const [recentChats, setRecentChats] = useState([]);
     const [loading, setLoading] = useState(true);
     const [unreadCount, setUnreadCount] = useState(0);
@@ -49,6 +50,7 @@ const RecentChatsWidget = ({
             db,
             userId: user.uid,
             companyId: readableCompanyId,
+            includeCompanyWide: Boolean(readableCompanyId) && hasCompanyPermission(COMPANY_WIDE_MESSAGES_PERMISSION_ID),
             onChange: (visibleChats) => {
                 const filteredChats = personalOnly
                     ? visibleChats.filter((chat) => {
@@ -72,7 +74,7 @@ const RecentChatsWidget = ({
         });
 
         return () => unsubscribe();
-    }, [companyRoleLoaded, companyUserAccess, customerIdSet, limit, personalOnly, recentlySelectedCompany, unreadOnly, user]);
+    }, [companyRoleLoaded, companyUserAccess, customerIdSet, hasCompanyPermission, limit, personalOnly, recentlySelectedCompany, unreadOnly, user]);
 
     const handleChatClick = (chatId) => {
         navigate(`/companies-chat/detail/${chatId}`);

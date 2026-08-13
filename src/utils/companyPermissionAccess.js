@@ -1,9 +1,12 @@
+import { SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID } from "./companyPermissions";
+
 const routePermissionRules = [
   [/^\/company\/customers\/createnew/i, "12"],
   [/^\/company\/customers\/bulk-upload/i, "910"],
   [/^\/company\/customers\/tags/i, "14"],
   [/^\/company\/customers/i, "10"],
 
+  [/^\/company\/jobs\/basic-create/i, SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID],
   [/^\/company\/jobs\/createnew/i, "22"],
   [/^\/company\/jobs/i, "20"],
 

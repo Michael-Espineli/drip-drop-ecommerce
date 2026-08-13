@@ -2008,6 +2008,8 @@ const sendSalesInvoiceEmailCore = async ({
         to: emailDelivery.actualTo,
         intendedTo: emailDelivery.intendedTo,
         testMode: emailDelivery.testMode,
+        realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
+        realEmailsEnabled: emailDelivery.realEmailsEnabled,
         templateMode
     };
 };
@@ -2393,7 +2395,9 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
             claimAccountUrl: customerAccess.claimAccountUrl,
             to: emailDelivery.actualTo,
             intendedTo: emailDelivery.intendedTo,
-            testMode: emailDelivery.testMode
+            testMode: emailDelivery.testMode,
+            realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
+            realEmailsEnabled: emailDelivery.realEmailsEnabled
         };
     } catch (error) {
         console.log("Failed To Send Service Stop Email");

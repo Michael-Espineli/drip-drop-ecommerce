@@ -57,6 +57,196 @@ const getMapCoordinate = (value) => {
     return Number.isFinite(coordinate) ? coordinate : null;
 };
 
+const hasGoogleMaps = () => typeof window !== 'undefined' && Boolean(window.google?.maps);
+
+const routeOrderValue = (item) => Number(item?.order || 0);
+
+const sortedRouteOrder = (order = []) => (
+    Array.isArray(order)
+        ? [...order].sort((left, right) => routeOrderValue(left) - routeOrderValue(right))
+        : []
+);
+
+const getTechnicianId = (technician) => (
+    technician?.userId || technician?.value || technician?.id || ""
+);
+
+const escapeMapHtml = (value = "") => (
+    String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+);
+
+const chunkRoutePoints = (points = [], maxPoints = 25) => {
+    if (points.length <= maxPoints) return [points];
+
+    const chunks = [];
+    for (let startIndex = 0; startIndex < points.length - 1; startIndex += maxPoints - 1) {
+        chunks.push(points.slice(startIndex, startIndex + maxPoints));
+    }
+    return chunks.filter((chunk) => chunk.length > 1);
+};
+
+const routePreviewStopCoordinate = (stop) => {
+    const lat = getMapCoordinate(stop?.address?.latitude ?? stop?.latitude);
+    const lng = getMapCoordinate(stop?.address?.longitude ?? stop?.longitude);
+
+    if (lat === null || lng === null || (lat === 0 && lng === 0)) return null;
+
+    return { lat, lng };
+};
+
+const PlannedRoutePreviewMap = ({ stops = [], height = "260px" }) => {
+    const mapRef = React.useRef(null);
+    const [mapsReady, setMapsReady] = useState(hasGoogleMaps);
+
+    const routePoints = useMemo(() => (
+        stops
+            .map((stop, index) => ({
+                stop,
+                index,
+                position: routePreviewStopCoordinate(stop),
+            }))
+            .filter((point) => point.position)
+    ), [stops]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+        if (mapsReady) return undefined;
+
+        const timer = window.setInterval(() => {
+            if (hasGoogleMaps()) {
+                setMapsReady(true);
+                window.clearInterval(timer);
+            }
+        }, 250);
+
+        return () => window.clearInterval(timer);
+    }, [mapsReady]);
+
+    useEffect(() => {
+        if (!mapsReady || !mapRef.current || !hasGoogleMaps() || routePoints.length === 0) return undefined;
+
+        const googleMaps = window.google.maps;
+        const map = new googleMaps.Map(mapRef.current, {
+            zoom: 11,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: true,
+        });
+        const bounds = new googleMaps.LatLngBounds();
+        const infoWindow = new googleMaps.InfoWindow();
+        const overlays = [];
+        const directionsService = googleMaps.DirectionsService ? new googleMaps.DirectionsService() : null;
+        let disposed = false;
+
+        const drawFallbackPath = (positions) => {
+            const path = new googleMaps.Polyline({
+                path: positions,
+                geodesic: true,
+                strokeColor: '#2563eb',
+                strokeOpacity: 0.72,
+                strokeWeight: 4,
+                map,
+            });
+            overlays.push(path);
+        };
+
+        routePoints.forEach(({ stop, index, position }) => {
+            bounds.extend(position);
+
+            const marker = new googleMaps.Marker({
+                position,
+                map,
+                title: stop.customerName || `Stop ${index + 1}`,
+                label: {
+                    text: String(index + 1),
+                    color: '#ffffff',
+                    fontSize: '12px',
+                    fontWeight: '700',
+                },
+                icon: {
+                    path: googleMaps.SymbolPath.CIRCLE,
+                    fillColor: '#2563eb',
+                    fillOpacity: 1,
+                    strokeColor: '#ffffff',
+                    strokeWeight: 3,
+                    scale: 13,
+                },
+            });
+
+            marker.addListener('click', () => {
+                infoWindow.setContent(`
+                    <div style="font-family: Arial, sans-serif; padding: 6px;">
+                        <p style="font-weight: 700; margin: 0 0 4px 0;">Stop ${index + 1}: ${escapeMapHtml(stop.customerName || 'Recurring Service Stop')}</p>
+                        <p style="margin: 0;">${escapeMapHtml(formatServiceLocationAddress(stop.address) || 'No address')}</p>
+                    </div>
+                `);
+                infoWindow.open(map, marker);
+            });
+
+            overlays.push(marker);
+        });
+
+        const positions = routePoints.map((point) => point.position);
+        if (positions.length > 1) {
+            if (directionsService && googleMaps.DirectionsRenderer && googleMaps.TravelMode?.DRIVING) {
+                chunkRoutePoints(positions).forEach((chunk) => {
+                    directionsService.route({
+                        origin: chunk[0],
+                        destination: chunk[chunk.length - 1],
+                        waypoints: chunk.slice(1, -1).map((position) => ({
+                            location: position,
+                            stopover: true,
+                        })),
+                        optimizeWaypoints: false,
+                        travelMode: googleMaps.TravelMode.DRIVING,
+                    }, (result, status) => {
+                        if (disposed) return;
+
+                        if (status === 'OK' && result) {
+                            const renderer = new googleMaps.DirectionsRenderer({
+                                directions: result,
+                                map,
+                                preserveViewport: true,
+                                suppressMarkers: true,
+                                polylineOptions: {
+                                    strokeColor: '#2563eb',
+                                    strokeOpacity: 0.84,
+                                    strokeWeight: 5,
+                                },
+                            });
+                            overlays.push(renderer);
+                        } else {
+                            drawFallbackPath(chunk);
+                        }
+                    });
+                });
+            } else {
+                drawFallbackPath(positions);
+            }
+        }
+
+        if (!bounds.isEmpty()) {
+            map.fitBounds(bounds);
+            if (positions.length === 1) {
+                map.setZoom(15);
+            }
+        }
+
+        return () => {
+            disposed = true;
+            overlays.forEach((overlay) => overlay.setMap(null));
+            infoWindow.close();
+        };
+    }, [mapsReady, routePoints]);
+
+    return <div ref={mapRef} style={{ width: '100%', height }} />;
+};
+
 const CreateNewRecurringServiceStop = () => {
     const {
         recentlySelectedCompany,
@@ -91,6 +281,9 @@ const CreateNewRecurringServiceStop = () => {
     const [techList, setTechList] = useState([]);
     const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [routePreview, setRoutePreview] = useState({ route: null, stops: [] });
+    const [isRoutePreviewLoading, setIsRoutePreviewLoading] = useState(false);
+    const [routePreviewError, setRoutePreviewError] = useState("");
 
     const dayOptions = [
         { value: "Sunday", label: "Sunday" },
@@ -131,6 +324,13 @@ const CreateNewRecurringServiceStop = () => {
     const hasSelectedLocationMap = selectedLocationLatitude !== null
         && selectedLocationLongitude !== null
         && (selectedLocationLatitude !== 0 || selectedLocationLongitude !== 0);
+    const selectedTechnicianId = getTechnicianId(tech);
+    const selectedTechnicianLabel = tech?.label || tech?.userName || tech?.firstName || "Technician";
+    const routePreviewStops = routePreview.stops || [];
+    const routePreviewMappedStopCount = routePreviewStops.filter(routePreviewStopCoordinate).length;
+    const routePreviewTitle = routePreview.route
+        ? routePreview.route.description || routePreview.route.name || `${selectedTechnicianLabel} ${dayOfWeek?.label || dayOfWeek?.value || ""} Route`
+        : `${selectedTechnicianLabel} ${dayOfWeek?.label || dayOfWeek?.value || ""} Route`;
     const errorContext = useMemo(() => ({
         userId: user?.uid || dataBaseUser?.id || dataBaseUser?.uid || '',
         userEmail: user?.email || dataBaseUser?.email || '',
@@ -374,6 +574,119 @@ const CreateNewRecurringServiceStop = () => {
         }
     }, [selectedServiceStopType, serviceStopTypeOptions]);
 
+    useEffect(() => {
+        if (!recentlySelectedCompany || !selectedTechnicianId || !dayOfWeek?.value) {
+            setRoutePreview({ route: null, stops: [] });
+            setRoutePreviewError("");
+            setIsRoutePreviewLoading(false);
+            return undefined;
+        }
+
+        let isMounted = true;
+
+        const loadRoutePreview = async () => {
+            setIsRoutePreviewLoading(true);
+            setRoutePreviewError("");
+
+            try {
+                const routesQuery = query(
+                    collection(db, "companies", recentlySelectedCompany, "recurringRoutes"),
+                    where("day", "==", dayOfWeek.value),
+                    where("techId", "==", selectedTechnicianId)
+                );
+                const routesSnapshot = await getDocs(routesQuery);
+                const matchingRoutes = routesSnapshot.docs
+                    .map((routeDoc) => ({ id: routeDoc.id, ...routeDoc.data() }))
+                    .sort((left, right) => sortedRouteOrder(right.order).length - sortedRouteOrder(left.order).length);
+                const route = matchingRoutes[0] || null;
+
+                if (!route) {
+                    if (isMounted) setRoutePreview({ route: null, stops: [] });
+                    return;
+                }
+
+                const orderedStops = sortedRouteOrder(route.order);
+                const stops = await Promise.all(orderedStops.map(async (orderedStop, index) => {
+                    let recurringStop = {};
+
+                    if (orderedStop.recurringServiceStopId) {
+                        try {
+                            const recurringStopSnapshot = await getDoc(doc(
+                                db,
+                                "companies",
+                                recentlySelectedCompany,
+                                "recurringServiceStop",
+                                orderedStop.recurringServiceStopId
+                            ));
+                            recurringStop = recurringStopSnapshot.exists()
+                                ? { id: recurringStopSnapshot.id, ...recurringStopSnapshot.data() }
+                                : {};
+                        } catch (error) {
+                            console.warn("Unable to load recurring stop for route preview.", {
+                                recurringServiceStopId: orderedStop.recurringServiceStopId,
+                                error,
+                            });
+                        }
+                    }
+
+                    const serviceLocationId = orderedStop.locationId || recurringStop.serviceLocationId || "";
+                    let routeServiceLocation = {};
+
+                    if (serviceLocationId) {
+                        try {
+                            const serviceLocationSnapshot = await getDoc(doc(
+                                db,
+                                "companies",
+                                recentlySelectedCompany,
+                                "serviceLocations",
+                                serviceLocationId
+                            ));
+                            routeServiceLocation = serviceLocationSnapshot.exists()
+                                ? { id: serviceLocationSnapshot.id, ...serviceLocationSnapshot.data() }
+                                : {};
+                        } catch (error) {
+                            console.warn("Unable to load service location for route preview.", {
+                                serviceLocationId,
+                                error,
+                            });
+                        }
+                    }
+
+                    return {
+                        id: orderedStop.id || orderedStop.recurringServiceStopId || serviceLocationId || `route-preview-stop-${index}`,
+                        order: index + 1,
+                        recurringServiceStopId: orderedStop.recurringServiceStopId || recurringStop.id || "",
+                        serviceLocationId,
+                        customerId: orderedStop.customerId || recurringStop.customerId || routeServiceLocation.customerId || "",
+                        customerName: orderedStop.customerName || recurringStop.customerName || routeServiceLocation.customerName || "Recurring Service Stop",
+                        address: routeServiceLocation.address || recurringStop.address || {},
+                    };
+                }));
+
+                if (isMounted) {
+                    setRoutePreview({
+                        route,
+                        stops,
+                    });
+                }
+            } catch (error) {
+                console.error("Error loading route preview:", error);
+                if (isMounted) {
+                    setRoutePreview({ route: null, stops: [] });
+                    setRoutePreviewError("Route preview could not be loaded.");
+                }
+            } finally {
+                if (isMounted) setIsRoutePreviewLoading(false);
+            }
+        };
+
+        loadRoutePreview();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [dayOfWeek?.value, recentlySelectedCompany, selectedTechnicianId]);
+
     const handleCustomerChange = async (selectedCustomer) => {
         setCustomer(selectedCustomer);
         setServiceLocation(null); // Reset location on customer change
@@ -565,13 +878,24 @@ const CreateNewRecurringServiceStop = () => {
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-5">
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <h1 className="text-3xl font-bold text-slate-950">Add New Recurring Service Stop</h1>
-                    <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                        Assign the customer, route schedule, technician, and service stop type.
-                    </p>
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                            <h1 className="text-3xl font-bold text-slate-950">Add New Recurring Service Stop</h1>
+                            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                                Assign the customer, route schedule, technician, and service stop type.
+                            </p>
+                        </div>
+                        <button
+                            type="submit"
+                            form="create-recurring-service-stop-form"
+                            className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 sm:mt-1"
+                        >
+                            Add Stop
+                        </button>
+                    </div>
                 </section>
 
-                <form onSubmit={createNewStop} className="space-y-5">
+                <form id="create-recurring-service-stop-form" onSubmit={createNewStop} className="space-y-5">
                     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <SelectField label="Customer" value={customer} options={customerList} onChange={handleCustomerChange} placeholder="Select a Customer" isDisabled={!!customerId && customerId !== 'NA'} isLoading={isLoading} />
@@ -630,35 +954,88 @@ const CreateNewRecurringServiceStop = () => {
 
                     {serviceLocation && (
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                            <div className="flex items-start gap-3">
-                                <span className="rounded-md bg-blue-50 p-2 text-blue-700">
-                                    <FaMapMarkerAlt className="text-sm" />
-                                </span>
+                            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                                 <div className="min-w-0">
-                                    <h2 className="text-lg font-bold text-slate-950">Location Preview</h2>
-                                    <p className="mt-1 text-sm font-semibold text-slate-900">
-                                        {serviceLocation.nickName || serviceLocation.label || 'Selected Service Location'}
-                                    </p>
-                                    <p className="mt-1 text-sm text-slate-600">
-                                        {selectedLocationAddressLine || 'No address saved for this location.'}
-                                    </p>
+                                    <div className="flex items-start gap-3">
+                                        <span className="rounded-md bg-blue-50 p-2 text-blue-700">
+                                            <FaMapMarkerAlt className="text-sm" />
+                                        </span>
+                                        <div className="min-w-0">
+                                            <h2 className="text-lg font-bold text-slate-950">Location Preview</h2>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                {serviceLocation.nickName || serviceLocation.label || 'Selected Service Location'}
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-600">
+                                                {selectedLocationAddressLine || 'No address saved for this location.'}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {hasSelectedLocationMap ? (
+                                        <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
+                                            <MapComponent
+                                                latitude={selectedLocationLatitude}
+                                                longitude={selectedLocationLongitude}
+                                                zoom={15}
+                                                height="260px"
+                                            />
+                                        </div>
+                                    ) : (
+                                        <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            No map coordinates are saved for this service location yet.
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="min-w-0">
+                                    <div className="flex items-start gap-3">
+                                        <span className="rounded-md bg-emerald-50 p-2 text-emerald-700">
+                                            <FaMapMarkerAlt className="text-sm" />
+                                        </span>
+                                        <div className="min-w-0">
+                                            <h2 className="text-lg font-bold text-slate-950">Technician Route Preview</h2>
+                                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                                {selectedTechnicianId ? routePreviewTitle : "Select a technician"}
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-600">
+                                                {selectedTechnicianId
+                                                    ? `${dayOfWeek?.label || dayOfWeek?.value || "Selected day"} - ${routePreviewStops.length} stop${routePreviewStops.length === 1 ? "" : "s"}`
+                                                    : "Choose a technician to preview their route for this day."}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {!selectedTechnicianId ? (
+                                        <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            Select an assigned technician to load their current planned route.
+                                        </div>
+                                    ) : isRoutePreviewLoading ? (
+                                        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                                            Loading route preview...
+                                        </div>
+                                    ) : routePreviewError ? (
+                                        <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                                            {routePreviewError}
+                                        </div>
+                                    ) : !routePreview.route ? (
+                                        <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            No planned route exists for this technician on {dayOfWeek?.label || dayOfWeek?.value || "this day"} yet.
+                                        </div>
+                                    ) : routePreviewStops.length === 0 ? (
+                                        <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            This planned route does not have ordered stops yet.
+                                        </div>
+                                    ) : routePreviewMappedStopCount === 0 ? (
+                                        <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            No map coordinates are saved for the stops on this route yet.
+                                        </div>
+                                    ) : (
+                                        <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
+                                            <PlannedRoutePreviewMap stops={routePreviewStops} height="260px" />
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-
-                            {hasSelectedLocationMap ? (
-                                <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
-                                    <MapComponent
-                                        latitude={selectedLocationLatitude}
-                                        longitude={selectedLocationLongitude}
-                                        zoom={15}
-                                        height="260px"
-                                    />
-                                </div>
-                            ) : (
-                                <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                                    No map coordinates are saved for this service location yet.
-                                </div>
-                            )}
                         </section>
                     )}
 

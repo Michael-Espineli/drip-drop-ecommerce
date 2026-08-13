@@ -287,12 +287,13 @@ const buildEquipmentCreatePath = (equipment = {}) => {
 const applyEquipmentDefaults = (current = {}, next = {}) => {
   const merged = { ...current, ...next };
   const shouldDefaultNeedsService = equipmentDefaultsToNeedsService(merged);
+  const shouldHaveServiceSchedule = shouldDefaultNeedsService || merged.needsService;
 
   return {
     ...merged,
     needsService: shouldDefaultNeedsService ? true : merged.needsService,
-    serviceFrequency: shouldDefaultNeedsService && !merged.serviceFrequency ? "6" : merged.serviceFrequency,
-    serviceFrequencyEvery: shouldDefaultNeedsService && !merged.serviceFrequencyEvery ? "Month" : merged.serviceFrequencyEvery,
+    serviceFrequency: shouldHaveServiceSchedule && !merged.serviceFrequency ? "6" : merged.serviceFrequency,
+    serviceFrequencyEvery: shouldHaveServiceSchedule && !merged.serviceFrequencyEvery ? "Month" : merged.serviceFrequencyEvery,
   };
 };
 
@@ -787,6 +788,47 @@ const EquipmentDetail = () => {
     model,
   });
 
+  const handleEquipmentNameChange = (value) => {
+    const nextForm = applyEquipmentDefaults(
+      {
+        name,
+        type: category,
+        category,
+        make,
+        model,
+        needsService,
+        serviceFrequency,
+        serviceFrequencyEvery,
+      },
+      { name: value }
+    );
+
+    setName(value);
+    setNeedsService(!!nextForm.needsService);
+    setServiceFrequency(nextForm.serviceFrequency || "");
+    setServiceFrequencyEvery(nextForm.serviceFrequencyEvery || "");
+  };
+
+  const handleNeedsServiceChange = (checked) => {
+    const nextForm = applyEquipmentDefaults(
+      {
+        name,
+        type: category,
+        category,
+        make,
+        model,
+        needsService,
+        serviceFrequency,
+        serviceFrequencyEvery,
+      },
+      { needsService: checked }
+    );
+
+    setNeedsService(!!nextForm.needsService);
+    setServiceFrequency(nextForm.serviceFrequency || "");
+    setServiceFrequencyEvery(nextForm.serviceFrequencyEvery || "");
+  };
+
   const getDateValue = (value) => {
     if (!value) return null;
     if (value instanceof Date) return value;
@@ -974,7 +1016,18 @@ const EquipmentDetail = () => {
         make,
         model,
       });
-	      const next = finalNeedsService ? computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery) : null;
+      const numericServiceFrequency = Number(serviceFrequency);
+      const next = finalNeedsService ? computeNextServiceDate(lastServiceDate, numericServiceFrequency, serviceFrequencyEvery) : null;
+
+      if (finalNeedsService && !lastServiceDate) {
+        toast.error("Add a last service date before saving equipment that needs service.");
+        return;
+      }
+
+      if (finalNeedsService && (!Number.isFinite(numericServiceFrequency) || numericServiceFrequency <= 0 || !serviceFrequencyEvery || !next)) {
+        toast.error("Add a valid service frequency so the next service date can be calculated.");
+        return;
+      }
 
       await updateDoc(docRef, {
         type: category,
@@ -999,8 +1052,8 @@ const EquipmentDetail = () => {
 	        needsService: finalNeedsService,
 
         // ✅ save in your desired shapes:
-	        serviceFrequency: finalNeedsService && serviceFrequency !== "" ? Number(serviceFrequency) : null,
-	        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
+		        serviceFrequency: finalNeedsService ? numericServiceFrequency : null,
+		        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
 
         status,
         notes,
@@ -1056,8 +1109,8 @@ const EquipmentDetail = () => {
         isActive,
 	        needsService: finalNeedsService,
 
-	        serviceFrequency: finalNeedsService && serviceFrequency !== "" ? Number(serviceFrequency) : null,
-	        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
+		        serviceFrequency: finalNeedsService ? numericServiceFrequency : null,
+		        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
 
         status,
         notes,
@@ -2015,9 +2068,9 @@ const EquipmentDetail = () => {
               <h3 className="text-xl font-bold text-gray-800">Edit Equipment</h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="Name">
-                  <input value={name} onChange={(e) => setName(e.target.value)} className={inputBase} />
-                </Field>
+	                <Field label="Name">
+	                  <input value={name} onChange={(e) => handleEquipmentNameChange(e.target.value)} className={inputBase} />
+	                </Field>
 
 	                <div className="md:col-span-2">
 	                  <EquipmentCatalogPicker
@@ -2113,11 +2166,11 @@ const EquipmentDetail = () => {
                 <Field label="Needs Service">
                   <div className="flex items-center gap-3">
                     <input
-                      type="checkbox"
-                      checked={needsService}
-                      onChange={(e) => setNeedsService(e.target.checked)}
-                      className="h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                    />
+	                      type="checkbox"
+	                      checked={needsService}
+	                      onChange={(e) => handleNeedsServiceChange(e.target.checked)}
+	                      className="h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+	                    />
                     <span className="text-gray-700 font-semibold">{needsService ? "Yes" : "No"}</span>
                   </div>
                 </Field>
@@ -2161,10 +2214,11 @@ const EquipmentDetail = () => {
                       <DatePicker
                         showIcon
                         selected={lastServiceDate || null}
-                        onChange={(e) => setLastServiceDate(e)}
-                        dateFormat="MM/dd/yyyy"
-                        isClearable
-                        className={inputBase}
+	                        onChange={(e) => setLastServiceDate(e)}
+	                        dateFormat="MM/dd/yyyy"
+	                        isClearable
+	                        required
+	                        className={inputBase}
                         icon={
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
@@ -2202,9 +2256,9 @@ const EquipmentDetail = () => {
 
                     <Field label="Service Frequency (number)">
                       <input
-                        type="number"
-                        min="0"
-                        value={serviceFrequency}
+	                        type="number"
+	                        min="1"
+	                        value={serviceFrequency}
                         onChange={(e) => setServiceFrequency(e.target.value)}
                         className={inputBase}
                         placeholder="e.g. 3"

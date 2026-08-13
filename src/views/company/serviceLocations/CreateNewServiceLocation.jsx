@@ -20,24 +20,57 @@ import {
 import { queueUniversalEquipmentSuggestion } from '../../../utils/universalEquipmentSuggestions';
 
 const nextServiceDate = (date, amount, unit) => {
+    const numericAmount = Number(amount);
+    if (!date || !Number.isFinite(numericAmount) || numericAmount <= 0) return null;
+
     const next = new Date(date);
+    if (Number.isNaN(next.getTime())) return null;
+
     switch (unit) {
         case 'Day':
-            next.setDate(next.getDate() + amount);
+            next.setDate(next.getDate() + numericAmount);
             break;
         case 'Week':
-            next.setDate(next.getDate() + (amount * 7));
+            next.setDate(next.getDate() + (numericAmount * 7));
             break;
         case 'Year':
-            next.setFullYear(next.getFullYear() + amount);
+            next.setFullYear(next.getFullYear() + numericAmount);
             break;
         case 'Month':
-        default:
-            next.setMonth(next.getMonth() + amount);
+            next.setMonth(next.getMonth() + numericAmount);
             break;
+        default:
+            return null;
     }
     return next;
 };
+
+const dateInputToLocalDate = (value) => {
+    if (!value) return null;
+    const [year, month, day] = String(value).split('-').map(Number);
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+};
+
+const formatDateInput = (value) => {
+    if (!value) return '';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const getEquipmentNextServiceDateInput = (equipment = {}) => (
+    formatDateInput(nextServiceDate(
+        dateInputToLocalDate(equipment.lastServiceDate),
+        equipment.serviceFrequency,
+        equipment.serviceFrequencyEvery || 'Month'
+    ))
+);
 
 const WATER_TYPE_OPTIONS = ['Fresh Water', 'Salt Water'];
 
@@ -60,10 +93,10 @@ const InfoSection = ({ title, children }) => (
     </div>
 );
 
-const FormInput = ({ label, name, value, onChange, required = false, type = 'text' }) => (
+const FormInput = ({ label, name, value, onChange, required = false, type = 'text', ...props }) => (
     <div>
         <label className="block text-sm font-medium text-gray-700">{label}</label>
-        <input type={type} name={name} value={value} onChange={onChange} required={required} className="w-full mt-1 p-2 border border-gray-300 rounded-lg" />
+        <input type={type} name={name} value={value} onChange={onChange} required={required} className="w-full mt-1 p-2 border border-gray-300 rounded-lg" {...props} />
     </div>
 );
 
@@ -113,8 +146,8 @@ const CreateNewServiceLocation = () => {
         { id: uuidv4(), name: 'Main', gallons: '16000', material: 'Plaster', waterType: 'Fresh Water', notes: '', shape: '', length: ['', ''], depth: ['', ''], width: ['', ''] }
     ]);
     const [equipment, setEquipment] = useState([
-        { id: uuidv4(), name: 'Pump 1', category: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, serviceFrequency: '', serviceFrequencyEvery: '' },
-        { id: uuidv4(), name: 'Filter 1', category: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: true, serviceFrequency: 6, serviceFrequencyEvery: 'Month' }
+        { id: uuidv4(), name: 'Pump 1', category: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, lastServiceDate: '', serviceFrequency: '', serviceFrequencyEvery: '' },
+        { id: uuidv4(), name: 'Filter 1', category: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: true, lastServiceDate: '', serviceFrequency: 6, serviceFrequencyEvery: 'Month' }
     ]);
 
     // Fetch customers for the dropdown
@@ -189,6 +222,29 @@ const CreateNewServiceLocation = () => {
             return;
         }
 
+        for (const eq of equipment) {
+            if (!eq.name) continue;
+
+            const finalType = eq.type || eq.category || '';
+            const finalNeedsService = !!eq.needsService || equipmentDefaultsToNeedsService({ ...eq, type: finalType });
+            const lastServiceDate = finalNeedsService ? dateInputToLocalDate(eq.lastServiceDate) : null;
+            const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency) : null;
+            const serviceFrequencyEvery = finalNeedsService ? (eq.serviceFrequencyEvery || 'Month') : null;
+            const calculatedNextServiceDate = finalNeedsService
+                ? nextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
+                : null;
+
+            if (finalNeedsService && !lastServiceDate) {
+                toast.error(`Add a last service date for ${eq.name}.`);
+                return;
+            }
+
+            if (finalNeedsService && (!Number.isFinite(serviceFrequency) || serviceFrequency <= 0 || !serviceFrequencyEvery || !calculatedNextServiceDate)) {
+                toast.error(`Add a valid service frequency for ${eq.name}.`);
+                return;
+            }
+        }
+
         const toastId = toast.loading('Creating service location...');
         try {
             const serviceLocationId = 'com_sl_' + uuidv4();
@@ -243,9 +299,12 @@ const CreateNewServiceLocation = () => {
                     const equipmentId = 'com_equ_' + uuidv4();
                     const finalType = eq.type || eq.category || '';
                     const finalNeedsService = !!eq.needsService || equipmentDefaultsToNeedsService({ ...eq, type: finalType });
-                    const lastServiceDate = finalNeedsService ? new Date() : null;
-                    const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency || 6) : null;
+                    const lastServiceDate = finalNeedsService ? dateInputToLocalDate(eq.lastServiceDate) : null;
+                    const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency) : null;
                     const serviceFrequencyEvery = finalNeedsService ? (eq.serviceFrequencyEvery || 'Month') : null;
+                    const calculatedNextServiceDate = finalNeedsService
+                        ? nextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
+                        : null;
                     const equipmentPayload = {
                          id: equipmentId,
                          name: eq.name,
@@ -273,9 +332,7 @@ const CreateNewServiceLocation = () => {
                          lastServiceDate,
                          serviceFrequency,
                          serviceFrequencyEvery,
-                         nextServiceDate: lastServiceDate && serviceFrequency && serviceFrequencyEvery
-                             ? nextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery)
-                             : null,
+                         nextServiceDate: calculatedNextServiceDate,
                          photoUrls: [],
                          verified: false,
                     };
@@ -341,7 +398,7 @@ const CreateNewServiceLocation = () => {
     };
 
     const addEquipment = () => {
-        setEquipment([...equipment, { id: uuidv4(), name: '', category: '', typeId: '', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, serviceFrequency: '', serviceFrequencyEvery: '' }]);
+        setEquipment([...equipment, { id: uuidv4(), name: '', category: '', typeId: '', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, lastServiceDate: '', serviceFrequency: '', serviceFrequencyEvery: '' }]);
     };
     const updateEquipmentCatalog = (index, nextEquipment) => {
         const next = [...equipment];
@@ -442,7 +499,7 @@ const CreateNewServiceLocation = () => {
                     <InfoSection title="Equipment">
                         {equipment.map((eq, index) => (
                             <div key={eq.id} className="p-4 border rounded-lg mt-4 space-y-3 bg-gray-50">
-                                <FormInput label="Name" value={eq.name} onChange={e => { const next = [...equipment]; next[index].name = e.target.value; setEquipment(next); }} />
+                                <FormInput label="Name" value={eq.name} onChange={e => { const next = [...equipment]; next[index] = applyEquipmentDefaults(next[index], { name: e.target.value }); setEquipment(next); }} />
                                 <EquipmentCatalogPicker
                                     value={eq}
                                     onChange={(nextEquipment) => updateEquipmentCatalog(index, nextEquipment)}
@@ -460,11 +517,13 @@ const CreateNewServiceLocation = () => {
                                     }}
                                 />
                                 <FormTextarea label="Notes" value={eq.notes} onChange={e => { const next = [...equipment]; next[index].notes = e.target.value; setEquipment(next); }} />
-                                <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={e => { const next = [...equipment]; next[index].needsService = e.target.checked; setEquipment(next); }} className="mr-2 h-4 w-4" />Needs Service</label>
+                                <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={e => { const next = [...equipment]; next[index] = applyEquipmentDefaults(next[index], { needsService: e.target.checked, serviceFrequency: e.target.checked ? (next[index].serviceFrequency || 6) : next[index].serviceFrequency, serviceFrequencyEvery: e.target.checked ? (next[index].serviceFrequencyEvery || 'Month') : next[index].serviceFrequencyEvery }); setEquipment(next); }} className="mr-2 h-4 w-4" />Needs Service</label>
                                 {eq.needsService && (
                                     <div className="grid md:grid-cols-2 gap-4">
-                                        <FormInput label="Service Frequency" type="number" value={eq.serviceFrequency || ''} onChange={e => { const next = [...equipment]; next[index].serviceFrequency = e.target.value; setEquipment(next); }} />
-                                        <FormSelect label="Frequency Unit" value={eq.serviceFrequencyEvery || 'Month'} onChange={e => { const next = [...equipment]; next[index].serviceFrequencyEvery = e.target.value; setEquipment(next); }}>
+                                        <FormInput label="Last Service Date" type="date" value={eq.lastServiceDate || ''} onChange={e => { const next = [...equipment]; next[index].lastServiceDate = e.target.value; setEquipment(next); }} required />
+                                        <FormInput label="Next Service Date" type="date" value={getEquipmentNextServiceDateInput(eq)} readOnly />
+                                        <FormInput label="Service Frequency" type="number" min="1" value={eq.serviceFrequency || ''} onChange={e => { const next = [...equipment]; next[index].serviceFrequency = e.target.value; setEquipment(next); }} required />
+                                        <FormSelect label="Frequency Unit" value={eq.serviceFrequencyEvery || 'Month'} onChange={e => { const next = [...equipment]; next[index].serviceFrequencyEvery = e.target.value; setEquipment(next); }} required>
                                             <option value="Day">Day</option>
                                             <option value="Week">Week</option>
                                             <option value="Month">Month</option>

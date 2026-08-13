@@ -23,6 +23,8 @@ import { MdConstruction, MdOutlineLocalOffer } from 'react-icons/md';
 import Chart from 'react-apexcharts';
 import { db } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
+import { TODO_ALL_BOARDS_PERMISSION_ID } from '../../utils/companyPermissions';
+import { roleHasCompanyPermission } from '../../utils/companyPermissionAccess';
 import { SalesAgreementSourceType, SalesAgreementStatus, salesCollectionNames } from '../../utils/models/Sales';
 import { SERVICE_STOP_TYPE_USE_CASES, normalizeServiceStopTypeBucket } from '../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { normalizeEquipmentStatus } from '../../utils/models/Equipment';
@@ -47,6 +49,7 @@ import {
     normalizeTodo,
     todoIsOpen,
     todoNeedsAttention,
+    todoVisibleToUser,
 } from '../../utils/models/TodoItem';
 import {
     ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID,
@@ -231,6 +234,8 @@ const getRecordUserIds = (record = {}) => normalizeCustomerTags([
     record.assignedToCompanyUserDocId,
     record.assignedUserId,
     record.companyUserId,
+    ...(Array.isArray(record.boardMemberUserIds) ? record.boardMemberUserIds : []),
+    ...(Array.isArray(record.boardMemberCompanyUserDocIds) ? record.boardMemberCompanyUserDocIds : []),
     record.ownerId,
     record.createdBy,
     record.createdById,
@@ -1481,6 +1486,14 @@ const Dashboard = () => {
         companyUserAccess?.companyUserId,
         companyUserAccess?.companyUserDocId,
     ]), [companyUserAccess, dataBaseUser, user]);
+    const canViewAllTodoBoards = useMemo(() => (
+        roleHasCompanyPermission(companyRole, TODO_ALL_BOARDS_PERMISSION_ID)
+    ), [companyRole]);
+    const visibleTodoItems = useMemo(() => (
+        canViewAllTodoBoards
+            ? todoItems
+            : todoItems.filter((todo) => todoVisibleToUser(todo, currentUserIds))
+    ), [canViewAllTodoBoards, currentUserIds, todoItems]);
     const currentUserTagAliases = useMemo(() => (
         buildCurrentUserTagAliases({ user, dataBaseUser, companyUserAccess })
     ), [companyUserAccess, dataBaseUser, user]);
@@ -1763,17 +1776,17 @@ const Dashboard = () => {
 
     const scopedTodoItems = useMemo(() => (
         dashboardScope === 'company'
-            ? todoItems
+            ? visibleTodoItems
             : dashboardScope === 'regional'
-                ? todoItems.filter((todo) => recordMatchesCustomerTags(todo, customersById, regionalScopeTag ? [regionalScopeTag] : []))
-                : todoItems.filter((todo) => recordMatchesPersonalAssignment(
+                ? visibleTodoItems.filter((todo) => recordMatchesCustomerTags(todo, customersById, regionalScopeTag ? [regionalScopeTag] : []))
+                : visibleTodoItems.filter((todo) => recordMatchesPersonalAssignment(
                     todo,
                     customersById,
                     currentUserIds,
                     personalCustomerIdSet,
                     currentUserTagAliases
                 ))
-    ), [currentUserIds, currentUserTagAliases, customersById, dashboardScope, personalCustomerIdSet, regionalScopeTag, todoItems]);
+    ), [currentUserIds, currentUserTagAliases, customersById, dashboardScope, personalCustomerIdSet, regionalScopeTag, visibleTodoItems]);
 
     const scopedAlertNotifications = useMemo(() => (
         dashboardScope === 'company'

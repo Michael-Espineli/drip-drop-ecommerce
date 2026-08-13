@@ -4,6 +4,7 @@ import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { ChatBubbleLeftRightIcon, MagnifyingGlassIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { timeSince } from '../../../utils/timeFormatter';
+import { COMPANY_WIDE_MESSAGES_PERMISSION_ID } from '../../../utils/companyPermissions';
 import {
     CHAT_AUDIENCE,
     getChatAudience,
@@ -24,7 +25,7 @@ const filterOptions = [
 ];
 
 const Chat = () => {
-    const { user, recentlySelectedCompany } = useContext(Context);
+    const { user, recentlySelectedCompany, companyRoleLoaded, hasCompanyPermission } = useContext(Context);
     const [chats, setChats] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [audienceFilter, setAudienceFilter] = useState('all');
@@ -50,6 +51,7 @@ const Chat = () => {
             db,
             userId: user.uid,
             companyId: recentlySelectedCompany || '',
+            includeCompanyWide: companyRoleLoaded && hasCompanyPermission(COMPANY_WIDE_MESSAGES_PERMISSION_ID),
             onChange: (visibleChats) => {
                 setChats(visibleChats);
                 setLoading(false);
@@ -61,7 +63,7 @@ const Chat = () => {
         });
 
         return () => unsubscribe();
-    }, [recentlySelectedCompany, user]);
+    }, [companyRoleLoaded, hasCompanyPermission, recentlySelectedCompany, user]);
 
     const filteredChats = useMemo(() => (
         chats.filter((chat) => {

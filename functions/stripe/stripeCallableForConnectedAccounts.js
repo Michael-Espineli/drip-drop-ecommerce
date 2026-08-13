@@ -958,6 +958,7 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     rateType: agreement.rateType || '',
     paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
     invoiceDeliveryMethod: agreement.invoiceDeliveryMethod || 'email',
+    firstInvoiceSendAt: agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt || agreement.startDate || null,
     lineItems,
     chemicalBillingMode: agreement.chemicalBillingMode || 'includedAll',
     includedChemicalIds: copyList(agreement.includedChemicalIds),
@@ -981,6 +982,8 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
       revisionNumber: String(agreement.revisionNumber || 0),
       billingFrequency,
       billingFrequencyCount: String(billingFrequencyCount),
+      firstInvoiceSendAt: agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt || agreement.startDate || null,
+      manualBillingAutoSendEnabled: agreement.manualBillingAutoSendEnabled === true,
       serviceCadence,
       serviceCadenceCount: String(serviceCadenceCount),
       serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
@@ -1005,7 +1008,7 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     nextAction: canStartStripeCheckout ? 'collectPaymentMethod' : 'connectStripeAccount',
     customerCanPayImmediately: canStartStripeCheckout,
     manualBillingEnabled: true,
-    manualBillingAutoSendEnabled: true,
+    manualBillingAutoSendEnabled: agreement.manualBillingAutoSendEnabled === true,
     manualBillingNextInvoiceAt: agreement.manualBillingNextInvoiceAt || agreement.firstInvoiceSendAt || agreement.startDate || admin.firestore.Timestamp.now(),
     manualBillingNextDueDate: null,
     manualBillingStatus: 'readyToInvoice',
@@ -1135,6 +1138,9 @@ const syncSalesSubscriptionRecordFromStripe = async ({
   connectedAccount,
 }) => {
   const updateData = buildStripeSubscriptionUpdateData({ stripeSubscription, connectedAccount });
+  if (updateData.manualBillingEnabled) {
+    updateData.manualBillingAutoSendEnabled = subscription.manualBillingAutoSendEnabled === true;
+  }
 
   if (updateData.status === 'active' && !subscription.operationsSetupStatus) {
     updateData.operationsSetupStatus = 'needsRecurringServiceStop';
@@ -1383,7 +1389,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
           ? existingSubscription.manualBillingEnabled !== false
           : !existingStripeManagedBilling
         : subscriptionDraft.manualBillingEnabled,
-      manualBillingAutoSendEnabled: hasStripeSubscription
+      manualBillingAutoSendEnabled: existingSubscription
         ? existingStripeManagedBilling
           ? false
           : existingSubscription.manualBillingAutoSendEnabled === true
@@ -1726,7 +1732,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
           ? existingSubscription.manualBillingEnabled !== false
           : !existingStripeManagedBilling
         : subscriptionDraft.manualBillingEnabled,
-      manualBillingAutoSendEnabled: hasStripeSubscription
+      manualBillingAutoSendEnabled: existingSubscription
         ? existingStripeManagedBilling
           ? false
           : existingSubscription.manualBillingAutoSendEnabled === true

@@ -331,6 +331,9 @@ export class SalesAgreement {
     billingFrequencyCount = 1,
     paymentTerms = 'dueOnReceipt',
     invoiceDeliveryMethod = SalesInvoiceDeliveryMethod.email,
+    firstInvoiceSendAt = null,
+    manualBillingNextInvoiceAt = null,
+    manualBillingAutoSendEnabled = false,
     receiptDeliveryMethod = SalesInvoiceDeliveryMethod.email,
     receiptsEnabled = true,
     pnlIncludeInReports = true,
@@ -427,6 +430,9 @@ export class SalesAgreement {
     this.billingFrequencyCount = billingFrequencyCount;
     this.paymentTerms = paymentTerms;
     this.invoiceDeliveryMethod = invoiceDeliveryMethod;
+    this.firstInvoiceSendAt = firstInvoiceSendAt || manualBillingNextInvoiceAt;
+    this.manualBillingNextInvoiceAt = manualBillingNextInvoiceAt || firstInvoiceSendAt;
+    this.manualBillingAutoSendEnabled = manualBillingAutoSendEnabled === true;
     this.receiptDeliveryMethod = receiptDeliveryMethod;
     this.receiptsEnabled = receiptsEnabled;
     this.pnlIncludeInReports = pnlIncludeInReports !== false;
@@ -556,6 +562,9 @@ export class SalesBillingSubscription {
     customerCanPayImmediately = false,
     stripeReadiness = {},
     manualBillingEnabled = true,
+    manualBillingAutoSendEnabled = false,
+    manualBillingNextInvoiceAt = null,
+    manualBillingNextDueDate = null,
     manualBillingStatus = 'readyToInvoice',
     manualBillingReason = '',
     receiptDeliveryMethod = SalesInvoiceDeliveryMethod.email,
@@ -640,6 +649,9 @@ export class SalesBillingSubscription {
     this.customerCanPayImmediately = customerCanPayImmediately;
     this.stripeReadiness = stripeReadiness;
     this.manualBillingEnabled = manualBillingEnabled;
+    this.manualBillingAutoSendEnabled = manualBillingAutoSendEnabled === true;
+    this.manualBillingNextInvoiceAt = manualBillingNextInvoiceAt;
+    this.manualBillingNextDueDate = manualBillingNextDueDate;
     this.manualBillingStatus = manualBillingStatus;
     this.manualBillingReason = manualBillingReason;
     this.receiptDeliveryMethod = receiptDeliveryMethod;

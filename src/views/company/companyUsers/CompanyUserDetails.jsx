@@ -58,6 +58,7 @@ import {
     normalizeDashboardScopeAccess,
     sourceHasDashboardScopeAccessFields,
 } from "../../../utils/dashboardAccess";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 
 const VEHICLE_TYPES = ["Car", "Truck", "Van"];
@@ -214,6 +215,44 @@ const getDisplayName = (user) => {
         safeUser.email ||
         safeUser.userId ||
         "Company User"
+    );
+};
+
+const firstNonEmptyText = (...values) => {
+    for (const value of values) {
+        const text = String(value || "").trim();
+        if (text) return text;
+    }
+
+    return "";
+};
+
+const getContactEmail = (companyUser = {}) => {
+    const safeCompanyUser = companyUser || {};
+
+    return firstNonEmptyText(
+        safeCompanyUser.contactInfo?.email,
+        safeCompanyUser.linkedUserContact?.email,
+        safeCompanyUser.email,
+        safeCompanyUser.userEmail,
+        safeCompanyUser.contactEmail
+    );
+};
+
+const getContactPhoneNumber = (companyUser = {}) => {
+    const safeCompanyUser = companyUser || {};
+
+    return firstNonEmptyText(
+        safeCompanyUser.contactInfo?.phoneNumber,
+        safeCompanyUser.contactInfo?.phone,
+        safeCompanyUser.linkedUserContact?.phoneNumber,
+        safeCompanyUser.linkedUserContact?.phone,
+        safeCompanyUser.phoneNumber,
+        safeCompanyUser.phone,
+        safeCompanyUser.mobilePhone,
+        safeCompanyUser.mobile,
+        safeCompanyUser.cellPhone,
+        safeCompanyUser.telephone
     );
 };
 
@@ -604,6 +643,27 @@ const buildDashboardScopeAccessDraft = (source = {}) => ({
         : [...DEFAULT_DASHBOARD_SCOPE_ACCESS],
 });
 
+const getWorkOrderAdminId = (source = {}) => (
+    source.workOrderAdminId ||
+    source.assignedWorkOrderAdminId ||
+    source.defaultWorkOrderAdminId ||
+    source.jobAdminId ||
+    ""
+);
+
+const getWorkOrderAdminName = (source = {}) => (
+    source.workOrderAdminName ||
+    source.assignedWorkOrderAdminName ||
+    source.defaultWorkOrderAdminName ||
+    source.jobAdminName ||
+    ""
+);
+
+const buildWorkOrderAdminDraft = (source = {}) => ({
+    adminId: getWorkOrderAdminId(source),
+    adminName: getWorkOrderAdminName(source),
+});
+
 const Section = ({ title, description, action, children }) => (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-start sm:justify-between">
@@ -622,7 +682,7 @@ const Section = ({ title, description, action, children }) => (
 const DetailField = ({ label, value }) => (
     <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-1 text-sm font-medium text-slate-900">{value || "Not set"}</p>
+        <p className="mt-1 break-words text-sm font-medium text-slate-900">{value || "Not set"}</p>
     </div>
 );
 
@@ -660,10 +720,13 @@ const CompanyUserDetails = () => {
     const [, setCompanyUserAccessDoc] = useState(null);
     const [regionalAccessDraft, setRegionalAccessDraft] = useState(buildRegionalAccessDraft(null));
     const [dashboardScopeAccessDraft, setDashboardScopeAccessDraft] = useState(buildDashboardScopeAccessDraft(null));
+    const [workOrderAdminDraft, setWorkOrderAdminDraft] = useState(buildWorkOrderAdminDraft(null));
+    const [workOrderAdminOptions, setWorkOrderAdminOptions] = useState([]);
     const [availableCustomerTags, setAvailableCustomerTags] = useState([]);
     const [regionalTagInput, setRegionalTagInput] = useState("");
     const [isSavingRegionalAccess, setIsSavingRegionalAccess] = useState(false);
     const [isSavingDashboardScopeAccess, setIsSavingDashboardScopeAccess] = useState(false);
+    const [isSavingWorkOrderAdmin, setIsSavingWorkOrderAdmin] = useState(false);
     const [routeVehicleAccess, setRouteVehicleAccess] = useState(normalizeRouteVehicleAccess());
     const [personalVehicle, setPersonalVehicle] = useState(emptyPersonalVehicle);
     const [isSavingVehicleAccess, setIsSavingVehicleAccess] = useState(false);
@@ -758,13 +821,45 @@ const CompanyUserDetails = () => {
             }
         };
 
+        const loadCompanyUserContactInfo = async (fetchedUser) => {
+            if (!fetchedUser?.id) return null;
+
+            try {
+                const idToken = await authUser?.getIdToken?.();
+                const getCompanyUserContactInfo = httpsCallable(functions, "getCompanyUserContactInfo");
+                const response = await getCompanyUserContactInfo({
+                    companyId: recentlySelectedCompany,
+                    companyUserId: fetchedUser.id,
+                    linkedUserId: fetchedUser.userId || "",
+                    ...(idToken ? { idToken } : {}),
+                });
+
+                return response?.data?.contact || null;
+            } catch (error) {
+                console.warn("Could not load company user contact info.", error);
+                return null;
+            }
+        };
+
         const applyFetchedUser = async (userDoc) => {
             const fetchedUser = { ...userDoc.data(), id: userDoc.id };
-            setUser(fetchedUser);
-            setProfileDraft(buildProfileDraft(fetchedUser));
-            setRouteVehicleAccess(normalizeRouteVehicleAccess(fetchedUser));
-            setPersonalVehicle(buildPersonalVehicleForm(fetchedUser));
-            await loadRegionalAccess(fetchedUser);
+            const contactInfo = await loadCompanyUserContactInfo(fetchedUser);
+            const nextUser = contactInfo ? {
+                ...fetchedUser,
+                email: firstNonEmptyText(contactInfo.email, fetchedUser.email),
+                phoneNumber: firstNonEmptyText(contactInfo.phoneNumber, fetchedUser.phoneNumber),
+                contactInfo: {
+                    ...(fetchedUser.contactInfo || {}),
+                    ...contactInfo,
+                },
+            } : fetchedUser;
+
+            setUser(nextUser);
+            setProfileDraft(buildProfileDraft(nextUser));
+            setRouteVehicleAccess(normalizeRouteVehicleAccess(nextUser));
+            setPersonalVehicle(buildPersonalVehicleForm(nextUser));
+            setWorkOrderAdminDraft(buildWorkOrderAdminDraft(nextUser));
+            await loadRegionalAccess(nextUser);
         };
 
         const fetchUser = async () => {
@@ -795,7 +890,7 @@ const CompanyUserDetails = () => {
         };
 
         fetchUser();
-    }, [recentlySelectedCompany, companyUserId, navigate]);
+    }, [authUser, recentlySelectedCompany, companyUserId, navigate]);
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -857,6 +952,52 @@ const CompanyUserDetails = () => {
         };
 
         fetchRoles();
+    }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany) {
+            setWorkOrderAdminOptions([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchWorkOrderAdminOptions = async () => {
+            try {
+                const usersSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers"));
+                if (cancelled) return;
+
+                const options = sortCompanyUsersByName(
+                    usersSnapshot.docs
+                        .map((userDoc) => {
+                            const data = userDoc.data();
+                            const id = data.id || userDoc.id;
+                            const userName = getCompanyUserDisplayName(data, "Company User");
+
+                            return {
+                                ...data,
+                                id,
+                                userId: data.userId || data.uid || id,
+                                userName,
+                                value: data.userId || data.uid || id,
+                                label: `${userName}${data.roleName ? ` - ${data.roleName}` : ""}`,
+                            };
+                        })
+                        .filter((companyUser) => String(companyUser.status || "Active").toLowerCase() !== "inactive")
+                );
+
+                setWorkOrderAdminOptions(options);
+            } catch (error) {
+                console.error("Error loading work order admin options:", error);
+                setWorkOrderAdminOptions([]);
+            }
+        };
+
+        fetchWorkOrderAdminOptions();
+
+        return () => {
+            cancelled = true;
+        };
     }, [recentlySelectedCompany]);
 
     useEffect(() => {
@@ -1249,6 +1390,15 @@ const CompanyUserDetails = () => {
         : assignedDashboardScopes
             .map((scopeId) => DASHBOARD_SCOPE_ACCESS_OPTIONS.find((option) => option.id === scopeId)?.label || scopeId)
             .join(", ");
+    const selectedWorkOrderAdminOption = useMemo(
+        () => workOrderAdminOptions.find((option) => (
+            option.userId === workOrderAdminDraft.adminId ||
+            option.id === workOrderAdminDraft.adminId ||
+            option.value === workOrderAdminDraft.adminId
+        )) || null,
+        [workOrderAdminDraft.adminId, workOrderAdminOptions]
+    );
+    const workOrderAdminSummary = selectedWorkOrderAdminOption?.label || workOrderAdminDraft.adminName || "Not assigned";
     const assignedRole = useMemo(() => (
         roleList.find((role) => String(role.id || role.value || "") === String(user?.roleId || ""))
         || (user?.roleId ? {
@@ -1299,6 +1449,8 @@ const CompanyUserDetails = () => {
         : "All customer tags";
 
     const displayName = getDisplayName(user);
+    const userEmail = getContactEmail(user);
+    const userPhoneNumber = getContactPhoneNumber(user);
     const isContractor = normalizeWorkerType(user?.workerType) === WorkerTypeEnum.contractor;
     const canViewPerformanceReviews = can("260");
     const canEditPerformanceReviews = can("264");
@@ -1671,6 +1823,41 @@ const CompanyUserDetails = () => {
             toast.error("Failed to update dashboard view access.");
         } finally {
             setIsSavingDashboardScopeAccess(false);
+        }
+    };
+
+    const handleSaveWorkOrderAdmin = async () => {
+        if (!requirePermission("264", "update company users")) return;
+        if (!recentlySelectedCompany || !user?.id) return;
+
+        const selectedAdmin = selectedWorkOrderAdminOption;
+        const payload = {
+            workOrderAdminId: selectedAdmin?.userId || "",
+            workOrderAdminName: selectedAdmin?.userName || selectedAdmin?.label || "",
+            assignedWorkOrderAdminId: selectedAdmin?.userId || "",
+            assignedWorkOrderAdminName: selectedAdmin?.userName || selectedAdmin?.label || "",
+        };
+
+        setIsSavingWorkOrderAdmin(true);
+        try {
+            await saveCompanyUserAccessUpdates(payload);
+
+            setUser((current) => ({ ...current, ...payload }));
+            setCompanyUserAccessDoc((current) => (user.userId ? {
+                ...(current || {}),
+                id: recentlySelectedCompany,
+                companyId: recentlySelectedCompany,
+                roleId: user.roleId || "",
+                roleName: user.roleName || "",
+                ...payload,
+            } : current));
+            setWorkOrderAdminDraft(buildWorkOrderAdminDraft(payload));
+            toast.success("Work order admin assignment updated.");
+        } catch (error) {
+            console.error("Error updating work order admin assignment:", error);
+            toast.error("Failed to update work order admin assignment.");
+        } finally {
+            setIsSavingWorkOrderAdmin(false);
         }
     };
 
@@ -2749,6 +2936,61 @@ const CompanyUserDetails = () => {
         </Section>
     );
 
+    const renderWorkOrderAdminSection = () => (
+        <Section
+            title="Work Order Admin"
+            description="Choose the admin automatically assigned when this user creates or receives a basic work order."
+            action={(
+                <Badge className={selectedWorkOrderAdminOption ? "bg-blue-50 text-blue-700 ring-blue-200" : "bg-amber-50 text-amber-700 ring-amber-200"}>
+                    {selectedWorkOrderAdminOption ? "Assigned" : "Not assigned"}
+                </Badge>
+            )}
+        >
+            <div className="space-y-4">
+                <label className="block">
+                    <span className="text-sm font-semibold text-slate-700">Assigned admin</span>
+                    <div className="mt-2">
+                        <Select
+                            value={selectedWorkOrderAdminOption}
+                            options={workOrderAdminOptions}
+                            onChange={(selected) => setWorkOrderAdminDraft({
+                                adminId: selected?.userId || "",
+                                adminName: selected?.userName || selected?.label || "",
+                            })}
+                            isDisabled={!can("264")}
+                            isClearable
+                            placeholder="Choose an admin..."
+                            styles={selectStyles}
+                        />
+                    </div>
+                </label>
+
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    Current setting: <span className="font-semibold text-slate-800">{workOrderAdminSummary}</span>
+                </div>
+
+                {assignedRegionalTags.length > 0 && (
+                    <p className="text-sm text-slate-500">
+                        This user is limited to customer tags {assignedRegionalTags.join(", ")}. The basic work-order form also uses regional admin fallback when no direct admin is set.
+                    </p>
+                )}
+
+                {can("264") && (
+                    <div className="flex justify-end border-t border-slate-100 pt-4">
+                        <button
+                            type="button"
+                            onClick={handleSaveWorkOrderAdmin}
+                            disabled={isSavingWorkOrderAdmin}
+                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {isSavingWorkOrderAdmin ? "Saving..." : "Save Work Order Admin"}
+                        </button>
+                    </div>
+                )}
+            </div>
+        </Section>
+    );
+
     const renderDashboardScopeAccessSection = () => (
         <Section
             title="Dashboard View Access"
@@ -3090,6 +3332,7 @@ const CompanyUserDetails = () => {
             </Section>
 
             {renderDashboardScopeAccessSection()}
+            {renderWorkOrderAdminSection()}
             {customerAreaFilteringEnabled ? (
                 renderRegionalAccessSection()
             ) : (
@@ -3180,8 +3423,10 @@ const CompanyUserDetails = () => {
                             </label>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             <DetailField label="Full Name" value={displayName} />
+                            <DetailField label="Email" value={userEmail} />
+                            <DetailField label="Phone" value={userPhoneNumber} />
                             <DetailField label="Role" value={user.roleName} />
                             <DetailField label="Worker Type" value={normalizeWorkerType(user.workerType)} />
                             <DetailField label="Date Created" value={formatDate(user.dateCreated || user.createdAt)} />

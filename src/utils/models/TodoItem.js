@@ -184,6 +184,14 @@ export const todoCreatorIds = (todo = {}) => [
   todo.createdByUid,
 ].map(normalizeTodoUserId).filter(Boolean);
 
+export const todoBoardMemberIds = (source = {}) => [
+  ...(Array.isArray(source.memberUserIds) ? source.memberUserIds : []),
+  ...(Array.isArray(source.memberCompanyUserDocIds) ? source.memberCompanyUserDocIds : []),
+  ...(Array.isArray(source.boardMemberUserIds) ? source.boardMemberUserIds : []),
+  ...(Array.isArray(source.boardMemberCompanyUserDocIds) ? source.boardMemberCompanyUserDocIds : []),
+  ...(Array.isArray(source.boardMemberCompanyUserIds) ? source.boardMemberCompanyUserIds : []),
+].map(normalizeTodoUserId).filter(Boolean);
+
 export const todoAssignedToUser = (todo = {}, userIds = new Set()) => {
   const normalizedUserIds = todoUserIdSet(userIds);
   if (!normalizedUserIds.size) return false;
@@ -197,6 +205,23 @@ export const todoCreatedByUser = (todo = {}, userIds = new Set()) => {
 
   return todoCreatorIds(todo).some((creatorId) => normalizedUserIds.has(creatorId));
 };
+
+export const todoBoardVisibleToUser = (board = {}, userIds = new Set()) => {
+  const normalizedUserIds = todoUserIdSet(userIds);
+  if (!normalizedUserIds.size) return false;
+
+  return todoBoardMemberIds(board).some((memberId) => normalizedUserIds.has(memberId));
+};
+
+export const todoVisibleToUser = (todo = {}, userIds = new Set()) => (
+  todoAssignedToUser(todo, userIds) ||
+  todoBoardVisibleToUser(todo, userIds) ||
+  (
+    todo.scope === TODO_SCOPE.me &&
+    todoAssigneeIds(todo).length === 0 &&
+    todoCreatedByUser(todo, userIds)
+  )
+);
 
 export const todoDueState = (todo = {}, now = new Date()) => {
   if (!todoIsOpen(todo)) return "complete";

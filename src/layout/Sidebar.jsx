@@ -4,16 +4,18 @@ import { Context } from '../context/AuthContext';
 import { COMPANY_PINNED_CATEGORY, getNav } from '../navigation/index';
 import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon, Cog6ToothIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
-import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { db } from '../utils/config';
-import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
+import { COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID } from '../utils/companyPermissions';
+import { REPAIR_REQUEST_STATUS } from '../utils/models/RepairRequest';
 import { normalizeEquipmentStatus } from '../utils/models/Equipment';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
+import { getFilteredDocsCount, getServerCount, listenForForegroundRefresh, sumServerCounts } from '../utils/firestoreCounts';
 import {
     TODO_LIST_FEATURE_FLAG_ID,
-    todoAssignedToUser,
     normalizeTodo,
     todoIsOpen,
+    todoVisibleToUser,
     todoUserIdSet,
 } from '../utils/models/TodoItem';
 import {
@@ -29,7 +31,6 @@ import {
     isActionableOperationsJob,
     isFinishedOutstandingJob,
 } from '../utils/jobStatusFilters';
-import { isOpenWorkOffer } from '../utils/workOffers';
 
 const normalizeBookmarkPaths = (savedBookmarks) => (
     Array.isArray(savedBookmarks)
@@ -81,6 +82,29 @@ const dateIsDueThroughToday = (value) => {
     return millis <= endOfToday.getTime();
 };
 
+const maintenanceStatusValues = [
+    "Needs Maintenance",
+    "Maintenance",
+    "Needs Service",
+];
+
+const openWorkOfferStatusValues = [
+    "Draft",
+    "Sent",
+    "Posted",
+    "Viewed",
+    "Pending",
+    "Open",
+    "Offered",
+    "draft",
+    "sent",
+    "posted",
+    "viewed",
+    "pending",
+    "open",
+    "offered",
+];
+
 const equipmentNeedsMaintenance = (equipment = {}) => {
     const status = normalizeEquipmentStatus(equipment.status);
     if (status === "nonoperational") return false;
@@ -98,7 +122,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
     const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
     const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
@@ -172,6 +196,8 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             return;
         }
 
+        let cancelled = false;
+
         setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 }));
 
         const leadsQuery = query(
@@ -190,21 +216,17 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             where("status", "==", "Need to Purchase")
         );
 
-        const equipmentMaintenanceQuery = query(
-            collection(db, "companies", recentlySelectedCompany, "equipment"),
-            where("isActive", "==", true)
+        const equipmentRef = collection(db, "companies", recentlySelectedCompany, "equipment");
+
+        const internalRepairRequestsOpenQuery = query(
+            collection(db, "companies", recentlySelectedCompany, "repairRequests"),
+            where("status", "==", REPAIR_REQUEST_STATUS.UNRESOLVED)
         );
 
-        const internalRepairRequestsQuery = collection(
-            db,
-            "companies",
-            recentlySelectedCompany,
-            "repairRequests"
-        );
-
-        const externalRepairRequestsQuery = query(
+        const externalRepairRequestsOpenQuery = query(
             collection(db, "homeownerRepairRequests"),
-            where("companyId", "==", recentlySelectedCompany)
+            where("companyId", "==", recentlySelectedCompany),
+            where("status", "==", REPAIR_REQUEST_STATUS.UNRESOLVED)
         );
 
         const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
@@ -230,18 +252,136 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             where("billingStatus", "==", JOB_BILLING_STATUS.accepted)
         );
 
-        const unsubscribeLeads = onSnapshot(leadsQuery, snapshot => {
-            setCounts(prev => ({ ...prev, leads: snapshot.size }));
-        });
+        const openWorkOfferQueries = [];
+        for (let index = 0; index < openWorkOfferStatusValues.length; index += 10) {
+            openWorkOfferQueries.push(query(
+                workOffersRef,
+                where("status", "in", openWorkOfferStatusValues.slice(index, index + 10))
+            ));
+        }
+
+        const loadCount = async (label, loader) => {
+            try {
+                return await loader();
+            } catch (error) {
+                console.error(`Error loading ${label} count:`, error);
+                return 0;
+            }
+        };
+
+        const getEquipmentMaintenanceCount = async () => {
+            const dueThrough = new Date();
+            dueThrough.setHours(23, 59, 59, 999);
+
+            let statusSnap;
+            let dueSnap;
+
+            try {
+                [statusSnap, dueSnap] = await Promise.all([
+                    getDocs(query(
+                        equipmentRef,
+                        where("isActive", "==", true),
+                        where("status", "in", maintenanceStatusValues)
+                    )),
+                    getDocs(query(
+                        equipmentRef,
+                        where("isActive", "==", true),
+                        where("needsService", "==", true),
+                        where("nextServiceDate", "<=", dueThrough)
+                    )),
+                ]);
+            } catch (error) {
+                console.warn("Falling back to active-equipment maintenance count:", error);
+                const activeSnap = await getDocs(query(equipmentRef, where("isActive", "==", true)));
+                return activeSnap.docs
+                    .map((equipmentDoc) => ({ id: equipmentDoc.id, ...equipmentDoc.data() }))
+                    .filter(equipmentNeedsMaintenance)
+                    .length;
+            }
+
+            const candidates = new Map();
+            [...statusSnap.docs, ...dueSnap.docs].forEach((equipmentDoc) => {
+                candidates.set(equipmentDoc.id, { id: equipmentDoc.id, ...equipmentDoc.data() });
+            });
+
+            return Array.from(candidates.values()).filter(equipmentNeedsMaintenance).length;
+        };
+
+        const getActionableJobCount = async () => {
+            const snapshots = await Promise.all([
+                getDocs(draftOperationJobsQuery),
+                getDocs(draftBillingJobsQuery),
+                getDocs(acceptedJobsQuery),
+            ]);
+            const actionableJobIds = new Set();
+
+            snapshots.forEach((snapshot) => {
+                snapshot.docs
+                    .map((jobDoc) => ({ id: jobDoc.id, ...jobDoc.data() }))
+                    .filter(isActionableOperationsJob)
+                    .forEach((job) => actionableJobIds.add(job.id));
+            });
+
+            return actionableJobIds.size;
+        };
+
+        const loadServerBackedCounts = async () => {
+            const [
+                leads,
+                shopping,
+                legacyShopping,
+                repairRequests,
+                finishedJobs,
+                actionableJobs,
+                offeredWork,
+                equipmentMaintenance,
+            ] = await Promise.all([
+                loadCount("lead", () => getServerCount(leadsQuery)),
+                loadCount("shopping", () => getServerCount(shoppingQuery)),
+                loadCount("legacy shopping", () => getServerCount(legacyShoppingQuery)),
+                loadCount("repair request", () => sumServerCounts([
+                    internalRepairRequestsOpenQuery,
+                    externalRepairRequestsOpenQuery,
+                ])),
+                loadCount("finished job", () => getFilteredDocsCount(
+                    finishedJobsQuery,
+                    (jobDoc) => isFinishedOutstandingJob({ id: jobDoc.id, ...jobDoc.data() })
+                )),
+                loadCount("actionable job", getActionableJobCount),
+                loadCount("offered work", () => sumServerCounts(openWorkOfferQueries)),
+                loadCount("equipment maintenance", getEquipmentMaintenanceCount),
+            ]);
+
+            if (cancelled) return;
+
+            setCounts(prev => ({
+                ...prev,
+                leads,
+                shopping,
+                legacyShopping,
+                repairRequests,
+                repairRequestSources: {},
+                finishedJobs,
+                actionableJobs,
+                offeredWork,
+                equipmentMaintenance,
+            }));
+        };
+
+        loadServerBackedCounts();
+        const removeForegroundRefresh = listenForForegroundRefresh(loadServerBackedCounts);
 
         const messagesEnabled = featureFlagsLoaded && isFeatureEnabled("feature_flag_001");
         let unsubscribeMessages = () => {};
 
         if (messagesEnabled && companyRoleLoaded && companyUserAccess) {
+            const includeCompanyWide = hasCompanyPermission(COMPANY_WIDE_MESSAGES_PERMISSION_ID);
+
             unsubscribeMessages = listenVisibleChats({
                 db,
                 userId: user.uid,
                 companyId: recentlySelectedCompany,
+                includeCompanyWide,
                 onChange: (visibleChats) => {
                     const unreadCount = visibleChats.filter((chat) => (
                         isChatUnreadFor(chat, user.uid, recentlySelectedCompany)
@@ -318,6 +458,9 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         }
 
         const todoListEnabled = featureFlagsLoaded && isFeatureEnabled(TODO_LIST_FEATURE_FLAG_ID);
+        const canViewAllTodoItems = companyRoleLoaded &&
+            !companyRoleLoading &&
+            hasCompanyPermission(TODO_ALL_BOARDS_PERMISSION_ID);
         let unsubscribeTodos = () => {};
 
         if (todoListEnabled) {
@@ -338,7 +481,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                     const openCount = snapshot.docs
                         .map(normalizeTodo)
                         .filter(todoIsOpen)
-                        .filter((todo) => todoAssignedToUser(todo, todoUserIds))
+                        .filter((todo) => canViewAllTodoItems || todoVisibleToUser(todo, todoUserIds))
                         .length;
 
                     setCounts(prev => ({ ...prev, todoItems: openCount }));
@@ -352,159 +495,15 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             setCounts(prev => ({ ...prev, todoItems: 0 }));
         }
 
-        const unsubscribeShopping = onSnapshot(shoppingQuery, snapshot => {
-            setCounts(prev => ({ ...prev, shopping: snapshot.size }));
-        });
-
-        const unsubscribeLegacyShopping = onSnapshot(legacyShoppingQuery, snapshot => {
-            setCounts(prev => ({ ...prev, legacyShopping: snapshot.size }));
-        });
-
-        const unsubscribeEquipmentMaintenance = onSnapshot(
-            equipmentMaintenanceQuery,
-            snapshot => {
-                const equipmentMaintenance = snapshot.docs
-                    .map((equipmentDoc) => ({ id: equipmentDoc.id, ...equipmentDoc.data() }))
-                    .filter(equipmentNeedsMaintenance)
-                    .length;
-
-                setCounts(prev => ({ ...prev, equipmentMaintenance }));
-            },
-            error => {
-                console.error("Error loading equipment maintenance count:", error);
-                setCounts(prev => ({ ...prev, equipmentMaintenance: 0 }));
-            }
-        );
-
-        const updateRepairRequestCount = (source, snapshot) => {
-            const count = snapshot.docs.filter((requestDoc) => (
-                isOpenRepairRequestStatus(requestDoc.data()?.status)
-            )).length;
-
-            setCounts(prev => {
-                const repairRequestSources = {
-                    ...prev.repairRequestSources,
-                    [source]: count,
-                };
-
-                return {
-                    ...prev,
-                    repairRequestSources,
-                    repairRequests: Object.values(repairRequestSources).reduce((total, value) => total + value, 0),
-                };
-            });
-        };
-
-        const unsubscribeInternalRepairRequests = onSnapshot(internalRepairRequestsQuery, snapshot => {
-            updateRepairRequestCount("internal", snapshot);
-        });
-
-        const unsubscribeExternalRepairRequests = onSnapshot(externalRepairRequestsQuery, snapshot => {
-            updateRepairRequestCount("external", snapshot);
-        });
-
-        const actionableJobSources = {
-            draftOperation: new Set(),
-            draftBilling: new Set(),
-            acceptedNotScheduled: new Set(),
-        };
-
-        const updateActionableJobCount = (source, snapshot) => {
-            actionableJobSources[source] = new Set(
-                snapshot.docs
-                    .map((jobDoc) => ({ id: jobDoc.id, ...jobDoc.data() }))
-                    .filter(isActionableOperationsJob)
-                    .map((job) => job.id)
-            );
-
-            const actionableJobIds = new Set([
-                ...actionableJobSources.draftOperation,
-                ...actionableJobSources.draftBilling,
-                ...actionableJobSources.acceptedNotScheduled,
-            ]);
-
-            setCounts(prev => ({ ...prev, actionableJobs: actionableJobIds.size }));
-        };
-
-        const handleActionableJobError = (source, error) => {
-            console.error("Error loading actionable job count:", error);
-            actionableJobSources[source] = new Set();
-            const actionableJobIds = new Set([
-                ...actionableJobSources.draftOperation,
-                ...actionableJobSources.draftBilling,
-                ...actionableJobSources.acceptedNotScheduled,
-            ]);
-            setCounts(prev => ({ ...prev, actionableJobs: actionableJobIds.size }));
-        };
-
-        const unsubscribeFinishedJobs = onSnapshot(
-            finishedJobsQuery,
-            snapshot => {
-                const finishedJobs = snapshot.docs
-                    .map((jobDoc) => ({ id: jobDoc.id, ...jobDoc.data() }))
-                    .filter(isFinishedOutstandingJob)
-                    .length;
-
-                setCounts(prev => ({ ...prev, finishedJobs }));
-            },
-            error => {
-                console.error("Error loading finished job count:", error);
-                setCounts(prev => ({ ...prev, finishedJobs: 0 }));
-            }
-        );
-
-        const unsubscribeDraftOperationJobs = onSnapshot(
-            draftOperationJobsQuery,
-            snapshot => updateActionableJobCount("draftOperation", snapshot),
-            error => handleActionableJobError("draftOperation", error)
-        );
-
-        const unsubscribeDraftBillingJobs = onSnapshot(
-            draftBillingJobsQuery,
-            snapshot => updateActionableJobCount("draftBilling", snapshot),
-            error => handleActionableJobError("draftBilling", error)
-        );
-
-        const unsubscribeAcceptedJobs = onSnapshot(
-            acceptedJobsQuery,
-            snapshot => updateActionableJobCount("acceptedNotScheduled", snapshot),
-            error => handleActionableJobError("acceptedNotScheduled", error)
-        );
-
-        const unsubscribeOfferedWork = onSnapshot(
-            workOffersRef,
-            snapshot => {
-                const offeredWork = snapshot.docs
-                    .map((offerDoc) => ({ id: offerDoc.id, ...offerDoc.data() }))
-                    .filter(isOpenWorkOffer)
-                    .length;
-
-                setCounts(prev => ({ ...prev, offeredWork }));
-            },
-            error => {
-                console.error("Error loading offered work count:", error);
-                setCounts(prev => ({ ...prev, offeredWork: 0 }));
-            }
-        );
-
         return () => {
-            unsubscribeLeads();
+            cancelled = true;
+            removeForegroundRefresh();
             unsubscribeMessages();
             unsubscribeNotifications();
             unsubscribePersonalNotifications();
             unsubscribeTodos();
-            unsubscribeShopping();
-            unsubscribeLegacyShopping();
-            unsubscribeEquipmentMaintenance();
-            unsubscribeInternalRepairRequests();
-            unsubscribeExternalRepairRequests();
-            unsubscribeFinishedJobs();
-            unsubscribeDraftOperationJobs();
-            unsubscribeDraftBillingJobs();
-            unsubscribeAcceptedJobs();
-            unsubscribeOfferedWork();
         };
-    }, [recentlySelectedCompany, user, dataBaseUser, companyRoleLoaded, companyUserAccess, featureFlagsLoaded, isFeatureEnabled]);
+    }, [recentlySelectedCompany, user, dataBaseUser, companyRoleLoaded, companyRoleLoading, companyUserAccess, featureFlagsLoaded, isFeatureEnabled, hasCompanyPermission]);
 
     const logout = async () => {
         try {

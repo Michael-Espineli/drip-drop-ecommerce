@@ -10,6 +10,7 @@ import StartChatModal from "../views/components/chat/StartChatModal";
 import { useTheme } from "../context/ThemeContext";
 import { db } from "../utils/config";
 import { isChatUnreadFor, listenVisibleChats } from "../utils/chatMessaging";
+import { COMPANY_WIDE_MESSAGES_PERMISSION_ID } from "../utils/companyPermissions";
 import {
     getCustomerTagOptions,
     getEffectiveCustomerRegionAccess,
@@ -165,10 +166,15 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
             return undefined;
         }
 
+        const includeCompanyWide = isCompanyShell
+            && companyRoleLoaded
+            && hasCompanyPermission(COMPANY_WIDE_MESSAGES_PERMISSION_ID);
+
         return listenVisibleChats({
             db,
             userId: user.uid,
             companyId,
+            includeCompanyWide,
             onChange: (visibleChats) => {
                 const unreadCount = visibleChats
                     .filter((chat) => isChatUnreadFor(chat, user.uid, companyId))
@@ -188,6 +194,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         isCompanyShell,
         messagingEnabled,
         recentlySelectedCompany,
+        hasCompanyPermission,
         user,
     ]);
 

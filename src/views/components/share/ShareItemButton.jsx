@@ -13,6 +13,7 @@ import {
 import toast from "react-hot-toast";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import { COMPANY_WIDE_MESSAGES_PERMISSION_ID } from "../../../utils/companyPermissions";
 import {
   CHAT_AUDIENCE,
   buildSharedRecordUrl,
@@ -83,6 +84,8 @@ const ShareItemButton = ({
     dataBaseUser,
     recentlySelectedCompany,
     recentlySelectedCompanyName,
+    companyRoleLoaded,
+    hasCompanyPermission,
   } = useContext(Context);
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("message");
@@ -153,6 +156,7 @@ const ShareItemButton = ({
       db,
       userId: user.uid,
       companyId: resolvedCompanyId,
+      includeCompanyWide: companyRoleLoaded && hasCompanyPermission(COMPANY_WIDE_MESSAGES_PERMISSION_ID),
       onChange: (visibleChats) => {
         setChats(visibleChats);
         setChatsLoading(false);
@@ -164,7 +168,7 @@ const ShareItemButton = ({
     });
 
     return () => unsubscribe();
-  }, [isOpen, resolvedCompanyId, user]);
+  }, [companyRoleLoaded, hasCompanyPermission, isOpen, resolvedCompanyId, user]);
 
   useEffect(() => {
     if (!isOpen) return;

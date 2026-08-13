@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { query, collection, getDocs, orderBy, where, doc, deleteDoc } from "firebase/firestore";
+import { query, collection, getDocs, limit, orderBy, where, doc, deleteDoc } from "firebase/firestore";
 import { RepairHistory } from '../../../utils/models/RepairHistory';
 import { format } from 'date-fns';
 
@@ -20,7 +20,8 @@ export default function EquipmentRepairHistory() {
                     const q = query(
                         collection(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'serviceHistory'),
                         where('type', '==', 'Repair'),
-                        orderBy('date', 'desc')
+                        orderBy('date', 'desc'),
+                        limit(100)
                     );
                     const querySnapshot = await getDocs(q);
                     const repairHistoryData = querySnapshot.docs.map(doc => RepairHistory.fromFirestore(doc));

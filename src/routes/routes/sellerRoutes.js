@@ -10,6 +10,7 @@ const OperationsDashboard = lazy(() => import("../../views/company/dashboard/Ope
 
 const Jobs = lazy(() => import("../../views/company/jobs/Jobs"))
 const CreateNewJob = lazy(() => import("../../views/company/jobs/CreateNewJob"))
+const BasicWorkOrderCreate = lazy(() => import("../../views/company/jobs/BasicWorkOrderCreate"))
 const JobDetailView = lazy(() => import("../../views/company/jobs/JobDetailView"))
 const JobHistoryView = lazy(() => import("../../views/company/jobs/JobHistoryView"))
 
@@ -377,6 +378,12 @@ export const sellerRoutes = [
         element: <CreateNewJob />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }, {
+        path: '/company/jobs/basic-create',
+        element: <BasicWorkOrderCreate />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionIds: ['22', '23', '27', '29', '31']
     }, {
         path: '/company/jobs/createNew/:customerId',
         element: <CreateNewJob />,

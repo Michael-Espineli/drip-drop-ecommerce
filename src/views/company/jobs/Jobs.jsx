@@ -18,6 +18,14 @@ import { FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
+    CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
+    CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID,
+    CREATE_JOBS_PERMISSION_ID,
+    CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
+    SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
+    UPDATE_JOBS_PERMISSION_ID,
+} from "../../../utils/companyPermissions";
+import {
     JOB_BILLING_STATUS,
     JOB_OPERATION_STATUS,
     isAcceptedNotScheduledJob,
@@ -25,6 +33,7 @@ import {
     isFinishedOutstandingJob,
 } from "../../../utils/jobStatusFilters";
 import {
+    ISSUE_PRIORITY_OPTIONS,
     getIssuePriorityLabel,
     getIssuePriorityTone,
     normalizeIssuePriority,
@@ -32,6 +41,7 @@ import {
 import { appAlert, appConfirm } from "../../../utils/appDialog";
 import { filterRecordsByCustomerTags } from "../../../utils/customerTags";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
     "Estimate Pending",
@@ -80,6 +90,7 @@ const BILLING_STATUS_OPTIONS = [
     "Invoiced",
     "Paid",
     "Comped",
+    JOB_BILLING_STATUS.customerResolved,
     "Expired",
     "Rejected"
 ];
@@ -87,28 +98,40 @@ const BILLING_STATUS_OPTIONS = [
 const JOB_SORT_OPTIONS = [
     { value: "dateCreated-desc", label: "Date Created: Newest First" },
     { value: "dateCreated-asc", label: "Date Created: Oldest First" },
+    { value: "internalId-asc", label: "Job ID: A to Z" },
+    { value: "internalId-desc", label: "Job ID: Z to A" },
     { value: "customerName-asc", label: "Customer: A to Z" },
     { value: "customerName-desc", label: "Customer: Z to A" },
     { value: "adminName-asc", label: "Admin: A to Z" },
     { value: "adminName-desc", label: "Admin: Z to A" },
+    { value: "type-asc", label: "Job Type: A to Z" },
+    { value: "type-desc", label: "Job Type: Z to A" },
     { value: "billingStatus-asc", label: "Billing Status: Workflow Order" },
     { value: "billingStatus-desc", label: "Billing Status: Reverse Order" },
     { value: "operationStatus-asc", label: "Operation Status: Workflow Order" },
     { value: "operationStatus-desc", label: "Operation Status: Reverse Order" },
-    { value: "solutionTier-asc", label: "Priority: Critical to Optional" },
-    { value: "solutionTier-desc", label: "Priority: Optional to Critical" },
+    { value: "priority-asc", label: "Priority: Critical to Optional" },
+    { value: "priority-desc", label: "Priority: Optional to Critical" },
     { value: "rate-desc", label: "Rate: High to Low" },
     { value: "rate-asc", label: "Rate: Low to High" },
+    { value: "laborCost-desc", label: "Labor Cost: High to Low" },
+    { value: "laborCost-asc", label: "Labor Cost: Low to High" },
+    { value: "profit-desc", label: "Profit: High to Low" },
+    { value: "profit-asc", label: "Profit: Low to High" },
 ];
 
 const DEFAULT_SORT_DIRECTIONS = {
     dateCreated: "desc",
+    internalId: "asc",
     customerName: "asc",
     adminName: "asc",
+    type: "asc",
     billingStatus: "asc",
     operationStatus: "asc",
-    solutionTier: "asc",
+    priority: "asc",
     rate: "desc",
+    laborCost: "desc",
+    profit: "desc",
 };
 
 const billingStatusOrder = BILLING_STATUS_OPTIONS.reduce((acc, status, index) => {
@@ -120,6 +143,17 @@ const operationStatusOrder = OPERATION_STATUS_OPTIONS.reduce((acc, status, index
     acc[status.toLowerCase()] = index;
     return acc;
 }, {});
+
+const PRIORITY_FILTER_OPTIONS = ISSUE_PRIORITY_OPTIONS.map((option) => ({
+    ...option,
+    value: normalizeIssuePriority(option.value),
+}));
+
+const ALL_PRIORITY_FILTER_VALUES = PRIORITY_FILTER_OPTIONS.map((option) => option.value);
+
+const getJobPriorityLevel = (job = {}) => (
+    normalizeIssuePriority(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)
+);
 
 const toMillis = (value) => {
     if (!value) return 0;
@@ -185,6 +219,54 @@ const compareNumber = (leftValue, rightValue, direction) => {
     return direction === "asc" ? result : -result;
 };
 
+const normalizeAdminFilterId = (value) => String(value || "").trim();
+
+const adminFilterIdSet = (values = []) => {
+    const sourceValues = values instanceof Set ? Array.from(values) : values;
+    const list = Array.isArray(sourceValues) ? sourceValues : [sourceValues];
+
+    return new Set(list.map(normalizeAdminFilterId).filter(Boolean));
+};
+
+const buildCompanyUserFilterOption = (docSnap) => {
+    const data = docSnap.data();
+    const docId = docSnap.id;
+    const primaryId = data.userId || data.id || data.uid || docId;
+    const companyUserId = data.id || data.companyUserId || data.companyUserDocId || docId;
+    const name = getCompanyUserDisplayName(data, "Admin");
+    const roleName = data.roleName || data.role || "";
+    const alternateIds = [
+        primaryId,
+        data.userId,
+        data.uid,
+        data.id,
+        data.companyUserId,
+        data.companyUserDocId,
+        docId,
+    ];
+
+    return {
+        ...data,
+        id: primaryId,
+        userId: primaryId,
+        companyUserId,
+        userName: name,
+        name,
+        label: `${name}${roleName ? ` - ${roleName}` : ""}`,
+        value: primaryId,
+        alternateIds: Array.from(adminFilterIdSet(alternateIds)),
+    };
+};
+
+const getJobProfitCents = (job = {}) => Number(job.rate || 0) - Number(job.laborCost || 0);
+
+const jobMatchesAdminFilters = (job = {}, adminFilterActive, adminLookupIds = new Set()) => {
+    if (!adminFilterActive) return true;
+    if (!adminLookupIds.size) return false;
+
+    return adminLookupIds.has(normalizeAdminFilterId(job.adminId));
+};
+
 const sortJobs = (jobList, sortBy) => {
     const [sortField, sortDirection = "asc"] = sortBy.split("-");
     const direction = sortDirection === "desc" ? "desc" : "asc";
@@ -196,11 +278,17 @@ const sortJobs = (jobList, sortBy) => {
             case "dateCreated":
                 result = compareDateCreated(left.dateCreated, right.dateCreated, direction);
                 break;
+            case "internalId":
+                result = compareText(left.internalId, right.internalId, direction);
+                break;
             case "customerName":
                 result = compareText(left.customerName, right.customerName, direction);
                 break;
             case "adminName":
                 result = compareText(left.adminName, right.adminName, direction);
+                break;
+            case "type":
+                result = compareText(left.type, right.type, direction);
                 break;
             case "billingStatus":
                 result = compareStatus(left.billingStatus, right.billingStatus, direction, billingStatusOrder);
@@ -208,15 +296,22 @@ const sortJobs = (jobList, sortBy) => {
             case "operationStatus":
                 result = compareStatus(left.operationStatus, right.operationStatus, direction, operationStatusOrder);
                 break;
+            case "priority":
             case "solutionTier":
                 result = compareNumber(
-                    normalizeIssuePriority(left.issuePriorityLevel || left.priorityLevel || left.solutionTier),
-                    normalizeIssuePriority(right.issuePriorityLevel || right.priorityLevel || right.solutionTier),
+                    getJobPriorityLevel(left),
+                    getJobPriorityLevel(right),
                     direction
                 );
                 break;
             case "rate":
                 result = compareNumber(left.rate, right.rate, direction);
+                break;
+            case "laborCost":
+                result = compareNumber(left.laborCost, right.laborCost, direction);
+                break;
+            case "profit":
+                result = compareNumber(getJobProfitCents(left), getJobProfitCents(right), direction);
                 break;
             default:
                 result = compareDateCreated(left.dateCreated, right.dateCreated, "desc");
@@ -237,6 +332,41 @@ const statusInFilter = (value, filters) => {
     if (!filters.length) return true;
     const allowed = new Set(filters.map(getStatusKey));
     return allowed.has(getStatusKey(value));
+};
+
+const priorityInFilter = (job, filters) => {
+    if (!filters.length) return false;
+    const allowed = new Set(filters.map((filter) => normalizeIssuePriority(filter)));
+    return allowed.has(getJobPriorityLevel(job));
+};
+
+const filterSetEquals = (leftFilters = [], rightFilters = []) => {
+    if (leftFilters.length !== rightFilters.length) return false;
+
+    const rightKeys = new Set(rightFilters.map(getStatusKey));
+    return leftFilters.every((filter) => rightKeys.has(getStatusKey(filter)));
+};
+
+const defaultFiltersForJobListView = (view) => (
+    view === "billing"
+        ? {
+            operationFilters: BILLING_QUICK_OPERATION_STATUSES,
+            billingFilters: BILLING_QUICK_BILLING_STATUSES,
+            priorityFilters: ALL_PRIORITY_FILTER_VALUES,
+        }
+        : {
+            operationFilters: OPERATIONS_QUICK_OPERATION_STATUSES,
+            billingFilters: OPERATIONS_QUICK_BILLING_STATUSES,
+            priorityFilters: ALL_PRIORITY_FILTER_VALUES,
+        }
+);
+
+const filtersMatchJobListViewDefaults = (operationFilters, billingFilters, priorityFilters, view) => {
+    const defaults = defaultFiltersForJobListView(view);
+
+    return filterSetEquals(operationFilters, defaults.operationFilters) &&
+        filterSetEquals(billingFilters, defaults.billingFilters) &&
+        filterSetEquals(priorityFilters, defaults.priorityFilters);
 };
 
 const statusConstraint = (field, filters) => {
@@ -314,9 +444,12 @@ const Jobs = () => {
     });
     const [jobTemplates, setJobTemplates] = useState([]);
     const [commentCounts, setCommentCounts] = useState({});
+    const [companyUserOptions, setCompanyUserOptions] = useState([]);
 
     const {
         recentlySelectedCompany,
+        user,
+        dataBaseUser,
         companyRole,
         companyUserAccess,
         selectedCustomerRegionTag,
@@ -347,7 +480,85 @@ const Jobs = () => {
         ...OPERATIONS_QUICK_BILLING_STATUSES
     ]);
 
+    const [priorityFilter, setPriorityFilter] = useState([
+        ...ALL_PRIORITY_FILTER_VALUES
+    ]);
+
+    const [adminFilterActive, setAdminFilterActive] = useState(false);
+    const [adminIdFilter, setAdminIdFilter] = useState([]);
     const [sortBy, setSortBy] = useState("dateCreated-desc");
+
+    const allAdminFilterValues = useMemo(
+        () => Array.from(adminFilterIdSet(companyUserOptions.map((option) => option.value))),
+        [companyUserOptions]
+    );
+
+    const adminFilterLookupIds = useMemo(() => {
+        if (!adminFilterActive) return new Set();
+
+        const selectedIds = adminFilterIdSet(adminIdFilter);
+        const lookupIds = new Set(selectedIds);
+
+        companyUserOptions.forEach((option) => {
+            if (
+                selectedIds.has(option.value) ||
+                selectedIds.has(option.id) ||
+                selectedIds.has(option.userId) ||
+                selectedIds.has(option.companyUserId)
+            ) {
+                option.alternateIds?.forEach((id) => lookupIds.add(id));
+            }
+        });
+
+        return lookupIds;
+    }, [adminFilterActive, adminIdFilter, companyUserOptions]);
+
+    const currentAdminFilterValues = useMemo(() => {
+        const currentUserIds = adminFilterIdSet([
+            user?.uid,
+            user?.id,
+            dataBaseUser?.id,
+            dataBaseUser?.uid,
+            dataBaseUser?.userId,
+            companyUserAccess?.id,
+            companyUserAccess?.uid,
+            companyUserAccess?.userId,
+            companyUserAccess?.companyUserId,
+            companyUserAccess?.companyUserDocId,
+        ]);
+
+        const matchingOptions = companyUserOptions.filter((option) => (
+            option.alternateIds?.some((id) => currentUserIds.has(id))
+        ));
+
+        if (matchingOptions.length) {
+            return Array.from(adminFilterIdSet(matchingOptions.map((option) => option.value)));
+        }
+
+        return Array.from(currentUserIds).slice(0, 1);
+    }, [
+        companyUserAccess?.companyUserDocId,
+        companyUserAccess?.companyUserId,
+        companyUserAccess?.id,
+        companyUserAccess?.uid,
+        companyUserAccess?.userId,
+        companyUserOptions,
+        dataBaseUser?.id,
+        dataBaseUser?.uid,
+        dataBaseUser?.userId,
+        user?.id,
+        user?.uid,
+    ]);
+
+    const assignedToMeActive = useMemo(() => {
+        if (!adminFilterActive || currentAdminFilterValues.length === 0) return false;
+
+        const currentIds = adminFilterIdSet(currentAdminFilterValues);
+        const selectedIds = adminFilterIdSet(adminIdFilter);
+
+        return selectedIds.size === currentIds.size &&
+            Array.from(currentIds).every((id) => selectedIds.has(id));
+    }, [adminFilterActive, adminIdFilter, currentAdminFilterValues]);
 
     const getInitialJobListView = useCallback((viewValue) => {
         return JOB_LIST_VIEWS.includes(viewValue) ? viewValue : DEFAULT_JOB_LIST_VIEW;
@@ -364,11 +575,13 @@ const Jobs = () => {
         if (nextView === "billing") {
             setOperationStatusFilter([...BILLING_QUICK_OPERATION_STATUSES]);
             setBillingStatusFilter([...BILLING_QUICK_BILLING_STATUSES]);
+            setPriorityFilter([...ALL_PRIORITY_FILTER_VALUES]);
             return;
         }
 
         setOperationStatusFilter([...OPERATIONS_QUICK_OPERATION_STATUSES]);
         setBillingStatusFilter([...OPERATIONS_QUICK_BILLING_STATUSES]);
+        setPriorityFilter([...ALL_PRIORITY_FILTER_VALUES]);
     }, []);
 
     useEffect(() => {
@@ -381,6 +594,33 @@ const Jobs = () => {
             navigate(`/company/jobs/${DEFAULT_JOB_LIST_VIEW}`, { replace: true });
         }
     }, [view, navigate]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const fetchCompanyUsers = async () => {
+            if (!recentlySelectedCompany) {
+                setCompanyUserOptions([]);
+                return;
+            }
+
+            try {
+                const usersSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers"));
+                if (cancelled) return;
+
+                setCompanyUserOptions(sortCompanyUsersByName(usersSnap.docs.map(buildCompanyUserFilterOption)));
+            } catch (error) {
+                console.error("Error fetching company users for job filters: ", error);
+                if (!cancelled) setCompanyUserOptions([]);
+            }
+        };
+
+        fetchCompanyUsers();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [recentlySelectedCompany]);
 
     const fetchJobs = useCallback(async () => {
         if (!recentlySelectedCompany) {
@@ -453,22 +693,28 @@ const Jobs = () => {
     const visibleJobs = useMemo(() => {
         const normalizedSearchTerm = searchTerm.trim().toLowerCase();
 
+        const priorityFilteredJobs = jobs.filter((job) => priorityInFilter(job, priorityFilter));
+
         const filteredJobs = normalizedSearchTerm
-            ? jobs.filter(job =>
+            ? priorityFilteredJobs.filter(job =>
                 [
                     job.customerName,
                     job.adminName,
                     job.internalId,
+                    job.type,
                     job.description,
                     job.billingStatus,
                     job.operationStatus,
-                    getIssuePriorityLabel(job.issuePriorityLevel || job.priorityLevel || job.solutionTier),
+                    getIssuePriorityLabel(getJobPriorityLevel(job)),
                 ].some((value) => String(value || "").toLowerCase().includes(normalizedSearchTerm))
             )
-            : jobs;
+            : priorityFilteredJobs;
 
-        return sortJobs(filteredJobs, sortBy);
-    }, [jobs, searchTerm, sortBy]);
+        return sortJobs(
+            filteredJobs.filter((job) => jobMatchesAdminFilters(job, adminFilterActive, adminFilterLookupIds)),
+            sortBy
+        );
+    }, [adminFilterActive, adminFilterLookupIds, jobs, priorityFilter, searchTerm, sortBy]);
 
     useEffect(() => {
         setSelectedJobIds((previousIds) => {
@@ -659,7 +905,10 @@ const Jobs = () => {
     };
 
     const openCreateOptions = () => {
-        if (!requirePermission("22", "create jobs")) return;
+        if (!canCreateAnyJobs) {
+            appAlert("You do not have permission to create jobs or basic work orders.");
+            return;
+        }
         setShowCreateOptionsModal(true);
     };
 
@@ -686,10 +935,29 @@ const Jobs = () => {
         });
     };
 
-    const handleApplyFilters = (newOperationFilters, newBillingFilters) => {
-        setCustomFiltersActive(true);
+    const handleCreateBasicWorkOrder = () => {
+        setShowCreateOptionsModal(false);
+        navigate("/company/jobs/basic-create");
+    };
+
+    const handleApplyFilters = (
+        newOperationFilters,
+        newBillingFilters,
+        newAdminFilters,
+        nextAdminFilterActive = false,
+        newPriorityFilters = ALL_PRIORITY_FILTER_VALUES
+    ) => {
+        setCustomFiltersActive(!filtersMatchJobListViewDefaults(
+            newOperationFilters,
+            newBillingFilters,
+            newPriorityFilters,
+            currentJobListView
+        ));
         setOperationStatusFilter(newOperationFilters);
         setBillingStatusFilter(newBillingFilters);
+        setPriorityFilter(newPriorityFilters);
+        setAdminFilterActive(nextAdminFilterActive);
+        setAdminIdFilter(newAdminFilters);
         setShowFilterModal(false);
     };
 
@@ -698,13 +966,43 @@ const Jobs = () => {
         navigate(`/company/jobs/${nextView}`);
     };
 
+    const handleAssignedToMeFilter = () => {
+        if (currentAdminFilterValues.length === 0) {
+            toast.error("Could not find your admin id for this company.");
+            return;
+        }
+
+        setAdminFilterActive(true);
+        setAdminIdFilter(currentAdminFilterValues);
+    };
+
+    const handleCompanyWideFilter = () => {
+        setAdminFilterActive(false);
+        setAdminIdFilter([]);
+    };
+
     const activeQuickFilter = useMemo(() => {
         return customFiltersActive ? "custom" : currentJobListView;
     }, [currentJobListView, customFiltersActive]);
 
+    const adminScopeLabel = useMemo(() => {
+        if (!adminFilterActive) return "Company wide";
+        if (assignedToMeActive) return "Assigned to me";
+        if (adminIdFilter.length === 0) return "No admins selected";
+
+        return `${adminIdFilter.length} admin${adminIdFilter.length === 1 ? "" : "s"} selected`;
+    }, [adminFilterActive, adminIdFilter.length, assignedToMeActive]);
+
     const [activeSortKey, activeSortDirection = "asc"] = sortBy.split("-");
-    const canCreateJobs = can("22");
-    const canUpdateJobs = can("24");
+    const canCreateJobs = can(CREATE_JOBS_PERMISSION_ID);
+    const canCreateBasicWorkOrders =
+        canCreateJobs ||
+        can(SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID) ||
+        can(CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID) ||
+        can(CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID) ||
+        can(CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID);
+    const canCreateAnyJobs = canCreateJobs || canCreateBasicWorkOrders;
+    const canUpdateJobs = can(UPDATE_JOBS_PERMISSION_ID);
 
     const handleHeaderSort = (nextSortKey) => {
         if (activeSortKey === nextSortKey) {
@@ -843,6 +1141,7 @@ const Jobs = () => {
             case "Finished":
             case "Paid":
             case "Comped":
+            case JOB_BILLING_STATUS.customerResolved:
                 return "bg-emerald-50 text-emerald-700";
             case "Invoiced":
                 return "bg-blue-50 text-blue-700";
@@ -914,6 +1213,10 @@ const Jobs = () => {
     const FilterModal = ({ onClose, applyFilters }) => {
         const [tempOperationFilters, setTempOperationFilters] = useState(operationStatusFilter);
         const [tempBillingFilters, setTempBillingFilters] = useState(billingStatusFilter);
+        const [tempPriorityFilters, setTempPriorityFilters] = useState(priorityFilter);
+        const [tempAdminFilters, setTempAdminFilters] = useState(
+            adminFilterActive ? adminIdFilter : allAdminFilterValues
+        );
 
         const handleOperationChange = (status) => {
             setTempOperationFilters(prev =>
@@ -931,9 +1234,44 @@ const Jobs = () => {
             );
         };
 
+        const handlePriorityChange = (priority) => {
+            setTempPriorityFilters(prev =>
+                prev.includes(priority)
+                    ? prev.filter((value) => value !== priority)
+                    : [...prev, priority]
+            );
+        };
+
+        const handleAdminChange = (adminId) => {
+            setTempAdminFilters(prev =>
+                prev.includes(adminId)
+                    ? prev.filter(id => id !== adminId)
+                    : [...prev, adminId]
+            );
+        };
+
+        const handleSelectAllAdmins = () => {
+            setTempAdminFilters(allAdminFilterValues);
+        };
+
+        const handleDeselectAllAdmins = () => {
+            setTempAdminFilters([]);
+        };
+
+        const handleSelectAllPriorities = () => {
+            setTempPriorityFilters([...ALL_PRIORITY_FILTER_VALUES]);
+        };
+
+        const handleDeselectAllPriorities = () => {
+            setTempPriorityFilters([]);
+        };
+
+        const tempAdminFilterActive = tempAdminFilters.length !== allAdminFilterValues.length ||
+            tempAdminFilters.some((id) => !allAdminFilterValues.includes(id));
+
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-                <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <h3 className="mb-5 text-xl font-bold text-slate-950">Filter & Sort</h3>
 
                     <div className="space-y-5">
@@ -950,6 +1288,48 @@ const Jobs = () => {
                                     </option>
                                 ))}
                             </select>
+                        </div>
+
+                        <div>
+                            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+                                    Priority
+                                </label>
+
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleSelectAllPriorities}
+                                        className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100"
+                                    >
+                                        Select All
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={handleDeselectAllPriorities}
+                                        className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                                    >
+                                        Deselect All
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+                                {PRIORITY_FILTER_OPTIONS.map((option) => (
+                                    <label key={option.value} className="flex cursor-pointer items-center space-x-3">
+                                        <input
+                                            type="checkbox"
+                                            checked={tempPriorityFilters.includes(option.value)}
+                                            onChange={() => handlePriorityChange(option.value)}
+                                            className="form-checkbox h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <span className="text-sm text-slate-700">
+                                            {option.value} - {option.label}
+                                        </span>
+                                    </label>
+                                ))}
+                            </div>
                         </div>
 
                         <div>
@@ -991,10 +1371,59 @@ const Jobs = () => {
                                 ))}
                             </div>
                         </div>
+
+                        <div>
+                            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+                                    Admins
+                                </label>
+
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleSelectAllAdmins}
+                                        className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-100"
+                                    >
+                                        Select All
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={handleDeselectAllAdmins}
+                                        className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                                    >
+                                        Deselect All
+                                    </button>
+                                </div>
+                            </div>
+
+                            {companyUserOptions.length === 0 ? (
+                                <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">
+                                    No company admins found.
+                                </div>
+                            ) : (
+                                <div className="max-h-56 overflow-y-auto rounded-md border border-slate-200 p-3">
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                        {companyUserOptions.map((admin) => (
+                                            <label key={admin.value} className="flex cursor-pointer items-center space-x-3">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={tempAdminFilters.includes(admin.value)}
+                                                    onChange={() => handleAdminChange(admin.value)}
+                                                    className="form-checkbox h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                                />
+                                                <span className="text-sm text-slate-700">{admin.label}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <div className="mt-6 flex justify-end gap-3">
                         <button
+                            type="button"
                             onClick={onClose}
                             className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
                         >
@@ -1002,7 +1431,14 @@ const Jobs = () => {
                         </button>
 
                         <button
-                            onClick={() => applyFilters(tempOperationFilters, tempBillingFilters)}
+                            type="button"
+                            onClick={() => applyFilters(
+                                tempOperationFilters,
+                                tempBillingFilters,
+                                tempAdminFilters,
+                                tempAdminFilterActive,
+                                tempPriorityFilters
+                            )}
                             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
                         >
                             Apply
@@ -1036,43 +1472,68 @@ const Jobs = () => {
                     </div>
 
                     <div className="space-y-3 p-5">
-                        <button
-                            type="button"
-                            onClick={handleCreateBlankJob}
-                            className="w-full rounded-md border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100"
-                        >
-                            <div className="flex items-start gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white">
-                                    <span className="text-lg">＋</span>
-                                </div>
+                        {canCreateBasicWorkOrders && (
+                            <button
+                                type="button"
+                                onClick={handleCreateBasicWorkOrder}
+                                className="w-full rounded-md border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100"
+                            >
+                                <div className="flex items-start gap-3">
+                                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-blue-200 bg-white">
+                                        <span className="text-lg">▣</span>
+                                    </div>
 
-                                <div>
-                                    <p className="font-bold text-slate-900">Blank Job</p>
-                                    <p className="mt-1 text-sm text-slate-500">
-                                        Build a job manually from scratch.
-                                    </p>
+                                    <div>
+                                        <p className="font-bold text-blue-900">Basic Work Order</p>
+                                        <p className="mt-1 text-sm text-blue-800">
+                                            Schedule a technician-safe template or custom work order with a generated price.
+                                        </p>
+                                    </div>
                                 </div>
-                            </div>
-                        </button>
+                            </button>
+                        )}
 
-                        <button
-                            type="button"
-                            onClick={handleOpenTemplatePicker}
-                            className="w-full rounded-md border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100"
-                        >
-                            <div className="flex items-start gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-md border border-blue-200 bg-white">
-                                    <span className="text-lg">▣</span>
-                                </div>
+                        {canCreateJobs && (
+                            <button
+                                type="button"
+                                onClick={handleCreateBlankJob}
+                                className="w-full rounded-md border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100"
+                            >
+                                <div className="flex items-start gap-3">
+                                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white">
+                                        <span className="text-lg">＋</span>
+                                    </div>
 
-                                <div>
-                                    <p className="font-bold text-blue-900">From Template</p>
-                                    <p className="mt-1 text-sm text-blue-800">
-                                        Copy planned stops, tasks, materials, and pricing into a new job.
-                                    </p>
+                                    <div>
+                                        <p className="font-bold text-slate-900">Blank Job</p>
+                                        <p className="mt-1 text-sm text-slate-500">
+                                            Build a job manually from scratch.
+                                        </p>
+                                    </div>
                                 </div>
-                            </div>
-                        </button>
+                            </button>
+                        )}
+
+                        {canCreateJobs && (
+                            <button
+                                type="button"
+                                onClick={handleOpenTemplatePicker}
+                                className="w-full rounded-md border border-slate-200 bg-white p-4 text-left transition hover:bg-slate-50"
+                            >
+                                <div className="flex items-start gap-3">
+                                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white">
+                                        <span className="text-lg">▣</span>
+                                    </div>
+
+                                    <div>
+                                        <p className="font-bold text-slate-900">From Template</p>
+                                        <p className="mt-1 text-sm text-slate-500">
+                                            Copy planned stops, tasks, materials, and pricing into a new job.
+                                        </p>
+                                    </div>
+                                </div>
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1193,7 +1654,7 @@ const Jobs = () => {
                             </div>
                         </div>
 
-                        {canCreateJobs && (
+                        {canCreateAnyJobs && (
                             <button
                                 type="button"
                                 onClick={openCreateOptions}
@@ -1251,6 +1712,26 @@ const Jobs = () => {
                             })}
                         >
                             Finished Not Invoiced
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleAssignedToMeFilter}
+                            className={getOutlinedButtonClass({
+                                tone: "amber",
+                                active: assignedToMeActive,
+                            })}
+                        >
+                            Assigned to me
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleCompanyWideFilter}
+                            className={getOutlinedButtonClass({
+                                tone: "slate",
+                                active: !adminFilterActive,
+                            })}
+                        >
+                            Company Wide
                         </button>
                     </div>
                     <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(280px,1fr)_auto] lg:items-center">
@@ -1347,7 +1828,7 @@ const Jobs = () => {
 
                     <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
                         <div>Showing {visibleJobs.length} of {jobs.length} job{jobs.length === 1 ? "" : "s"}</div>
-                        <div>{currentJobListView === "billing" ? "Finished not invoiced" : "Operations"} - {customFiltersActive ? "Custom filters" : "Default filters"}</div>
+                        <div>{currentJobListView === "billing" ? "Finished not invoiced" : "Operations"} - {adminScopeLabel} - {customFiltersActive ? "Custom filters" : "Default filters"}</div>
                     </div>
 
                     <div className="overflow-x-auto border-t border-slate-200">
@@ -1366,7 +1847,11 @@ const Jobs = () => {
                                             />
                                         </th>
                                     )}
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Job</th>
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
+                                        <SortHeaderButton sortKey="internalId" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Job
+                                        </SortHeaderButton>
+                                    </th>
                                     <th className="border-b border-slate-200 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="dateCreated" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Date Created
@@ -1393,7 +1878,7 @@ const Jobs = () => {
                                         </SortHeaderButton>
                                     </th>
                                     <th className="border-b border-slate-200 px-5 py-3 text-left">
-                                        <SortHeaderButton sortKey="solutionTier" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                        <SortHeaderButton sortKey="priority" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Priority
                                         </SortHeaderButton>
                                     </th>
@@ -1415,7 +1900,7 @@ const Jobs = () => {
                                                 Create a blank job or start from a template.
                                             </p>
 
-                                            {canCreateJobs && (
+                                            {canCreateAnyJobs && (
                                                 <button
                                                     type="button"
                                                     onClick={openCreateOptions}

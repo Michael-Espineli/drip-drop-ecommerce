@@ -1,12 +1,26 @@
-import React, { useState, useEffect, useContext, useMemo } from "react";
+import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { collection, doc, getDocs, orderBy, query, setDoc, updateDoc, where } from "firebase/firestore";
+import {
+  arrayUnion,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  Timestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   EQUIPMENT_STATUS_OPTIONS,
   Equipment,
   displayEquipmentStatus,
+  equipmentDefaultsToNeedsService,
   normalizeEquipmentStatus,
 } from "../../../utils/models/Equipment";
 import { addDays, addMonths, addWeeks, addYears, endOfToday, format, isBefore, isEqual } from "date-fns";
@@ -25,6 +39,22 @@ import {
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
 import { sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+  JOB_BILLING_STATUS,
+  JOB_OPERATION_STATUS,
+  normalizeJobStatus,
+} from "../../../utils/jobStatusFilters";
+import {
+  CREATE_JOBS_PERMISSION_ID,
+  CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
+  SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
+} from "../../../utils/companyPermissions";
+import {
+  DEFAULT_JOB_PLAN_TIER,
+  JOB_PLAN_STATUS,
+  getIssuePriorityLabel,
+  getJobPlanRecommendationLabel,
+} from "../../../utils/models/JobPlan";
 
 const EMPTY_TOP_COUNTS = {
   all: 0,
@@ -53,6 +83,51 @@ const EQUIPMENT_FILTER_ALIASES = {
 
 const CUSTOM_CATALOG_VALUE = "__custom__";
 const DEFAULT_MAINTENANCE_NAME = "Clean";
+const SCHEDULE_JOB_MODAL = "scheduleJob";
+const SCHEDULE_JOB_INTENTS = {
+  maintenance: {
+    label: "Maintenance",
+    actionLabel: "Schedule Maintenance",
+    jobType: "Maintenance",
+    historyTitle: "Equipment maintenance scheduled",
+    tone: "green",
+  },
+  repair: {
+    label: "Repair",
+    actionLabel: "Schedule Repair",
+    jobType: "Repair",
+    historyTitle: "Equipment repair scheduled",
+    tone: "amber",
+  },
+};
+const ACTIVE_JOB_OPERATION_STATUSES = [
+  JOB_OPERATION_STATUS.draft,
+  JOB_OPERATION_STATUS.scheduled,
+];
+const ACTIVE_JOB_BILLING_STATUSES = [
+  JOB_BILLING_STATUS.draft,
+  JOB_BILLING_STATUS.estimate,
+  JOB_BILLING_STATUS.accepted,
+  JOB_BILLING_STATUS.inProgress,
+];
+const TERMINAL_JOB_BILLING_STATUSES = new Set([
+  normalizeJobStatus(JOB_BILLING_STATUS.invoiced),
+  normalizeJobStatus(JOB_BILLING_STATUS.paid),
+  normalizeJobStatus(JOB_BILLING_STATUS.comped),
+  normalizeJobStatus(JOB_BILLING_STATUS.customerResolved),
+  normalizeJobStatus(JOB_BILLING_STATUS.expired),
+  normalizeJobStatus(JOB_BILLING_STATUS.rejected),
+]);
+const EQUIPMENT_TABLE_SORT_COLUMNS = [
+  { field: "customerName", label: "Customer" },
+  { field: "serviceAddress", label: "Service Location" },
+  { field: "make", label: "Make" },
+  { field: "model", label: "Model" },
+  { field: "type", label: "Type" },
+  { field: "nextServiceDate", label: "Next Service" },
+  { field: "status", label: "Status" },
+  { field: "activeJobs", label: "Active Jobs" },
+];
 const inputBase =
   "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 const modalSecondaryButton =
@@ -62,11 +137,79 @@ const modalPrimaryButton =
 
 const todayDateInputValue = () => format(new Date(), "yyyy-MM-dd");
 
+const moneyFromCents = (value) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format((Number(value || 0) || 0) / 100);
+
+const quantityNumber = (value) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+};
+
+const toDateTimeLocalValue = (date) => {
+  const value = date instanceof Date ? date : new Date();
+  const offsetMs = value.getTimezoneOffset() * 60 * 1000;
+  return new Date(value.getTime() - offsetMs).toISOString().slice(0, 16);
+};
+
+const defaultScheduledAt = () => {
+  const value = new Date();
+  value.setHours(value.getHours() + 1, 0, 0, 0);
+  return toDateTimeLocalValue(value);
+};
+
+const getTaskBillingLaborPriceCents = (task = {}) => {
+  const explicitBillingValue =
+    task.billingLaborPriceCents ??
+    task.customerLaborPriceCents ??
+    task.billingLaborRateCents ??
+    task.laborBillingRateCents ??
+    task.billableLaborCents;
+
+  if (explicitBillingValue !== undefined && explicitBillingValue !== null && explicitBillingValue !== "") {
+    const amount = Number(explicitBillingValue || 0);
+    return Number.isFinite(amount) ? amount : 0;
+  }
+
+  return Number(task.contractedRate || 0);
+};
+
+const plannedMaterialTotalCostCents = (item = {}) => {
+  if (item.plannedTotalCostCents !== undefined && item.plannedTotalCostCents !== null) {
+    return Number(item.plannedTotalCostCents || 0);
+  }
+
+  return Math.round(Number(item.plannedUnitCostCents || item.cost || 0) * quantityNumber(item.quantity));
+};
+
+const plannedMaterialTotalPriceCents = (item = {}) => {
+  if (item.plannedTotalPriceCents !== undefined && item.plannedTotalPriceCents !== null) {
+    return Number(item.plannedTotalPriceCents || 0);
+  }
+
+  return Math.round(Number(item.plannedUnitPriceCents || item.price || 0) * quantityNumber(item.quantity));
+};
+
 const dateInputToLocalDate = (value) => {
   if (!value) return null;
   const [year, month, day] = value.split("-").map(Number);
   if (!year || !month || !day) return null;
   return new Date(year, month - 1, day);
+};
+
+const dateToInputValue = (value) => {
+  if (!value) return "";
+
+  const valueDate = value instanceof Date
+    ? value
+    : typeof value.toDate === "function"
+      ? value.toDate()
+      : new Date(value);
+
+  if (Number.isNaN(valueDate.getTime())) return "";
+  return format(valueDate, "yyyy-MM-dd");
 };
 
 const Field = ({ label, children }) => (
@@ -78,7 +221,7 @@ const Field = ({ label, children }) => (
 
 const ModalShell = ({ title, children, onClose, footer }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-    <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-xl font-bold text-slate-950">{title}</h3>
@@ -159,6 +302,180 @@ const companyUserDisplayName = (user = {}) =>
 
 const companyUserRecordId = (user = {}) => user.userId || user.id || "";
 
+const getCompanyUserId = (companyUser = {}) => (
+  companyUser.userId || companyUser.uid || companyUser.id || ""
+);
+
+const buildCompanyUserOption = (companyUser = {}) => {
+  const id = companyUser.id || companyUser.userId || companyUser.uid || "";
+  const userId = getCompanyUserId(companyUser);
+  const userName = companyUserDisplayName(companyUser) || "Company User";
+
+  return {
+    ...companyUser,
+    id,
+    userId,
+    userName,
+    value: userId,
+    label: `${userName}${companyUser.roleName ? ` - ${companyUser.roleName}` : ""}`,
+  };
+};
+
+const isActiveCompanyUser = (companyUser = {}) => {
+  const status = String(companyUser.status || companyUser.userStatus || "").trim().toLowerCase();
+  return companyUser.isActive !== false && companyUser.active !== false && status !== "inactive";
+};
+
+const isLikelyAdminUser = (companyUser = {}) => {
+  const searchable = `${companyUser.roleName || ""} ${companyUser.role || ""} ${companyUser.workerType || ""}`.toLowerCase();
+  return ["owner", "admin", "manager", "office"].some((term) => searchable.includes(term));
+};
+
+const jobTemplateIsScheduleable = (template = {}) => (
+  template.isActive !== false &&
+  template.active !== false &&
+  template.technicianCanAdd === true
+);
+
+const templateIntentMatches = (template = {}, intent = "") => {
+  const searchable = `${template.name || ""} ${template.type || ""} ${template.jobType || ""} ${template.description || ""}`.toLowerCase();
+  if (intent === "repair") return searchable.includes("repair");
+  if (intent === "maintenance") {
+    return searchable.includes("maintenance") || searchable.includes("service");
+  }
+  return false;
+};
+
+const formatAddressLine = (address = {}) => {
+  if (typeof address === "string") return address.trim();
+
+  const street = address.streetAddress || address.address1 || address.line1 || "";
+  const cityStateZip = [
+    address.city,
+    address.state,
+    address.zip || address.zipCode,
+  ].filter(Boolean).join(" ");
+
+  return [street, cityStateZip].filter(Boolean).join(", ");
+};
+
+const serviceLocationDisplayAddress = (serviceLocation = {}) => (
+  formatAddressLine(serviceLocation.address) ||
+  serviceLocation.serviceLocationAddress ||
+  serviceLocation.locationAddress ||
+  serviceLocation.addressLabel ||
+  serviceLocation.label ||
+  serviceLocation.nickName ||
+  ""
+);
+
+const serviceLocationDisplayName = (serviceLocation = {}) => (
+  serviceLocation.nickName ||
+  serviceLocation.name ||
+  serviceLocation.label ||
+  serviceLocationDisplayAddress(serviceLocation) ||
+  "Service Location"
+);
+
+const isActiveEquipmentJob = (job = {}) => {
+  const operationStatus = normalizeJobStatus(job.operationStatus || job.status);
+  const billingStatus = normalizeJobStatus(job.billingStatus);
+
+  if (operationStatus === normalizeJobStatus(JOB_OPERATION_STATUS.finished)) return false;
+  return !TERMINAL_JOB_BILLING_STATUSES.has(billingStatus);
+};
+
+const getJobDateMillis = (job = {}) => sortableDateMillis(job.dateCreated || job.createdAt) || 0;
+
+const compactEquipmentJob = (job = {}, equipmentTaskCount = 0, equipmentTaskNames = []) => ({
+  id: job.id,
+  internalId: job.internalId || "",
+  description: job.description || "",
+  type: job.type || "",
+  operationStatus: job.operationStatus || job.status || "",
+  billingStatus: job.billingStatus || "",
+  dateMillis: getJobDateMillis(job),
+  equipmentTaskCount,
+  equipmentTaskNames: [...new Set(equipmentTaskNames.filter(Boolean))],
+});
+
+const addJobToEquipmentLookup = (lookup, equipmentId, job, equipmentTaskCount = 0, equipmentTaskNames = []) => {
+  if (!equipmentId || !job?.id) return;
+
+  const currentJobs = lookup[equipmentId] || [];
+  const existingIndex = currentJobs.findIndex((currentJob) => currentJob.id === job.id);
+  const nextJob = compactEquipmentJob(job, equipmentTaskCount, equipmentTaskNames);
+
+  if (existingIndex >= 0) {
+    const nextJobs = [...currentJobs];
+    nextJobs[existingIndex] = {
+      ...nextJobs[existingIndex],
+      equipmentTaskCount: Math.max(nextJobs[existingIndex].equipmentTaskCount || 0, equipmentTaskCount),
+      equipmentTaskNames: [
+        ...new Set([
+          ...(nextJobs[existingIndex].equipmentTaskNames || []),
+          ...nextJob.equipmentTaskNames,
+        ]),
+      ],
+    };
+    lookup[equipmentId] = nextJobs;
+    return;
+  }
+
+  lookup[equipmentId] = [...currentJobs, nextJob];
+};
+
+const getJobStatusLabel = (job = {}) => (
+  [job.operationStatus, job.billingStatus].filter(Boolean).join(" / ") || "Active"
+);
+
+const ActiveJobsCell = ({ jobs = [], loading = false }) => {
+  if (loading && jobs.length === 0) {
+    return <span className="text-xs text-slate-400">Checking...</span>;
+  }
+
+  if (jobs.length === 0) {
+    return <span className="text-sm text-slate-400">—</span>;
+  }
+
+  const visibleJobs = jobs.slice(0, 2);
+  const remainingCount = Math.max(0, jobs.length - visibleJobs.length);
+
+  return (
+    <div className="min-w-[220px] space-y-1.5">
+      {visibleJobs.map((job) => (
+        <Link
+          key={job.id}
+          to={`/company/jobs/detail/${job.id}`}
+          className="block rounded-md border border-blue-100 bg-blue-50 px-2.5 py-2 text-xs transition hover:border-blue-300 hover:bg-blue-100"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-bold text-blue-800">{job.internalId || "Job"}</span>
+            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 font-semibold text-blue-700">
+              {getJobStatusLabel(job)}
+            </span>
+          </div>
+          <p className="mt-1 text-slate-700">
+            {job.equipmentTaskNames?.length
+              ? job.equipmentTaskNames.slice(0, 2).join(", ")
+              : job.description || job.type || "Open work order"}
+          </p>
+          {job.equipmentTaskCount > 0 && (
+            <p className="mt-1 text-[11px] font-semibold text-slate-500">
+              {job.equipmentTaskCount} equipment task{job.equipmentTaskCount === 1 ? "" : "s"}
+            </p>
+          )}
+        </Link>
+      ))}
+      {remainingCount > 0 && (
+        <p className="text-xs font-semibold text-slate-500">
+          +{remainingCount} more active job{remainingCount === 1 ? "" : "s"}
+        </p>
+      )}
+    </div>
+  );
+};
+
 const getEquipmentListMeta = (equipmentData = []) => ({
   types: [...new Set(equipmentData.map((item) => item.type))].filter(Boolean),
   topCounts: {
@@ -202,7 +519,7 @@ const TopFilterButton = ({ label, count, active, onClick }) => (
     <span
       className={[
         "min-w-[34px] text-center px-2 py-0.5 rounded-full text-xs font-bold",
-        active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-700",
+        active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-700",
       ].join(" ")}
     >
       {count}
@@ -242,11 +559,24 @@ const EquipmentDetailLink = ({ equipment, children }) => (
 export default function EquipmentList() {
   const navigate = useNavigate();
   const { tab } = useParams();
-  const { recentlySelectedCompany } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    recentlySelectedCompanyName,
+    dataBaseUser,
+    currentUser,
+    user,
+    companyUserAccess,
+  } = useContext(Context);
   const { can } = useCompanyPermissions();
 
   const [equipmentList, setEquipmentList] = useState([]);
   const [filteredEquipmentList, setFilteredEquipmentList] = useState([]);
+  const [serviceLocationsById, setServiceLocationsById] = useState({});
+  const [activeJobsByEquipmentId, setActiveJobsByEquipmentId] = useState({});
+  const [loadingActiveJobs, setLoadingActiveJobs] = useState(false);
+  const [noteDrafts, setNoteDrafts] = useState({});
+  const [savingNoteIds, setSavingNoteIds] = useState({});
+  const [noteErrors, setNoteErrors] = useState({});
 
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -271,6 +601,21 @@ export default function EquipmentList() {
   const [selectedQuickEquipment, setSelectedQuickEquipment] = useState(null);
 
   const [companyUsers, setCompanyUsers] = useState([]);
+  const [jobTemplates, setJobTemplates] = useState([]);
+  const [loadingJobTemplates, setLoadingJobTemplates] = useState(false);
+  const [scheduleJobIntent, setScheduleJobIntent] = useState("maintenance");
+  const [scheduleTemplateId, setScheduleTemplateId] = useState("");
+  const [scheduleTemplateDetails, setScheduleTemplateDetails] = useState({
+    tasks: [],
+    plannedServiceStops: [],
+    shoppingItems: [],
+  });
+  const [loadingScheduleTemplateDetails, setLoadingScheduleTemplateDetails] = useState(false);
+  const [scheduleAdminId, setScheduleAdminId] = useState("");
+  const [scheduleTechnicianId, setScheduleTechnicianId] = useState("");
+  const [scheduleDateTime, setScheduleDateTime] = useState(defaultScheduledAt);
+  const [scheduleNotes, setScheduleNotes] = useState("");
+  const [schedulingJob, setSchedulingJob] = useState(false);
   const [equipmentTypes, setEquipmentTypes] = useState([]);
   const [equipmentMakes, setEquipmentMakes] = useState([]);
   const [equipmentModels, setEquipmentModels] = useState([]);
@@ -288,6 +633,10 @@ export default function EquipmentList() {
   const [quickManualPdfLink, setQuickManualPdfLink] = useState("");
   const [quickNotes, setQuickNotes] = useState("");
   const [quickStatus, setQuickStatus] = useState("");
+  const [quickNeedsService, setQuickNeedsService] = useState(false);
+  const [quickLastServiceDate, setQuickLastServiceDate] = useState("");
+  const [quickServiceFrequency, setQuickServiceFrequency] = useState("");
+  const [quickServiceFrequencyEvery, setQuickServiceFrequencyEvery] = useState("");
 
   const [maintenanceName, setMaintenanceName] = useState(DEFAULT_MAINTENANCE_NAME);
   const [maintenanceDate, setMaintenanceDate] = useState(todayDateInputValue);
@@ -304,6 +653,31 @@ export default function EquipmentList() {
   const [repairPartsReplaced, setRepairPartsReplaced] = useState([]);
   const [currentPart, setCurrentPart] = useState("");
   const [repairNotes, setRepairNotes] = useState("");
+
+  const loggedInUser = currentUser || user || {};
+  const createdByUserId = dataBaseUser?.id || loggedInUser?.uid || loggedInUser?.id || "";
+  const createdByUserName =
+    `${dataBaseUser?.firstName || ""} ${dataBaseUser?.lastName || ""}`.trim() ||
+    loggedInUser?.displayName ||
+    loggedInUser?.userName ||
+    "Unknown";
+  const scheduleJobIntentConfig = SCHEDULE_JOB_INTENTS[scheduleJobIntent] || SCHEDULE_JOB_INTENTS.maintenance;
+  const canScheduleTemplateForOthers =
+    can(CREATE_JOBS_PERMISSION_ID) ||
+    can(CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID);
+  const canScheduleTemplateSelf =
+    canScheduleTemplateForOthers ||
+    can(SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID);
+
+  const equipmentIdSignature = useMemo(() => (
+    equipmentList.map((equipment) => equipment.id).filter(Boolean).sort().join("|")
+  ), [equipmentList]);
+
+  const serviceLocationIdSignature = useMemo(() => (
+    [...new Set(equipmentList.map((equipment) => equipment.serviceLocationId).filter(Boolean))]
+      .sort()
+      .join("|")
+  ), [equipmentList]);
 
   useEffect(() => {
     const nextFilter = getEquipmentFilterFromTab(tab);
@@ -349,6 +723,235 @@ export default function EquipmentList() {
       cancelled = true;
     };
   }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !canScheduleTemplateSelf) {
+      setJobTemplates([]);
+      setLoadingJobTemplates(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchJobTemplates = async () => {
+      try {
+        setLoadingJobTemplates(true);
+        const templatesSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates"));
+        const templates = templatesSnap.docs.map((templateDoc) => ({
+          id: templateDoc.data().id || templateDoc.id,
+          ...templateDoc.data(),
+        }));
+
+        if (!cancelled) setJobTemplates(templates);
+      } catch (error) {
+        console.error("Error loading equipment schedule templates:", error);
+        if (!cancelled) setJobTemplates([]);
+      } finally {
+        if (!cancelled) setLoadingJobTemplates(false);
+      }
+    };
+
+    fetchJobTemplates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canScheduleTemplateSelf, recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (activeQuickModal !== SCHEDULE_JOB_MODAL || !recentlySelectedCompany || !scheduleTemplateId) {
+      setScheduleTemplateDetails({ tasks: [], plannedServiceStops: [], shoppingItems: [] });
+      setLoadingScheduleTemplateDetails(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchScheduleTemplateDetails = async () => {
+      try {
+        setLoadingScheduleTemplateDetails(true);
+        const templateRef = doc(db, "companies", recentlySelectedCompany, "jobTemplates", scheduleTemplateId);
+        const [tasksSnap, stopsSnap, shoppingSnap] = await Promise.all([
+          getDocs(collection(templateRef, "tasks")),
+          getDocs(collection(templateRef, "plannedServiceStops")),
+          getDocs(collection(templateRef, "shoppingItems")),
+        ]);
+
+        if (cancelled) return;
+
+        setScheduleTemplateDetails({
+          tasks: tasksSnap.docs
+            .map((taskDoc) => ({ id: taskDoc.data().id || taskDoc.id, ...taskDoc.data() }))
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
+          plannedServiceStops: stopsSnap.docs
+            .map((stopDoc) => ({ id: stopDoc.data().id || stopDoc.id, ...stopDoc.data() }))
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
+          shoppingItems: shoppingSnap.docs
+            .map((itemDoc) => ({ id: itemDoc.data().id || itemDoc.id, ...itemDoc.data() }))
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
+        });
+      } catch (error) {
+        console.error("Error loading equipment schedule template details:", error);
+        if (!cancelled) {
+          setScheduleTemplateDetails({ tasks: [], plannedServiceStops: [], shoppingItems: [] });
+          toast.error("Could not load template details.");
+        }
+      } finally {
+        if (!cancelled) setLoadingScheduleTemplateDetails(false);
+      }
+    };
+
+    fetchScheduleTemplateDetails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeQuickModal, recentlySelectedCompany, scheduleTemplateId]);
+
+  useEffect(() => {
+    setNoteDrafts((currentDrafts) => {
+      const nextDrafts = {};
+      equipmentList.forEach((equipment) => {
+        nextDrafts[equipment.id] = currentDrafts[equipment.id] ?? equipment.notes ?? "";
+      });
+      return nextDrafts;
+    });
+
+    setNoteErrors((currentErrors) => {
+      const nextErrors = {};
+      equipmentList.forEach((equipment) => {
+        if (currentErrors[equipment.id]) nextErrors[equipment.id] = currentErrors[equipment.id];
+      });
+      return nextErrors;
+    });
+  }, [equipmentList]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !serviceLocationIdSignature) {
+      setServiceLocationsById({});
+      return;
+    }
+
+    let cancelled = false;
+    const serviceLocationIds = serviceLocationIdSignature.split("|").filter(Boolean);
+
+    const fetchServiceLocations = async () => {
+      try {
+        const locationEntries = await Promise.all(
+          serviceLocationIds.map(async (serviceLocationId) => {
+            const locationSnap = await getDoc(
+              doc(db, "companies", recentlySelectedCompany, "serviceLocations", serviceLocationId)
+            );
+
+            return locationSnap.exists()
+              ? [serviceLocationId, { id: serviceLocationId, ...locationSnap.data() }]
+              : [serviceLocationId, null];
+          })
+        );
+
+        if (!cancelled) {
+          setServiceLocationsById(Object.fromEntries(locationEntries.filter(([, location]) => location)));
+        }
+      } catch (error) {
+        console.error("Error loading service location addresses:", error);
+        if (!cancelled) setServiceLocationsById({});
+      }
+    };
+
+    fetchServiceLocations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recentlySelectedCompany, serviceLocationIdSignature]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !equipmentIdSignature) {
+      setActiveJobsByEquipmentId({});
+      setLoadingActiveJobs(false);
+      return;
+    }
+
+    let cancelled = false;
+    const equipmentIds = new Set(equipmentIdSignature.split("|").filter(Boolean));
+
+    const fetchActiveJobs = async () => {
+      try {
+        setLoadingActiveJobs(true);
+
+        const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
+        const [operationSnap, billingSnap] = await Promise.all([
+          getDocs(query(workOrdersRef, where("operationStatus", "in", ACTIVE_JOB_OPERATION_STATUSES))),
+          getDocs(query(workOrdersRef, where("billingStatus", "in", ACTIVE_JOB_BILLING_STATUSES))),
+        ]);
+        const activeJobsById = new Map();
+
+        [...operationSnap.docs, ...billingSnap.docs].forEach((jobDoc) => {
+          const job = { id: jobDoc.id, ref: jobDoc.ref, ...jobDoc.data() };
+          if (isActiveEquipmentJob(job)) activeJobsById.set(job.id, job);
+        });
+
+        const nextLookup = {};
+        const activeJobs = [...activeJobsById.values()];
+
+        activeJobs.forEach((job) => {
+          const linkedEquipmentIds = new Set([
+            job.equipmentId,
+            ...(Array.isArray(job.equipmentIds) ? job.equipmentIds : []),
+            ...(Array.isArray(job.companyEquipmentIds) ? job.companyEquipmentIds : []),
+          ].filter(Boolean));
+
+          linkedEquipmentIds.forEach((equipmentId) => {
+            if (equipmentIds.has(equipmentId)) {
+              addJobToEquipmentLookup(nextLookup, equipmentId, job);
+            }
+          });
+        });
+
+        await Promise.all(activeJobs.map(async (job) => {
+          try {
+            const taskSnap = await getDocs(collection(job.ref, "tasks"));
+            const taskDetailsByEquipmentId = new Map();
+
+            taskSnap.docs.forEach((taskDoc) => {
+              const task = taskDoc.data() || {};
+              const taskEquipmentId = task.equipmentId || "";
+              if (!equipmentIds.has(taskEquipmentId)) return;
+
+              const current = taskDetailsByEquipmentId.get(taskEquipmentId) || { count: 0, names: [] };
+              taskDetailsByEquipmentId.set(taskEquipmentId, {
+                count: current.count + 1,
+                names: [...current.names, task.name || task.description || task.type || ""].filter(Boolean),
+              });
+            });
+
+            taskDetailsByEquipmentId.forEach((taskDetails, equipmentId) => {
+              addJobToEquipmentLookup(nextLookup, equipmentId, job, taskDetails.count, taskDetails.names);
+            });
+          } catch (error) {
+            console.error("Error loading active equipment job tasks:", error);
+          }
+        }));
+
+        Object.keys(nextLookup).forEach((equipmentId) => {
+          nextLookup[equipmentId] = nextLookup[equipmentId].sort((a, b) => b.dateMillis - a.dateMillis);
+        });
+
+        if (!cancelled) setActiveJobsByEquipmentId(nextLookup);
+      } catch (error) {
+        console.error("Error loading active equipment jobs:", error);
+        if (!cancelled) setActiveJobsByEquipmentId({});
+      } finally {
+        if (!cancelled) setLoadingActiveJobs(false);
+      }
+    };
+
+    fetchActiveJobs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recentlySelectedCompany, equipmentIdSignature]);
 
   useEffect(() => {
     let cancelled = false;
@@ -513,6 +1116,164 @@ export default function EquipmentList() {
   }, [equipmentList]);
 
   const maintenanceDueCount = topCounts.maintenance;
+  const quickDefaultsToNeedsService = useMemo(() => equipmentDefaultsToNeedsService({
+    name: quickName,
+    type: quickType,
+    make: quickMake,
+    model: quickModel,
+  }), [quickMake, quickModel, quickName, quickType]);
+  const quickServiceIsRequired = quickNeedsService || quickDefaultsToNeedsService;
+  const quickNextMaintenanceDate = useMemo(() => {
+    if (!quickServiceIsRequired) return null;
+
+    return computeNextServiceDate(
+      dateInputToLocalDate(quickLastServiceDate),
+      quickServiceFrequency,
+      quickServiceFrequencyEvery
+    );
+  }, [quickLastServiceDate, quickServiceFrequency, quickServiceFrequencyEvery, quickServiceIsRequired]);
+
+  const companyUserOptions = useMemo(() => (
+    companyUsers
+      .filter(isActiveCompanyUser)
+      .map(buildCompanyUserOption)
+      .filter((companyUser) => companyUser.userId)
+  ), [companyUsers]);
+
+  const currentCompanyUser = useMemo(() => {
+    const accessCompanyUserId = companyUserAccess?.companyUserId || companyUserAccess?.companyUserDocId || "";
+    const accessUserId = companyUserAccess?.userId || loggedInUser?.uid || dataBaseUser?.id || "";
+
+    return companyUserOptions.find((companyUser) => (
+      companyUser.id === accessCompanyUserId ||
+      companyUser.userId === accessUserId ||
+      companyUser.id === accessUserId ||
+      companyUser.userId === createdByUserId ||
+      companyUser.id === createdByUserId
+    )) || null;
+  }, [companyUserAccess, companyUserOptions, createdByUserId, dataBaseUser?.id, loggedInUser?.uid]);
+
+  const scheduleTemplateOptions = useMemo(() => (
+    jobTemplates
+      .filter(jobTemplateIsScheduleable)
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+  ), [jobTemplates]);
+
+  const scheduleAdminOptions = useMemo(() => {
+    const admins = companyUserOptions.filter(isLikelyAdminUser);
+    return admins.length ? admins : companyUserOptions;
+  }, [companyUserOptions]);
+
+  const scheduleTechnicianOptions = useMemo(() => {
+    if (canScheduleTemplateForOthers) return companyUserOptions;
+    return currentCompanyUser ? [currentCompanyUser] : [];
+  }, [canScheduleTemplateForOthers, companyUserOptions, currentCompanyUser]);
+
+  const selectedScheduleTemplate = useMemo(() => (
+    scheduleTemplateOptions.find((template) => template.id === scheduleTemplateId) || null
+  ), [scheduleTemplateId, scheduleTemplateOptions]);
+
+  const selectedScheduleAdmin = useMemo(() => (
+    scheduleAdminOptions.find((admin) => admin.userId === scheduleAdminId || admin.id === scheduleAdminId) || null
+  ), [scheduleAdminId, scheduleAdminOptions]);
+
+  const selectedScheduleTechnician = useMemo(() => (
+    scheduleTechnicianOptions.find((technician) => (
+      technician.userId === scheduleTechnicianId || technician.id === scheduleTechnicianId
+    )) || null
+  ), [scheduleTechnicianId, scheduleTechnicianOptions]);
+
+  const scheduleGeneratedPriceCents = useMemo(() => {
+    const taskPrice = scheduleTemplateDetails.tasks.reduce(
+      (total, task) => total + getTaskBillingLaborPriceCents(task),
+      0
+    );
+    const stopPrice = scheduleTemplateDetails.plannedServiceStops.reduce(
+      (total, stop) => total + Number(stop.plannedLaborCostCents || 0),
+      0
+    );
+    const materialPrice = scheduleTemplateDetails.shoppingItems.reduce(
+      (total, item) => total + plannedMaterialTotalPriceCents(item),
+      0
+    );
+
+    return taskPrice + stopPrice + materialPrice;
+  }, [scheduleTemplateDetails]);
+
+  const selectedQuickEquipmentServiceLocation = useMemo(() => (
+    selectedQuickEquipment?.serviceLocationId
+      ? serviceLocationsById[selectedQuickEquipment.serviceLocationId]
+      : null
+  ), [selectedQuickEquipment, serviceLocationsById]);
+
+  const selectedQuickEquipmentServiceAddress = serviceLocationDisplayAddress(selectedQuickEquipmentServiceLocation) ||
+    selectedQuickEquipment?.serviceLocationAddress ||
+    selectedQuickEquipment?.locationAddress ||
+    "";
+
+  const scheduleEquipmentIsMissingLocation =
+    activeQuickModal === SCHEDULE_JOB_MODAL &&
+    (!selectedQuickEquipment?.customerId || !selectedQuickEquipment?.serviceLocationId);
+
+  const canCreateScheduledEquipmentJob =
+    canScheduleTemplateSelf &&
+    !!selectedQuickEquipment &&
+    !!selectedScheduleTemplate &&
+    !!selectedScheduleAdmin &&
+    !!selectedScheduleTechnician &&
+    !!scheduleDateTime &&
+    !scheduleEquipmentIsMissingLocation &&
+    !loadingScheduleTemplateDetails &&
+    !schedulingJob;
+
+  useEffect(() => {
+    if (activeQuickModal !== SCHEDULE_JOB_MODAL) return;
+
+    if (!scheduleTemplateId && scheduleTemplateOptions.length) {
+      const preferredTemplate =
+        scheduleTemplateOptions.find((template) => templateIntentMatches(template, scheduleJobIntent)) ||
+        scheduleTemplateOptions[0];
+      setScheduleTemplateId(preferredTemplate?.id || "");
+    }
+
+    if (!scheduleAdminId && scheduleAdminOptions.length) {
+      setScheduleAdminId(scheduleAdminOptions[0].userId || scheduleAdminOptions[0].id || "");
+    }
+
+    if (!scheduleTechnicianId && scheduleTechnicianOptions.length) {
+      setScheduleTechnicianId(scheduleTechnicianOptions[0].userId || scheduleTechnicianOptions[0].id || "");
+    }
+  }, [
+    activeQuickModal,
+    scheduleAdminId,
+    scheduleAdminOptions,
+    scheduleJobIntent,
+    scheduleTechnicianId,
+    scheduleTechnicianOptions,
+    scheduleTemplateId,
+    scheduleTemplateOptions,
+  ]);
+
+  const getEquipmentServiceLocation = useCallback((equipment) => (
+    equipment?.serviceLocationId ? serviceLocationsById[equipment.serviceLocationId] : null
+  ), [serviceLocationsById]);
+
+  const getEquipmentServiceAddress = useCallback((equipment) => (
+    serviceLocationDisplayAddress(getEquipmentServiceLocation(equipment)) ||
+    equipment?.serviceLocationAddress ||
+    equipment?.locationAddress ||
+    ""
+  ), [getEquipmentServiceLocation]);
+
+  const getEquipmentActiveJobs = useCallback((equipment) => (
+    activeJobsByEquipmentId[equipment?.id] || []
+  ), [activeJobsByEquipmentId]);
+
+  const getSortValue = useCallback((equipment, field) => {
+    if (field === "serviceAddress") return getEquipmentServiceAddress(equipment);
+    if (field === "activeJobs") return getEquipmentActiveJobs(equipment).length;
+    return equipment?.[field];
+  }, [getEquipmentActiveJobs, getEquipmentServiceAddress]);
 
   useEffect(() => {
     let filtered = [...equipmentList];
@@ -530,9 +1291,23 @@ export default function EquipmentList() {
     if (searchTerm.trim()) {
       const s = searchTerm.toLowerCase();
       filtered = filtered.filter((item) =>
-        ["customerName", "type", "make", "model", "notes", "status"].some(
-          (field) => item?.[field] && item[field].toString().toLowerCase().includes(s)
-        )
+        [
+          item.customerName,
+          item.type,
+          item.make,
+          item.model,
+          item.notes,
+          item.status,
+          getEquipmentServiceAddress(item),
+          ...getEquipmentActiveJobs(item).flatMap((job) => [
+            job.internalId,
+            job.description,
+            job.type,
+            job.operationStatus,
+            job.billingStatus,
+            ...(job.equipmentTaskNames || []),
+          ]),
+        ].some((value) => String(value || "").toLowerCase().includes(s))
       );
     }
 
@@ -553,8 +1328,8 @@ export default function EquipmentList() {
 
     // Sort
     filtered.sort((a, b) => {
-      const fieldA = a?.[sortBy];
-      const fieldB = b?.[sortBy];
+      const fieldA = getSortValue(a, sortBy);
+      const fieldB = getSortValue(b, sortBy);
 
       // Dates
       if (sortBy === "nextServiceDate" || fieldA instanceof Date || fieldB instanceof Date) {
@@ -583,7 +1358,18 @@ export default function EquipmentList() {
     });
 
     setFilteredEquipmentList(filtered);
-  }, [equipmentList, searchTerm, typeFilter, needsServiceFilter, sortBy, sortOrder, topFilter]);
+  }, [
+    equipmentList,
+    getEquipmentActiveJobs,
+    getEquipmentServiceAddress,
+    getSortValue,
+    needsServiceFilter,
+    searchTerm,
+    sortBy,
+    sortOrder,
+    topFilter,
+    typeFilter,
+  ]);
 
   const handleSort = (field) => {
     const order = sortBy === field && sortOrder === "asc" ? "desc" : "asc";
@@ -631,12 +1417,35 @@ export default function EquipmentList() {
     name: equipment?.name || "",
   });
 
+  const getQuickEquipmentServiceDraft = (overrides = {}) => ({
+    name: quickName,
+    type: quickType,
+    make: quickMake,
+    model: quickModel,
+    ...overrides,
+  });
+
+  const applyQuickServiceDefaults = (overrides = {}) => {
+    if (!equipmentDefaultsToNeedsService(getQuickEquipmentServiceDraft(overrides))) return;
+
+    setQuickNeedsService(true);
+    setQuickServiceFrequency((current) => current || "6");
+    setQuickServiceFrequencyEvery((current) => current || "Month");
+  };
+
   const updateEquipmentInLists = (equipmentId, updates) => {
     const applyUpdates = (equipment) =>
       equipment.id === equipmentId ? { ...equipment, ...updates } : equipment;
 
     setEquipmentList((current) => current.map(applyUpdates));
     setFilteredEquipmentList((current) => current.map(applyUpdates));
+
+    if (Object.prototype.hasOwnProperty.call(updates, "notes")) {
+      setNoteDrafts((current) => ({
+        ...current,
+        [equipmentId]: updates.notes || "",
+      }));
+    }
   };
 
   const closeQuickModal = () => {
@@ -644,12 +1453,13 @@ export default function EquipmentList() {
     setSelectedQuickEquipment(null);
   };
 
-  const openQuickModal = (equipment, modalName) => {
+  const openQuickModal = (equipment, modalName, jobIntent = "maintenance") => {
     closeQuickActions();
     setSelectedQuickEquipment(equipment);
     setActiveQuickModal(modalName);
 
     if (modalName === "makeModel") {
+      const shouldDefaultNeedsService = equipmentDefaultsToNeedsService(equipment);
       setQuickName(equipment.name || "");
       setQuickType(equipment.type || "");
       setQuickTypeId(equipment.typeId || "");
@@ -660,6 +1470,18 @@ export default function EquipmentList() {
       setQuickUniversalEquipmentId(equipment.universalEquipmentId || equipment.modelId || "");
       setQuickManualPdfLink(equipment.manualPdfLink || "");
       setQuickNotes(equipment.notes || "");
+      setQuickNeedsService(!!equipment.needsService || shouldDefaultNeedsService);
+      setQuickLastServiceDate(dateToInputValue(equipment.lastServiceDate));
+      setQuickServiceFrequency(
+        equipment.serviceFrequency !== undefined &&
+          equipment.serviceFrequency !== null &&
+          equipment.serviceFrequency !== ""
+          ? String(equipment.serviceFrequency)
+          : shouldDefaultNeedsService
+            ? "6"
+            : ""
+      );
+      setQuickServiceFrequencyEvery(equipment.serviceFrequencyEvery || (shouldDefaultNeedsService ? "Month" : ""));
       setCatalogTypeId(equipment.typeId || CUSTOM_CATALOG_VALUE);
       setCatalogMakeId(equipment.makeId || CUSTOM_CATALOG_VALUE);
       setCatalogEquipmentId(equipment.universalEquipmentId || equipment.modelId || CUSTOM_CATALOG_VALUE);
@@ -692,15 +1514,25 @@ export default function EquipmentList() {
       setCurrentPart("");
       setRepairNotes("");
     }
-  };
 
-  const createEquipmentJob = (equipment, jobIntent) => {
-    navigate("/company/jobs/createNew", {
-      state: {
-        equipmentContext: buildEquipmentContext(equipment, jobIntent),
-        jobIntent,
-      },
-    });
+    if (modalName === SCHEDULE_JOB_MODAL) {
+      const normalizedIntent = SCHEDULE_JOB_INTENTS[jobIntent] ? jobIntent : "maintenance";
+      const intentConfig = SCHEDULE_JOB_INTENTS[normalizedIntent];
+      const preferredTemplate =
+        scheduleTemplateOptions.find((template) => templateIntentMatches(template, normalizedIntent)) ||
+        scheduleTemplateOptions[0];
+      const defaultAdmin = scheduleAdminOptions[0];
+      const defaultTechnician = canScheduleTemplateForOthers
+        ? scheduleTechnicianOptions[0]
+        : currentCompanyUser || scheduleTechnicianOptions[0];
+
+      setScheduleJobIntent(normalizedIntent);
+      setScheduleTemplateId(preferredTemplate?.id || "");
+      setScheduleAdminId(defaultAdmin?.userId || defaultAdmin?.id || "");
+      setScheduleTechnicianId(defaultTechnician?.userId || defaultTechnician?.id || "");
+      setScheduleDateTime(defaultScheduledAt());
+      setScheduleNotes(`${intentConfig.label} for ${getEquipmentDisplayName(equipment)}`);
+    }
   };
 
   const handleCatalogTypeChange = (value) => {
@@ -723,6 +1555,11 @@ export default function EquipmentList() {
     setQuickType(selected?.name || "");
     setQuickMake("");
     setQuickModel("");
+    applyQuickServiceDefaults({
+      type: selected?.name || "",
+      make: "",
+      model: "",
+    });
   };
 
   const handleCatalogMakeChange = (value) => {
@@ -741,6 +1578,10 @@ export default function EquipmentList() {
     setQuickMakeId(selected?.id || "");
     setQuickMake(selected?.name || "");
     setQuickModel("");
+    applyQuickServiceDefaults({
+      make: selected?.name || "",
+      model: "",
+    });
   };
 
   const handleCatalogEquipmentChange = (value) => {
@@ -759,10 +1600,47 @@ export default function EquipmentList() {
     setQuickUniversalEquipmentId(selected?.id || "");
     setQuickManualPdfLink(selected?.manualPdfLink || "");
     if (!quickName.trim()) setQuickName(selected?.name || selected?.model || "");
+    applyQuickServiceDefaults({
+      name: quickName.trim() ? quickName : selected?.name || selected?.model || "",
+      model: selected?.model || selected?.name || "",
+    });
   };
 
   const handleSaveEquipment = async () => {
     if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
+
+    const defaultsToNeedsService = equipmentDefaultsToNeedsService({
+      name: quickName,
+      type: quickType,
+      make: quickMake,
+      model: quickModel,
+    });
+    const finalNeedsService = quickNeedsService || defaultsToNeedsService;
+    const finalLastServiceDate = finalNeedsService ? dateInputToLocalDate(quickLastServiceDate) : null;
+    const serviceFrequencyValue =
+      quickServiceFrequency || (defaultsToNeedsService ? "6" : "");
+    const serviceFrequencyEveryValue =
+      quickServiceFrequencyEvery || (defaultsToNeedsService ? "Month" : "");
+    const numericServiceFrequency = Number(serviceFrequencyValue);
+    const nextMaintenanceDate = finalNeedsService
+      ? computeNextServiceDate(finalLastServiceDate, numericServiceFrequency, serviceFrequencyEveryValue)
+      : null;
+
+    if (finalNeedsService && !finalLastServiceDate) {
+      toast.error("Add a last serviced date before saving equipment that needs service.");
+      return;
+    }
+
+    if (
+      finalNeedsService &&
+      (!Number.isFinite(numericServiceFrequency) ||
+        numericServiceFrequency <= 0 ||
+        !serviceFrequencyEveryValue ||
+        !nextMaintenanceDate)
+    ) {
+      toast.error("Add a valid service frequency so the next maintenance date can be calculated.");
+      return;
+    }
 
     const updates = {
       name: quickName,
@@ -775,6 +1653,11 @@ export default function EquipmentList() {
       universalEquipmentId: quickUniversalEquipmentId,
       manualPdfLink: quickManualPdfLink,
       notes: quickNotes,
+      needsService: finalNeedsService,
+      lastServiceDate: finalNeedsService ? finalLastServiceDate : null,
+      nextServiceDate: nextMaintenanceDate,
+      serviceFrequency: finalNeedsService ? numericServiceFrequency : null,
+      serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEveryValue : "",
     };
 
     try {
@@ -810,6 +1693,58 @@ export default function EquipmentList() {
     }
   };
 
+  const handleInlineNoteChange = (equipmentId, value) => {
+    setNoteDrafts((current) => ({
+      ...current,
+      [equipmentId]: value,
+    }));
+
+    setNoteErrors((current) => {
+      if (!current[equipmentId]) return current;
+      const next = { ...current };
+      delete next[equipmentId];
+      return next;
+    });
+  };
+
+  const handleInlineNoteSave = async (equipment) => {
+    if (!equipment || !recentlySelectedCompany || !can("64")) return;
+
+    const draft = noteDrafts[equipment.id] ?? "";
+    const currentNotes = equipment.notes || "";
+    if (draft === currentNotes) return;
+
+    try {
+      setSavingNoteIds((current) => ({ ...current, [equipment.id]: true }));
+      setNoteErrors((current) => {
+        if (!current[equipment.id]) return current;
+        const next = { ...current };
+        delete next[equipment.id];
+        return next;
+      });
+
+      const updates = { notes: draft };
+      await updateDoc(
+        doc(db, "companies", recentlySelectedCompany, "equipment", equipment.id),
+        updates
+      );
+      updateEquipmentInLists(equipment.id, updates);
+    } catch (error) {
+      console.error("Error updating equipment notes from table:", error);
+      setNoteErrors((current) => ({
+        ...current,
+        [equipment.id]: "Could not save",
+      }));
+      toast.error("Failed to update notes");
+    } finally {
+      setSavingNoteIds((current) => {
+        const next = { ...current };
+        delete next[equipment.id];
+        return next;
+      });
+    }
+  };
+
   const handleUpdateStatus = async () => {
     if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
 
@@ -831,6 +1766,724 @@ export default function EquipmentList() {
     } catch (error) {
       console.error("Error updating equipment status:", error);
       toast.error("Failed to update status");
+    }
+  };
+
+  const resolveEquipmentServiceLocation = async (equipment) => {
+    if (!equipment?.serviceLocationId || !recentlySelectedCompany) return null;
+
+    const existingServiceLocation = getEquipmentServiceLocation(equipment);
+    if (existingServiceLocation) return existingServiceLocation;
+
+    const locationSnap = await getDoc(
+      doc(db, "companies", recentlySelectedCompany, "serviceLocations", equipment.serviceLocationId)
+    );
+
+    return locationSnap.exists()
+      ? { id: equipment.serviceLocationId, ...locationSnap.data() }
+      : null;
+  };
+
+  const buildScheduleLineItems = ({ planId, normalizedTasks, normalizedPlannedStops, normalizedShoppingItems }) => ([
+    ...normalizedPlannedStops.map((stop) => {
+      const amount = Number(stop.plannedLaborCostCents || 0);
+      return {
+        id: `${planId}_${stop.id}`,
+        sourceType: "serviceStopType",
+        sourceId: stop.serviceStopTypeId || stop.id,
+        salesItemType: "service",
+        billingBehavior: "oneTime",
+        type: "Planned Stop",
+        name: stop.name || "Planned Service Stop",
+        description: stop.description || stop.plannedLaborNotes || "",
+        quantity: 1,
+        unitAmountCents: amount,
+        totalAmountCents: amount,
+        amount,
+        taxable: false,
+        displayAmount: moneyFromCents(amount),
+      };
+    }),
+    ...normalizedTasks.map((task) => {
+      const amount = getTaskBillingLaborPriceCents(task);
+      return {
+        id: `${planId}_${task.id}`,
+        sourceType: "task",
+        sourceId: task.id,
+        salesItemType: "labor",
+        billingBehavior: "oneTime",
+        type: "Task",
+        name: task.name || "Task",
+        description: task.description || task.type || "",
+        quantity: 1,
+        unitAmountCents: amount,
+        totalAmountCents: amount,
+        amount,
+        billingLaborPriceCents: amount,
+        internalLaborCostCents: Number(task.contractedRate || 0),
+        taxable: false,
+        displayAmount: moneyFromCents(amount),
+      };
+    }),
+    ...normalizedShoppingItems.map((item) => {
+      const quantity = quantityNumber(item.quantity) || 1;
+      const amount = plannedMaterialTotalPriceCents(item);
+      const unitAmountCents = quantity ? Math.round(amount / quantity) : amount;
+      return {
+        id: `${planId}_${item.id}`,
+        sourceType: item.dbItemId || item.itemId ? "databaseItem" : "shoppingListItem",
+        sourceId: item.dbItemId || item.itemId || item.id,
+        salesItemType: "material",
+        billingBehavior: "oneTime",
+        type: "Material",
+        name: item.name || "Material",
+        description: item.description || "",
+        quantity,
+        unitAmountCents,
+        totalAmountCents: amount,
+        amount,
+        taxable: Boolean(item.taxable),
+        displayAmount: moneyFromCents(amount),
+      };
+    }),
+  ]).filter((item) => item.totalAmountCents > 0 || item.name);
+
+  const handleScheduleEquipmentJob = async () => {
+    if (!selectedQuickEquipment || !recentlySelectedCompany) return;
+
+    if (!canScheduleTemplateSelf) {
+      toast.error("You do not have permission to schedule template work orders.");
+      return;
+    }
+
+    if (!canCreateScheduledEquipmentJob) {
+      toast.error("Pick a template, admin, technician, and scheduled time.");
+      return;
+    }
+
+    if (!canScheduleTemplateForOthers && selectedScheduleTechnician?.userId !== currentCompanyUser?.userId) {
+      toast.error("You can only assign this work order to yourself.");
+      setScheduleTechnicianId(currentCompanyUser?.userId || currentCompanyUser?.id || "");
+      return;
+    }
+
+    const scheduledDate = new Date(scheduleDateTime);
+    if (Number.isNaN(scheduledDate.getTime())) {
+      toast.error("Choose a valid scheduled date and time.");
+      return;
+    }
+
+    setSchedulingJob(true);
+
+    try {
+      const serviceLocation =
+        await resolveEquipmentServiceLocation(selectedQuickEquipment) ||
+        {
+          id: selectedQuickEquipment.serviceLocationId || "",
+          label: selectedQuickEquipmentServiceAddress || "Service Location",
+          address: {},
+        };
+      const serviceLocationName = serviceLocationDisplayName(serviceLocation);
+      const workOrderCounterRef = doc(db, "companies", recentlySelectedCompany, "settings", "workOrders");
+      const workOrderCounterSnap = await getDoc(workOrderCounterRef);
+      const nextCount = workOrderCounterSnap.exists()
+        ? Number(workOrderCounterSnap.data().increment || 0) + 1
+        : 1;
+      const nextInternalId = `J${nextCount}`;
+      const jobId = `comp_wo_${uuidv4()}`;
+      const planId = `comp_job_plan_${uuidv4()}`;
+      const now = new Date();
+      const nowTimestamp = Timestamp.fromDate(now);
+      const nowMillis = now.getTime();
+      const equipmentContext = buildEquipmentContext(selectedQuickEquipment, scheduleJobIntent);
+      const description =
+        scheduleNotes.trim() ||
+        selectedScheduleTemplate?.description ||
+        `${scheduleJobIntentConfig.label} for ${getEquipmentDisplayName(selectedQuickEquipment)}`;
+      const customerName = selectedQuickEquipment.customerName || "Customer";
+      const adminId = selectedScheduleAdmin.userId || selectedScheduleAdmin.id || "";
+      const adminName = selectedScheduleAdmin.userName || selectedScheduleAdmin.label || "";
+      const techId = selectedScheduleTechnician.userId || selectedScheduleTechnician.id || "";
+      const techName = selectedScheduleTechnician.userName || selectedScheduleTechnician.label || "";
+
+      await setDoc(workOrderCounterRef, { increment: nextCount }, { merge: true });
+
+      const normalizedTasks = scheduleTemplateDetails.tasks.map((task, index) => ({
+        id: `comp_job_task_${uuidv4()}`,
+        companyId: recentlySelectedCompany,
+        jobId,
+        sourcePlanId: planId,
+        sourceSolutionId: planId,
+        sourceTemplateId: selectedScheduleTemplate.id,
+        sourceTemplateTaskId: task.id || "",
+        name: task.name || task.description || "Task",
+        type: task.type || scheduleJobIntentConfig.jobType || "General",
+        description: task.description || "",
+        contractedRate: Number(task.contractedRate || 0),
+        billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
+        estimatedTime: Number(task.estimatedTime || 0),
+        status: "Draft",
+        customerApproval: Boolean(task.customerApproval || false),
+        actualTime: 0,
+        workerId: "",
+        workerType: "Not Assigned",
+        workerName: "",
+        laborContractId: "",
+        serviceStopId: { id: "", internalId: "" },
+        equipmentId: selectedQuickEquipment.id,
+        serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+        dataBaseItemId: task.dataBaseItemId || "",
+        shoppingListItemId: task.shoppingListItemId || "",
+        shoppingListItemIds: Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds : [],
+        sortOrder: Number(task.sortOrder ?? index),
+      }));
+      const taskIdMap = scheduleTemplateDetails.tasks.reduce((map, task, index) => ({
+        ...map,
+        [task.id]: normalizedTasks[index]?.id,
+      }), {});
+      const normalizedPlannedStops = scheduleTemplateDetails.plannedServiceStops.length
+        ? scheduleTemplateDetails.plannedServiceStops.map((stop, index) => {
+          const originalTaskIds = Array.isArray(stop.taskTemplateIds)
+            ? stop.taskTemplateIds
+            : Array.isArray(stop.taskIds)
+              ? stop.taskIds
+              : [];
+
+          return {
+            id: `comp_job_plan_stop_${uuidv4()}`,
+            companyId: recentlySelectedCompany,
+            jobId,
+            sourcePlanId: planId,
+            sourceSolutionId: planId,
+            sourceTemplateId: selectedScheduleTemplate.id,
+            sourceTemplatePlannedStopId: stop.id || "",
+            name: stop.name || stop.serviceStopTypeName || selectedScheduleTemplate.name || "Planned Stop",
+            description: stop.description || "",
+            serviceStopTypeId: stop.serviceStopTypeId || "",
+            serviceStopTypeName: stop.serviceStopTypeName || "",
+            serviceStopTypeImage: stop.serviceStopTypeImage || "",
+            serviceStopTypeUseCaseRawValue: stop.serviceStopTypeUseCaseRawValue || "",
+            estimatedMinutes: Number(stop.estimatedMinutes || 0),
+            sortOrder: Number(stop.sortOrder ?? index),
+            taskIds: originalTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean),
+            plannedLaborCostCents: stop.plannedLaborCostCents !== undefined && stop.plannedLaborCostCents !== null
+              ? Number(stop.plannedLaborCostCents)
+              : null,
+            plannedLaborNotes: stop.plannedLaborNotes || "",
+            equipmentId: selectedQuickEquipment.id,
+            serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+            bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+            createdAt: nowTimestamp,
+            createdByUserId: createdByUserId || "",
+          };
+        })
+        : [{
+          id: `comp_job_plan_stop_${uuidv4()}`,
+          companyId: recentlySelectedCompany,
+          jobId,
+          sourcePlanId: planId,
+          sourceSolutionId: planId,
+          sourceTemplateId: selectedScheduleTemplate.id,
+          name: selectedScheduleTemplate.name || `${scheduleJobIntentConfig.label} Visit`,
+          description,
+          serviceStopTypeId: "system_job_service_stop",
+          serviceStopTypeName: "Job Visit",
+          serviceStopTypeImage: "briefcase",
+          serviceStopTypeUseCaseRawValue: "jobVisit",
+          estimatedMinutes: normalizedTasks.reduce((total, task) => total + Number(task.estimatedTime || 0), 0) || 60,
+          sortOrder: 0,
+          taskIds: normalizedTasks.map((task) => task.id),
+          plannedLaborCostCents: 0,
+          plannedLaborNotes: "",
+          equipmentId: selectedQuickEquipment.id,
+          serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+          createdAt: nowTimestamp,
+          createdByUserId: createdByUserId || "",
+        }];
+      const normalizedShoppingItems = scheduleTemplateDetails.shoppingItems.map((item, index) => {
+        const quantity = item.quantity !== undefined && item.quantity !== null ? String(item.quantity) : "1";
+
+        return {
+          id: `comp_shop_${uuidv4()}`,
+          companyId: recentlySelectedCompany,
+          jobId,
+          customerId: selectedQuickEquipment.customerId || "",
+          customerName,
+          planId,
+          sourcePlanId: planId,
+          solutionId: planId,
+          sourceSolutionId: planId,
+          sourceTemplateId: selectedScheduleTemplate.id,
+          sourceTemplateShoppingItemId: item.id || "",
+          category: "Job",
+          subCategory: item.subCategory || "Custom",
+          status: "Needs Customer Approval",
+          purchaserId: createdByUserId || "",
+          purchaserName: createdByUserName || "",
+          genericItemId: item.genericItemId || "",
+          name: item.name || "",
+          description: item.description || "",
+          datePurchased: null,
+          quantity,
+          userId: "",
+          userName: "",
+          dbItemId: item.dbItemId || "",
+          purchasedItem: "",
+          invoiced: false,
+          plannedUnitCostCents: item.plannedUnitCostCents ?? null,
+          plannedUnitPriceCents: item.plannedUnitPriceCents ?? null,
+          plannedTotalCostCents: plannedMaterialTotalCostCents(item),
+          plannedTotalPriceCents: plannedMaterialTotalPriceCents(item),
+          cost: item.plannedUnitCostCents ?? item.cost ?? 0,
+          price: item.plannedUnitPriceCents ?? item.price ?? 0,
+          itemId: item.dbItemId || item.itemId || "",
+          itemType: item.subCategory || item.itemType || "Custom",
+          sortOrder: Number(item.sortOrder ?? index),
+        };
+      });
+      const lineItems = buildScheduleLineItems({
+        planId,
+        normalizedTasks,
+        normalizedPlannedStops,
+        normalizedShoppingItems,
+      });
+      const subtotalAmountCents = lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
+      const totalAmountCents = subtotalAmountCents || scheduleGeneratedPriceCents;
+      const plannedLaborCostCents = normalizedTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0) +
+        normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+      const materialCostCents = normalizedShoppingItems.reduce(
+        (total, item) => total + plannedMaterialTotalCostCents(item),
+        0
+      );
+      const materialPriceCents = normalizedShoppingItems.reduce(
+        (total, item) => total + plannedMaterialTotalPriceCents(item),
+        0
+      );
+      const internalCostCents = plannedLaborCostCents + materialCostCents;
+      const projectedProfitCents = totalAmountCents - internalCostCents;
+      const profitMarginPercent = totalAmountCents > 0
+        ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
+        : 0;
+      const issuePriorityLabel = getIssuePriorityLabel(DEFAULT_JOB_PLAN_TIER);
+      const planTierLabel = getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER);
+      const planName = selectedScheduleTemplate.name ? `${selectedScheduleTemplate.name} Plan` : `${scheduleJobIntentConfig.label} Plan`;
+
+      const planRecord = {
+        id: planId,
+        planId,
+        solutionId: planId,
+        companyId: recentlySelectedCompany,
+        jobId,
+        jobInternalId: nextInternalId,
+        customerId: selectedQuickEquipment.customerId || "",
+        customerName,
+        serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+        serviceLocationName,
+        sourceType: "template",
+        sourceTemplateId: selectedScheduleTemplate.id,
+        sourceTemplateName: selectedScheduleTemplate.name || "",
+        title: planName,
+        name: planName,
+        planName,
+        description,
+        status: JOB_PLAN_STATUS.DRAFT,
+        planTier: DEFAULT_JOB_PLAN_TIER,
+        planTierLabel,
+        solutionTier: DEFAULT_JOB_PLAN_TIER,
+        solutionTierLabel: planTierLabel,
+        recommendationRank: DEFAULT_JOB_PLAN_TIER,
+        recommendationRankLabel: planTierLabel,
+        issuePriorityLevel: DEFAULT_JOB_PLAN_TIER,
+        issuePriorityLabel,
+        isActivePlan: true,
+        isAccepted: false,
+        rateAmountCents: totalAmountCents,
+        totalAmountCents,
+        subtotalAmountCents,
+        laborCostCents: plannedLaborCostCents,
+        plannedLaborCostCents,
+        materialCostCents,
+        materialPriceCents,
+        internalCostCents,
+        projectedProfitCents,
+        profitMarginPercent,
+        costSummary: {
+          plannedLaborCostCents,
+          plannedMaterialCostCents: materialCostCents,
+          plannedMaterialPriceCents: materialPriceCents,
+          internalCostCents,
+        },
+        billingSummary: {
+          pricingSource: "templateGeneratedPrice",
+          lineItemCount: lineItems.length,
+          subtotalAmountCents,
+          totalAmountCents,
+          projectedProfitCents,
+          profitMarginPercent,
+        },
+        scopeOfWork: {
+          title: planName,
+          customerDescription: description,
+          taskSummaries: normalizedTasks.map((task, index) => ({
+            id: task.id,
+            sortOrder: Number(task.sortOrder ?? index),
+            name: task.name || `Task ${index + 1}`,
+            type: task.type || "",
+            estimatedMinutes: Number(task.estimatedTime || 0),
+            plannedLaborCostCents: Number(task.contractedRate || 0),
+            billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
+          })),
+          plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
+            id: stop.id,
+            sortOrder: Number(stop.sortOrder ?? index),
+            name: stop.name || `Visit ${index + 1}`,
+            serviceStopTypeId: stop.serviceStopTypeId || "",
+            serviceStopTypeName: stop.serviceStopTypeName || "",
+            estimatedMinutes: Number(stop.estimatedMinutes || 0),
+            plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
+            taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
+          })),
+          materialSummaries: normalizedShoppingItems.map((item, index) => ({
+            id: item.id,
+            sortOrder: Number(item.sortOrder ?? index),
+            name: item.name || `Material ${index + 1}`,
+            description: item.description || "",
+            quantity: item.quantity || "1",
+            plannedTotalCostCents: plannedMaterialTotalCostCents(item),
+            plannedTotalPriceCents: plannedMaterialTotalPriceCents(item),
+          })),
+          counts: {
+            tasks: normalizedTasks.length,
+            plannedServiceStops: normalizedPlannedStops.length,
+            shoppingItems: normalizedShoppingItems.length,
+            lineItems: lineItems.length,
+          },
+        },
+        tasks: normalizedTasks,
+        plannedServiceStops: normalizedPlannedStops,
+        shoppingItems: normalizedShoppingItems,
+        lineItems,
+        estimateLineItems: lineItems,
+        taskCount: normalizedTasks.length,
+        plannedStopCount: normalizedPlannedStops.length,
+        materialCount: normalizedShoppingItems.length,
+        createdAt: nowTimestamp,
+        createdAtMillis: nowMillis,
+        createdByUserId,
+        createdByUserName,
+        updatedAt: nowTimestamp,
+        updatedAtMillis: nowMillis,
+      };
+      const jobData = {
+        id: jobId,
+        internalId: nextInternalId,
+        type: selectedScheduleTemplate.jobType || selectedScheduleTemplate.type || scheduleJobIntentConfig.jobType,
+        dateCreated: nowTimestamp,
+        updatedAt: nowTimestamp,
+        updatedAtMillis: nowMillis,
+        lastHistoryEventTitle: scheduleJobIntentConfig.historyTitle,
+        lastHistoryEventType: "Created",
+        description,
+        operationStatus: "Scheduled",
+        billingStatus: "Draft",
+        issuePriorityLevel: DEFAULT_JOB_PLAN_TIER,
+        issuePriorityLabel,
+        priorityLevel: DEFAULT_JOB_PLAN_TIER,
+        priorityLabel: issuePriorityLabel,
+        solutionTier: DEFAULT_JOB_PLAN_TIER,
+        solutionTierLabel: issuePriorityLabel,
+        activePlanId: planId,
+        activePlanTier: DEFAULT_JOB_PLAN_TIER,
+        activePlanTierLabel: planTierLabel,
+        acceptedPlanId: "",
+        activeSolutionId: planId,
+        activeSolutionTier: DEFAULT_JOB_PLAN_TIER,
+        activeSolutionTierLabel: planTierLabel,
+        acceptedSolutionId: "",
+        planSelectionStatus: "Draft",
+        solutionSelectionStatus: "Draft",
+        customerId: selectedQuickEquipment.customerId || "",
+        customerName,
+        serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+        serviceLocationName,
+        serviceStopIds: [],
+        laborContractIds: [],
+        adminId,
+        adminName,
+        adminAssignmentSource: "Equipment schedule popup",
+        purchasedItemsIds: [],
+        rate: totalAmountCents,
+        laborCost: plannedLaborCostCents,
+        otherCompany: false,
+        receivedLaborContractId: "",
+        receiverId: "",
+        senderId: recentlySelectedCompany,
+        dateEstimateAccepted: null,
+        estimateAcceptedById: null,
+        estimateAcceptType: null,
+        estimateAcceptedNotes: "",
+        invoiceDate: null,
+        invoiceRef: "",
+        invoiceType: null,
+        invoiceNotes: "",
+        sourceTemplateId: selectedScheduleTemplate.id,
+        sourceTemplateName: selectedScheduleTemplate.name || "",
+        createdFromBasicWorkOrderForm: true,
+        createdFromEquipmentList: true,
+        createdFromEquipmentScheduleModal: true,
+        basicWorkOrderMode: "template",
+        assignedTechId: techId,
+        assignedTechName: techName,
+        assignedCompanyUserId: selectedScheduleTechnician.id || "",
+        scheduledAt: Timestamp.fromDate(scheduledDate),
+        scheduledDate: Timestamp.fromDate(scheduledDate),
+        equipmentId: selectedQuickEquipment.id,
+        equipmentIds: [selectedQuickEquipment.id],
+        companyEquipmentIds: [selectedQuickEquipment.id],
+        equipmentName: getEquipmentDisplayName(selectedQuickEquipment),
+        equipmentContext,
+        jobIntent: scheduleJobIntent,
+        createdByUserId,
+        createdByUserName,
+      };
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobData);
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plans", planId), planRecord);
+
+      for (const stop of normalizedPlannedStops) {
+        await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops", stop.id), stop);
+      }
+
+      for (const task of normalizedTasks) {
+        await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task);
+      }
+
+      for (const item of normalizedShoppingItems) {
+        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item);
+      }
+
+      const selectedPlannedStop = normalizedPlannedStops[0] || null;
+      const serviceStopId = `comp_ss_${uuidv4()}`;
+      const serviceStopCounterRef = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
+      const serviceStopCounterSnap = await getDoc(serviceStopCounterRef);
+      const currentServiceStopCount = serviceStopCounterSnap.exists()
+        ? Number(serviceStopCounterSnap.data().increment || 0)
+        : 0;
+      const nextServiceStopCount = currentServiceStopCount + 1;
+      const serviceStopInternalId = `SS${currentServiceStopCount}`;
+      const taskIdsForStop = Array.isArray(selectedPlannedStop?.taskIds) && selectedPlannedStop.taskIds.length
+        ? selectedPlannedStop.taskIds
+        : normalizedTasks.map((task) => task.id);
+      const scheduledTasks = normalizedTasks.filter((task) => taskIdsForStop.includes(task.id));
+      const duration =
+        Number(selectedPlannedStop?.estimatedMinutes || 0) ||
+        scheduledTasks.reduce((total, task) => total + Number(task.estimatedTime || 0), 0) ||
+        60;
+
+      await setDoc(serviceStopCounterRef, { increment: nextServiceStopCount }, { merge: true });
+
+      const serviceStopRecord = {
+        id: serviceStopId,
+        address: serviceLocation.address || {},
+        companyId: recentlySelectedCompany,
+        companyName: recentlySelectedCompanyName || "",
+        customerId: selectedQuickEquipment.customerId || "",
+        customerName,
+        dateCreated: Timestamp.fromDate(now),
+        serviceDate: Timestamp.fromDate(scheduledDate),
+        description: selectedPlannedStop?.description || description,
+        estimatedDuration: duration,
+        operationStatus: "Not Finished",
+        billingStatus: "Not Invoiced",
+        isInvoiced: false,
+        contractedCompanyId: "",
+        jobId,
+        jobName: nextInternalId,
+        serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+        tech: techName,
+        techId,
+        internalId: serviceStopInternalId,
+        checkList: [],
+        mainCompanyId: "",
+        otherCompany: false,
+        laborContractId: "",
+        endTime: null,
+        startTime: null,
+        includeDosages: false,
+        includeReadings: false,
+        estimatedPayCents: 0,
+        estimatedPayLines: [],
+        payWorkTypeId: "",
+        payWorkTypeName: "",
+        workTypeId: "",
+        workTypeName: "",
+        manualPayOverrideCents: null,
+        manualPayOverrideNotes: "",
+        defaultWorkTypeIds: [],
+        plannedServiceStopId: selectedPlannedStop?.id || "",
+        rate: scheduledTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0),
+        recurringServiceStopId: "",
+        type: selectedPlannedStop?.serviceStopTypeName || scheduleJobIntentConfig.label,
+        typeId: selectedPlannedStop?.serviceStopTypeId || "system_job_service_stop",
+        typeImage: selectedPlannedStop?.serviceStopTypeImage || "briefcase",
+        category: "Job",
+        serviceStopTypeUseCaseRawValue: selectedPlannedStop?.serviceStopTypeUseCaseRawValue || "jobVisit",
+        source: "EquipmentList",
+        serviceNotes: "",
+        duration,
+        equipmentId: selectedQuickEquipment.id,
+        equipmentIds: [selectedQuickEquipment.id],
+        companyEquipmentIds: [selectedQuickEquipment.id],
+      };
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId), serviceStopRecord);
+
+      for (const task of scheduledTasks) {
+        const serviceStopTaskId = `comp_ss_tas_${uuidv4()}`;
+        const scheduledTaskUpdates = {
+          workerId: techId,
+          workerName: techName,
+          workerType: selectedScheduleTechnician.workerType || "Assigned",
+          status: "Scheduled",
+          serviceStopId: {
+            id: serviceStopId,
+            internalId: serviceStopInternalId,
+          },
+          serviceStopIdString: serviceStopId,
+        };
+
+        await setDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId, "tasks", serviceStopTaskId), {
+          ...task,
+          ...scheduledTaskUpdates,
+          id: serviceStopTaskId,
+          jobId: {
+            id: jobId || "",
+            internalId: nextInternalId || "",
+          },
+          recurringServiceStopId: {
+            id: "",
+            internalId: "",
+          },
+          jobTaskId: task.id,
+          workOrderTaskId: task.id,
+        });
+
+        await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), scheduledTaskUpdates);
+      }
+
+      if (selectedPlannedStop?.id) {
+        await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops", selectedPlannedStop.id), {
+          serviceStopId,
+          scheduledServiceStopId: serviceStopId,
+          convertedServiceStopId: serviceStopId,
+          scheduledServiceStopInternalId: serviceStopInternalId,
+          scheduledDate: Timestamp.fromDate(scheduledDate),
+          assignedTechId: techId,
+          assignedTechName: techName,
+        });
+      }
+
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
+        serviceStopIds: arrayUnion(serviceStopId),
+        scheduledServiceStopId: serviceStopId,
+        scheduledServiceStopInternalId: serviceStopInternalId,
+        assignedTechId: techId,
+        assignedTechName: techName,
+        operationStatus: "Scheduled",
+      });
+
+      const scheduledWorkId = `com_equ_sw_${uuidv4()}`;
+      await setDoc(
+        doc(db, "companies", recentlySelectedCompany, "equipment", selectedQuickEquipment.id, "scheduledWork", scheduledWorkId),
+        {
+          id: scheduledWorkId,
+          name: selectedScheduleTemplate.name || scheduleJobIntentConfig.label,
+          type: scheduleJobIntentConfig.jobType,
+          serviceDate: Timestamp.fromDate(scheduledDate),
+          techId,
+          techName,
+          serviceStopId,
+          serviceStopInternalId,
+          jobId,
+          jobInternalId: nextInternalId,
+          status: "Scheduled",
+          description,
+          dateCreated: nowTimestamp,
+          dateCompleted: null,
+        }
+      );
+
+      const historyId = `comp_job_hist_${uuidv4()}`;
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId), {
+        id: historyId,
+        companyId: recentlySelectedCompany,
+        jobId,
+        jobInternalId: nextInternalId,
+        eventType: "Created",
+        title: scheduleJobIntentConfig.historyTitle,
+        description: `Scheduled from equipment list using template: ${selectedScheduleTemplate.name || "Template"}`,
+        changes: [
+          { field: "adminName", label: "Admin", before: "-", after: adminName || "-" },
+          { field: "assignedTechName", label: "Technician", before: "-", after: techName || "-" },
+          { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
+          { field: "serviceLocationName", label: "Service Location", before: "-", after: serviceLocationName || "-" },
+          { field: "equipmentName", label: "Equipment", before: "-", after: getEquipmentDisplayName(selectedQuickEquipment) },
+          { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
+          { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(totalAmountCents) },
+        ],
+        metadata: {
+          sourceTemplateId: selectedScheduleTemplate.id,
+          sourceTemplateName: selectedScheduleTemplate.name || "",
+          starterPlanId: planId,
+          activePlanId: planId,
+          activeSolutionId: planId,
+          scheduledServiceStopId: serviceStopId,
+          scheduledServiceStopInternalId: serviceStopInternalId,
+          createdFromEquipmentList: true,
+          createdFromEquipmentScheduleModal: true,
+          equipmentId: selectedQuickEquipment.id,
+          equipmentContext,
+          adminAssignmentSource: "Equipment schedule popup",
+        },
+        severity: "success",
+        actorUserId: createdByUserId || "",
+        actorUserName: createdByUserName,
+        actorCompanyUserId: currentCompanyUser?.id || "",
+        createdAt: serverTimestamp(),
+        createdAtMillis: nowMillis,
+      });
+
+      const scheduledJobForLookup = {
+        ...jobData,
+        serviceStopIds: [serviceStopId],
+        scheduledServiceStopId: serviceStopId,
+        scheduledServiceStopInternalId: serviceStopInternalId,
+      };
+
+      setActiveJobsByEquipmentId((current) => {
+        const next = { ...current };
+        addJobToEquipmentLookup(
+          next,
+          selectedQuickEquipment.id,
+          scheduledJobForLookup,
+          normalizedTasks.length,
+          normalizedTasks.map((task) => task.name)
+        );
+        Object.keys(next).forEach((equipmentId) => {
+          next[equipmentId] = [...next[equipmentId]].sort((a, b) => b.dateMillis - a.dateMillis);
+        });
+        return next;
+      });
+
+      closeQuickModal();
+      toast.success(`${scheduleJobIntentConfig.label} scheduled.`);
+    } catch (error) {
+      console.error("Error scheduling equipment job:", error);
+      toast.error(`Failed to schedule ${scheduleJobIntentConfig.label.toLowerCase()}.`);
+    } finally {
+      setSchedulingJob(false);
     }
   };
 
@@ -1010,11 +2663,19 @@ export default function EquipmentList() {
         return {
           Equipment: eq?.name || eq?.model || eq?.type || "Equipment",
           "Customer Name": eq?.customerName || "",
+          "Service Location Address": getEquipmentServiceAddress(eq),
           Name: eq?.name || "",
           Make: eq?.make || "",
           Model: eq?.model || "",
           Type: eq?.type || "",
           Status: maintenanceFlag ? "Needs Maintenance" : displayEquipmentStatus(eq?.status || ""),
+          "Active Jobs": getEquipmentActiveJobs(eq)
+            .map((job) => [
+              job.internalId || job.id,
+              job.equipmentTaskNames?.length ? job.equipmentTaskNames.join(", ") : job.description || job.type,
+              getJobStatusLabel(job),
+            ].filter(Boolean).join(" - "))
+            .join("\n"),
           "Needs Service (bool)": eq?.needsService ?? "",
           "Last Service Date": eq?.needsService && eq?.lastServiceDate ? format(eq.lastServiceDate, "yyyy-MM-dd") : "",
           "Next Service Date": eq?.needsService && eq?.nextServiceDate ? format(eq.nextServiceDate, "yyyy-MM-dd") : "",
@@ -1128,7 +2789,7 @@ export default function EquipmentList() {
                 value={searchTerm}
                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 md:col-span-1"
                 type="text"
-                placeholder="Search customer, make, model, type, status, notes..."
+                placeholder="Search customer, address, job, make, model, status, notes..."
               />
 
               <select
@@ -1167,13 +2828,13 @@ export default function EquipmentList() {
             <table className="min-w-full bg-white">
               <thead className="bg-slate-50">
                 <tr>
-                  {["customerName", "make", "model", "type", "nextServiceDate", "status"].map((field) => (
+                  {EQUIPMENT_TABLE_SORT_COLUMNS.map(({ field, label }) => (
                     <th
                       key={field}
                       className="cursor-pointer select-none border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
                       onClick={() => handleSort(field)}
                     >
-                      {field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase())}
+                      {label}
                       {sortBy === field ? (sortOrder === "asc" ? " ▲" : " ▼") : ""}
                     </th>
                   ))}
@@ -1185,7 +2846,7 @@ export default function EquipmentList() {
               <tbody className="divide-y divide-slate-200">
                 {loadingEquipment && (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-500">
+                    <td colSpan={10} className="px-6 py-12 text-center text-sm text-slate-500">
                       Loading equipment...
                     </td>
                   </tr>
@@ -1194,7 +2855,14 @@ export default function EquipmentList() {
                 {!loadingEquipment && filteredEquipmentList.map((equipment) => {
                   const maintenanceFlag = isNeedsMaintenance(equipment);
                   const actionMenuOpen = openActionMenuId === equipment.id;
-                  const hasQuickActions = can("64") || can("22");
+                  const hasQuickActions = can("64") || canScheduleTemplateSelf;
+                  const serviceLocation = getEquipmentServiceLocation(equipment);
+                  const serviceAddress = getEquipmentServiceAddress(equipment);
+                  const activeJobs = getEquipmentActiveJobs(equipment);
+                  const noteDraft = noteDrafts[equipment.id] ?? equipment.notes ?? "";
+                  const noteDirty = noteDraft !== (equipment.notes || "");
+                  const noteSaving = !!savingNoteIds[equipment.id];
+                  const noteError = noteErrors[equipment.id];
 
                   return (
                     <tr key={equipment.id} className="transition hover:bg-slate-50">
@@ -1202,6 +2870,20 @@ export default function EquipmentList() {
                         <EquipmentDetailLink equipment={equipment}>
                           {equipment.customerName}
                         </EquipmentDetailLink>
+                      </td>
+
+                      <td className="min-w-[240px] px-5 py-3 text-sm text-slate-700">
+                        {equipment.serviceLocationId ? (
+                          <Link
+                            to={`/company/serviceLocations/detail/${equipment.serviceLocationId}`}
+                            className="font-semibold text-slate-800 hover:text-blue-800 hover:underline"
+                            title={serviceAddress || serviceLocation?.nickName || ""}
+                          >
+                            {serviceAddress || serviceLocation?.nickName || "Address unavailable"}
+                          </Link>
+                        ) : (
+                          <span className="text-slate-400">No service location</span>
+                        )}
                       </td>
 
                       <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
@@ -1238,8 +2920,46 @@ export default function EquipmentList() {
                         </span>
                       </td>
 
-                      <td className="max-w-xs truncate whitespace-nowrap px-5 py-3 text-sm text-slate-700" title={equipment.notes}>
-                        {equipment.notes}
+                      <td className="px-5 py-3 text-sm text-slate-700">
+                        <ActiveJobsCell jobs={activeJobs} loading={loadingActiveJobs} />
+                      </td>
+
+                      <td className="min-w-[260px] px-5 py-3 text-sm text-slate-700">
+                        <textarea
+                          value={noteDraft}
+                          disabled={!can("64") || noteSaving}
+                          rows={2}
+                          onChange={(event) => handleInlineNoteChange(equipment.id, event.target.value)}
+                          onBlur={() => handleInlineNoteSave(equipment)}
+                          onKeyDown={(event) => {
+                            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                              event.currentTarget.blur();
+                            }
+
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              const textarea = event.currentTarget;
+                              handleInlineNoteChange(equipment.id, equipment.notes || "");
+                              window.setTimeout(() => textarea.blur(), 0);
+                            }
+                          }}
+                          className={[
+                            "min-h-[72px] w-full resize-y rounded-md border bg-white px-3 py-2 text-sm text-slate-800 shadow-sm",
+                            "focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100",
+                            "disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500",
+                            noteError ? "border-red-300" : noteDirty ? "border-blue-300" : "border-slate-300",
+                          ].join(" ")}
+                          placeholder="Add equipment notes"
+                        />
+                        <div className="mt-1 min-h-[16px] text-xs">
+                          {noteSaving ? (
+                            <span className="font-semibold text-blue-600">Saving...</span>
+                          ) : noteError ? (
+                            <span className="font-semibold text-red-600">{noteError}</span>
+                          ) : noteDirty ? (
+                            <span className="font-semibold text-blue-600">Unsaved changes</span>
+                          ) : null}
+                        </div>
                       </td>
 
                       <td className="relative min-w-[140px] px-5 py-3">
@@ -1264,7 +2984,7 @@ export default function EquipmentList() {
 
                 {!loadingEquipment && filteredEquipmentList.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-500">
+                    <td colSpan={10} className="px-6 py-12 text-center text-sm text-slate-500">
                       No equipment found for the selected filters.
                     </td>
                   </tr>
@@ -1321,25 +3041,19 @@ export default function EquipmentList() {
                   />
                 </>
               )}
-              {can("22") && (
+              {canScheduleTemplateSelf && (
                 <>
                   <QuickActionMenuItem
-                    label="Maintenance Job"
+                    label="Schedule Maintenance"
                     icon={BriefcaseIcon}
                     tone="green"
-                    onClick={() => {
-                      closeQuickActions();
-                      createEquipmentJob(openActionEquipment, "maintenance");
-                    }}
+                    onClick={() => openQuickModal(openActionEquipment, SCHEDULE_JOB_MODAL, "maintenance")}
                   />
                   <QuickActionMenuItem
-                    label="Repair Job"
+                    label="Schedule Repair"
                     icon={BriefcaseIcon}
                     tone="amber"
-                    onClick={() => {
-                      closeQuickActions();
-                      createEquipmentJob(openActionEquipment, "repair");
-                    }}
+                    onClick={() => openQuickModal(openActionEquipment, SCHEDULE_JOB_MODAL, "repair")}
                   />
                 </>
               )}
@@ -1374,7 +3088,10 @@ export default function EquipmentList() {
               <Field label="Equipment">
                 <input
                   value={quickName}
-                  onChange={(event) => setQuickName(event.target.value)}
+                  onChange={(event) => {
+                    setQuickName(event.target.value);
+                    applyQuickServiceDefaults({ name: event.target.value });
+                  }}
                   className={inputBase}
                 />
               </Field>
@@ -1401,6 +3118,11 @@ export default function EquipmentList() {
                     onChange={(event) => {
                       setQuickType(event.target.value);
                       setQuickTypeId("");
+                      applyQuickServiceDefaults({
+                        type: event.target.value,
+                        make: "",
+                        model: "",
+                      });
                     }}
                     className={inputBase}
                   />
@@ -1427,6 +3149,10 @@ export default function EquipmentList() {
                     onChange={(event) => {
                       setQuickMake(event.target.value);
                       setQuickMakeId("");
+                      applyQuickServiceDefaults({
+                        make: event.target.value,
+                        model: "",
+                      });
                     }}
                     className={`${inputBase} mt-2`}
                     placeholder="Custom Make"
@@ -1456,6 +3182,7 @@ export default function EquipmentList() {
                       setQuickModelId("");
                       setQuickUniversalEquipmentId("");
                       setQuickManualPdfLink("");
+                      applyQuickServiceDefaults({ model: event.target.value });
                     }}
                     className={`${inputBase} mt-2`}
                     placeholder="Custom Model"
@@ -1472,6 +3199,73 @@ export default function EquipmentList() {
                 >
                   View selected catalog manual
                 </a>
+              )}
+
+              <Field label="Needs Service">
+                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={quickServiceIsRequired}
+                    disabled={quickDefaultsToNeedsService}
+                    onChange={(event) => {
+                      setQuickNeedsService(event.target.checked);
+                      if (event.target.checked) {
+                        setQuickServiceFrequency((current) => current || "6");
+                        setQuickServiceFrequencyEvery((current) => current || "Month");
+                      }
+                    }}
+                    className="h-5 w-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-semibold text-slate-700">
+                    {quickServiceIsRequired ? "Yes" : "No"}
+                  </span>
+                </label>
+              </Field>
+
+              {quickServiceIsRequired && (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <Field label="Last Serviced">
+                    <input
+                      type="date"
+                      value={quickLastServiceDate}
+                      onChange={(event) => setQuickLastServiceDate(event.target.value)}
+                      className={inputBase}
+                    />
+                  </Field>
+
+                  <Field label="Next Maintenance Date">
+                    <input
+                      type="date"
+                      value={quickNextMaintenanceDate ? format(quickNextMaintenanceDate, "yyyy-MM-dd") : ""}
+                      readOnly
+                      className={`${inputBase} bg-slate-50`}
+                    />
+                  </Field>
+
+                  <Field label="Service Frequency">
+                    <div className="grid grid-cols-[minmax(0,0.45fr)_minmax(0,0.55fr)] gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={quickServiceFrequency}
+                        onChange={(event) => setQuickServiceFrequency(event.target.value)}
+                        className={inputBase}
+                        placeholder="6"
+                      />
+                      <select
+                        value={quickServiceFrequencyEvery}
+                        onChange={(event) => setQuickServiceFrequencyEvery(event.target.value)}
+                        className={inputBase}
+                      >
+                        <option value="">Unit</option>
+                        <option value="Day">Days</option>
+                        <option value="Week">Weeks</option>
+                        <option value="Month">Months</option>
+                        <option value="Year">Years</option>
+                      </select>
+                    </div>
+                  </Field>
+                </div>
               )}
 
               <Field label="Notes">
@@ -1559,6 +3353,156 @@ export default function EquipmentList() {
                 ))}
               </select>
             </Field>
+          </ModalShell>
+        )}
+
+        {activeQuickModal === SCHEDULE_JOB_MODAL && selectedQuickEquipment && (
+          <ModalShell
+            title={scheduleJobIntentConfig.actionLabel}
+            onClose={schedulingJob ? undefined : closeQuickModal}
+            footer={
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={closeQuickModal}
+                  disabled={schedulingJob}
+                  className={modalSecondaryButton}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleScheduleEquipmentJob}
+                  disabled={!canCreateScheduledEquipmentJob}
+                  className={`${modalPrimaryButton} disabled:cursor-not-allowed disabled:opacity-60`}
+                  type="button"
+                >
+                  {schedulingJob ? "Scheduling..." : scheduleJobIntentConfig.actionLabel}
+                </button>
+              </div>
+            }
+          >
+            <div className="space-y-4">
+              <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Equipment</p>
+                  <p className="mt-1 font-semibold text-slate-900">{getEquipmentDisplayName(selectedQuickEquipment)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Customer</p>
+                  <p className="mt-1 font-semibold text-slate-900">{selectedQuickEquipment.customerName || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Service Location</p>
+                  <p className="mt-1 font-semibold text-slate-900">{selectedQuickEquipmentServiceAddress || "—"}</p>
+                </div>
+              </div>
+
+              {scheduleEquipmentIsMissingLocation && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  This equipment needs a customer and service location before a job can be scheduled.
+                </div>
+              )}
+
+              <Field label="Template">
+                <select
+                  value={scheduleTemplateId}
+                  onChange={(event) => setScheduleTemplateId(event.target.value)}
+                  disabled={loadingJobTemplates || schedulingJob}
+                  className={inputBase}
+                >
+                  <option value="">Select template</option>
+                  {scheduleTemplateOptions.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name || "Template"}
+                    </option>
+                  ))}
+                </select>
+                {!loadingJobTemplates && scheduleTemplateOptions.length === 0 && (
+                  <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    No active technician-enabled templates found.
+                  </p>
+                )}
+              </Field>
+
+              {selectedScheduleTemplate && (
+                <div className="grid gap-3 text-sm sm:grid-cols-4">
+                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
+                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.tasks.length}</p>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Stops</p>
+                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.plannedServiceStops.length || 1}</p>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Items</p>
+                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.shoppingItems.length}</p>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Price</p>
+                    <p className="mt-1 font-bold text-slate-950">{moneyFromCents(scheduleGeneratedPriceCents)}</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Admin">
+                  <select
+                    value={scheduleAdminId}
+                    onChange={(event) => setScheduleAdminId(event.target.value)}
+                    disabled={schedulingJob}
+                    className={inputBase}
+                  >
+                    <option value="">Select admin</option>
+                    {scheduleAdminOptions.map((admin) => (
+                      <option key={admin.id || admin.userId} value={admin.userId || admin.id}>
+                        {admin.label || admin.userName || "Admin"}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Technician">
+                  <select
+                    value={scheduleTechnicianId}
+                    onChange={(event) => setScheduleTechnicianId(event.target.value)}
+                    disabled={schedulingJob || !canScheduleTemplateForOthers}
+                    className={inputBase}
+                  >
+                    <option value="">Select technician</option>
+                    {scheduleTechnicianOptions.map((technician) => (
+                      <option key={technician.id || technician.userId} value={technician.userId || technician.id}>
+                        {technician.label || technician.userName || "Technician"}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
+              <Field label="Scheduled Time">
+                <input
+                  type="datetime-local"
+                  value={scheduleDateTime}
+                  onChange={(event) => setScheduleDateTime(event.target.value)}
+                  disabled={schedulingJob}
+                  className={inputBase}
+                />
+              </Field>
+
+              <Field label="Work Notes">
+                <textarea
+                  value={scheduleNotes}
+                  onChange={(event) => setScheduleNotes(event.target.value)}
+                  disabled={schedulingJob}
+                  className={inputBase}
+                  rows={4}
+                />
+              </Field>
+
+              {loadingScheduleTemplateDetails && (
+                <p className="text-sm font-semibold text-blue-700">Loading template details...</p>
+              )}
+            </div>
           </ModalShell>
         )}
 

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { FaCopy } from 'react-icons/fa';
 import {
   APP_ERROR_SEVERITY_OPTIONS,
   APP_ERROR_STATUS_OPTIONS,
@@ -48,6 +49,76 @@ const formatDate = (value) => {
 const labelize = (value) => {
   if (!value) return '-';
   return String(value).charAt(0).toUpperCase() + String(value).slice(1);
+};
+
+const parseMetadata = (value) => {
+  if (!value || typeof value !== 'string') return value || '';
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return value;
+  }
+};
+
+const buildErrorClipboardPayload = (error) => ({
+  id: error.id || '',
+  createdAt: toDate(error.createdAt)?.toISOString() || '',
+  updatedAt: toDate(error.updatedAt)?.toISOString() || '',
+  status: error.status || 'New',
+  severity: error.severity || 'error',
+  source: error.source || 'client',
+  title: error.title || '',
+  message: error.message || '',
+  description: error.description || '',
+  where: error.where || '',
+  pathname: error.pathname || '',
+  location: error.location || '',
+  user: {
+    id: error.userId || '',
+    email: error.userEmail || '',
+    accountType: error.accountType || '',
+  },
+  company: {
+    id: error.companyId || '',
+    name: error.companyName || '',
+  },
+  fingerprint: error.fingerprint || '',
+  metadata: parseMetadata(error.data),
+  stack: error.stack || '',
+});
+
+const formatErrorsForClipboard = (errorsToCopy) => {
+  const payload = errorsToCopy.map(buildErrorClipboardPayload);
+  return JSON.stringify(payload.length === 1 ? payload[0] : payload, null, 2);
+};
+
+const copyTextToClipboard = async (text) => {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is unavailable.');
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    const didCopy = document.execCommand('copy');
+    if (!didCopy) {
+      throw new Error('Copy command failed.');
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
 };
 
 const StatusPill = ({ value }) => (
@@ -131,6 +202,31 @@ function AppErrors() {
     }
   };
 
+  const handleCopyError = async (error) => {
+    try {
+      await copyTextToClipboard(formatErrorsForClipboard([error]));
+      toast.success('Error copied.');
+    } catch (copyError) {
+      console.error('Error copying app error:', copyError);
+      toast.error('Could not copy error.');
+    }
+  };
+
+  const handleCopyFilteredErrors = async () => {
+    if (filteredErrors.length === 0) {
+      toast.error('No errors to copy.');
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(formatErrorsForClipboard(filteredErrors));
+      toast.success(`${filteredErrors.length} error${filteredErrors.length === 1 ? '' : 's'} copied.`);
+    } catch (copyError) {
+      console.error('Error copying app errors:', copyError);
+      toast.error('Could not copy errors.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 px-2 md:px-7 py-5 text-slate-100">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -143,13 +239,25 @@ function AppErrors() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={loadErrors}
-          className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition"
-        >
-          Refresh
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleCopyFilteredErrors}
+            disabled={filteredErrors.length === 0}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md font-semibold bg-slate-800 text-slate-100 ring-1 ring-slate-700 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Copy visible errors"
+          >
+            <FaCopy className="text-sm" aria-hidden="true" />
+            Copy Visible
+          </button>
+          <button
+            type="button"
+            onClick={loadErrors}
+            className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -211,6 +319,7 @@ function AppErrors() {
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400">Context</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400">Location</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-400">Actions</th>
               </tr>
             </thead>
 
@@ -265,6 +374,18 @@ function AppErrors() {
                         <option key={status} value={status}>{status}</option>
                       ))}
                     </select>
+                  </td>
+                  <td className="px-4 py-4 min-w-[130px]">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyError(error)}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-slate-800 text-xs font-bold text-slate-100 ring-1 ring-slate-700 transition hover:bg-slate-700"
+                      title="Copy error details"
+                      aria-label={`Copy error ${error.id || ''}`}
+                    >
+                      <FaCopy aria-hidden="true" />
+                      Copy
+                    </button>
                   </td>
                 </tr>
               ))}

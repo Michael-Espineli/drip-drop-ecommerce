@@ -65,8 +65,32 @@ const emptyShoppingForm = () => ({
   sortOrder: "0",
 });
 
+const emptyLaborLineForm = () => ({
+  name: "",
+  description: "",
+  quantity: "1",
+  unitPrice: "0.00",
+  totalPrice: "0.00",
+  internalCost: "0.00",
+  taskTemplateIds: "",
+  plannedServiceStopTemplateIds: "",
+  sortOrder: "0",
+});
+
 const sortByOrder = (items) =>
   [...items].sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+
+const splitIdList = (value = "") => String(value || "")
+  .split(",")
+  .map((idValue) => idValue.trim())
+  .filter(Boolean);
+
+const detailTabLabel = (type) => ({
+  tasks: "Task",
+  plannedServiceStops: "Planned Stop",
+  laborLineItems: "Labor Line",
+  shoppingItems: "Shopping Item",
+}[type] || "Item");
 
 const countSubcollection = async (companyId, templateId, subcollectionName) => {
   const snapshot = await getDocs(
@@ -90,7 +114,7 @@ const JobTemplates = () => {
   const [detailTemplate, setDetailTemplate] = useState(null);
   const [detailTab, setDetailTab] = useState("tasks");
   const [detailLoading, setDetailLoading] = useState(false);
-  const [details, setDetails] = useState({ tasks: [], plannedServiceStops: [], shoppingItems: [] });
+  const [details, setDetails] = useState({ tasks: [], plannedServiceStops: [], laborLineItems: [], shoppingItems: [] });
   const [itemModal, setItemModal] = useState(null);
   const [itemForm, setItemForm] = useState({});
   const [savingItem, setSavingItem] = useState(false);
@@ -146,9 +170,10 @@ const JobTemplates = () => {
             const data = docSnap.data();
             const id = data.id || docSnap.id;
 
-            const [taskCount, plannedStopCount, shoppingItemCount] = await Promise.all([
+            const [taskCount, plannedStopCount, laborLineCount, shoppingItemCount] = await Promise.all([
               countSubcollection(recentlySelectedCompany, id, "tasks"),
               countSubcollection(recentlySelectedCompany, id, "plannedServiceStops"),
+              countSubcollection(recentlySelectedCompany, id, "laborLineItems"),
               countSubcollection(recentlySelectedCompany, id, "shoppingItems"),
             ]);
 
@@ -157,6 +182,7 @@ const JobTemplates = () => {
               id,
               taskCount,
               plannedStopCount,
+              laborLineCount,
               shoppingItemCount,
             };
           })
@@ -259,15 +285,17 @@ const JobTemplates = () => {
     setActionMessage("");
 
     try {
-      const [tasksSnap, stopsSnap, shoppingSnap] = await Promise.all([
+      const [tasksSnap, stopsSnap, laborLinesSnap, shoppingSnap] = await Promise.all([
         getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", template.id, "tasks")),
         getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", template.id, "plannedServiceStops")),
+        getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", template.id, "laborLineItems")),
         getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", template.id, "shoppingItems")),
       ]);
 
       setDetails({
         tasks: sortByOrder(tasksSnap.docs.map((docSnap) => ({ id: docSnap.data().id || docSnap.id, ...docSnap.data() }))),
         plannedServiceStops: sortByOrder(stopsSnap.docs.map((docSnap) => ({ id: docSnap.data().id || docSnap.id, ...docSnap.data() }))),
+        laborLineItems: sortByOrder(laborLinesSnap.docs.map((docSnap) => ({ id: docSnap.data().id || docSnap.id, ...docSnap.data() }))),
         shoppingItems: sortByOrder(shoppingSnap.docs.map((docSnap) => ({ id: docSnap.data().id || docSnap.id, ...docSnap.data() }))),
       });
     } catch (err) {
@@ -281,7 +309,7 @@ const JobTemplates = () => {
   const closeDetails = () => {
     if (savingItem) return;
     setDetailTemplate(null);
-    setDetails({ tasks: [], plannedServiceStops: [], shoppingItems: [] });
+    setDetails({ tasks: [], plannedServiceStops: [], laborLineItems: [], shoppingItems: [] });
     setItemModal(null);
     setItemForm({});
   };
@@ -311,6 +339,22 @@ const JobTemplates = () => {
         plannedLaborCost: dollarsFromCents(item.plannedLaborCostCents || 0),
         plannedLaborNotes: item.plannedLaborNotes || "",
       } : emptyStopForm());
+    } else if (type === "laborLineItems") {
+      const taskIds = item?.taskTemplateIds?.length ? item.taskTemplateIds : item?.taskIds || item?.laborLineTaskIds || [];
+      const plannedStopIds = item?.plannedServiceStopTemplateIds?.length
+        ? item.plannedServiceStopTemplateIds
+        : item?.plannedServiceStopIds || item?.laborLinePlannedServiceStopIds || [];
+      setItemForm(item ? {
+        name: item.name || "",
+        description: item.description || "",
+        quantity: String(item.quantity || 1),
+        unitPrice: dollarsFromCents(item.unitPriceCents || 0),
+        totalPrice: dollarsFromCents(item.totalPriceCents || item.totalAmountCents || 0),
+        internalCost: dollarsFromCents(item.internalCostCents || item.internalLaborCostCents || 0),
+        taskTemplateIds: taskIds.join(", "),
+        plannedServiceStopTemplateIds: plannedStopIds.join(", "),
+        sortOrder: String(item.sortOrder || 0),
+      } : emptyLaborLineForm());
     } else {
       setItemForm(item ? {
         name: item.name || "",
@@ -339,6 +383,7 @@ const JobTemplates = () => {
     const countField = {
       tasks: "taskCount",
       plannedServiceStops: "plannedStopCount",
+      laborLineItems: "laborLineCount",
       shoppingItems: "shoppingItemCount",
     }[type];
     setTemplates((items) => items.map((item) => item.id === templateId ? { ...item, [countField]: count } : item));
@@ -379,6 +424,41 @@ const JobTemplates = () => {
       };
     }
 
+    if (type === "laborLineItems") {
+      const quantity = Math.max(Number(itemForm.quantity || 1) || 1, 1);
+      const enteredUnitPriceCents = itemForm.unitPrice !== undefined && itemForm.unitPrice !== ""
+        ? centsFromMoney(itemForm.unitPrice)
+        : 0;
+      const enteredTotalPriceCents = centsFromMoney(itemForm.totalPrice);
+      const totalPriceCents = enteredTotalPriceCents || Math.round(enteredUnitPriceCents * quantity);
+      const unitPriceCents = enteredUnitPriceCents || Math.round(totalPriceCents / quantity);
+      const taskTemplateIds = splitIdList(itemForm.taskTemplateIds);
+      const plannedServiceStopTemplateIds = splitIdList(itemForm.plannedServiceStopTemplateIds);
+
+      return {
+        id,
+        laborLineId: id,
+        companyId: recentlySelectedCompany,
+        templateId: detailTemplate.id,
+        name: itemForm.name.trim(),
+        description: itemForm.description.trim(),
+        quantity,
+        unitPriceCents,
+        totalPriceCents,
+        internalCostCents: centsFromMoney(itemForm.internalCost),
+        taskTemplateIds,
+        taskIds: taskTemplateIds,
+        laborLineTaskIds: taskTemplateIds,
+        plannedServiceStopTemplateIds,
+        plannedServiceStopIds: plannedServiceStopTemplateIds,
+        laborLinePlannedServiceStopIds: plannedServiceStopTemplateIds,
+        salesItemType: "labor",
+        billingBehavior: "oneTime",
+        sourceType: "manual",
+        sortOrder: Number(itemForm.sortOrder || 0),
+      };
+    }
+
     const unitCostCents = centsFromMoney(itemForm.plannedUnitCost);
     const unitPriceCents = centsFromMoney(itemForm.plannedUnitPrice);
     const quantity = Number.parseFloat(itemForm.quantity) || 0;
@@ -414,6 +494,7 @@ const JobTemplates = () => {
       const idPrefix = {
         tasks: "comp_job_template_task_",
         plannedServiceStops: "comp_job_template_plan_stop_",
+        laborLineItems: "comp_job_template_labor_line_",
         shoppingItems: "comp_job_template_shop_item_",
       }[itemModal.type];
       const itemId = itemModal.mode === "create" ? `${idPrefix}${uuidv4()}` : itemModal.item.id;
@@ -502,7 +583,7 @@ const JobTemplates = () => {
         payload.createdByUserId = user?.uid || "";
         await setDoc(templateRef, payload);
         setTemplates((items) =>
-          [...items, { ...payload, taskCount: 0, plannedStopCount: 0, shoppingItemCount: 0 }]
+          [...items, { ...payload, taskCount: 0, plannedStopCount: 0, laborLineCount: 0, shoppingItemCount: 0 }]
             .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
         );
         setActionMessage("Job template created.");
@@ -643,9 +724,10 @@ const JobTemplates = () => {
                 ) : null}
                 <p className="mt-2 text-xs text-slate-500">{template.templateReference || template.internalId || template.companyTemplateId || "Reusable job template"}</p>
 
-                <div className="mt-4 grid grid-cols-3 gap-2 text-center text-sm">
+                <div className="mt-4 grid grid-cols-2 gap-2 text-center text-sm sm:grid-cols-4">
                   <Metric label="Tasks" value={template.taskCount} />
                   <Metric label="Stops" value={template.plannedStopCount} />
+                  <Metric label="Labor Lines" value={template.laborLineCount || 0} />
                   <Metric label="Items" value={template.shoppingItemCount} />
                 </div>
 
@@ -703,6 +785,7 @@ const JobTemplates = () => {
               {[
                 ["tasks", "Tasks"],
                 ["plannedServiceStops", "Planned Stops"],
+                ["laborLineItems", "Labor Lines"],
                 ["shoppingItems", "Shopping Items"],
               ].map(([tab, label]) => (
                 <button
@@ -722,7 +805,7 @@ const JobTemplates = () => {
                 onClick={() => openItemModal(detailTab)}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
               >
-                Add {detailTab === "plannedServiceStops" ? "Planned Stop" : detailTab === "shoppingItems" ? "Shopping Item" : "Task"}
+                Add {detailTabLabel(detailTab)}
               </button>
             </div>
 
@@ -750,6 +833,10 @@ const JobTemplates = () => {
                             <span>{item.type || "Task"} · {moneyFromCents(item.contractedRate)} · {item.estimatedTime || 0} min</span>
                           ) : detailTab === "plannedServiceStops" ? (
                             <span>{item.serviceStopTypeName || "Stop"} · {item.estimatedMinutes || 0} min · {(item.taskTemplateIds || []).length} task link(s)</span>
+                          ) : detailTab === "laborLineItems" ? (
+                            <span>
+                              {moneyFromCents(item.totalPriceCents || item.totalAmountCents || 0)} price · {moneyFromCents(item.internalCostCents || item.internalLaborCostCents || 0)} cost · {((item.taskTemplateIds || item.taskIds || []).length) + ((item.plannedServiceStopTemplateIds || item.plannedServiceStopIds || []).length)} link(s)
+                            </span>
                           ) : (
                             <span>{item.subCategory || "Item"} · Qty {item.quantity || 1} · {moneyFromCents(item.plannedTotalCostCents)}</span>
                           )}
@@ -789,7 +876,7 @@ const JobTemplates = () => {
           <form onSubmit={saveTemplateItem} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <h2 className="text-xl font-bold text-slate-900">
-                {itemModal.mode === "create" ? "Add" : "Edit"} {itemModal.type === "plannedServiceStops" ? "Planned Stop" : itemModal.type === "shoppingItems" ? "Shopping Item" : "Task"}
+                {itemModal.mode === "create" ? "Add" : "Edit"} {detailTabLabel(itemModal.type)}
               </h2>
               <button type="button" onClick={closeItemModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
                 Close
@@ -850,6 +937,35 @@ const JobTemplates = () => {
                   <label className="text-sm font-semibold text-slate-700">
                     Labor notes
                     <input value={itemForm.plannedLaborNotes || ""} onChange={(event) => setItemForm((form) => ({ ...form, plannedLaborNotes: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </label>
+                </>
+              ) : itemModal.type === "laborLineItems" ? (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <label className="text-sm font-semibold text-slate-700">
+                      Quantity
+                      <input type="number" min="1" step="1" value={itemForm.quantity || "1"} onChange={(event) => setItemForm((form) => ({ ...form, quantity: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Unit price
+                      <input type="number" min="0" step="0.01" value={itemForm.unitPrice || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, unitPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Total price
+                      <input type="number" min="0" step="0.01" value={itemForm.totalPrice || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, totalPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Internal cost
+                      <input type="number" min="0" step="0.01" value={itemForm.internalCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, internalCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                  </div>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Linked task template IDs
+                    <input value={itemForm.taskTemplateIds || ""} onChange={(event) => setItemForm((form) => ({ ...form, taskTemplateIds: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Linked planned stop template IDs
+                    <input value={itemForm.plannedServiceStopTemplateIds || ""} onChange={(event) => setItemForm((form) => ({ ...form, plannedServiceStopTemplateIds: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                 </>
               ) : (

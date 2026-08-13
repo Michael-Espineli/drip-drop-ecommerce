@@ -17,6 +17,7 @@ import { MdArchive, MdHistory, MdOutlineSchedule } from "react-icons/md";
 import { Link } from "react-router-dom";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import { TODO_ALL_BOARDS_PERMISSION_ID } from "../../../utils/companyPermissions";
 import { salesCollectionNames } from "../../../utils/models/Sales";
 import { compareCompanyUsersByName, getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import {
@@ -35,11 +36,13 @@ import {
   normalizeTodo,
   todoAssignedToUser,
   todoAssigneeIds,
+  todoBoardVisibleToUser,
   todoCompletedInDateRange,
   todoCreatedByUser,
   todoDueState,
   todoIsOpen,
   todoNeedsAttention,
+  todoVisibleToUser,
   todoUserIdSet,
 } from "../../../utils/models/TodoItem";
 import { ALERT_SEVERITY } from "../../../utils/models/AlertNotification";
@@ -138,20 +141,23 @@ const relatedEntityPickerConfig = {
   },
 };
 
-const normalizeRelatedEntityOption = (type, itemDoc) => {
+const normalizeRelatedEntityOptionFromData = (type, id, data = {}) => {
   const config = relatedEntityPickerConfig[type];
-  const data = itemDoc.data();
-  const label = config.label(data, itemDoc.id);
-  const subtitle = config.subtitle(data, itemDoc.id);
+  const label = config.label(data, id);
+  const subtitle = config.subtitle(data, id);
 
   return {
-    id: itemDoc.id,
+    id,
     type,
     label,
     subtitle,
-    searchText: compact([itemDoc.id, label, subtitle]).join(" ").toLowerCase(),
+    searchText: compact([id, label, subtitle]).join(" ").toLowerCase(),
   };
 };
+
+const normalizeRelatedEntityOption = (type, itemDoc) => (
+  normalizeRelatedEntityOptionFromData(type, itemDoc.id, itemDoc.data())
+);
 
 const emptyTodoForm = () => ({
   title: "",
@@ -313,7 +319,16 @@ const StatCard = ({ icon: Icon, label, value, helper, tone = "slate" }) => {
 };
 
 const TodoList = () => {
-  const { recentlySelectedCompany, user, dataBaseUser, companyUserAccess, name } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    user,
+    dataBaseUser,
+    companyUserAccess,
+    name,
+    companyRoleLoading,
+    companyRoleLoaded,
+    hasCompanyPermission,
+  } = useContext(Context);
   const [todoItems, setTodoItems] = useState([]);
   const [todoBoards, setTodoBoards] = useState([]);
   const [companyUsers, setCompanyUsers] = useState([]);
@@ -460,43 +475,6 @@ const TodoList = () => {
     };
   }, [boardModalOpen, savingBoard]);
 
-  useEffect(() => {
-    const config = relatedEntityPickerConfig[form.relatedEntityType];
-
-    if (!recentlySelectedCompany || !config) {
-      setRelatedEntityOptions([]);
-      setRelatedEntityLoading(false);
-      return undefined;
-    }
-
-    let isActive = true;
-    setRelatedEntityLoading(true);
-    setRelatedEntityOptions([]);
-
-    getDocs(config.getRef(recentlySelectedCompany))
-      .then((snapshot) => {
-        if (!isActive) return;
-
-        setRelatedEntityOptions(snapshot.docs
-          .map((itemDoc) => normalizeRelatedEntityOption(form.relatedEntityType, itemDoc))
-          .sort((left, right) => left.label.localeCompare(right.label)));
-      })
-      .catch((error) => {
-        console.error("Error loading related record options:", error);
-        if (isActive) {
-          setRelatedEntityOptions([]);
-          toast.error("Failed to load record picker options.");
-        }
-      })
-      .finally(() => {
-        if (isActive) setRelatedEntityLoading(false);
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, [form.relatedEntityType, recentlySelectedCompany]);
-
   const companyUserOptions = useMemo(() => companyUsers
     .map((companyUser) => ({
       id: companyUser.id,
@@ -545,9 +523,34 @@ const TodoList = () => {
     user?.uid,
   ]);
 
+  const canViewAllTodoBoards = useMemo(() => (
+    companyRoleLoaded &&
+    !companyRoleLoading &&
+    hasCompanyPermission(TODO_ALL_BOARDS_PERMISSION_ID)
+  ), [companyRoleLoaded, companyRoleLoading, hasCompanyPermission]);
+
+  const visibleTodoBoards = useMemo(() => (
+    canViewAllTodoBoards
+      ? todoBoards
+      : todoBoards.filter((board) => todoBoardVisibleToUser(board, currentTodoUserIds))
+  ), [canViewAllTodoBoards, currentTodoUserIds, todoBoards]);
+
+  const visibleTodoBoardIds = useMemo(() => (
+    new Set(visibleTodoBoards.map((board) => board.id))
+  ), [visibleTodoBoards]);
+
+  const visibleTodoItems = useMemo(() => (
+    canViewAllTodoBoards
+      ? todoItems
+      : todoItems.filter((todo) => (
+        todoVisibleToUser(todo, currentTodoUserIds) ||
+        visibleTodoBoardIds.has(todoBoardId(todo))
+      ))
+  ), [canViewAllTodoBoards, currentTodoUserIds, todoItems, visibleTodoBoardIds]);
+
   const boardById = useMemo(() => (
-    new Map(todoBoards.map((board) => [board.id, board]))
-  ), [todoBoards]);
+    new Map(visibleTodoBoards.map((board) => [board.id, board]))
+  ), [visibleTodoBoards]);
 
   const recentDoneRange = useMemo(() => defaultTodoHistoryDateRange(), []);
 
@@ -556,8 +559,8 @@ const TodoList = () => {
   ), [recentDoneRange.endInput, recentDoneRange.startInput]);
 
   const boardScopedTodos = useMemo(() => (
-    todoItems.filter((todo) => todoMatchesBoardFilter(todo, selectedBoardId))
-  ), [selectedBoardId, todoItems]);
+    visibleTodoItems.filter((todo) => todoMatchesBoardFilter(todo, selectedBoardId))
+  ), [selectedBoardId, visibleTodoItems]);
 
   const boardCounts = useMemo(() => {
     const counts = {
@@ -566,7 +569,7 @@ const TodoList = () => {
       byBoard: {},
     };
 
-    todoItems.forEach((todo) => {
+    visibleTodoItems.forEach((todo) => {
       if (!todoIsOpen(todo)) return;
 
       counts.all += 1;
@@ -581,12 +584,67 @@ const TodoList = () => {
     });
 
     return counts;
-  }, [todoItems]);
+  }, [visibleTodoItems]);
 
   const selectedTodo = useMemo(() => (
-    todoItems.find((todo) => todo.id === selectedTodoId) || null
-  ), [selectedTodoId, todoItems]);
+    visibleTodoItems.find((todo) => todo.id === selectedTodoId) || null
+  ), [selectedTodoId, visibleTodoItems]);
   const detailsModalOpen = Boolean(selectedTodo && editForm);
+
+  useEffect(() => {
+    if (
+      selectedBoardId !== BOARD_FILTER_ALL &&
+      selectedBoardId !== BOARD_FILTER_UNASSIGNED &&
+      !visibleTodoBoards.some((board) => board.id === selectedBoardId)
+    ) {
+      setSelectedBoardId(BOARD_FILTER_ALL);
+    }
+  }, [selectedBoardId, visibleTodoBoards]);
+
+  useEffect(() => {
+    const config = relatedEntityPickerConfig[form.relatedEntityType];
+
+    if (!recentlySelectedCompany || !config) {
+      setRelatedEntityOptions([]);
+      setRelatedEntityLoading(false);
+      return undefined;
+    }
+
+    if (form.relatedEntityType === "todo") {
+      setRelatedEntityLoading(false);
+      setRelatedEntityOptions(visibleTodoItems
+        .map((todo) => normalizeRelatedEntityOptionFromData("todo", todo.id, todo))
+        .sort((left, right) => left.label.localeCompare(right.label)));
+      return undefined;
+    }
+
+    let isActive = true;
+    setRelatedEntityLoading(true);
+    setRelatedEntityOptions([]);
+
+    getDocs(config.getRef(recentlySelectedCompany))
+      .then((snapshot) => {
+        if (!isActive) return;
+
+        setRelatedEntityOptions(snapshot.docs
+          .map((itemDoc) => normalizeRelatedEntityOption(form.relatedEntityType, itemDoc))
+          .sort((left, right) => left.label.localeCompare(right.label)));
+      })
+      .catch((error) => {
+        console.error("Error loading related record options:", error);
+        if (isActive) {
+          setRelatedEntityOptions([]);
+          toast.error("Failed to load record picker options.");
+        }
+      })
+      .finally(() => {
+        if (isActive) setRelatedEntityLoading(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [form.relatedEntityType, recentlySelectedCompany, visibleTodoItems]);
 
   useEffect(() => {
     if (selectedTodoId && !selectedTodo) {
@@ -806,6 +864,21 @@ const TodoList = () => {
 
     try {
       await setDoc(doc(db, "companies", recentlySelectedCompany, "todoBoards", boardId), boardPayload, { merge: Boolean(editingBoardId) });
+
+      if (editingBoardId) {
+        const boardTodosSnapshot = await getDocs(query(
+          collection(db, "companies", recentlySelectedCompany, "todoItems"),
+          where("boardId", "==", boardId)
+        ));
+        await Promise.all(boardTodosSnapshot.docs.map((todoDoc) => updateDoc(todoDoc.ref, {
+          boardName,
+          boardMemberUserIds: boardPayload.memberUserIds,
+          boardMemberCompanyUserDocIds: boardPayload.memberCompanyUserDocIds,
+          boardMemberNames: boardPayload.memberNames,
+          updatedAt: serverTimestamp(),
+        })));
+      }
+
       setSelectedBoardId(boardId);
       setForm((current) => ({ ...current, boardId }));
       setBoardModalOpen(false);
@@ -890,6 +963,7 @@ const TodoList = () => {
         boardId: selectedBoard?.id || "",
         boardName: selectedBoard?.name || "",
         boardMemberUserIds: selectedBoard?.memberUserIds || [],
+        boardMemberCompanyUserDocIds: selectedBoard?.memberCompanyUserDocIds || [],
         boardMemberNames: selectedBoard?.memberNames || [],
         status: nextStatus,
         scope: editForm.scope,
@@ -991,6 +1065,7 @@ const TodoList = () => {
       boardId: selectedBoard?.id || "",
       boardName: selectedBoard?.name || "",
       boardMemberUserIds: selectedBoard?.memberUserIds || [],
+      boardMemberCompanyUserDocIds: selectedBoard?.memberCompanyUserDocIds || [],
       boardMemberNames: selectedBoard?.memberNames || [],
       status: TODO_STATUS.open,
       scope: form.scope,
@@ -1216,7 +1291,7 @@ const TodoList = () => {
                   className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 >
                   <option value="">No board</option>
-                  {todoBoards.map((board) => (
+                  {visibleTodoBoards.map((board) => (
                     <option key={board.id} value={board.id}>{board.name}</option>
                   ))}
                 </select>
@@ -1521,9 +1596,9 @@ const TodoList = () => {
                 </div>
               </div>
 
-              {todoBoards.length > 0 ? (
+              {visibleTodoBoards.length > 0 ? (
                 <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-1">
-                  {todoBoards.map((board) => {
+                  {visibleTodoBoards.map((board) => {
                     const selected = selectedBoardId === board.id;
 
                     return (
@@ -1581,7 +1656,7 @@ const TodoList = () => {
                 >
                   No Board ({boardCounts.unassigned})
                 </button>
-                {todoBoards.map((board) => (
+                {visibleTodoBoards.map((board) => (
                   <button
                     key={board.id}
                     type="button"
@@ -1858,7 +1933,7 @@ const TodoList = () => {
                             className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                           >
                             <option value="">No board</option>
-                            {todoBoards.map((board) => (
+                            {visibleTodoBoards.map((board) => (
                               <option key={board.id} value={board.id}>{board.name}</option>
                             ))}
                           </select>

@@ -1,4 +1,5 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   collection,
   doc,
@@ -417,7 +418,16 @@ const CustomerBillingNotesPanel = ({
       ].filter(Boolean).join(' ')}>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{displayCustomerName}</p>
+            {customerId ? (
+              <Link
+                to={`/company/customers/details/${customerId}`}
+                className="text-xs font-semibold uppercase tracking-wide text-blue-700 hover:text-blue-900"
+              >
+                {displayCustomerName}
+              </Link>
+            ) : (
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{displayCustomerName}</p>
+            )}
             <h2 className="mt-1 text-lg font-bold text-slate-950">Customer Notes</h2>
           </div>
           <StatusBadge>{countLoading ? 'Counting...' : `${noteCount} Total`}</StatusBadge>

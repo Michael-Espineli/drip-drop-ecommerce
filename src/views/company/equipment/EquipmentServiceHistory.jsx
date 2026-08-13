@@ -7,6 +7,7 @@ import {
   query,
   collection,
   getDocs,
+  limit,
   orderBy,
   doc,
   deleteDoc,
@@ -85,7 +86,8 @@ export default function EquipmentServiceHistory() {
             equipmentId,
             "serviceHistory"
           ),
-          orderBy("date", "desc")
+          orderBy("date", "desc"),
+          limit(100)
         );
 
         const serviceHistorySnap = await getDocs(serviceHistoryQ);

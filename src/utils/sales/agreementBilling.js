@@ -90,6 +90,7 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
   const billingFrequencyCount = billingFrequencyCountForAgreement(agreement);
   const serviceCadence = serviceFrequencyForAgreement(agreement);
   const serviceCadenceCount = serviceFrequencyCountForAgreement(agreement);
+  const firstInvoiceSendAt = agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt || agreement.startDate || null;
   const missingStripePriceItemIds = lineItems
     .filter((item) => !item.stripePriceId)
     .map((item) => item.id || item.catalogItemId || item.name)
@@ -147,6 +148,7 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     rateType: agreement.rateType || '',
     paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
     invoiceDeliveryMethod: agreement.invoiceDeliveryMethod || 'email',
+    firstInvoiceSendAt,
     lineItems,
     chemicalBillingMode: agreement.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
     includedChemicalIds: copyList(agreement.includedChemicalIds),
@@ -171,6 +173,8 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
       acceptedAt: agreement.acceptedAt || null,
       billingFrequency,
       billingFrequencyCount: String(billingFrequencyCount),
+      firstInvoiceSendAt,
+      manualBillingAutoSendEnabled: agreement.manualBillingAutoSendEnabled === true,
       serviceCadence,
       serviceCadenceCount: String(serviceCadenceCount),
       serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
@@ -199,6 +203,9 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     nextAction: canStartStripeCheckout ? 'collectPaymentMethod' : 'connectStripeAccount',
     customerCanPayImmediately: canStartStripeCheckout,
     manualBillingEnabled: true,
+    manualBillingAutoSendEnabled: agreement.manualBillingAutoSendEnabled === true,
+    manualBillingNextInvoiceAt: firstInvoiceSendAt,
+    manualBillingNextDueDate: null,
     manualBillingStatus: 'readyToInvoice',
     manualBillingReason: canStartStripeCheckout ? 'autopayNotSetup' : 'stripeUnavailable',
     receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod || 'email',
@@ -314,6 +321,13 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
           ? existingSubscription.manualBillingEnabled !== false
           : !existingStripeManagedBilling
         : subscription.manualBillingEnabled,
+      manualBillingAutoSendEnabled: existingSubscription
+        ? existingStripeManagedBilling
+          ? false
+          : existingSubscription.manualBillingAutoSendEnabled === true
+        : subscription.manualBillingAutoSendEnabled,
+      manualBillingNextInvoiceAt: existingSubscription?.manualBillingNextInvoiceAt || subscription.manualBillingNextInvoiceAt,
+      manualBillingNextDueDate: existingSubscription?.manualBillingNextDueDate || subscription.manualBillingNextDueDate,
       manualBillingStatus: hasStripeSubscription
         ? existingSubscription.manualBillingStatus || (
           existingAutopayActive
@@ -396,6 +410,7 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       billingCollectionMethod: nextSubscription.billingCollectionMethod,
       autopayStatus: nextSubscription.autopayStatus,
       manualBillingEnabled: nextSubscription.manualBillingEnabled,
+      manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
       customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       ...operationsSetupUpdates,
       ...renewalActivationUpdates,
@@ -410,6 +425,7 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
         billingCollectionMethod: nextSubscription.billingCollectionMethod,
         autopayStatus: nextSubscription.autopayStatus,
         manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
       },
     });
 

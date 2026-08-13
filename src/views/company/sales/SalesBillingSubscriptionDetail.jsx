@@ -122,6 +122,7 @@ const paymentTermsDueDays = (paymentTerms = '') => {
   const key = normalizeStatus(paymentTerms);
   if (key === 'net7') return 7;
   if (key === 'net14') return 14;
+  if (key === 'net15') return 15;
   if (key === 'net30') return 30;
   return 0;
 };
@@ -623,11 +624,17 @@ const SalesBillingSubscriptionDetail = () => {
                 {subscription?.status && <StatusBadge status={subscription.stripeStatus || subscription.status} />}
               </div>
               <h1 className="mt-3 text-3xl font-bold text-slate-950">
-                {subscription?.customerName || 'Billing Subscription'}
+                {subscription?.customerId ? (
+                  <Link
+                    to={`/company/customers/details/${subscription.customerId}`}
+                    className="text-blue-700 hover:text-blue-900"
+                  >
+                    {subscription?.customerName || 'Billing Subscription'}
+                  </Link>
+                ) : (
+                  subscription?.customerName || 'Billing Subscription'
+                )}
               </h1>
-              <p className="mt-2 text-sm text-slate-600">
-                {subscription?.id}
-              </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -785,7 +792,7 @@ const SalesBillingSubscriptionDetail = () => {
                       label="Payment Terms"
                       value={draft.paymentTerms}
                       onChange={(value) => updateDraft('paymentTerms', value)}
-                      options={['dueOnReceipt', 'net7', 'net14', 'net30', 'manual']}
+                      options={['dueOnReceipt', 'net7', 'net14', 'net15', 'net30', 'manual']}
                     />
                     <SelectInput
                       label="Invoice Delivery"
@@ -813,7 +820,7 @@ const SalesBillingSubscriptionDetail = () => {
                         checked={draft.manualBillingAutoSendEnabled}
                         onChange={(event) => updateDraft('manualBillingAutoSendEnabled', event.target.checked)}
                       />
-                      Auto-send recurring invoices until autopay is active
+                      Email invoices automatically after they are created
                     </label>
                     <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700">
                       <input

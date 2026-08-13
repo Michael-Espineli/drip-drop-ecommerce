@@ -13,7 +13,7 @@ const emailVerificationAllowedCompanyPaths = [
 
 export function Protected({ route, children }) {
 
-    const { user, accountType, recentlySelectedCompany, companySubscription, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
+    const { user, accountType, dataBaseUser, recentlySelectedCompany, companySubscription, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const location = useLocation();
     const routeRole = String(route.role || "").toLowerCase();
     const requiredFeatureFlagIds = [
@@ -28,6 +28,20 @@ export function Protected({ route, children }) {
         return <Navigate to={`${signInPath}?redirect=${redirectTarget}`} />;
 
     } else {
+        if (!accountType) {
+            return (
+                <div className="mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-6 text-center">
+                    <h1 className="text-2xl font-bold text-slate-900">Account profile unavailable</h1>
+                    <p className="mt-3 text-sm text-slate-600">
+                        We could not load a web role for this account. Please contact support and include this user id:
+                    </p>
+                    <p className="mt-3 break-all rounded-md bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">
+                        {dataBaseUser?.id || user.uid}
+                    </p>
+                </div>
+            );
+        }
+
         if (requiredFeatureFlagIds.length > 0) {
             if (!featureFlagsLoaded) {
                 return null;
@@ -106,5 +120,7 @@ export function Protected({ route, children }) {
                 return <Navigate to='/client/dashboard' replace />
             }
         }
+
+        return <Navigate to='/' replace />
     }
 }

@@ -1,7 +1,24 @@
+export const COMPANY_WIDE_MESSAGES_PERMISSION_ID = "300";
+export const TODO_ALL_BOARDS_PERMISSION_ID = "310";
+export const JOBS_PERMISSION_ID = "20";
+export const CREATE_JOBS_PERMISSION_ID = "22";
+export const SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID = "23";
+export const UPDATE_JOBS_PERMISSION_ID = "24";
+export const EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID = "28";
+export const CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID = "29";
+export const CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID = "27";
+export const CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID = "31";
+export const BASIC_WORK_ORDER_PERMISSION_IDS = [
+  SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
+  CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
+  CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID,
+  CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
+];
+
 const webImplementedPermissionIds = new Set([
-  "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
+  "0", "10", "12", "14", "16", JOBS_PERMISSION_ID, CREATE_JOBS_PERMISSION_ID, SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID, UPDATE_JOBS_PERMISSION_ID, "26", CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID, EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID, CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "30", CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "32", "34", "36",
   "40", "42", "44", "50", "52", "54", "60", "62", "64", "66",
-  "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", "400", "420",
+  "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID, "400", "420",
   "600", "610", "612", "614", "620", "622", "630", "632", "634", "800", "810", "820", "822", "824", "826", "830",
   "840", "850", "852", "854", "856", "860", "864", "870", "880", "882", "884", "886", "890", "900", "910"
 ]);
@@ -12,13 +29,16 @@ const permissionCatalog = [
   { id: "12", name: "Create Customer", description: "", category: "Operations", ios: false, web: false },
   { id: "14", name: "Update Customer", description: "", category: "Operations", ios: false, web: false },
   { id: "16", name: "Delete Customer", description: "", category: "Operations", ios: false, web: false },
-  { id: "20", name: "Jobs", description: "", category: "Operations", ios: true, web: false },
-  { id: "22", name: "Create Jobs", description: "", category: "Operations", ios: false, web: false },
-  { id: "23", name: "Create Jobs From Templates", description: "Can create jobs from technician-enabled job templates.", category: "Operations", ios: true, web: false },
-  { id: "24", name: "Update Jobs", description: "", category: "Operations", ios: false, web: false },
+  { id: JOBS_PERMISSION_ID, name: "Jobs", description: "", category: "Operations", ios: true, web: false },
+  { id: CREATE_JOBS_PERMISSION_ID, name: "Create Jobs", description: "Can use the full job creation workflow, including billing, labor, materials, and admin assignment fields.", category: "Operations", ios: false, web: false },
+  { id: SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID, name: "Schedule Template Work Orders", description: "Can create and schedule technician-enabled job templates for themselves from the basic work order form.", category: "Operations", ios: true, web: false },
+  { id: UPDATE_JOBS_PERMISSION_ID, name: "Update Jobs", description: "", category: "Operations", ios: false, web: false },
   { id: "26", name: "Delete Jobs", description: "", category: "Operations", ios: false, web: false },
-  { id: "27", name: "Create Blank Jobs", description: "Can create blank jobs without starting from a template.", category: "Operations", ios: true, web: false },
+  { id: CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID, name: "Create Custom Work Orders For Self", description: "Can create a basic custom work order assigned to themselves.", category: "Operations", ios: true, web: false },
+  { id: EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID, name: "Edit Template Work Orders", description: "Can make basic scope and schedule edits to work orders that were created from templates.", category: "Operations", ios: false, web: false },
+  { id: CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, name: "Create Template Work Orders For Others", description: "Can create and schedule technician-enabled job templates for another company user.", category: "Operations", ios: false, web: false },
   { id: "30", name: "Repair Requests", description: "", category: "Operations", ios: true, web: false },
+  { id: CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, name: "Create Custom Work Orders For Others", description: "Can create a basic custom work order assigned to another company user.", category: "Operations", ios: false, web: false },
   { id: "32", name: "Create Repair Requests", description: "", category: "Operations", ios: false, web: false },
   { id: "34", name: "Update Repair Requests", description: "", category: "Operations", ios: false, web: false },
   { id: "36", name: "Delete Repair Requests", description: "", category: "Operations", ios: false, web: false },
@@ -61,6 +81,8 @@ const permissionCatalog = [
   { id: "292", name: "Create Fleet", description: "", category: "Management", ios: false, web: false },
   { id: "294", name: "Update Fleet", description: "", category: "Management", ios: false, web: false },
   { id: "296", name: "Delete Fleet", description: "", category: "Management", ios: false, web: false },
+  { id: COMPANY_WIDE_MESSAGES_PERMISSION_ID, name: "View Other Messages", description: "Can view company and customer conversations they are not directly included in.", category: "Management", ios: true, web: false },
+  { id: TODO_ALL_BOARDS_PERMISSION_ID, name: "View All Todo Boards", description: "Can view every todo board and todo task, even when not assigned or listed as a board member.", category: "Management", ios: false, web: false },
   { id: "400", name: "Finance", description: "", category: "Finance", ios: true, web: false },
   { id: "410", name: "Finished Jobs", description: "", category: "Finance", ios: true, web: false },
   { id: "412", name: "Create Finished Jobs", description: "", category: "Finance", ios: false, web: false },
