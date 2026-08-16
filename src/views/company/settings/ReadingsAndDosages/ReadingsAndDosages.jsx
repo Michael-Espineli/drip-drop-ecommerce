@@ -568,8 +568,8 @@ const ReadingsAndDosages = () => {
             );
             setDatabaseItemsLoaded(true);
         } catch (error) {
-            console.error('Could not fetch database items:', error);
-            toast.error('Could not load database items.');
+            console.error('Could not fetch database products:', error);
+            toast.error('Could not load database products.');
         } finally {
             setDatabaseItemsLoading(false);
         }
@@ -606,7 +606,7 @@ const ReadingsAndDosages = () => {
         }
 
         const linkedItemIds = normalizeLinkedItemIds(form.linkedItemIds, form.linkedItemId);
-        const toastId = toast.loading('Updating linked database items...');
+        const toastId = toast.loading('Updating linked database products...');
 
         try {
             await updateDoc(
@@ -617,12 +617,12 @@ const ReadingsAndDosages = () => {
                     linkedItemIds,
                 }
             );
-            toast.success('Linked database items updated.', { id: toastId });
+            toast.success('Linked database products updated.', { id: toastId });
             setDatabaseItemPickerOpen(false);
             setDatabaseItemSearchTerm('');
         } catch (error) {
-            console.error('Failed to update linked database items:', error);
-            toast.error('Could not update linked database items.', { id: toastId });
+            console.error('Failed to update linked database products:', error);
+            toast.error('Could not update linked database products.', { id: toastId });
         }
     };
 
@@ -896,10 +896,10 @@ const ReadingsAndDosages = () => {
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                             <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Linked Purchased Items</p>
-                            <p className="mt-1 text-sm text-slate-500">Only chemical database items can be linked to dosages.</p>
+                            <p className="mt-1 text-sm text-slate-500">Only chemical database products can be linked to dosages.</p>
                         </div>
                         <Button type="button" onClick={openDatabaseItemPicker} className="bg-blue-600 text-white hover:bg-blue-700">
-                            <FaPlus /> Add Linked Database Item
+                            <FaPlus /> Add Linked Database Product
                         </Button>
                     </div>
 
@@ -920,7 +920,7 @@ const ReadingsAndDosages = () => {
                                 </span>
                             );
                         }) : (
-                            <p className="text-sm text-slate-500">No linked chemical database items yet.</p>
+                            <p className="text-sm text-slate-500">No linked chemical database products yet.</p>
                         )}
                     </div>
                 </div>
@@ -933,15 +933,15 @@ const ReadingsAndDosages = () => {
             <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg bg-white shadow-xl">
                 <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                        <p className="text-sm font-semibold text-blue-600">Chemical database items</p>
+                        <p className="text-sm font-semibold text-blue-600">Chemical database products</p>
                         <h2 className="text-xl font-bold text-slate-950">Linked Purchased Items</h2>
-                        <p className="mt-1 text-sm text-slate-500">Only database items categorized as chemicals can be selected for dosage waste reporting.</p>
+                        <p className="mt-1 text-sm text-slate-500">Only database products categorized as chemicals can be selected for dosage waste reporting.</p>
                     </div>
                     <button
                         type="button"
                         onClick={closeDatabaseItemPicker}
                         className="rounded-md border border-slate-200 p-2 text-slate-500 transition hover:border-slate-400 hover:text-slate-900"
-                        aria-label="Close database item picker"
+                        aria-label="Close database product picker"
                     >
                         <FaTimes />
                     </button>
@@ -963,7 +963,7 @@ const ReadingsAndDosages = () => {
                 <div className="min-h-0 flex-1 overflow-y-auto p-5">
                     {databaseItemsLoading ? (
                         <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-                            Loading chemical database items...
+                            Loading chemical database products...
                         </div>
                     ) : filteredDatabaseItems.length ? (
                         <div className="grid gap-2 md:grid-cols-2">
@@ -996,7 +996,7 @@ const ReadingsAndDosages = () => {
                         </div>
                     ) : (
                         <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-                            {databaseItemsLoaded ? 'No chemical database items match that search.' : 'Open the picker to load chemical database items.'}
+                            {databaseItemsLoaded ? 'No chemical database products match that search.' : 'Open the picker to load chemical database products.'}
                         </div>
                     )}
                 </div>
@@ -1226,7 +1226,7 @@ const ReadingsAndDosages = () => {
                     <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
                         <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
                             <div>
-                                <h3 className="text-lg font-bold text-slate-950">Linked Database Items</h3>
+                                <h3 className="text-lg font-bold text-slate-950">Linked Database Products</h3>
                                 <p className="mt-1 text-sm text-slate-500">Chemical purchases linked here are compared against dosage usage in waste reports.</p>
                             </div>
                             <div className="flex flex-wrap gap-2">
@@ -1234,10 +1234,10 @@ const ReadingsAndDosages = () => {
                                     to="/company/items"
                                     className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                                 >
-                                    <FaExternalLinkAlt /> See All Database Items
+                                    <FaExternalLinkAlt /> See All Database Products
                                 </Link>
                                 <Button type="button" onClick={openDatabaseItemPicker} className="bg-blue-600 text-white hover:bg-blue-700">
-                                    <FaPlus /> Add Linked Database Item
+                                    <FaPlus /> Add Linked Database Product
                                 </Button>
                             </div>
                         </div>
@@ -1250,10 +1250,10 @@ const ReadingsAndDosages = () => {
                                 </p>
                                 <p className="mt-1 text-sm text-emerald-800">
                                     {suggestedCostCents
-                                        ? `Average unit cost from ${linkedItemsWithUnitCosts.length} linked database item${linkedItemsWithUnitCosts.length === 1 ? '' : 's'}${suggestedCostRange ? `, range ${suggestedCostRange}` : ''}.`
+                                        ? `Average unit cost from ${linkedItemsWithUnitCosts.length} linked database product${linkedItemsWithUnitCosts.length === 1 ? '' : 's'}${suggestedCostRange ? `, range ${suggestedCostRange}` : ''}.`
                                         : databaseItemsLoading
                                             ? 'Loading linked item costs...'
-                                            : 'Link database items with unit costs to produce a suggested cost.'}
+                                            : 'Link database products with unit costs to produce a suggested cost.'}
                                 </p>
                             </div>
 
@@ -1275,19 +1275,19 @@ const ReadingsAndDosages = () => {
                                                             item.sku ? `SKU ${item.sku}` : '',
                                                             unitCostCents ? `Unit cost ${formatCurrency(unitCostCents / 100)}` : '',
                                                         ].filter(Boolean).join(' | ') || itemId
-                                                        : databaseItemsLoading ? 'Loading item details...' : 'Open database item detail'}
+                                                        : databaseItemsLoading ? 'Loading product details...' : 'Open database product detail'}
                                                 </span>
                                             </Link>
                                         );
                                     })}
                                 </div>
                             ) : (
-                                <p className="text-sm text-slate-500">No chemical database items linked yet.</p>
+                                <p className="text-sm text-slate-500">No chemical database products linked yet.</p>
                             )}
 
                             {missingLinkedItemsCount > 0 && !databaseItemsLoading ? (
                                 <p className="mt-3 text-xs text-amber-700">
-                                    {missingLinkedItemsCount} linked item{missingLinkedItemsCount === 1 ? '' : 's'} could not be found in the database item list.
+                                    {missingLinkedItemsCount} linked product{missingLinkedItemsCount === 1 ? '' : 's'} could not be found in the database product catalog.
                                 </p>
                             ) : null}
                         </div>

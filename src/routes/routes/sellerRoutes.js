@@ -400,6 +400,11 @@ export const sellerRoutes = [
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }, {
+        path: '/company/jobs/detail/:jobId/:section',
+        element: <JobDetailView />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
         path: '/company/jobs/:view',
         element: <Jobs />,
         ability: ['Admin', 'Seller'],
@@ -780,19 +785,25 @@ export const sellerRoutes = [
         path: '/company/settings/terms-templates',
         element: <TermsTemplates />,
         role: 'company',
-        name: 'Terms Templates'
+        name: 'Service Agreement Templates'
     },
     {
         path: '/company/settings/terms-templates/:templateId',
         element: <TermsTemplateDetail />,
         role: 'company',
-        name: 'Terms Templates'
+        name: 'Service Agreement Templates'
     },
     {
         path: '/company/settings/job-templates',
         element: <JobTemplates />,
         role: 'company',
         name: 'Job Templates'
+    },
+    {
+        path: '/company/settings/job-templates/detail/:templateId',
+        element: <JobTemplates />,
+        role: 'company',
+        name: 'Job Template Detail'
     },
 
     {
@@ -1342,6 +1353,11 @@ export const sellerRoutes = [
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/catalog-items',
+        element: <SalesCatalogItems />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/catalog-items/:catalogItemId',
         element: <SalesCatalogItems />,
         role: 'Company',
         featureFlagId: 'feature_flag_004',

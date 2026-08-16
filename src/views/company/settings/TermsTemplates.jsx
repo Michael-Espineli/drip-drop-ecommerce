@@ -92,7 +92,7 @@ const TemplateCard = ({ template, canDuplicate, isDuplicating, onDuplicate }) =>
         <article className="flex min-h-[220px] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-blue-200">
             <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                    <h2 className="truncate text-lg font-bold text-slate-950">{template.name || 'Terms Template'}</h2>
+                    <h2 className="truncate text-lg font-bold text-slate-950">{template.name || 'Service Agreement Template'}</h2>
                     <p className="mt-1 line-clamp-2 text-sm text-slate-600">
                         {template.description || 'No description added.'}
                     </p>
@@ -287,10 +287,10 @@ const TermsTemplates = () => {
                                 Back to Settings
                             </Link>
                             <div className="mt-3 flex items-center gap-2">
-                                <h1 className="text-3xl font-bold text-slate-950">Terms Templates</h1>
-                                <FeatureInfoButton title="How Terms Templates Work" align="left">
+                                <h1 className="text-3xl font-bold text-slate-950">Service Agreement Templates</h1>
+                                <FeatureInfoButton title="How Service Agreement Templates Work" align="left">
                                     <p>
-                                        Terms templates are saved under this company at
+                                        Service agreement templates are saved under this company at
                                         {' '}<span className="font-semibold">companies/{'{companyId}'}/termsTemplates</span>.
                                         Each pool company can keep its own residential, commercial, weekly, twice-weekly, or custom service terms.
                                     </p>
@@ -301,7 +301,7 @@ const TermsTemplates = () => {
                                 </FeatureInfoButton>
                             </div>
                             <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                                Reusable agreement language for estimates, service agreements, and company-specific terms.
+                                Reusable agreement language and billing defaults for estimates, service agreements, and company-specific terms.
                             </p>
                         </div>
 

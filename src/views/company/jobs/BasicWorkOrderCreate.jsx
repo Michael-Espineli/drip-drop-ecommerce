@@ -150,11 +150,16 @@ const laborLineIdValue = (value) => {
     return value.id || value.value || value.docId || "";
 };
 
+const splitTemplateIdList = (value = "") => String(value || "")
+    .split(",")
+    .map((idValue) => idValue.trim())
+    .filter(Boolean);
+
 const laborLineIdArray = (value) => (
     Array.isArray(value)
         ? value.map(laborLineIdValue).filter(Boolean)
         : laborLineIdValue(value)
-            ? [laborLineIdValue(value)]
+            ? splitTemplateIdList(laborLineIdValue(value))
             : []
 );
 
@@ -688,11 +693,11 @@ const BasicWorkOrderCreate = () => {
     const buildPlannedStopsForJob = (jobId, planId, taskIdMap, normalizedTasks) => {
         const plannedStops = mode === "template"
             ? templateDetails.plannedServiceStops.map((stop, index) => {
-                const originalTaskIds = Array.isArray(stop.taskTemplateIds)
-                    ? stop.taskTemplateIds
-                    : Array.isArray(stop.taskIds)
-                        ? stop.taskIds
-                        : [];
+                const originalTaskIds = laborLineIdArray(
+                    stop.taskTemplateIds?.length
+                        ? stop.taskTemplateIds
+                        : stop.taskIds
+                );
 
                 return {
                     id: `comp_job_plan_stop_${uuidv4()}`,
@@ -765,7 +770,7 @@ const BasicWorkOrderCreate = () => {
             sourceSolutionId: planId,
             sourceTemplateId: selectedTemplate?.id || "",
             sourceTemplateLaborLineId: line.id || "",
-            name: line.name || line.title || `Labor ${index + 1}`,
+            name: line.name || line.title || `Service ${index + 1}`,
             description: line.description || "",
             quantity,
             unitPriceCents,
@@ -840,7 +845,7 @@ const BasicWorkOrderCreate = () => {
                     salesItemType: "labor",
                     billingBehavior: line.billingBehavior || "oneTime",
                     type: "Labor",
-                    name: line.name || `Labor ${index + 1}`,
+                    name: line.name || `Service ${index + 1}`,
                     description: [
                         line.description || "",
                         line.taskIds?.length ? `${line.taskIds.length} task${line.taskIds.length === 1 ? "" : "s"}` : "",
@@ -911,7 +916,7 @@ const BasicWorkOrderCreate = () => {
                 salesItemType: "material",
                 billingBehavior: "oneTime",
                 type: "Material",
-                name: item.name || "Material",
+                name: item.name || "Product",
                 description: item.description || "",
                 quantity,
                 unitAmountCents,
@@ -1044,7 +1049,7 @@ const BasicWorkOrderCreate = () => {
                 laborLineSummaries: normalizedLaborLineItems.map((line, index) => ({
                     id: line.id,
                     sortOrder: Number(line.sortOrder ?? index),
-                    name: line.name || `Labor ${index + 1}`,
+                    name: line.name || `Service ${index + 1}`,
                     description: line.description || "",
                     quantity: Number(line.quantity || 1),
                     unitPriceCents: Number(line.unitPriceCents || 0),
@@ -1056,7 +1061,7 @@ const BasicWorkOrderCreate = () => {
                 materialSummaries: normalizedShoppingItems.map((item, index) => ({
                     id: item.id,
                     sortOrder: Number(item.sortOrder ?? index),
-                    name: item.name || `Material ${index + 1}`,
+                    name: item.name || `Product ${index + 1}`,
                     description: item.description || "",
                     quantity: item.quantity || "1",
                     plannedTotalCostCents: plannedMaterialTotalCostCents(item),
@@ -1548,13 +1553,13 @@ const BasicWorkOrderCreate = () => {
                         {mode === "template" ? (
                             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                                 <label className="block">
-                                    <span className="text-sm font-semibold text-slate-700">Template</span>
+                                    <span className="text-sm font-semibold text-slate-700">Job Template</span>
                                     <div className="mt-2">
                                         <Select
                                             value={selectedTemplate}
                                             options={templateOptions}
                                             onChange={setSelectedTemplate}
-                                            placeholder="Choose a technician-enabled template..."
+                                            placeholder="Choose a technician-enabled prebuilt job..."
                                             styles={selectStyles}
                                             isLoading={loadingTemplateDetails}
                                         />
@@ -1564,8 +1569,8 @@ const BasicWorkOrderCreate = () => {
                                     <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
                                         <Metric label="Tasks" value={templateDetails.tasks.length} />
                                         <Metric label="Stops" value={templateDetails.plannedServiceStops.length || 1} />
-                                        <Metric label="Labor Lines" value={templateDetails.laborLineItems.length} />
-                                        <Metric label="Items" value={templateDetails.shoppingItems.length} />
+                                        <Metric label="Service Lines" value={templateDetails.laborLineItems.length} />
+                                        <Metric label="Products" value={templateDetails.shoppingItems.length} />
                                         <Metric label="Price" value={moneyFromCents(templateGeneratedPriceCents)} />
                                     </div>
                                 )}

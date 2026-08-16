@@ -196,7 +196,7 @@ const StripeBillingSnapshotPanel = ({
         {
             complete: null,
             label: "Billable services and agreements prepared",
-            detail: "Create Sales Catalog Items and service agreement line items before starting Checkout for a customer.",
+            detail: "Create Service Catalog items and service agreement pricing before starting Checkout for a customer.",
         },
         {
             complete: applicationFeePercent ? true : null,

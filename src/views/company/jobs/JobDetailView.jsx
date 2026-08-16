@@ -61,6 +61,7 @@ import {
   SalesCatalogItemType,
   SalesCatalogSourceType,
 } from "../../../utils/models/Sales";
+import { salesCatalogCollection } from "../../../utils/sales/salesFirestore";
 import {
   BODY_OF_WATER_JOB_TASK_TYPES,
   EQUIPMENT_JOB_TASK_TYPES,
@@ -151,6 +152,24 @@ const CUSTOMER_NOTE_AUDIENCE_OPTIONS = [
   { value: "office", label: "Office" },
   { value: "field", label: "Field" },
 ];
+const JOB_DETAIL_SECTIONS = [
+  { id: "overview", tab: "Plans", label: "Overview", helper: "Customer options for solving this job" },
+  { id: "create-plans", tab: "Planned", label: "Create Plans", helper: "Create estimates based on services and products" },
+  { id: "actual", tab: "Actual", label: "Actual", helper: "Service stops, payroll, and purchased parts" },
+  { id: "billing", tab: "Billing", label: "Billing", helper: "Estimate, invoice, and payment lifecycle" },
+  { id: "history", tab: "History", label: "History", helper: "Change orders and job audit trail" },
+];
+const DEFAULT_JOB_DETAIL_SECTION_ID = "overview";
+const JOB_DETAIL_TABS = JOB_DETAIL_SECTIONS.map((section) => section.tab);
+const JOB_DETAIL_SECTION_IDS = JOB_DETAIL_SECTIONS.map((section) => section.id);
+const JOB_DETAIL_TAB_BY_SECTION_ID = JOB_DETAIL_SECTIONS.reduce((map, section) => {
+  map[section.id] = section.tab;
+  return map;
+}, {});
+const JOB_DETAIL_SECTION_ID_BY_TAB = JOB_DETAIL_SECTIONS.reduce((map, section) => {
+  map[section.tab] = section.id;
+  return map;
+}, {});
 const DETAIL_PANEL_IDS_BY_SECTION = {
   Plans: ["plans-overview", "plans-options"],
   Planned: ["planned-editor"],
@@ -492,6 +511,27 @@ const normalizeJobLaborLineItems = (items = []) => (
     .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0))
 );
 
+const JOB_SERVICE_CATALOG_TYPES = new Set([
+  SalesCatalogItemType.service,
+  SalesCatalogItemType.recurringService,
+  SalesCatalogItemType.labor,
+  SalesCatalogItemType.manual,
+]);
+
+const isJobServiceCatalogItem = (item = {}) => (
+  item.active !== false && JOB_SERVICE_CATALOG_TYPES.has(item.type || SalesCatalogItemType.service)
+);
+
+const getCatalogServiceTaskTemplates = (item = {}) => {
+  const templates =
+    item.metadata?.taskTemplates ||
+    item.metadata?.tasks ||
+    item.taskTemplates ||
+    [];
+
+  return Array.isArray(templates) ? templates.filter(Boolean) : [];
+};
+
 const buildPlanEditorSnapshot = ({
   planId = "",
   title = "",
@@ -603,7 +643,7 @@ const buildPlanEditorSnapshot = ({
 };
 
 const JobDetailView = () => {
-  const { jobId } = useParams();
+  const { jobId, section } = useParams();
   const navigate = useNavigate();
 
   // Auth / company context
@@ -719,6 +759,12 @@ const JobDetailView = () => {
   const [editingLaborLineId, setEditingLaborLineId] = useState("");
   const [savingLaborLine, setSavingLaborLine] = useState(false);
   const [laborLineForm, setLaborLineForm] = useState(EMPTY_LABOR_LINE_FORM);
+  const [serviceCatalogItems, setServiceCatalogItems] = useState([]);
+  const [loadingServiceCatalogItems, setLoadingServiceCatalogItems] = useState(false);
+  const [showServiceCatalogPicker, setShowServiceCatalogPicker] = useState(false);
+  const [addingCatalogServiceId, setAddingCatalogServiceId] = useState("");
+  const [newTaskLaborLineId, setNewTaskLaborLineId] = useState("");
+  const [newPlannedStopLaborLineId, setNewPlannedStopLaborLineId] = useState("");
   const [workOffers, setWorkOffers] = useState([]);
   const [showAllWorkOffers, setShowAllWorkOffers] = useState(false);
   const [purchasedItems, setPurchasedItems] = useState([]);
@@ -790,8 +836,11 @@ const JobDetailView = () => {
   });
 
   // Sections
-  const tabs = ["Plans", "Planned", "Actual", "Billing", "History"];
-  const [activeTab, setActiveTab] = useState("Plans");
+  const getInitialJobTab = useCallback((sectionValue) => (
+    JOB_DETAIL_TAB_BY_SECTION_ID[sectionValue] || JOB_DETAIL_TAB_BY_SECTION_ID[DEFAULT_JOB_DETAIL_SECTION_ID]
+  ), []);
+  const tabs = JOB_DETAIL_TABS;
+  const [activeTab, setActiveTab] = useState(() => getInitialJobTab(section));
   const [openDetailPanels, setOpenDetailPanels] = useState(() => ({ ...DEFAULT_OPEN_DETAIL_PANELS }));
   const [showBillingLifecycleHelp, setShowBillingLifecycleHelp] = useState(false);
   const [showJobHistoryModal, setShowJobHistoryModal] = useState(false);
@@ -805,6 +854,50 @@ const JobDetailView = () => {
   const [savingCustomerNote, setSavingCustomerNote] = useState(false);
   const [expiringJob, setExpiringJob] = useState(false);
   const [resolvingCustomerHandledJob, setResolvingCustomerHandledJob] = useState(false);
+
+  useEffect(() => {
+    setActiveTab(getInitialJobTab(section));
+  }, [section, getInitialJobTab]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    if (!section || !JOB_DETAIL_SECTION_IDS.includes(section)) {
+      navigate(`/company/jobs/detail/${jobId}/${DEFAULT_JOB_DETAIL_SECTION_ID}`, { replace: true });
+    }
+  }, [jobId, navigate, section]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setServiceCatalogItems([]);
+      setLoadingServiceCatalogItems(false);
+      return undefined;
+    }
+
+    setLoadingServiceCatalogItems(true);
+    return onSnapshot(
+      salesCatalogCollection(db, recentlySelectedCompany),
+      (snapshot) => {
+        const items = snapshot.docs
+          .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+          .filter(isJobServiceCatalogItem)
+          .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
+        setServiceCatalogItems(items);
+        setLoadingServiceCatalogItems(false);
+      },
+      (error) => {
+        console.error("[JobDetailView] Unable to load service catalog", error);
+        setLoadingServiceCatalogItems(false);
+      }
+    );
+  }, [recentlySelectedCompany]);
+
+  const handleJobTabChange = useCallback((nextTab) => {
+    const sectionId = JOB_DETAIL_SECTION_ID_BY_TAB[nextTab] || DEFAULT_JOB_DETAIL_SECTION_ID;
+    setActiveTab(nextTab);
+    if (jobId) {
+      navigate(`/company/jobs/detail/${jobId}/${sectionId}`);
+    }
+  }, [jobId, navigate]);
 
   // Tasks
   const [taskTypeList, setTaskTypeList] = useState([]);
@@ -1493,7 +1586,7 @@ const JobDetailView = () => {
       job.bodyOfWaterName ? `Body of water: ${job.bodyOfWaterName}` : "",
       job.equipmentName ? `Equipment: ${job.equipmentName}` : "",
       `Tasks: ${(taskList || []).length}${openTaskCount ? ` (${openTaskCount} open)` : ""}`,
-      shoppingList.length ? `Planned materials: ${shoppingList.length}` : "",
+      shoppingList.length ? `Planned products: ${shoppingList.length}` : "",
       purchasedItems.length ? `Purchased items: ${purchasedItems.length}` : "",
       reason ? `Reason: ${reason}` : "",
     ].filter(Boolean);
@@ -1606,7 +1699,7 @@ const JobDetailView = () => {
       job.bodyOfWaterName ? `Body of water: ${job.bodyOfWaterName}` : "",
       job.equipmentName ? `Equipment: ${job.equipmentName}` : "",
       `Tasks: ${(taskList || []).length}${openTaskCount ? ` (${openTaskCount} open)` : ""}`,
-      shoppingList.length ? `Planned materials: ${shoppingList.length}` : "",
+      shoppingList.length ? `Planned products: ${shoppingList.length}` : "",
       purchasedItems.length ? `Purchased items: ${purchasedItems.length}` : "",
     ].filter(Boolean);
 
@@ -1713,7 +1806,7 @@ const JobDetailView = () => {
       job.bodyOfWaterName ? `Body of water: ${job.bodyOfWaterName}` : "",
       job.equipmentName ? `Equipment: ${job.equipmentName}` : "",
       `Tasks: ${(taskList || []).length}${openTaskCount ? ` (${openTaskCount} open)` : ""}`,
-      shoppingList.length ? `Planned materials: ${shoppingList.length}` : "",
+      shoppingList.length ? `Planned products: ${shoppingList.length}` : "",
       purchasedItems.length ? `Purchased items: ${purchasedItems.length}` : "",
     ].filter(Boolean);
     const authorId = getUserId() || "";
@@ -1905,7 +1998,7 @@ const JobDetailView = () => {
           buildHistoryChange("status", "Status", "—", payload.status),
           buildHistoryChange("priceImpactCents", "Price Impact", "—", moneyFromCents(priceImpactCents)),
           buildHistoryChange("laborCostImpactCents", "Labor Cost Impact", "—", moneyFromCents(laborCostImpactCents)),
-          buildHistoryChange("materialCostImpactCents", "Material Cost Impact", "—", moneyFromCents(materialCostImpactCents)),
+          buildHistoryChange("materialCostImpactCents", "Product Cost Impact", "—", moneyFromCents(materialCostImpactCents)),
           buildHistoryChange("scheduleImpact", "Schedule Impact", "—", payload.scheduleImpact || "—"),
         ],
         metadata: {
@@ -1920,7 +2013,7 @@ const JobDetailView = () => {
       toast.success("Change order created");
       setShowChangeOrderModal(false);
       resetChangeOrderForm();
-      setActiveTab("Planned");
+      handleJobTabChange("Planned");
     } catch (err) {
       console.error(err);
       toast.error("Failed to create change order");
@@ -2764,7 +2857,7 @@ const JobDetailView = () => {
         salesItemType: SalesCatalogItemType.material,
         billingBehavior: SalesCatalogBillingBehavior.oneTime,
         type: "Material",
-        name: item.name || "Material",
+        name: item.name || "Product",
         description: item.description || "",
         quantity,
         unitAmountCents,
@@ -3517,7 +3610,7 @@ const JobDetailView = () => {
           buildHistoryChange("totalAmountCents", "Calculated Customer Price", existingSolution ? moneyFromCents(planOptionTotalCents(existingSolution)) : "—", moneyFromCents(payload.totalAmountCents)),
           buildHistoryChange("taskCount", "Tasks", existingSolution ? String(existingSolution.taskCount || 0) : "—", String(payload.taskCount || 0)),
           buildHistoryChange("plannedStopCount", "Planned Stops", existingSolution ? String(existingSolution.plannedStopCount || 0) : "—", String(payload.plannedStopCount || 0)),
-          buildHistoryChange("materialCount", "Materials", existingSolution ? String(existingSolution.materialCount || 0) : "—", String(payload.materialCount || 0)),
+          buildHistoryChange("materialCount", "Products", existingSolution ? String(existingSolution.materialCount || 0) : "—", String(payload.materialCount || 0)),
         ],
         metadata: {
           planId: solutionId,
@@ -3530,7 +3623,7 @@ const JobDetailView = () => {
     }
 
     if (showToast) toast.success(existingSolution ? "Plan updated" : "Plan added");
-    if (switchToTab) setActiveTab(switchToTab);
+    if (switchToTab) handleJobTabChange(switchToTab);
 
     return payload;
   };
@@ -3775,8 +3868,8 @@ const JobDetailView = () => {
           buildHistoryChange("activePlanId", "Editing Plan", job.activePlanId || job.activeSolutionId || "—", solution.id),
           buildHistoryChange("tasks", "Tasks", String(taskList.length), String(tasksToWrite.length)),
           buildHistoryChange("plannedServiceStops", "Planned Stops", String(plannedServiceStops.length), String(plannedStopsToWrite.length)),
-          buildHistoryChange("laborLineItems", "Labor Lines", String(laborLineItems.length), String(laborLinesToWrite.length)),
-          buildHistoryChange("shoppingItems", "Planned Materials", String(shoppingList.length), String(materialsToWrite.length)),
+          buildHistoryChange("laborLineItems", "Service Lines", String(laborLineItems.length), String(laborLinesToWrite.length)),
+          buildHistoryChange("shoppingItems", "Planned Products", String(shoppingList.length), String(materialsToWrite.length)),
         ],
         metadata: {
           planId: solution.id,
@@ -3787,7 +3880,7 @@ const JobDetailView = () => {
       });
 
       toast.success("Plan loaded into Planned");
-      setActiveTab("Planned");
+      handleJobTabChange("Planned");
       return true;
     } catch (err) {
       console.error(err);
@@ -4026,8 +4119,8 @@ const JobDetailView = () => {
         buildHistoryChange("rate", "Customer Price", moneyFromCents(job.rate), moneyFromCents(planOptionTotalCents(solution))),
         buildHistoryChange("tasks", "Tasks", String(taskList.length), String(tasksToWrite.length)),
         buildHistoryChange("plannedServiceStops", "Planned Stops", String(plannedServiceStops.length), String(plannedStopsToWrite.length)),
-        buildHistoryChange("laborLineItems", "Labor Lines", String(laborLineItems.length), String(laborLinesToWrite.length)),
-        buildHistoryChange("shoppingItems", "Planned Materials", String(shoppingList.length), String(materialsToWrite.length)),
+        buildHistoryChange("laborLineItems", "Service Lines", String(laborLineItems.length), String(laborLinesToWrite.length)),
+        buildHistoryChange("shoppingItems", "Planned Products", String(shoppingList.length), String(materialsToWrite.length)),
       ],
       metadata: {
         planId: solution.id,
@@ -4062,7 +4155,7 @@ const JobDetailView = () => {
       setAcceptingPlanId(solution.id);
       await promotePlanToActiveWork(solution);
       toast.success("Plan accepted and promoted to the active job work");
-      setActiveTab("Planned");
+      handleJobTabChange("Planned");
     } catch (err) {
       console.error(err);
       toast.error("Failed to accept plan");
@@ -4456,8 +4549,8 @@ const JobDetailView = () => {
       Number(job.rate || 0) ? `Customer price: ${moneyFromCents(job.rate)}` : "",
       job.description ? `Scope: ${job.description}` : "",
       `Tasks: ${(taskList || []).length}${openTasks.length ? ` (${openTasks.length} open)` : " (all complete)"}`,
-      plannedMaterials.length ? `Planned materials: ${plannedMaterials.length}` : "",
-      purchasedMaterialCount ? `Purchased materials: ${purchasedMaterialCount}` : "",
+      plannedMaterials.length ? `Planned products: ${plannedMaterials.length}` : "",
+      purchasedMaterialCount ? `Purchased products: ${purchasedMaterialCount}` : "",
       serviceStopCount ? `Service stops: ${serviceStopCount}` : "",
     ]
       .filter(Boolean)
@@ -5338,14 +5431,14 @@ const JobDetailView = () => {
       },
       {
         id: uuidv4(),
-        title: "Planned Materials",
-        description: "Internal planned material cost",
+        title: "Planned Products",
+        description: "Internal planned product cost",
         value: plannedMaterialCostCents,
       },
       {
         id: uuidv4(),
-        title: "Planned Billable Materials",
-        description: "Planned customer-facing material value included for estimate review",
+        title: "Planned Billable Products",
+        description: "Planned customer-facing product value included for estimate review",
         value: plannedMaterialPriceCents,
       },
     ];
@@ -6500,7 +6593,7 @@ const JobDetailView = () => {
       `${title} by ${acceptedByName}.`,
       contractId ? `Estimate/contract: ${contractId}` : "",
       salesAgreementId ? `Service agreement: ${salesAgreementId}` : "",
-      Number(readyShoppingItemCount || 0) ? `Materials ready to purchase: ${readyShoppingItemCount}` : "",
+      Number(readyShoppingItemCount || 0) ? `Products ready to purchase: ${readyShoppingItemCount}` : "",
     ].filter(Boolean);
 
     return addJobCommentDocument(lines.join("\n"), {
@@ -6991,7 +7084,7 @@ const JobDetailView = () => {
         "Delete this job permanently?",
         "",
         "Cancel, Rejected, or Customer Resolved keeps the job in history because the issue still matters.",
-        "Delete removes the job record and job-owned notes, tasks, planned stops, change orders, and planned material rows. Use delete only for accidental or duplicate jobs.",
+        "Delete removes the job record and job-owned notes, tasks, planned stops, change orders, and planned product rows. Use delete only for accidental or duplicate jobs.",
       ].join("\n"),
       confirmLabel: "Continue",
       variant: "danger",
@@ -7252,8 +7345,8 @@ const JobDetailView = () => {
         changes: [
           buildHistoryChange("tasks", "Tasks", "—", String(taskList.length)),
           buildHistoryChange("plannedServiceStops", "Planned Stops", "—", String(plannedServiceStops.length)),
-          buildHistoryChange("laborLineItems", "Labor Lines", "—", String(normalizedTemplateLaborLines.length)),
-          buildHistoryChange("shoppingItems", "Planned Materials", "—", String(shoppingList.length)),
+          buildHistoryChange("laborLineItems", "Service Lines", "—", String(normalizedTemplateLaborLines.length)),
+          buildHistoryChange("shoppingItems", "Planned Products", "—", String(shoppingList.length)),
         ],
         metadata: {
           templateId,
@@ -7397,10 +7490,21 @@ const JobDetailView = () => {
   const showNewLaborLineItem = () => {
     if (!requireUpdateCurrentJob("update jobs")) return;
     setNewTask(false);
+    setShowServiceCatalogPicker(false);
     setEditingTaskId("");
     setEditingLaborLineId("");
     setLaborLineForm(buildSuggestedLaborLineForm());
     setNewLaborLine(true);
+  };
+
+  const toggleServiceCatalogPicker = () => {
+    if (!requireUpdateCurrentJob("update jobs")) return;
+    clearLaborLineEditor({ force: true });
+    clearNewTask({ preventDefault: () => { } });
+    setEditingTaskId("");
+    setNewTaskLaborLineId("");
+    setNewPlannedStopLaborLineId("");
+    setShowServiceCatalogPicker((current) => !current);
   };
 
   const editGeneratedLaborLine = (line) => {
@@ -7488,10 +7592,10 @@ const JobDetailView = () => {
     const unitPriceCents = centsFromCurrencyInput(laborLineForm.unitPrice);
     const internalCostCents = centsFromCurrencyInput(laborLineForm.internalCost);
 
-    if (!name) return toast.error("Add a labor line name.");
+    if (!name) return toast.error("Add a service line name.");
     if (!Number.isFinite(quantity) || quantity <= 0) return toast.error("Quantity must be greater than 0.");
-    if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) return toast.error("Labor price cannot be negative.");
-    if (!Number.isFinite(internalCostCents) || internalCostCents < 0) return toast.error("Labor cost cannot be negative.");
+    if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) return toast.error("Service price cannot be negative.");
+    if (!Number.isFinite(internalCostCents) || internalCostCents < 0) return toast.error("Service cost cannot be negative.");
 
     const existingLine = (laborLineItems || []).find((line) => line.id === editingLaborLineId);
     const nowMillis = Date.now();
@@ -7532,8 +7636,8 @@ const JobDetailView = () => {
       const persistedItems = await persistLaborLineItems(nextItems);
 
       await recordJobHistory({
-        eventType: "Labor Line",
-        title: `${existingLine ? "Labor line updated" : "Labor line added"}: ${name}`,
+        eventType: "Service Line",
+        title: `${existingLine ? "Service line updated" : "Service line added"}: ${name}`,
         description: payload.description,
         changes: [
           buildHistoryChange("totalPriceCents", "Customer Price", existingLine ? moneyFromCents(existingLine.totalPriceCents) : "—", moneyFromCents(payload.totalPriceCents)),
@@ -7551,12 +7655,208 @@ const JobDetailView = () => {
       });
 
       clearLaborLineEditor({ force: true });
-      toast.success(existingLine ? "Updated labor line" : "Added labor line");
+      toast.success(existingLine ? "Updated service line" : "Added service line");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to save labor line");
+      toast.error("Failed to save service line");
     } finally {
       setSavingLaborLine(false);
+    }
+  };
+
+  const catalogTemplateNumber = (...values) => {
+    const found = values.find((value) => value !== undefined && value !== null && value !== "");
+    const parsed = Number(found || 0);
+    return Number.isFinite(parsed) ? Math.max(parsed, 0) : 0;
+  };
+
+  const catalogTemplateCents = (...values) => Math.round(catalogTemplateNumber(...values));
+
+  const catalogTemplateMinutes = (template = {}) => catalogTemplateNumber(
+    template.estimatedMinutes,
+    template.estimatedTime,
+    template.minutes,
+    template.durationMinutes,
+    template.duration
+  );
+
+  const catalogTemplateType = (template = {}) => (
+    template.type ||
+    template.taskType ||
+    template.taskTypeName ||
+    taskTypeList?.[0]?.value ||
+    "General"
+  );
+
+  const addCatalogServiceToJob = async (catalogItem) => {
+    if (!requireUpdateCurrentJob("update jobs")) return;
+    if (!recentlySelectedCompany || !jobId || !catalogItem?.id) return toast.error("Missing job context.");
+
+    const serviceName = String(catalogItem.name || "").trim();
+    if (!serviceName) return toast.error("Catalog service needs a name.");
+
+    setAddingCatalogServiceId(catalogItem.id);
+
+    try {
+      const lineId = `comp_job_labor_line_${uuidv4()}`;
+      const nowMillis = Date.now();
+      const taskTemplates = getCatalogServiceTaskTemplates(catalogItem);
+      const createdTasks = taskTemplates
+        .map((template, index) => {
+          const taskName = String(
+            template.name ||
+            template.title ||
+            template.description ||
+            `Task ${index + 1}`
+          ).trim();
+          if (!taskName) return null;
+
+          const taskId = `comp_wo_tas_${uuidv4()}`;
+          const laborCostCents = catalogTemplateCents(
+            template.laborCostCents,
+            template.contractRateCents,
+            template.contractedRateCents,
+            template.costCents
+          );
+          const billingLaborPriceCents = catalogTemplateCents(
+            template.billingLaborPriceCents,
+            template.unitAmountCents,
+            template.priceCents,
+            template.rateCents
+          );
+
+          return {
+            id: taskId,
+            name: taskName,
+            description: template.description || "",
+            type: catalogTemplateType(template),
+            contractedRate: laborCostCents,
+            billingLaborPriceCents,
+            estimatedTime: catalogTemplateMinutes(template),
+            status: "Unassigned",
+            customerApproval: Boolean(template.customerApproval || template.customerApprovalRequired),
+            actualTime: 0,
+            workerId: "",
+            workerType: "Not Assigned",
+            workerName: "",
+            laborContractId: "",
+            serviceStopId: {
+              id: "",
+              internalId: "",
+            },
+            equipmentId: "",
+            serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
+            bodyOfWaterId: "",
+            dataBaseItemId: "",
+            shoppingListItemId: "",
+            shoppingListItemIds: [],
+            customerApprovalRequired: Boolean(template.customerApproval || template.customerApprovalRequired),
+            customerApprovalStatus: template.customerApproval || template.customerApprovalRequired ? "pending" : "notRequired",
+            customerApprovalRequestId: "",
+            sourceType: "serviceCatalog",
+            sourceCatalogItemId: catalogItem.id,
+            sourceCatalogItemName: serviceName,
+            sourceCatalogTaskTemplateId: template.id || template.templateId || "",
+            laborLineId: lineId,
+            laborLineIds: [lineId],
+            sortOrder: (taskList || []).length + index,
+            createdAtMillis: nowMillis,
+            createdByUserId: getUserId() || "",
+            createdByUserName: getAuditUserName(),
+            updatedAtMillis: nowMillis,
+            updatedByUserId: getUserId() || "",
+            updatedByUserName: getAuditUserName(),
+          };
+        })
+        .filter(Boolean);
+
+      await Promise.all(
+        createdTasks.map((task) => (
+          setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task)
+        ))
+      );
+
+      const quantity = Math.max(Number(catalogItem.defaultQuantity || 1), 1);
+      const taskPriceCents = createdTasks.reduce((total, task) => total + cents(task.billingLaborPriceCents), 0);
+      const taskCostCents = createdTasks.reduce((total, task) => total + cents(task.contractedRate), 0);
+      const unitPriceCents = cents(catalogItem.unitAmountCents) || taskPriceCents;
+      const internalCostCents = cents(catalogItem.unitCostCents) || taskCostCents;
+      const taskIds = createdTasks.map((task) => task.id);
+      const catalogLine = {
+        id: lineId,
+        laborLineId: lineId,
+        companyId: recentlySelectedCompany,
+        jobId,
+        name: serviceName,
+        description: catalogItem.description || "",
+        quantity,
+        unitPriceCents,
+        totalPriceCents: Math.round(unitPriceCents * quantity),
+        internalCostCents,
+        taskIds,
+        laborLineTaskIds: taskIds,
+        plannedServiceStopIds: [],
+        laborLinePlannedServiceStopIds: [],
+        salesItemType: catalogItem.type || SalesCatalogItemType.service,
+        billingBehavior: catalogItem.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+        sourceType: catalogItem.sourceType || SalesCatalogSourceType.manual,
+        sourceId: catalogItem.sourceId || "",
+        catalogItemId: catalogItem.id,
+        salesCatalogItemId: catalogItem.id,
+        catalogItemName: serviceName,
+        stripeProductId: catalogItem.stripeProductId || "",
+        stripePriceId: catalogItem.stripePriceId || "",
+        sortOrder: (laborLineItems || []).length,
+        createdAtMillis: nowMillis,
+        createdByUserId: getUserId() || "",
+        createdByUserName: getAuditUserName(),
+        updatedAtMillis: nowMillis,
+        updatedByUserId: getUserId() || "",
+        updatedByUserName: getAuditUserName(),
+      };
+
+      const persistedItems = await persistLaborLineItems([...(laborLineItems || []), catalogLine]);
+      const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
+      const tasksSnap = await getDocs(tasksRef);
+      const tasks = tasksSnap.docs.map((d) => ({ ...d.data(), id: d.id }));
+      setTaskList(tasks);
+
+      await loadJobWorkflowData({
+        companyId: recentlySelectedCompany,
+        currentJobId: jobId,
+        currentTaskList: tasks,
+        currentShoppingList: shoppingList,
+      });
+
+      await recordJobHistory({
+        eventType: "Service Line",
+        title: `Catalog service added: ${serviceName}`,
+        description: catalogItem.description || "",
+        changes: [
+          buildHistoryChange("catalogItemId", "Service Catalog Item", "—", serviceName),
+          buildHistoryChange("totalPriceCents", "Customer Price", "—", moneyFromCents(catalogLine.totalPriceCents)),
+          buildHistoryChange("taskIds", "Seeded Tasks", "—", String(taskIds.length)),
+        ],
+        metadata: {
+          laborLineId: lineId,
+          catalogItemId: catalogItem.id,
+          taskIds,
+          laborLineCount: persistedItems.length,
+        },
+        severity: "success",
+      });
+
+      setShowServiceCatalogPicker(false);
+      toast.success(
+        taskIds.length
+          ? `Added ${serviceName} with ${taskIds.length} task${taskIds.length === 1 ? "" : "s"}`
+          : `Added ${serviceName}`
+      );
+    } catch (err) {
+      console.error("[JobDetailView] Failed to add catalog service", err);
+      toast.error("Failed to add catalog service.");
+    } finally {
+      setAddingCatalogServiceId("");
     }
   };
 
@@ -7565,9 +7865,9 @@ const JobDetailView = () => {
     if (!line?.id) return;
 
     const ok = await appConfirm({
-      title: "Delete Labor Line",
-      message: "Delete this labor line? Tasks and planned service stops stay on the job.",
-      confirmLabel: "Delete Labor Line",
+      title: "Delete Service Line",
+      message: "Delete this service line? Tasks and planned service stops stay on the job.",
+      confirmLabel: "Delete Service Line",
       variant: "danger",
     });
     if (!ok) return;
@@ -7577,18 +7877,18 @@ const JobDetailView = () => {
       const nextItems = (laborLineItems || []).filter((item) => item.id !== line.id);
       await persistLaborLineItems(nextItems);
       await recordJobHistory({
-        eventType: "Labor Line",
-        title: `Labor line deleted: ${line.name || line.id}`,
+        eventType: "Service Line",
+        title: `Service line deleted: ${line.name || line.id}`,
         description: line.description || "",
         metadata: { laborLineId: line.id },
         severity: "danger",
       });
 
       if (editingLaborLineId === line.id) clearLaborLineEditor({ force: true });
-      toast.success("Deleted labor line");
+      toast.success("Deleted service line");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete labor line");
+      toast.error("Failed to delete service line");
     } finally {
       setSavingLaborLine(false);
     }
@@ -7614,8 +7914,58 @@ const JobDetailView = () => {
     if (changed) await persistLaborLineItems(nextItems);
   };
 
+  const attachTaskToLaborLine = async (laborLineId, taskId) => {
+    if (!laborLineId || !taskId) return;
+
+    const nextItems = (laborLineItems || []).map((line) => {
+      if (line.id !== laborLineId) return line;
+
+      const taskIds = Array.from(new Set([...getLaborLineTaskIds(line), taskId]));
+      return {
+        ...line,
+        taskIds,
+        laborLineTaskIds: taskIds,
+      };
+    });
+
+    const changed = JSON.stringify(nextItems) !== JSON.stringify(laborLineItems || []);
+    if (changed) await persistLaborLineItems(nextItems);
+  };
+
+  const attachPlannedStopToLaborLine = async (laborLineId, plannedStopId) => {
+    if (!laborLineId || !plannedStopId) return;
+
+    const nextItems = (laborLineItems || []).map((line) => {
+      if (line.id !== laborLineId) return line;
+
+      const plannedServiceStopIds = Array.from(new Set([...getLaborLinePlannedStopIds(line), plannedStopId]));
+      return {
+        ...line,
+        plannedServiceStopIds,
+        laborLinePlannedServiceStopIds: plannedServiceStopIds,
+      };
+    });
+
+    const changed = JSON.stringify(nextItems) !== JSON.stringify(laborLineItems || []);
+    if (changed) await persistLaborLineItems(nextItems);
+  };
+
   const showNewTaskItem = () => {
     clearLaborLineEditor({ force: true });
+    setShowServiceCatalogPicker(false);
+    setNewTaskLaborLineId("");
+    setNewPlannedStopLaborLineId("");
+    setNewTask(true);
+  };
+
+  const showNewTaskForLaborLine = (laborLineId) => {
+    if (!requireUpdateCurrentJob("update jobs")) return;
+
+    clearNewTask({ preventDefault: () => { } });
+    clearLaborLineEditor({ force: true });
+    setShowServiceCatalogPicker(false);
+    setEditingTaskId("");
+    setNewTaskLaborLineId(laborLineId || "");
     setNewTask(true);
   };
 
@@ -7637,6 +7987,7 @@ const JobDetailView = () => {
     setSelectedTaskEquipment(null);
     setSelectedTaskDbItem(null);
     setTaskQuantity("1");
+    setNewTaskLaborLineId("");
     setNewTask(false);
   };
 
@@ -8000,6 +8351,7 @@ const JobDetailView = () => {
   const handleAddTask = async (e) => {
     e.preventDefault();
     try {
+      const targetLaborLineId = newTaskLaborLineId;
       if (!selectedTaskType?.value) return toast.error("Pick a task type");
       if (!taskDescription) return toast.error("Add a description");
       const laborCostNumber = Number(taskLaborCost || 0);
@@ -8148,9 +8500,13 @@ const JobDetailView = () => {
 
       }
 
+      if (targetLaborLineId) {
+        await attachTaskToLaborLine(targetLaborLineId, id);
+      }
+
       await recordJobHistory({
         eventType: "Task",
-        title: `Task added: ${taskDescription}`,
+        title: targetLaborLineId ? `Task added to service line: ${taskDescription}` : `Task added: ${taskDescription}`,
         changes: [
           buildHistoryChange("type", "Task Type", "—", selectedTaskType.value),
           buildHistoryChange("contractedRate", "Tech Labor Cost", "—", moneyFromCents(costCents)),
@@ -8166,7 +8522,7 @@ const JobDetailView = () => {
             ? [buildHistoryChange("dataBaseItemId", "Item", "—", selectedTaskDbItem?.label || selectedTaskDbItem?.name || "—")]
             : []),
         ],
-        metadata: { taskId: id },
+        metadata: { taskId: id, laborLineId: targetLaborLineId || "" },
       });
 
       const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
@@ -8189,7 +8545,7 @@ const JobDetailView = () => {
         currentShoppingList: updatedShoppingList,
       });
 
-      toast.success("Added task");
+      toast.success(targetLaborLineId ? "Added task to service line" : "Added task");
       clearNewTask({ preventDefault: () => { } });
     } catch (err) {
       console.error(err);
@@ -8197,9 +8553,11 @@ const JobDetailView = () => {
     }
   };
 
-  const openNewPlannedStopModal = () => {
+  const openNewPlannedStopModal = (laborLineId = "") => {
     if (!requireUpdateCurrentJob("update jobs")) return;
 
+    const targetLaborLineId = typeof laborLineId === "string" ? laborLineId : "";
+    setNewPlannedStopLaborLineId(targetLaborLineId);
     setPlannedStopForm({
       ...EMPTY_PLANNED_STOP_FORM,
       serviceStopTypeId: companyServiceStopTypes?.[0]?.id || "",
@@ -8211,6 +8569,7 @@ const JobDetailView = () => {
     e?.preventDefault?.();
     if (savingPlannedStop && !force) return;
     setNewPlannedStop(false);
+    setNewPlannedStopLaborLineId("");
     setPlannedStopForm(EMPTY_PLANNED_STOP_FORM);
   };
 
@@ -8242,6 +8601,7 @@ const JobDetailView = () => {
     if (!requireUpdateCurrentJob("update jobs")) return;
     if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
     if (!selectedPlannedStopType) return toast.error("Select a service stop type.");
+    const targetLaborLineId = newPlannedStopLaborLineId;
 
     const estimatedMinutesNumber = Number(plannedStopForm.estimatedMinutes || 0);
     if (!Number.isFinite(estimatedMinutesNumber) || estimatedMinutesNumber < 0) {
@@ -8301,9 +8661,13 @@ const JobDetailView = () => {
 
       await setDoc(doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), id), payload);
 
+      if (targetLaborLineId) {
+        await attachPlannedStopToLaborLine(targetLaborLineId, id);
+      }
+
       await recordJobHistory({
         eventType: "Planned Service Stop",
-        title: `Planned stop added: ${stopName}`,
+        title: targetLaborLineId ? `Planned stop added to service line: ${stopName}` : `Planned stop added: ${stopName}`,
         description: payload.description,
         changes: [
           buildHistoryChange("serviceStopTypeId", "Service Stop Type", "—", typeName),
@@ -8315,6 +8679,7 @@ const JobDetailView = () => {
           plannedStopId: id,
           serviceStopTypeId: selectedPlannedStopType.id || "",
           highestWorkerName: plannedStopFormPayRange.highestWorkerName || "",
+          laborLineId: targetLaborLineId || "",
         },
         severity: "success",
       });
@@ -8326,7 +8691,7 @@ const JobDetailView = () => {
         currentShoppingList: shoppingList,
       });
 
-      toast.success("Added planned stop");
+      toast.success(targetLaborLineId ? "Added planned stop to service line" : "Added planned stop");
       clearNewPlannedStop({ preventDefault: () => { } }, { force: true });
     } catch (err) {
       console.error(err);
@@ -8442,6 +8807,7 @@ const JobDetailView = () => {
   };
 
   const showNewShoppingListItem = () => {
+    setShowServiceCatalogPicker(false);
     setNewShoppingList(true);
     if (!shoppingFormData.quantity) {
       handleShoppingFormChange("quantity", "1");
@@ -8658,7 +9024,7 @@ const JobDetailView = () => {
     if (!requireUpdateCurrentJob("update jobs")) return;
 
     const itemId = getFirestoreDocId(item);
-    if (!recentlySelectedCompany || !jobId || !itemId) return toast.error("Missing planned material context.");
+    if (!recentlySelectedCompany || !jobId || !itemId) return toast.error("Missing planned product context.");
 
     const nextName = shoppingEditForm.name.trim();
     const nextQuantity = Number(shoppingEditForm.quantity || 0);
@@ -8669,14 +9035,14 @@ const JobDetailView = () => {
     const existingLinkedTaskId = linkedTaskIdForPlanMaterial(item);
     const databaseItemId = item.dbItemId || item.itemId || item.dataBaseItemId || "";
 
-    if (!nextName) return toast.error("Enter material name.");
+    if (!nextName) return toast.error("Enter product name.");
     if (!Number.isFinite(nextQuantity) || nextQuantity <= 0) {
       return toast.error("Quantity must be greater than 0.");
     }
     if (nextUnitCostCents < 0) return toast.error("Unit cost cannot be negative.");
     if (nextUnitPriceCents < 0) return toast.error("Unit billing price cannot be negative.");
     if (shoppingEditForm.updateDatabaseItem && !databaseItemId) {
-      return toast.error("This planned material is not linked to a database item.");
+      return toast.error("This planned product is not linked to a database item.");
     }
     if (shoppingEditForm.updateDatabaseItem && !requirePermission("852", "update database items")) return;
 
@@ -8784,8 +9150,8 @@ const JobDetailView = () => {
       }
 
       await recordJobHistory({
-        eventType: "Planned Material",
-        title: `Planned material updated: ${nextName}`,
+        eventType: "Planned Product",
+        title: `Planned product updated: ${nextName}`,
         description: shoppingEditForm.description || "",
         changes: [
           buildHistoryChange("name", "Name", getMaterialName(item), nextName),
@@ -8824,10 +9190,10 @@ const JobDetailView = () => {
       });
 
       cancelPlannedMaterialEdit({ force: true });
-      toast.success("Updated planned material");
+      toast.success("Updated planned product");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update planned material");
+      toast.error("Failed to update planned product");
     } finally {
       setSavingShoppingEdit(false);
     }
@@ -9005,8 +9371,8 @@ const JobDetailView = () => {
       }
 
       await recordJobHistory({
-        eventType: "Planned Material",
-        title: `Planned material added: ${materialName || "Unnamed Material"}`,
+        eventType: "Planned Product",
+        title: `Planned product added: ${materialName || "Unnamed Product"}`,
         description: materialDescription || "",
         changes: [
           buildHistoryChange("quantity", "Quantity", "—", qty),
@@ -9066,8 +9432,8 @@ const JobDetailView = () => {
       }
 
       await recordJobHistory({
-        eventType: "Planned Material",
-        title: `Planned material deleted: ${deletedItem ? getMaterialName(deletedItem) : id}`,
+        eventType: "Planned Product",
+        title: `Planned product deleted: ${deletedItem ? getMaterialName(deletedItem) : id}`,
         description: deletedItem?.description || "",
         metadata: { shoppingListItemId: id, linkedTaskId },
         severity: "danger",
@@ -9162,8 +9528,8 @@ const JobDetailView = () => {
       setShoppingList(nextShoppingList);
 
       await recordJobHistory({
-        eventType: "Planned Material",
-        title: `Planned material purchased: ${getMaterialName(item)}`,
+        eventType: "Planned Product",
+        title: `Planned product purchased: ${getMaterialName(item)}`,
         description: item.description || "",
         changes: [
           buildHistoryChange("status", "Status", item.status || "Need to Purchase", "Purchased"),
@@ -9183,10 +9549,10 @@ const JobDetailView = () => {
         currentShoppingList: nextShoppingList,
       });
 
-      toast.success("Marked planned material as purchased");
+      toast.success("Marked planned product as purchased");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to mark material as purchased");
+      toast.error("Failed to mark product as purchased");
     } finally {
       setMarkingPurchasedShoppingItemId("");
     }
@@ -9229,7 +9595,7 @@ const JobDetailView = () => {
 
   const getMaterialName = (item) => {
     const dbItem = getShoppingDbItemById(item?.dbItemId || item?.itemId || item?.genericItemId);
-    return item.name || item.dbItemName || item.itemName || dbItem?.name || "Unnamed Material";
+    return item.name || item.dbItemName || item.itemName || dbItem?.name || "Unnamed Product";
   };
 
   const getMaterialQuantity = (item) => {
@@ -9322,9 +9688,9 @@ const JobDetailView = () => {
     if (!recentlySelectedCompany || !jobId || !purchasedItemId) return;
 
     const ok = await appConfirm({
-      title: "Remove Purchased Material",
-      message: "Remove this purchased material from the job? The purchased item and receipt will stay in Purchases.",
-      confirmLabel: "Remove Material",
+      title: "Remove Purchased Product",
+      message: "Remove this purchased product from the job? The purchased item and receipt will stay in Purchases.",
+      confirmLabel: "Remove Product",
       variant: "danger",
     });
 
@@ -9402,12 +9768,12 @@ const JobDetailView = () => {
       }
 
       await recordJobHistory({
-        eventType: "Purchased Material",
-        title: "Purchased material removed",
+        eventType: "Purchased Product",
+        title: "Purchased product removed",
         description: item.name || purchasedItemId,
         changes: [
-          buildHistoryChange("purchasedItemsIds", "Purchased Material", item.name || purchasedItemId, "Removed"),
-          buildHistoryChange("actualMaterialCost", "Actual Material Cost", moneyFromCents(getPurchasedItemTotalCents(item)), "—"),
+          buildHistoryChange("purchasedItemsIds", "Purchased Product", item.name || purchasedItemId, "Removed"),
+          buildHistoryChange("actualMaterialCost", "Actual Product Cost", moneyFromCents(getPurchasedItemTotalCents(item)), "—"),
           buildHistoryChange("status", "Purchase Status", item.status || "Connected to Job", nextStatus),
         ],
         metadata: {
@@ -9417,10 +9783,10 @@ const JobDetailView = () => {
         severity: "warning",
       });
 
-      toast.success("Purchased material removed from job.");
+      toast.success("Purchased product removed from job.");
     } catch (error) {
       console.error("Error removing purchased item from job:", error);
-      toast.error("Failed to remove purchased material.");
+      toast.error("Failed to remove purchased product.");
     } finally {
       setRemovingPurchasedItemId("");
     }
@@ -9563,7 +9929,7 @@ const JobDetailView = () => {
             </button>
 
             <p className="mt-0.5 truncate text-xs text-slate-500">
-              {item.subCategory || "Material"} • Qty: {getMaterialQuantity(item)}
+              {item.subCategory || "Product"} • Qty: {getMaterialQuantity(item)}
               {(linkedTask || item.linkedTaskName) ? ` • Task: ${linkedTask?.name || item.linkedTaskName}` : ""}
             </p>
 
@@ -9760,7 +10126,7 @@ const JobDetailView = () => {
                     disabled={savingShoppingEdit}
                     className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {savingShoppingEdit ? "Saving..." : "Save Material"}
+                    {savingShoppingEdit ? "Saving..." : "Save Product"}
                   </button>
                 </div>
               </div>
@@ -9814,7 +10180,7 @@ const JobDetailView = () => {
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Purchased Material
+              Purchased Product
             </p>
 
             <p className="mt-1 text-base font-bold text-gray-800">
@@ -9855,7 +10221,7 @@ const JobDetailView = () => {
               type="button"
               onClick={() => removePurchasedItemFromJob(item)}
               disabled={isRemoving}
-              title="Remove purchased material from this job"
+              title="Remove purchased product from this job"
               className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <XMarkIcon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -10041,13 +10407,13 @@ const JobDetailView = () => {
       });
       setAvailablePurchasedItems((prev) => prev.filter((item) => !selectedPurchasedItemIds.includes(item.id)));
       await recordJobHistory({
-        eventType: "Purchased Material",
-        title: `${selectedItems.length} purchased material item(s) attached`,
+        eventType: "Purchased Product",
+        title: `${selectedItems.length} purchased product item(s) attached`,
         description: selectedItems.map((item) => item.name || item.id).filter(Boolean).join(", "),
         changes: [
           buildHistoryChange(
             "actualMaterialCost",
-            "Actual Material Cost",
+            "Actual Product Cost",
             "—",
             moneyFromCents(selectedItems.reduce((total, item) => total + getPurchasedItemTotalCents(item), 0))
           ),
@@ -10166,7 +10532,7 @@ const JobDetailView = () => {
       toast.success("Draft service agreement created");
       setSelectedSalesAgreementId(salesAgreement.id);
       setShowCreateContractModal(false);
-      setActiveTab("Billing");
+      handleJobTabChange("Billing");
     } catch (err) {
       console.error(err);
       toast.error("Failed to create draft service agreement");
@@ -10675,7 +11041,7 @@ const JobDetailView = () => {
         <div>
           <h5 className="text-sm font-bold text-slate-950">New Database Item</h5>
           <p className="mt-1 text-xs text-slate-600">
-            Create a catalog item, then use it for this planned material.
+            Create a catalog item, then use it for this planned product.
           </p>
         </div>
         <button
@@ -11195,7 +11561,7 @@ const JobDetailView = () => {
 
         <div className="rounded-lg bg-white border border-gray-200 p-3">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-            Material Impact
+            Product Impact
           </p>
           <p className="mt-1 font-semibold text-gray-800">
             {moneyFromCents(order.materialCostImpactCents)}
@@ -11865,22 +12231,22 @@ const JobDetailView = () => {
 
         <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-6">
           <StatCard title="Price" value={moneyFromCents(total)} subtitle="Calculated estimate" tone="blue" />
-          <StatCard title="Labor" value={moneyFromCents(laborCost)} subtitle="Internal planned" />
-          <StatCard title="Material Cost" value={moneyFromCents(materialCost)} subtitle={moneyFromCents(solution.materialPriceCents || solution.costSummary?.plannedMaterialPriceCents || 0) + " billable"} />
+          <StatCard title="Services" value={moneyFromCents(laborCost)} subtitle="Internal planned labor" />
+          <StatCard title="Product Cost" value={moneyFromCents(materialCost)} subtitle={moneyFromCents(solution.materialPriceCents || solution.costSummary?.plannedMaterialPriceCents || 0) + " billable"} />
           <StatCard title="Profit" value={moneyFromCents(profit)} subtitle="Projected" tone={profit < 0 ? "red" : "green"} />
           <StatCard title="Tasks" value={String(scope.tasks.length || solution.taskCount || 0)} subtitle="Saved scope" />
-          <StatCard title="Labor Lines" value={String(scope.laborLineItems.length || solution.laborLineCount || 0)} subtitle={`${lineItems.length} estimate lines`} />
-          <StatCard title="Visits/Materials" value={`${scope.plannedServiceStops.length || solution.plannedStopCount || 0}/${scope.shoppingItems.length || solution.materialCount || 0}`} subtitle="Saved scope" />
+          <StatCard title="Service Lines" value={String(scope.laborLineItems.length || solution.laborLineCount || 0)} subtitle={`${lineItems.length} estimate lines`} />
+          <StatCard title="Visits/Products" value={`${scope.plannedServiceStops.length || solution.plannedStopCount || 0}/${scope.shoppingItems.length || solution.materialCount || 0}`} subtitle="Saved scope" />
         </div>
 
         {(laborLineSummaries.length > 0 || taskSummaries.length > 0 || plannedStopSummaries.length > 0 || materialSummaries.length > 0) && (
           <div className="mt-4 grid gap-3 lg:grid-cols-4">
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Labor Lines</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Service Lines</p>
               <div className="mt-2 space-y-2">
                 {laborLineSummaries.slice(0, 3).map((line, index) => (
                   <div key={line.id || `${solution.id}-labor-${index}`} className="text-xs text-slate-700">
-                    <p className="font-semibold text-slate-900">{line.name || `Labor ${index + 1}`}</p>
+                    <p className="font-semibold text-slate-900">{line.name || `Service ${index + 1}`}</p>
                     <p>{moneyFromCents(line.totalPriceCents || line.totalAmountCents || line.amount || 0)} • Cost {moneyFromCents(line.internalCostCents || line.internalLaborCostCents || 0)}</p>
                   </div>
                 ))}
@@ -11915,15 +12281,15 @@ const JobDetailView = () => {
             </div>
 
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Materials</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Products</p>
               <div className="mt-2 space-y-2">
                 {materialSummaries.slice(0, 3).map((item, index) => (
                   <div key={item.id || `${solution.id}-material-${index}`} className="text-xs text-slate-700">
-                    <p className="font-semibold text-slate-900">{item.name || item.dbItemName || `Material ${index + 1}`}</p>
-                    <p>{item.quantity ? `Qty ${item.quantity}` : "Material"} • {moneyFromCents(item.plannedTotalPriceCents || getShoppingPlannedTotalPriceCents(item))}</p>
+                    <p className="font-semibold text-slate-900">{item.name || item.dbItemName || `Product ${index + 1}`}</p>
+                    <p>{item.quantity ? `Qty ${item.quantity}` : "Product"} • {moneyFromCents(item.plannedTotalPriceCents || getShoppingPlannedTotalPriceCents(item))}</p>
                   </div>
                 ))}
-                {!materialSummaries.length && <p className="text-xs text-slate-500">No materials saved.</p>}
+                {!materialSummaries.length && <p className="text-xs text-slate-500">No products saved.</p>}
               </div>
             </div>
           </div>
@@ -11945,7 +12311,7 @@ const JobDetailView = () => {
             </div>
             {lineItems.length > 4 && (
               <p className="mt-2 text-xs text-slate-500">
-                {lineItems.length - 4} more line item{lineItems.length - 4 === 1 ? "" : "s"} saved in this plan.
+                {lineItems.length - 4} more service/product item{lineItems.length - 4 === 1 ? "" : "s"} saved in this plan.
               </p>
             )}
           </div>
@@ -11990,7 +12356,7 @@ const JobDetailView = () => {
     },
 	    Planned: {
 	      label: "Create Plans",
-	      helper: "Create Estimates based on materials and labor",
+	      helper: "Create estimates based on services and products",
 	      count: String(
 	        (taskList?.length || 0) +
 	        (plannedServiceStops?.length || 0) +
@@ -12036,6 +12402,7 @@ const JobDetailView = () => {
   const isInitialShellLoading = loading && sectionLoading.shell;
   const visiblePlannedMaterials = showAllPlannedMaterials ? shoppingList : shoppingList.slice(0, 5);
   const hiddenPlannedMaterialCount = Math.max(shoppingList.length - 5, 0);
+  const newPlannedStopTargetLaborLine = (laborLineItems || []).find((line) => line.id === newPlannedStopLaborLineId) || null;
   const shoppingPreviewQuantity = quantityNumber(shoppingFormData.quantity);
   const shoppingPreviewUnitCostCents = requiresShoppingDbItem
     ? shoppingFormData.plannedUnitCost !== ""
@@ -12121,7 +12488,7 @@ const JobDetailView = () => {
 	        group: "Material",
         name: getMaterialName(item),
         description: [
-          item.subCategory || "Material",
+          item.subCategory || "Product",
           item.linkedTaskName ? `Task: ${item.linkedTaskName}` : "",
         ].filter(Boolean).join(" • "),
         quantity,
@@ -12345,13 +12712,13 @@ const JobDetailView = () => {
       <form onSubmit={saveLaborLineItem} className="rounded-md border border-blue-200 bg-blue-50/60 p-3">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
           <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 md:col-span-2">
-            Labor Line
+            Service Line
             <input
               type="text"
               value={laborLineForm.name}
               onChange={(event) => updateLaborLineForm("name", event.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-              placeholder="Labor"
+              placeholder="Service"
             />
           </label>
           <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
@@ -12393,7 +12760,7 @@ const JobDetailView = () => {
               value={laborLineForm.description}
               onChange={(event) => updateLaborLineForm("description", event.target.value)}
               className="mt-1 min-h-[72px] w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-              placeholder="Customer-facing labor description"
+              placeholder="Customer-facing service description"
             />
           </label>
         </div>
@@ -12441,13 +12808,108 @@ const JobDetailView = () => {
               disabled={savingLaborLine}
               className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {savingLaborLine ? "Saving..." : editingLaborLineId ? "Save Labor" : "Add Labor"}
+              {savingLaborLine ? "Saving..." : editingLaborLineId ? "Save Service" : "Add Service"}
             </button>
           </div>
         </div>
       </form>
     );
   };
+
+  const renderServiceCatalogPicker = () => (
+    <div className="border-b border-slate-200 bg-white p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Prebuilt Service Lines</p>
+          <p className="mt-1 text-sm text-slate-600">
+            Add reusable service building blocks with their task checklist, estimated time, and billing price.
+          </p>
+        </div>
+        <Link
+          to="/company/sales/catalog-items"
+          className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-white"
+        >
+          Manage Service Catalog
+        </Link>
+      </div>
+
+      {loadingServiceCatalogItems ? (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+          Loading service catalog...
+        </div>
+      ) : !serviceCatalogItems.length ? (
+        <div className="mt-3 rounded-md border border-dashed border-slate-300 p-4 text-center">
+          <p className="text-sm font-semibold text-slate-800">No prebuilt services yet.</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Create services in the catalog, then add them here as job building blocks.
+          </p>
+          <Link
+            to="/company/sales/catalog-items"
+            className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+          >
+            <PlusIcon className="h-4 w-4" aria-hidden="true" />
+            Add first service
+          </Link>
+        </div>
+      ) : (
+        <div className="mt-3 grid gap-2 lg:grid-cols-2">
+          {serviceCatalogItems.map((item) => {
+            const taskTemplates = getCatalogServiceTaskTemplates(item);
+            const isAdding = addingCatalogServiceId === item.id;
+            return (
+              <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-slate-900">{item.name || "Service"}</p>
+                    <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                      {item.description || "No service description"}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
+                      <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                        Price {moneyFromCents(item.unitAmountCents)}
+                      </span>
+                      <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                        Cost {moneyFromCents(item.unitCostCents)}
+                      </span>
+                      <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">
+                        {taskTemplates.length} task{taskTemplates.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addCatalogServiceToJob(item)}
+                    disabled={Boolean(addingCatalogServiceId)}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                    {isAdding ? "Adding..." : "Add"}
+                  </button>
+                </div>
+                {taskTemplates.length > 0 && (
+                  <div className="mt-3 space-y-1 border-t border-slate-200 pt-2">
+                    {taskTemplates.slice(0, 3).map((template, index) => (
+                      <p key={`${item.id}-task-${template.id || index}`} className="text-[11px] text-slate-500">
+                        <span className="font-semibold text-slate-700">
+                          {template.name || template.title || template.description || `Task ${index + 1}`}
+                        </span>
+                        {catalogTemplateMinutes(template) ? ` • ${formatDurationMinutes(catalogTemplateMinutes(template))}` : ""}
+                      </p>
+                    ))}
+                    {taskTemplates.length > 3 && (
+                      <p className="text-[11px] font-semibold text-slate-500">
+                        +{taskTemplates.length - 3} more task{taskTemplates.length - 3 === 1 ? "" : "s"}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 
   const renderPlanInvoiceTaskEditForm = () => (
     <form onSubmit={saveTaskEdit} className="rounded-md border border-blue-200 bg-white p-3 shadow-sm">
@@ -12804,7 +13266,7 @@ const JobDetailView = () => {
                   value={shoppingFormData.name}
                   onChange={(event) => handleShoppingFormChange("name", event.target.value)}
                   className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-                  placeholder="Material name"
+                  placeholder="Product name"
                 />
               </label>
               <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 md:col-span-2">
@@ -12813,7 +13275,7 @@ const JobDetailView = () => {
                   value={shoppingFormData.description}
                   onChange={(event) => handleShoppingFormChange("description", event.target.value)}
                   className="mt-1 min-h-[72px] w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-                  placeholder="Material description"
+                  placeholder="Product description"
                 />
               </label>
             </>
@@ -12875,7 +13337,7 @@ const JobDetailView = () => {
             />
             <span>
               <span className="block font-bold text-amber-900">Require customer approval</span>
-              <span className="mt-1 block text-amber-800">Keeps this material out of Ready to Purchase until approved.</span>
+              <span className="mt-1 block text-amber-800">Keeps this product out of Ready to Purchase until approved.</span>
             </span>
           </label>
         </div>
@@ -12927,7 +13389,7 @@ const JobDetailView = () => {
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Unassigned Work</p>
                 <p className="mt-0.5 text-xs text-amber-700">
-                  Attach these tasks or planned stops to a labor line so they are included in the customer-facing labor scope.
+                  Attach these tasks or planned stops to a service line so they are included in the customer-facing service scope.
                 </p>
               </div>
               {canUpdateCurrentJob && (
@@ -12937,7 +13399,7 @@ const JobDetailView = () => {
                   disabled={savingLaborLine || Boolean(editingLaborLineId) || newLaborLine}
                   className="rounded-md border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  New Labor Line
+                  New Service Line
                 </button>
               )}
             </div>
@@ -13023,6 +13485,9 @@ const JobDetailView = () => {
     const linkedTasks = (taskList || []).filter((task) => (line.taskIds || []).includes(task.id));
     const linkedStops = (plannedServiceStops || []).filter((stop) => (line.plannedServiceStopIds || []).includes(stop.id));
     const editingLinkedTask = linkedTasks.find((task) => editingTaskId === task.id) || null;
+    const showLaborLineWorkDetails = Boolean(
+      laborLine && !isEditingLaborLine && (linkedTasks.length || linkedStops.length || canUpdateCurrentJob)
+    );
 
     return (
       <React.Fragment key={line.id}>
@@ -13030,7 +13495,7 @@ const JobDetailView = () => {
           <td className="px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-600">
-                {line.generated ? "Generated Labor" : "Labor"}
+                {line.generated ? "Generated Service" : "Service"}
               </span>
               <span className="font-semibold text-slate-950">{line.name}</span>
             </div>
@@ -13110,12 +13575,31 @@ const JobDetailView = () => {
             </td>
           </tr>
         )}
-        {!isEditingLaborLine && (linkedTasks.length > 0 || linkedStops.length > 0) && (
+        {newTask && laborLine?.id && newTaskLaborLineId === laborLine.id && (
+          <tr>
+            <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
+              {renderPlanInvoiceNewTaskForm()}
+            </td>
+          </tr>
+        )}
+        {showLaborLineWorkDetails && (
           <tr className="bg-slate-50">
             <td colSpan={7} className="px-4 py-3">
               <div className="grid gap-3 lg:grid-cols-2">
                 <div>
-                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Tasks</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Tasks</p>
+                    {canUpdateCurrentJob && (
+                      <button
+                        type="button"
+                        onClick={() => showNewTaskForLaborLine(laborLine.id)}
+                        disabled={Boolean(editingTaskId) || newTask || newLaborLine || Boolean(editingLaborLineId)}
+                        className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Add Task
+                      </button>
+                    )}
+                  </div>
                   <div className="mt-2 space-y-2">
                     {!linkedTasks.length ? (
                       <p className="rounded-md border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-500">No tasks attached.</p>
@@ -13155,7 +13639,19 @@ const JobDetailView = () => {
                 </div>
 
                 <div>
-                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Planned Stops</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Planned Stops</p>
+                    {canUpdateCurrentJob && (
+                      <button
+                        type="button"
+                        onClick={() => openNewPlannedStopModal(laborLine.id)}
+                        disabled={savingPlannedStop}
+                        className="rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Add Planned Stop
+                      </button>
+                    )}
+                  </div>
                   <div className="mt-2 space-y-2">
                     {!linkedStops.length ? (
                       <p className="rounded-md border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-500">No planned stops attached.</p>
@@ -13376,19 +13872,23 @@ const JobDetailView = () => {
           </div>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <section className="grid gap-6 lg:grid-cols-[450px_minmax(0,1fr)]">
           <aside className="space-y-4">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
               <div className="mt-3 space-y-2">
-                {tabs.map((tab) => {
-                  const meta = sectionMeta[tab] || { label: tab, helper: "", count: "" };
-                  const active = tab === selectedSection;
+                {JOB_DETAIL_SECTIONS.map((sectionOption) => {
+                  const meta = sectionMeta[sectionOption.tab] || {
+                    label: sectionOption.label,
+                    helper: sectionOption.helper,
+                    count: "",
+                  };
+                  const active = sectionOption.tab === selectedSection;
                   return (
                     <button
-                      key={tab}
+                      key={sectionOption.id}
                       type="button"
-                      onClick={() => setActiveTab(tab)}
+                      onClick={() => handleJobTabChange(sectionOption.tab)}
                       className={[
                         "w-full rounded-md border px-3 py-2 text-left transition",
                         active
@@ -13480,7 +13980,8 @@ const JobDetailView = () => {
           </aside>
 
           <div className="min-w-0 space-y-4">
-            <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            {selectedSection !== "Planned" && (
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -13508,13 +14009,14 @@ const JobDetailView = () => {
                   </button>
                 </div>
               </div>
-            </div>
+              </div>
+            )}
 
             {activeTab === "Plans" && (
               <div className="space-y-3">
                 <DetailDisclosure
                   panelId="plans-overview"
-                  title="Overview"
+                  title="Summary"
                   helper="Core job details and financial snapshot"
                   count="Summary"
                 >
@@ -13524,7 +14026,7 @@ const JobDetailView = () => {
                     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-4">
                         <div>
-                          <h3 className="text-base font-bold text-slate-900">Overview</h3>
+                          <h3 className="text-base font-bold text-slate-900">Summary</h3>
                           <p className="mt-0.5 text-xs text-slate-500">Core job details and statuses</p>
                         </div>
                       </div>
@@ -13533,7 +14035,7 @@ const JobDetailView = () => {
                           <StatCard
                             title="Estimate Price"
                             value={moneyFromCents(plannedEstimatePriceCents || job.rate)}
-                            subtitle={plannedEstimatePriceCents ? "Labor + material billing" : "Saved job rate"}
+                            subtitle={plannedEstimatePriceCents ? "Services + products billing" : "Saved job rate"}
                             tone="blue"
                           />
                         ) : (
@@ -13562,15 +14064,15 @@ const JobDetailView = () => {
                         )}
 
                         <StatCard
-                          title="Labor"
+                          title="Services"
                           value={moneyFromCents(plannedTotalLaborCents)}
                           subtitle={(laborLineItems || []).length
-                            ? `${moneyFromCents(plannedLaborPriceCents)} customer price • ${laborLineItems.length} labor line${laborLineItems.length === 1 ? "" : "s"}`
+                            ? `${moneyFromCents(plannedLaborPriceCents)} customer price • ${laborLineItems.length} service line${laborLineItems.length === 1 ? "" : "s"}`
                             : `${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tech tasks • ${moneyFromCents(plannedTaskBillingLaborCents)} billable tasks`}
                         />
 
                         <StatCard
-                          title="Materials"
+                          title="Products"
                           value={moneyFromCents(plannedMaterialCostCents)}
                           subtitle={`${moneyFromCents(plannedMaterialPriceCents)} billable`}
                         />
@@ -13635,7 +14137,7 @@ const JobDetailView = () => {
                             className="rounded-md border border-slate-200 bg-slate-50 p-3 transition hover:bg-slate-100"
                           >
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Source Repair Request</p>
-                            <p className="mt-1 text-sm font-semibold text-blue-700">{job.repairRequestId}</p>
+                            <p className="mt-1 text-sm font-semibold text-blue-700">Open repair request</p>
                             <p className="mt-0.5 text-xs text-slate-500">Converted to this job</p>
                           </Link>
                         )}
@@ -13853,7 +14355,7 @@ const JobDetailView = () => {
 	                        </h4>
 	                        <p className="mt-1 max-w-2xl text-xs text-slate-500">
 	                          {currentPlanInvoiceLineItems.length
-	                            ? `${currentPlanLaborLineItems.length} labor line${currentPlanLaborLineItems.length === 1 ? "" : "s"} and ${currentPlanMaterialLineItems.length} material line${currentPlanMaterialLineItems.length === 1 ? "" : "s"}`
+	                            ? `${currentPlanLaborLineItems.length} service line${currentPlanLaborLineItems.length === 1 ? "" : "s"} and ${currentPlanMaterialLineItems.length} product line${currentPlanMaterialLineItems.length === 1 ? "" : "s"}`
 	                            : "No plan line items yet"}
 	                        </p>
 	                      </div>
@@ -13886,9 +14388,9 @@ const JobDetailView = () => {
 	                      <section className="overflow-hidden rounded-md border border-slate-200">
 	                        <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
 	                          <div>
-	                            <h4 className="text-sm font-bold text-slate-950">Labor</h4>
+	                            <h4 className="text-sm font-bold text-slate-950">Services</h4>
 	                            <p className="mt-0.5 text-xs text-slate-500">
-	                              Editable labor price with tasks and planned stops underneath.
+	                              Billable service price with tasks and planned stops underneath.
 	                            </p>
 	                          </div>
 	                          <div className="flex flex-wrap items-center gap-2">
@@ -13902,12 +14404,21 @@ const JobDetailView = () => {
 	                              <>
 	                                <button
 	                                  type="button"
+	                                  onClick={toggleServiceCatalogPicker}
+	                                  disabled={Boolean(addingCatalogServiceId) || newLaborLine || Boolean(editingLaborLineId)}
+	                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+	                                >
+	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                                  From Catalog
+	                                </button>
+	                                <button
+	                                  type="button"
 	                                  onClick={showNewLaborLineItem}
 	                                  disabled={savingLaborLine || Boolean(editingLaborLineId) || newLaborLine}
 	                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
 	                                >
 	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                  Labor Line
+	                                  Service Line
 	                                </button>
 	                                <button
 	                                  type="button"
@@ -13931,6 +14442,8 @@ const JobDetailView = () => {
 	                            )}
 	                          </div>
 	                        </div>
+
+	                        {showServiceCatalogPicker && renderServiceCatalogPicker()}
 	
 	                        <div className="overflow-x-auto">
 	                          <table className="min-w-full text-sm">
@@ -13949,7 +14462,25 @@ const JobDetailView = () => {
 	                              {!currentPlanLaborLineItems.length && !newTask && !newLaborLine ? (
 	                                <tr>
 	                                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
-	                                    Add a labor line to price the work, then attach tasks and planned stops underneath it.
+	                                    <div className="flex flex-col items-center gap-3">
+	                                      <div>
+	                                        <p className="font-semibold text-slate-700">No services added yet.</p>
+	                                        <p className="mt-1 text-xs text-slate-500">
+	                                          Add a service line to price the work, then attach tasks and planned stops underneath it.
+	                                        </p>
+	                                      </div>
+	                                      {canUpdateCurrentJob && (
+	                                        <button
+	                                          type="button"
+	                                          onClick={showNewLaborLineItem}
+	                                          disabled={savingLaborLine || Boolean(editingLaborLineId) || newLaborLine}
+	                                          className="inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+	                                        >
+	                                          <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                                          Add first service
+	                                        </button>
+	                                      )}
+	                                    </div>
 	                                  </td>
 	                                </tr>
 	                              ) : (
@@ -13962,7 +14493,7 @@ const JobDetailView = () => {
 	                                  </td>
 	                                </tr>
 	                              )}
-	                              {newTask && (
+	                              {newTask && !newTaskLaborLineId && (
 	                                <tr>
 	                                  <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
 	                                    {renderPlanInvoiceNewTaskForm()}
@@ -13978,9 +14509,9 @@ const JobDetailView = () => {
 	                      <section className="overflow-hidden rounded-md border border-slate-200">
 	                        <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
 	                          <div>
-	                            <h4 className="text-sm font-bold text-slate-950">Materials to Purchase</h4>
+	                            <h4 className="text-sm font-bold text-slate-950">Products</h4>
 	                            <p className="mt-0.5 text-xs text-slate-500">
-	                              Planned material cost and customer billing.
+	                              Products needed for the job, purchase prep, and customer billing.
 	                            </p>
 	                          </div>
 	                          <div className="flex flex-wrap items-center gap-2">
@@ -13998,7 +14529,7 @@ const JobDetailView = () => {
 	                                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
 	                              >
 	                                <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                Material Line
+	                                Product Line
 	                              </button>
 	                            )}
 	                          </div>
@@ -14007,10 +14538,21 @@ const JobDetailView = () => {
 	                        <div className="space-y-2 bg-white p-4">
 	                          {!shoppingList.length && !newShoppingList ? (
 	                            <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
-	                              <p className="text-sm font-medium text-slate-700">No planned materials yet.</p>
+	                              <p className="text-sm font-medium text-slate-700">No planned products yet.</p>
 	                              <p className="mt-0.5 text-xs text-slate-500">
-	                                Add materials to estimate purchase cost and billing.
+	                                Add products to estimate purchase cost and billing.
 	                              </p>
+	                              {canUpdateCurrentJob && (
+	                                <button
+	                                  type="button"
+	                                  onClick={showNewShoppingListItem}
+	                                  disabled={Boolean(editingShoppingItemId) || newShoppingList}
+	                                  className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+	                                >
+	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                                  Add first product
+	                                </button>
+	                              )}
 	                            </div>
 	                          ) : (
 	                            visiblePlannedMaterials.map((item) => renderPlannedMaterialCard(item))
@@ -14024,8 +14566,8 @@ const JobDetailView = () => {
 	                                className="text-sm font-semibold text-blue-700 hover:text-blue-900"
 	                              >
 	                                {showAllPlannedMaterials
-	                                  ? "Show first 5 planned materials"
-	                                  : `Show ${hiddenPlannedMaterialCount} more planned material${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
+	                                  ? "Show first 5 planned products"
+	                                  : `Show ${hiddenPlannedMaterialCount} more planned product${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
 	                              </button>
 	                            </div>
 	                          )}
@@ -14059,7 +14601,7 @@ const JobDetailView = () => {
                             Accepted Plan: {getJobPlanDisplayName(acceptedPlan, "Untitled Plan")}
                           </p>
                           <p className="mt-0.5 text-xs text-emerald-800">
-                            Use the sections below to schedule visits and move accepted materials into purchasing.
+                            Use the sections below to schedule visits and move accepted products into purchasing.
                           </p>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs sm:min-w-[320px]">
@@ -14593,20 +15135,20 @@ const JobDetailView = () => {
             {false && activeTab === "Planned" && (
               <DetailDisclosure
                 panelId="planned-materials"
-                title="Planned Materials"
-                helper="Expected material cost, billable pricing, and purchase readiness"
+                title="Planned Products"
+                helper="Expected product cost, billable pricing, and purchase readiness"
                 count={shoppingList.length}
               >
                 {sectionLoading.plannedMaterials ? (
-                  <SectionSkeleton title="Loading planned materials" rows={2} />
+                  <SectionSkeleton title="Loading planned products" rows={2} />
                 ) : (
                   <div className="space-y-4">
                     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                         <div>
-                          <h3 className="text-base font-bold text-slate-900">Planned Materials</h3>
+                          <h3 className="text-base font-bold text-slate-900">Planned Products</h3>
                           <p className="mt-0.5 text-xs text-slate-500">
-                            Materials expected before purchasing.
+                            Products expected before purchasing.
                           </p>
                         </div>
 
@@ -14621,7 +15163,7 @@ const JobDetailView = () => {
                               className="inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
                             >
                               <PlusIcon className="h-4 w-4" aria-hidden="true" />
-                              Add Planned Material
+                              Add Planned Product
                             </button>
                           )}
                         </div>
@@ -14646,10 +15188,20 @@ const JobDetailView = () => {
                         <div className="space-y-2">
                           {!shoppingList.length ? (
                             <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
-                              <p className="text-sm font-medium text-slate-700">No planned materials yet.</p>
+                              <p className="text-sm font-medium text-slate-700">No planned products yet.</p>
                               <p className="mt-0.5 text-xs text-slate-500">
-                                Add planned materials to estimate job cost and billing.
+                                Add planned products to estimate job cost and billing.
                               </p>
+                              {canUpdateCurrentJob && (
+                                <button
+                                  type="button"
+                                  onClick={showNewShoppingListItem}
+                                  className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                                >
+                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                                  Add first product
+                                </button>
+                              )}
                             </div>
                           ) : (
                             visiblePlannedMaterials.map((item) => renderPlannedMaterialCard(item))
@@ -14664,8 +15216,8 @@ const JobDetailView = () => {
                               className="text-sm font-semibold text-blue-700 hover:text-blue-900"
                             >
                               {showAllPlannedMaterials
-                                ? "Show first 5 planned materials"
-                                : `Show ${hiddenPlannedMaterialCount} more planned material${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
+                                ? "Show first 5 planned products"
+                                : `Show ${hiddenPlannedMaterialCount} more planned product${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
                             </button>
                           </div>
                         )}
@@ -14678,10 +15230,10 @@ const JobDetailView = () => {
                           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
                             <div>
                               <h4 className="text-lg font-bold text-slate-950">
-                                Add Planned Material
+                                Add Planned Product
                               </h4>
                               <p className="mt-1 text-sm text-slate-600">
-                                Add a reusable planned material snapshot for this job.
+                                Add a reusable planned product snapshot for this job.
                               </p>
                             </div>
 
@@ -14689,7 +15241,7 @@ const JobDetailView = () => {
                               type="button"
                               onClick={clearNewShoppingListItem}
                               className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50"
-                              aria-label="Close add planned material"
+                              aria-label="Close add planned product"
                             >
                               <XMarkIcon className="h-5 w-5" aria-hidden="true" />
                             </button>
@@ -14794,7 +15346,7 @@ const JobDetailView = () => {
                                       value={shoppingFormData.name}
                                       onChange={(e) => handleShoppingFormChange("name", e.target.value)}
                                       className="w-full rounded-md border border-slate-300 p-2 text-sm"
-                                      placeholder="Enter custom material name"
+                                      placeholder="Enter custom product name"
                                     />
                                   </div>
 
@@ -14806,7 +15358,7 @@ const JobDetailView = () => {
                                       value={shoppingFormData.description}
                                       onChange={(e) => handleShoppingFormChange("description", e.target.value)}
                                       className="w-full min-h-[88px] rounded-md border border-slate-300 p-2 text-sm"
-                                      placeholder="Enter custom material description"
+                                      placeholder="Enter custom product description"
                                     />
                                   </div>
 
@@ -14885,7 +15437,7 @@ const JobDetailView = () => {
                                 <span>
                                   <span className="block font-bold text-amber-900">Require customer approval</span>
                                   <span className="mt-1 block text-amber-800">
-                                    Creates a client-visible approval request and keeps this material out of Ready to Purchase until approved.
+                                    Creates a client-visible approval request and keeps this product out of Ready to Purchase until approved.
                                   </span>
                                 </span>
                               </label>
@@ -14895,7 +15447,7 @@ const JobDetailView = () => {
                             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                               <h5 className="text-sm font-bold text-slate-900">Pricing Snapshot</h5>
                               <p className="mt-0.5 text-xs text-slate-500">
-                                Unit pricing is stored as cents and copied into this material.
+                                Unit pricing is stored as cents and copied into this product.
                               </p>
 
                               <div className="mt-3 space-y-2">
@@ -14950,7 +15502,7 @@ const JobDetailView = () => {
                                 disabled={!canSaveShoppingItem}
                                 className="mt-3 block w-full rounded-md bg-blue-600 px-4 py-2 text-center text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
                               >
-                                Add Material
+                                Add Product
                               </button>
                             </div>
                           </div>
@@ -15147,7 +15699,7 @@ const JobDetailView = () => {
               <DetailDisclosure
                 panelId="actual-work"
                 title="Actual Work"
-                helper="Payroll, purchased materials, and plan comparison"
+                helper="Payroll, purchased products, and plan comparison"
                 count={(actualPayLineItems?.length || 0) + (purchasedItems?.length || 0)}
               >
                 {sectionLoading.actual ? (
@@ -15159,7 +15711,7 @@ const JobDetailView = () => {
                         <div>
                           <h3 className="text-xl font-bold text-gray-800">Actual Work</h3>
                           <p className="text-gray-600 mt-1">
-                            Actual labor and purchased material cost connected to this job.
+                            Actual labor and purchased product cost connected to this job.
                           </p>
                         </div>
 
@@ -15182,7 +15734,7 @@ const JobDetailView = () => {
                         <StatCard
                           title="Estimate Price"
                           value={moneyFromCents(estimateCustomerPriceCents)}
-                          subtitle={`${moneyFromCents(plannedLaborPriceCents)} labor • ${moneyFromCents(plannedMaterialPriceCents)} materials`}
+                          subtitle={`${moneyFromCents(plannedLaborPriceCents)} services • ${moneyFromCents(plannedMaterialPriceCents)} products`}
                           tone="blue"
                         />
 
@@ -15194,16 +15746,16 @@ const JobDetailView = () => {
                         />
 
                         <StatCard
-                          title="Actual Materials"
+                          title="Actual Products"
                           value={moneyFromCents(actualPurchasedMaterialCostCents)}
-                          subtitle="Purchased material cost"
+                          subtitle="Purchased product cost"
                           tone="amber"
                         />
 
                         <StatCard
                           title="Actual Profit"
                           value={moneyFromCents(actualProfitCents)}
-                          subtitle="Estimate price minus actual labor and materials"
+                          subtitle="Estimate price minus actual services and products"
                           tone={actualProfitCents < 0 ? "red" : "green"}
                         />
                       </div>
@@ -15242,7 +15794,7 @@ const JobDetailView = () => {
                       <div className="bg-white shadow-lg rounded-xl p-6">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <h4 className="text-lg font-bold text-gray-800">Purchased Materials</h4>
+                            <h4 className="text-lg font-bold text-gray-800">Purchased Products</h4>
                             <p className="text-gray-600 mt-1 text-sm">
                               Actual vendor receipt items attached to this job.
                             </p>
@@ -15265,7 +15817,7 @@ const JobDetailView = () => {
                         <div className="mt-6 space-y-3">
                           {!purchasedItems.length ? (
                             <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                              <p className="text-gray-700 font-medium">No purchased materials yet.</p>
+                              <p className="text-gray-700 font-medium">No purchased products yet.</p>
                               <p className="text-sm text-gray-500 mt-1">
                                 Purchased items from vendor receipts will appear here when tied to this job.
                               </p>
@@ -15467,7 +16019,7 @@ const JobDetailView = () => {
                       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
                           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            Estimate Labor
+                            Estimate Services
                           </p>
                           <p className="mt-1 text-lg font-bold text-gray-800">
                             {moneyFromCents(plannedLaborPriceCents)}
@@ -15479,7 +16031,7 @@ const JobDetailView = () => {
 
                         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
                           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            Estimate Materials
+                            Estimate Products
                           </p>
                           <p className="mt-1 text-lg font-bold text-gray-800">
                             {moneyFromCents(plannedMaterialPriceCents)}
@@ -15580,7 +16132,7 @@ const JobDetailView = () => {
                             0
                           )
                         )}
-                        subtitle="Labor plus materials"
+                        subtitle="Services plus products"
                         tone="red"
                       />
                     </div>
@@ -15590,7 +16142,7 @@ const JobDetailView = () => {
                 <DetailDisclosure
                   panelId="history-change-orders"
                   title="Change Orders"
-                  helper="Scope, price, labor, material, and schedule changes"
+                  helper="Scope, price, services, products, and schedule changes"
                   count={changeOrders.length}
                 >
                   <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
@@ -15599,7 +16151,7 @@ const JobDetailView = () => {
                         <div>
                           <h4 className="text-lg font-bold text-gray-800">Change Orders</h4>
                           <p className="text-gray-600 mt-1 text-sm">
-                            Requests that change scope, price, labor, materials, or schedule.
+                            Requests that change scope, price, services, products, or schedule.
                           </p>
                         </div>
                       </div>
@@ -15769,14 +16321,14 @@ const JobDetailView = () => {
                       <StatCard
                         title="Estimate Price"
                         value={moneyFromCents(estimateCustomerPriceCents)}
-                        subtitle={plannedEstimatePriceCents ? "Current plan labor + materials" : "Saved job rate"}
+                        subtitle={plannedEstimatePriceCents ? "Current plan services + products" : "Saved job rate"}
                         tone="blue"
                       />
 
                       <StatCard
-                        title="Material Cost"
+                        title="Product Cost"
                         value={moneyFromCents(actualPurchasedMaterialCostCents)}
-                        subtitle={`${purchasedItems.length} purchased material item(s)`}
+                        subtitle={`${purchasedItems.length} purchased product item(s)`}
                         tone="red"
                       />
 
@@ -16178,7 +16730,7 @@ const JobDetailView = () => {
                 <div>
                   <h3 className="text-xl font-bold text-slate-900">Create Job Template</h3>
                   <p className="mt-1 text-sm text-slate-600">
-                    Save this job's labor lines, planned stops, tasks, materials, and pricing for reuse.
+                    Save this prebuilt job's service lines, planned stops, tasks, products, and pricing for reuse.
                   </p>
                 </div>
                 <button
@@ -16209,12 +16761,12 @@ const JobDetailView = () => {
                 <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
                   <StatCard title="Tasks" value={String(taskList.length)} subtitle="Planned work" />
                   <StatCard title="Stops" value={String(plannedServiceStops.length)} subtitle="Planned visits" />
-                  <StatCard title="Labor Lines" value={String(laborLineItems.length)} subtitle="Editable estimate" />
-                  <StatCard title="Materials" value={String(shoppingList.length)} subtitle="Planned items" />
+                  <StatCard title="Service Lines" value={String(laborLineItems.length)} subtitle="Editable estimate" />
+                  <StatCard title="Products" value={String(shoppingList.length)} subtitle="Planned items" />
                   <StatCard
                     title="Price"
                     value={moneyFromCents(plannedEstimatePriceCents || job.rate)}
-                    subtitle={plannedEstimatePriceCents ? "Labor + material billing" : "Default rate"}
+                    subtitle={plannedEstimatePriceCents ? "Services + products billing" : "Default rate"}
                     tone="blue"
                   />
                 </div>
@@ -16390,7 +16942,7 @@ const JobDetailView = () => {
                     <div>
                       <h4 className="text-base font-bold text-slate-900">Change Orders</h4>
                       <p className="mt-1 text-sm text-slate-600">
-                        Scope, price, labor, material, and schedule changes.
+                        Scope, price, services, products, and schedule changes.
                       </p>
                     </div>
                     <button
@@ -16449,6 +17001,11 @@ const JobDetailView = () => {
                 <p className="mt-1 text-sm text-slate-600">
                   Plan an expected visit before it becomes a scheduled service stop.
                 </p>
+                {newPlannedStopTargetLaborLine && (
+                  <p className="mt-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-800">
+                    Attaches to {newPlannedStopTargetLaborLine.name || "this service line"}.
+                  </p>
+                )}
               </div>
               <button
                 type="button"
@@ -16622,7 +17179,7 @@ const JobDetailView = () => {
                   {planForm.id ? "Refresh Plan" : "Save Current Work As Plan"}
                 </h3>
                 <p className="mt-1 text-sm text-slate-600">
-                  This saves the current job tasks, planned stops, materials, and pricing as a selectable customer option.
+                  This saves the current job tasks, planned stops, products, and pricing as a selectable customer option.
                 </p>
               </div>
               <button
@@ -16707,9 +17264,9 @@ const JobDetailView = () => {
               <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-6">
                 <StatCard title="Tasks" value={String(taskList.length)} subtitle="Current plan" />
                 <StatCard title="Stops" value={String(plannedServiceStops.length)} subtitle="Current plan" />
-                <StatCard title="Labor Lines" value={String(laborLineItems.length)} subtitle="Current plan" />
-                <StatCard title="Materials" value={String(shoppingList.length)} subtitle="Current plan" />
-                <StatCard title="Line Items" value={String(currentPlanInvoiceLineItems.length)} subtitle="Generated estimate" />
+                <StatCard title="Service Lines" value={String(laborLineItems.length)} subtitle="Current plan" />
+                <StatCard title="Products" value={String(shoppingList.length)} subtitle="Current plan" />
+                <StatCard title="Services & Products" value={String(currentPlanInvoiceLineItems.length)} subtitle="Generated estimate" />
                 <StatCard
                   title="Profit"
                   value={moneyFromCents(currentPlanInvoiceProfitCents)}
@@ -16815,7 +17372,7 @@ const JobDetailView = () => {
               <div>
                 <h3 className="text-xl font-bold text-gray-800">New Change Order</h3>
                 <p className="mt-1 text-sm text-gray-600">
-                  Capture a scope, price, labor, material, or schedule change for this job.
+                  Capture a scope, price, services, products, or schedule change for this job.
                 </p>
               </div>
               <button
@@ -16946,7 +17503,7 @@ const JobDetailView = () => {
 
                 <div>
                   <label className="block text-sm font-semibold text-gray-500 mb-2">
-                    Material Cost Impact
+                    Product Cost Impact
                   </label>
                   <input
                     type="number"
@@ -17398,7 +17955,7 @@ const JobDetailView = () => {
 
               <div>
                 <h4 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
-                  Line Items
+                  Services & Products
                 </h4>
 
                 {!draftContractData.lineItems?.length ? (
@@ -17634,7 +18191,7 @@ const JobDetailView = () => {
 
               <div>
                 <h4 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
-                  Line Items
+                  Services & Products
                 </h4>
 
                 {!contractForm.lineItems?.length ? (

@@ -10,6 +10,7 @@ import {
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import PaymentMethodSelector from '../../../components/sales/PaymentMethodSelector';
+import LineItemSectionTables from '../../../components/billing/LineItemSectionTables';
 import { Context } from '../../../context/AuthContext';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
@@ -413,38 +414,16 @@ const ClientInvoiceDetail = () => {
 
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 p-5">
-              <h2 className="text-lg font-bold text-slate-950">Line Items</h2>
+              <h2 className="text-lg font-bold text-slate-950">Services & Products</h2>
             </div>
 
-            {lineItems.length === 0 ? (
-              <div className="p-5 text-sm text-slate-500">No line items were included.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Item</th>
-                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Qty</th>
-                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Unit</th>
-                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {lineItems.map((item) => (
-                      <tr key={item.id || item.catalogItemId || item.name}>
-                        <td className="px-5 py-4">
-                          <p className="font-semibold text-slate-950">{item.name || item.description || 'Service'}</p>
-                          {item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}
-                        </td>
-                        <td className="px-5 py-4 text-slate-700">{Number(item.quantity || 1)}</td>
-                        <td className="px-5 py-4 text-slate-700">{formatCurrency(item.unitAmountCents)}</td>
-                        <td className="px-5 py-4 font-semibold text-slate-950">{formatCurrency(item.totalAmountCents)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div className="p-5">
+              <LineItemSectionTables
+                lineItems={lineItems}
+                formatCurrency={formatCurrency}
+                emptyMessage="No services or products were included."
+              />
+            </div>
           </section>
 
           {invoice.memo && (

@@ -486,7 +486,7 @@ const CompanySettings = () => {
                 to: '/company/settings/job-templates',
                 icon: <DocumentTextIcon className="w-6 h-6" />,
                 title: 'Job Templates',
-                description: 'Review reusable job templates shared with iOS.',
+                description: 'Create and manage prebuilt jobs with tasks, planned stops, service lines, and products.',
                 permissionId: '820',
             },
             {
@@ -664,15 +664,15 @@ const CompanySettings = () => {
             {
                 to: '/Company/Items',
                 icon: <ArchiveBoxIcon className="w-6 h-6" />,
-                title: 'Database Items',
-                description: 'Manage your company\'s internal database of items.',
+                title: 'Database Products Catalog',
+                description: 'Manage reusable products, parts, materials, costs, vendors, and billing defaults.',
                 permissionId: '850',
             },
             {
                 to: '/company/sales/catalog-items',
                 icon: <BiPurchaseTagAlt className="w-6 h-6" />,
-                title: 'Sales Catalog Items',
-                description: 'Manage billable services, recurring charges, materials, fees, and discounts.',
+                title: 'Service Catalog',
+                description: 'Manage billable services, recurring service charges, fees, discounts, and Stripe references.',
                 permissionId: '400',
             },
             // Update 3.1
@@ -685,8 +685,8 @@ const CompanySettings = () => {
             {
                 to: '/company/settings/terms-templates',
                 icon: <DocumentTextIcon className="w-6 h-6" />,
-                title: 'Terms Templates',
-                description: 'Create and manage templates for your terms and conditions.',
+                title: 'Service Agreement Templates',
+                description: 'Create and manage reusable agreement language and billing defaults.',
                 permissionId: '880',
             },
             {

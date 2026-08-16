@@ -181,7 +181,7 @@ const DataBaseItemDetailView = () => {
 
   async function editItem(e) {
     e.preventDefault();
-    if (!requirePermission("854", "update database items")) return;
+    if (!requirePermission("854", "update products")) return;
 
     try {
       setRate(purchase.rate ?? "");
@@ -209,7 +209,7 @@ const DataBaseItemDetailView = () => {
 
   async function deleteItem(e) {
     e.preventDefault();
-    if (!requirePermission("856", "delete database items")) return;
+    if (!requirePermission("856", "delete products")) return;
 
     try {
       const batch = writeBatch(db);
@@ -254,7 +254,7 @@ const DataBaseItemDetailView = () => {
 
   async function saveEdit(e) {
     e.preventDefault();
-    if (!requirePermission("854", "update database items")) return;
+    if (!requirePermission("854", "update products")) return;
 
     try {
       const rateCents = Math.round(Number(rate || 0) * 100);
@@ -276,7 +276,7 @@ const DataBaseItemDetailView = () => {
 
       const photoFields = itemPhotoFieldsFromUrl(
         uploadedPhoto.photoUrl,
-        itemName || purchase.name || "Database item photo",
+        itemName || purchase.name || "Product photo",
         uploadedPhoto.storagePath
       );
       const updatedItem = {
@@ -327,10 +327,10 @@ const DataBaseItemDetailView = () => {
       setPhotoPreviewUrl("");
       setPhotoUrl(photoFields.photoUrl || "");
       setEdit(false);
-      toast.success("Database item updated.");
+      toast.success("Product updated.");
     } catch (error) {
       console.log(error);
-      toast.error("Could not update database item.");
+      toast.error("Could not update product.");
     }
   }
 
@@ -365,11 +365,11 @@ const DataBaseItemDetailView = () => {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <Link to="/company/items" className="app-back-link">
-                &larr; Back to Items
+                &larr; Back to Products
               </Link>
-              <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Database Item</p>
+              <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Database Product</p>
               <h1 className="mt-1 break-words text-3xl font-bold text-slate-950">
-                {edit ? "Edit Database Item" : purchase.name || "Database Item"}
+                {edit ? "Edit Product" : purchase.name || "Database Product"}
               </h1>
               <div className="mt-3 flex flex-wrap gap-2">
                 <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700">
@@ -423,13 +423,13 @@ const DataBaseItemDetailView = () => {
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
               <h2 className="text-lg font-bold text-slate-950">Catalog Details</h2>
-              <p className="mt-1 text-sm text-slate-500">Edit item pricing, classification, tracking, and billing defaults.</p>
+              <p className="mt-1 text-sm text-slate-500">Edit product pricing, classification, tracking, and billing defaults.</p>
             </div>
 
             <div className="grid gap-4 p-5 lg:grid-cols-2">
               <div className="lg:col-span-2">
-                <label className={labelClass}>Item Name</label>
-                <input className={inputClass} onChange={(e) => setItemName(e.target.value)} type="text" placeholder="Item Name" value={itemName} />
+                <label className={labelClass}>Product Name</label>
+                <input className={inputClass} onChange={(e) => setItemName(e.target.value)} type="text" placeholder="Product Name" value={itemName} />
               </div>
 
               <div className="lg:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -446,7 +446,7 @@ const DataBaseItemDetailView = () => {
 
                   <div className="min-w-0 flex-1 space-y-3">
                     <div>
-                      <label className={labelClass}>Item Photo</label>
+                      <label className={labelClass}>Product Photo</label>
                       <input
                         className="mt-2 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
                         type="file"
@@ -499,7 +499,7 @@ const DataBaseItemDetailView = () => {
                 />
                 <span>
                   <span className="block font-bold text-slate-900">Billable</span>
-                  <span className="mt-1 block text-slate-500">Use this item as billable by default when it is selected for jobs, purchases, or customer-facing material.</span>
+                  <span className="mt-1 block text-slate-500">Use this product as billable by default when it is selected for jobs, purchases, or customer-facing product rows.</span>
                 </span>
               </label>
 
@@ -690,7 +690,7 @@ const DataBaseItemDetailView = () => {
                   </div>
                 )}
               </div>
-              <h2 className="text-lg font-bold text-slate-950">Item Summary</h2>
+              <h2 className="text-lg font-bold text-slate-950">Product Summary</h2>
               <div className="mt-4 space-y-3 text-sm text-slate-700">
                 <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
                   <span className="font-semibold text-slate-500">Updated</span>

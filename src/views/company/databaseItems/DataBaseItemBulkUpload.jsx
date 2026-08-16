@@ -156,7 +156,7 @@ const DataBaseItemBulkUpload = () => {
           );
         }
 
-        setSuccess("Database items uploaded successfully!");
+        setSuccess("Products uploaded successfully!");
         setIsLoading(false);
 
         setTimeout(() => {
@@ -240,7 +240,7 @@ const DataBaseItemBulkUpload = () => {
         );
       }
 
-      setSuccess("Test database items uploaded successfully!");
+      setSuccess("Test products uploaded successfully!");
       setIsLoading(false);
     } catch (err) {
       console.error(err);
@@ -251,7 +251,7 @@ const DataBaseItemBulkUpload = () => {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Bulk Upload Database Items</h1>
+      <h1 className="text-2xl font-bold mb-4">Bulk Upload Products</h1>
 
       <div className="mb-4">
         <input
@@ -355,7 +355,7 @@ const DataBaseItemBulkUpload = () => {
       {process.env.NODE_ENV === "development" && (
         <div className="p-4 my-4 bg-yellow-900 border-2 border-yellow-500 rounded-lg">
           <h3 className="text-xl font-bold text-yellow-400">
-            🚧 Development Only: Random Database Item Upload 🚧
+            🚧 Development Only: Random Product Upload 🚧
           </h3>
           <p className="text-yellow-300">
             This feature is for testing and will not be in the final product.

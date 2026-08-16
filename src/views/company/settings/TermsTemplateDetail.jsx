@@ -234,7 +234,7 @@ const TermsTemplateDetail = () => {
         if (!isEditing || !requirePermission("886", "delete terms templates")) return;
 
         const confirmed = await appConfirm({
-            title: 'Delete Terms Template',
+            title: 'Delete Service Agreement Template',
             message: 'Are you sure you want to delete this template and all its terms?',
             confirmLabel: 'Delete Template',
             variant: 'danger',
@@ -319,10 +319,10 @@ const TermsTemplateDetail = () => {
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 <div>
                                     <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                                        Editing Terms Template
+                                        Editing Service Agreement Template
                                     </span>
                                     <h1 className="mt-3 text-3xl font-bold text-slate-950">Edit Template</h1>
-                                    <p className="mt-1 text-sm text-slate-500">Update the saved default content and terms lines.</p>
+                                    <p className="mt-1 text-sm text-slate-500">Update the saved agreement defaults and terms lines.</p>
                                 </div>
                             </div>
 

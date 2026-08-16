@@ -241,7 +241,7 @@ const CreateNewDataBaseItem = () => {
 
   async function createNewItem(e) {
     e.preventDefault();
-    if (!requirePermission("852", "create database items")) return;
+    if (!requirePermission("852", "create products")) return;
 
     try {
       let id = "com_sett_db_" + uuidv4();
@@ -267,7 +267,7 @@ const CreateNewDataBaseItem = () => {
 
       const photoFields = itemPhotoFieldsFromUrl(
         uploadedPhoto.photoUrl,
-        itemName || "Database item photo",
+        itemName || "Product photo",
         uploadedPhoto.storagePath
       );
 
@@ -315,30 +315,30 @@ const CreateNewDataBaseItem = () => {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company catalog</p>
-              <h2 className="mt-1 text-3xl font-bold text-slate-950">Create Database Item</h2>
-              <p className="mt-1 text-sm text-slate-500">Add an item to your company catalog.</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Products</p>
+              <h2 className="mt-1 text-3xl font-bold text-slate-950">Create Product</h2>
+              <p className="mt-1 text-sm text-slate-500">Add a reusable product, part, material, or supply to your catalog.</p>
             </div>
 
             <Link
               className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
               to={`/company/items`}
             >
-              &larr; Back to Items
+              &larr; Back to Products
             </Link>
           </div>
         </section>
 
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="px-6 py-5 border-b border-slate-200 bg-slate-50">
-            <div className="text-sm font-semibold text-slate-700">Item Details</div>
-            <div className="text-xs text-slate-500 mt-1">Fill out the fields below and create the item.</div>
+            <div className="text-sm font-semibold text-slate-700">Product Details</div>
+            <div className="text-xs text-slate-500 mt-1">Fill out the fields below and create the product.</div>
           </div>
 
           <div className="p-6 space-y-4">
             {/* Item Name */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700">Item Name</label>
+              <label className="block text-sm font-semibold text-slate-700">Product Name</label>
               <input
                 className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setItemName(e.target.value)}
@@ -366,7 +366,7 @@ const CreateNewDataBaseItem = () => {
 
                 <div className="min-w-0 flex-1 space-y-3">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700">Item Photo</label>
+                    <label className="block text-sm font-semibold text-slate-700">Product Photo</label>
                     <input
                       className="mt-2 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
                       type="file"
@@ -374,7 +374,7 @@ const CreateNewDataBaseItem = () => {
                       onChange={handlePhotoFileChange}
                     />
                     {photoFile ? (
-                      <p className="mt-1 text-xs text-slate-500">{photoFile.name} will upload when you create.</p>
+                    <p className="mt-1 text-xs text-slate-500">{photoFile.name} will upload when you create the product.</p>
                     ) : null}
                     {photoError ? (
                       <p className="mt-1 text-xs font-semibold text-red-600">{photoError}</p>
@@ -651,7 +651,7 @@ const CreateNewDataBaseItem = () => {
               }}
               className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
             >
-              Create New
+              Create Product
             </button>
             <div className="text-xs text-slate-500 mt-2 text-center">
               This will add the item to your company database.

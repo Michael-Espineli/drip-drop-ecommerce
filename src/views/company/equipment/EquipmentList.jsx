@@ -348,6 +348,7 @@ const templateIntentMatches = (template = {}, intent = "") => {
 
 const formatAddressLine = (address = {}) => {
   if (typeof address === "string") return address.trim();
+  if (!address || typeof address !== "object") return "";
 
   const street = address.streetAddress || address.address1 || address.line1 || "";
   const cityStateZip = [
@@ -359,23 +360,31 @@ const formatAddressLine = (address = {}) => {
   return [street, cityStateZip].filter(Boolean).join(", ");
 };
 
-const serviceLocationDisplayAddress = (serviceLocation = {}) => (
-  formatAddressLine(serviceLocation.address) ||
-  serviceLocation.serviceLocationAddress ||
-  serviceLocation.locationAddress ||
-  serviceLocation.addressLabel ||
-  serviceLocation.label ||
-  serviceLocation.nickName ||
-  ""
-);
+const serviceLocationDisplayAddress = (serviceLocation = {}) => {
+  const location = serviceLocation || {};
 
-const serviceLocationDisplayName = (serviceLocation = {}) => (
-  serviceLocation.nickName ||
-  serviceLocation.name ||
-  serviceLocation.label ||
-  serviceLocationDisplayAddress(serviceLocation) ||
-  "Service Location"
-);
+  return (
+    formatAddressLine(location.address) ||
+    location.serviceLocationAddress ||
+    location.locationAddress ||
+    location.addressLabel ||
+    location.label ||
+    location.nickName ||
+    ""
+  );
+};
+
+const serviceLocationDisplayName = (serviceLocation = {}) => {
+  const location = serviceLocation || {};
+
+  return (
+    location.nickName ||
+    location.name ||
+    location.label ||
+    serviceLocationDisplayAddress(location) ||
+    "Service Location"
+  );
+};
 
 const isActiveEquipmentJob = (job = {}) => {
   const operationStatus = normalizeJobStatus(job.operationStatus || job.status);

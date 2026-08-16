@@ -37,6 +37,7 @@ import {
   getSubscriptionBillingPeriodPreview,
 } from '../../../utils/sales/manualBilling';
 import CustomerBillingNotesPanel from './components/CustomerBillingNotesPanel';
+import LineItemSectionTables from '../../../components/billing/LineItemSectionTables';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -861,37 +862,14 @@ const SalesBillingSubscriptionDetail = () => {
               </form>
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Line Items</h2>
-                <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-                  {lineItems.length === 0 ? (
-                    <div className="bg-slate-50 p-5 text-sm text-slate-500">No line items saved.</div>
-                  ) : (
-                    <table className="min-w-full divide-y divide-slate-200 text-sm">
-                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        <tr>
-                          <th className="px-4 py-3">Item</th>
-                          <th className="px-4 py-3">Qty</th>
-                          <th className="px-4 py-3">Unit</th>
-                          <th className="px-4 py-3">Total</th>
-                          <th className="px-4 py-3">Stripe Price</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {lineItems.map((item) => (
-                          <tr key={item.id || item.catalogItemId || item.name}>
-                            <td className="px-4 py-3">
-                              <p className="font-semibold text-slate-900">{item.name || item.description || 'Service'}</p>
-                              {item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}
-                            </td>
-                            <td className="px-4 py-3 text-slate-600">{item.quantity || 1}</td>
-                            <td className="px-4 py-3 text-slate-600">{formatCurrency(item.unitAmountCents)}</td>
-                            <td className="px-4 py-3 font-semibold text-slate-900">{formatCurrency(item.totalAmountCents)}</td>
-                            <td className="px-4 py-3 text-xs text-slate-500">{item.stripePriceId || 'Inline Checkout price'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
+                <h2 className="text-lg font-bold text-slate-950">Services & Products</h2>
+                <div className="mt-4">
+                  <LineItemSectionTables
+                    lineItems={lineItems}
+                    formatCurrency={formatCurrency}
+                    emptyMessage="No services or products saved."
+                    includeStripePrice
+                  />
                 </div>
               </section>
             </main>

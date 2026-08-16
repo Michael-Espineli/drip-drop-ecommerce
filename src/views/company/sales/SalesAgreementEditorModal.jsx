@@ -898,7 +898,7 @@ const SalesAgreementEditorModal = ({
 
     const templateName = editDraft.termsTemplateName || selectedEditTermsTemplate?.name || 'selected template';
     const confirmed = await appConfirm({
-      title: 'Update Terms Template',
+      title: 'Update Service Agreement Template',
       message: `Update "${templateName}" with the current default content, terms lines, and agreement defaults from this agreement?`,
       confirmLabel: 'Update Template',
     });
@@ -1197,7 +1197,7 @@ const SalesAgreementEditorModal = ({
               <section className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
                   <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTemplateSelector">
-                    Agreement Template
+                    Service Agreement Template
                   </label>
                   <select
                     id="agreementTemplateSelector"
@@ -1558,7 +1558,7 @@ const SalesAgreementEditorModal = ({
               <section>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h3 className="text-base font-bold text-slate-950">Line Items</h3>
+                    <h3 className="text-base font-bold text-slate-950">Services & Products</h3>
                     <p className="mt-1 text-sm text-slate-500">
                       Customer-facing pricing rows for this service agreement.
                     </p>
@@ -1629,7 +1629,7 @@ const SalesAgreementEditorModal = ({
                     <div>
                       <h4 className="text-sm font-bold text-slate-950">Add Line Item</h4>
                       <p className="mt-1 text-sm text-slate-500">
-                        Add pricing from the Sales Catalog or create a one-off manual row.
+                        Add pricing from the Service Catalog or create a one-off manual row.
                       </p>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row">
@@ -1844,7 +1844,7 @@ const SalesAgreementEditorModal = ({
             <div className="w-full max-w-xl rounded-lg bg-white shadow-2xl xl:sticky xl:top-4 xl:max-h-[92vh] xl:overflow-y-auto">
               <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-950">Create Sales Catalog Item</h2>
+                  <h2 className="text-lg font-bold text-slate-950">Create Service / Product</h2>
                   <p className="mt-1 text-sm text-slate-500">
                     Add a reusable catalog item, then attach it to this agreement.
                   </p>

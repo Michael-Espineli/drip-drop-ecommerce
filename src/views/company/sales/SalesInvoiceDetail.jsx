@@ -30,6 +30,7 @@ import {
 } from '../../../utils/sales/manualBilling';
 import CustomerBillingNotesPanel from './components/CustomerBillingNotesPanel';
 import ShareItemButton from '../../components/share/ShareItemButton';
+import LineItemSectionTables from '../../../components/billing/LineItemSectionTables';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -616,7 +617,7 @@ const SalesInvoiceDetail = () => {
                 className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FaReceipt className="text-xs" />
-                Mark Paid
+                Record Payment
               </button>
               {!editing ? (
                 <button
@@ -718,7 +719,7 @@ const SalesInvoiceDetail = () => {
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-slate-950">Line Items</h2>
+                  <h2 className="text-lg font-bold text-slate-950">Services & Products</h2>
                   {editing && (
                     <button
                       type="button"
@@ -799,32 +800,14 @@ const SalesInvoiceDetail = () => {
                         })}
                       </tbody>
                     </table>
-                  ) : lineItems.length === 0 ? (
-                    <div className="bg-slate-50 p-5 text-sm text-slate-500">No line items saved.</div>
                   ) : (
-                    <table className="min-w-full divide-y divide-slate-200 text-sm">
-                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        <tr>
-                          <th className="px-4 py-3">Item</th>
-                          <th className="px-4 py-3">Qty</th>
-                          <th className="px-4 py-3">Unit</th>
-                          <th className="px-4 py-3">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {lineItems.map((item) => (
-                          <tr key={item.id || item.catalogItemId || item.name}>
-                            <td className="px-4 py-3">
-                              <p className="font-semibold text-slate-900">{item.name || item.description || 'Service'}</p>
-                              {item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}
-                            </td>
-                            <td className="px-4 py-3 text-slate-600">{item.quantity || 1}</td>
-                            <td className="px-4 py-3 text-slate-600">{formatCurrency(item.unitAmountCents)}</td>
-                            <td className="px-4 py-3 font-semibold text-slate-900">{formatCurrency(item.totalAmountCents)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="bg-white p-4">
+                      <LineItemSectionTables
+                        lineItems={lineItems}
+                        formatCurrency={formatCurrency}
+                        emptyMessage="No services or products saved."
+                      />
+                    </div>
                   )}
                 </div>
               </section>
@@ -978,7 +961,7 @@ const SalesInvoiceDetail = () => {
           <form onSubmit={handleRecordPayment} className="w-full max-w-lg rounded-lg bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Mark Invoice Paid</h2>
+                <h2 className="text-xl font-bold text-slate-950">Record Invoice Payment</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {invoice?.invoiceNumber || 'Invoice'} - Balance {formatCurrency(balanceCents)}
                 </p>

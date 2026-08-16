@@ -42,6 +42,7 @@ import {
   ArrowPathRoundedSquareIcon,
   BriefcaseIcon,
   ChevronDownIcon,
+  DocumentTextIcon,
   PencilSquareIcon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
@@ -181,6 +182,13 @@ const toDateValue = (value) => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
+const getDateValue = toDateValue;
+
+const getDateMillis = (value) => {
+  const date = getDateValue(value);
+  return date ? date.getTime() : 0;
+};
+
 const pluralizeDuration = (value, unit) => `${value} ${unit}${value === 1 ? "" : "s"}`;
 
 const maintenanceIntervalText = (days) => {
@@ -270,6 +278,22 @@ const companyUserRecordId = (user = {}) => user.userId || user.id || "";
 
 const equipmentDisplayName = (equipment = {}) =>
   [equipment.name, equipment.make, equipment.model].filter(Boolean).join(" ") || equipment.type || "Equipment";
+
+const firstPresent = (...values) =>
+  values.find((value) => value !== undefined && value !== null && value !== "");
+
+const displayCompactValue = (value, fallback = "—") => {
+  const resolved = firstPresent(value);
+  return resolved === undefined ? fallback : resolved;
+};
+
+const stopDataObservationValues = (record = {}) => {
+  if (Array.isArray(record.observation)) return record.observation.filter(Boolean);
+  if (Array.isArray(record.observations)) return record.observations.filter(Boolean);
+  if (typeof record.observation === "string") return record.observation.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (typeof record.observations === "string") return record.observations.split("\n").map((line) => line.trim()).filter(Boolean);
+  return [];
+};
 
 const buildEquipmentCreatePath = (equipment = {}) => {
   let path = "/company/equipment/createNew";
@@ -382,8 +406,10 @@ const EquipmentDetail = () => {
   const [catalogTypeId, setCatalogTypeId] = useState(CUSTOM_CATALOG_VALUE);
   const [catalogMakeId, setCatalogMakeId] = useState(CUSTOM_CATALOG_VALUE);
   const [catalogEquipmentId, setCatalogEquipmentId] = useState(CUSTOM_CATALOG_VALUE);
+  const [catalogEquipment, setCatalogEquipment] = useState(null);
   const [catalogSuggestion, setCatalogSuggestion] = useState(null);
   const [applyingCatalogSuggestion, setApplyingCatalogSuggestion] = useState(false);
+  const [recentEquipmentObservations, setRecentEquipmentObservations] = useState([]);
 
   const openMaintenanceModal = useCallback(() => {
     setMaintenanceName(DEFAULT_MAINTENANCE_NAME);
@@ -709,6 +735,35 @@ const EquipmentDetail = () => {
   }, [equipmentId, recentlySelectedCompany, edit]);
 
   useEffect(() => {
+    const catalogId = equipment?.universalEquipmentId || equipment?.modelId || "";
+    if (!catalogId) {
+      setCatalogEquipment(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchCatalogEquipment = async () => {
+      try {
+        const catalogSnap = await getDoc(doc(db, "universal", "equipment", "equipment", catalogId));
+        if (cancelled) return;
+        setCatalogEquipment(catalogSnap.exists() ? { id: catalogSnap.id, ...catalogSnap.data() } : null);
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Error loading universal equipment details:", error);
+          setCatalogEquipment(null);
+        }
+      }
+    };
+
+    fetchCatalogEquipment();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [equipment?.modelId, equipment?.universalEquipmentId]);
+
+  useEffect(() => {
     const fetchOutstandingWork = async () => {
       if (!equipmentId || !recentlySelectedCompany) return;
 
@@ -829,27 +884,35 @@ const EquipmentDetail = () => {
     setServiceFrequencyEvery(nextForm.serviceFrequencyEvery || "");
   };
 
-  const getDateValue = (value) => {
-    if (!value) return null;
-    if (value instanceof Date) return value;
-    if (typeof value.toDate === "function") return value.toDate();
-    if (typeof value === "number") return new Date(value);
-
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  };
-
-  const getDateMillis = (value) => {
-    const date = getDateValue(value);
-    return date ? date.getTime() : 0;
-  };
-
+  const equipmentIsFilter = useMemo(() => isFilterEquipment(equipment), [equipment]);
   const attentionSummary = useMemo(() => equipmentAttentionSummary(equipment), [equipment]);
   const attentionBannerClass =
     attentionSummary?.tone === "red"
       ? "border-red-200 bg-red-50 text-red-900"
       : "border-amber-200 bg-amber-50 text-amber-900";
   const attentionIconClass = attentionSummary?.tone === "red" ? "text-red-700" : "text-amber-700";
+  const catalogManualLink = equipment?.manualPdfLink || catalogEquipment?.manualPdfLink || "";
+  const catalogInfo = useMemo(() => {
+    const catalogId = equipment?.universalEquipmentId || equipment?.modelId || catalogEquipment?.id || "";
+    const catalogType = catalogEquipment?.type || catalogEquipment?.category || equipment?.type || "";
+    const catalogMake = catalogEquipment?.make || equipment?.make || "";
+    const catalogModel = catalogEquipment?.model || catalogEquipment?.name || equipment?.model || "";
+    const catalogName =
+      [catalogMake, catalogModel].filter(Boolean).join(" ") ||
+      catalogEquipment?.name ||
+      equipment?.model ||
+      "Universal equipment";
+
+    return {
+      id: catalogId,
+      name: catalogName,
+      type: catalogType,
+      make: catalogMake,
+      model: catalogModel,
+      manualPdfLink: catalogManualLink,
+      hasDetails: Boolean(catalogId || catalogEquipment || catalogManualLink),
+    };
+  }, [catalogEquipment, catalogManualLink, equipment?.make, equipment?.model, equipment?.modelId, equipment?.type, equipment?.universalEquipmentId]);
 
   const pressureTrendChart = useMemo(() => {
     const categories = pressureTrendPoints.map((point) => (
@@ -902,10 +965,46 @@ const EquipmentDetail = () => {
       return Number.isFinite(number) ? number : null;
     };
 
-    const pointKey = (point) => `${point.source}:${point.id || point.date?.getTime() || point.pressure}`;
+    const readRpm = (measurement = {}) => {
+      const value =
+        measurement.revolutionsPerMinute ??
+        measurement.rpm ??
+        measurement.RPM;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    };
+
+    const pointKey = (point) => point.measurementId || `${point.date?.getTime() || "no-date"}:${point.pressure}`;
+    const observationKey = (observation) =>
+      observation.measurementId ||
+      `${observation.date?.getTime() || "no-date"}:${observation.pressure ?? ""}:${observation.rpm ?? ""}`;
+
+    const buildObservation = (measurement = {}, { id, source, stopData = null } = {}) => {
+      const date = getDateValue(measurement.date || stopData?.date);
+      const pressure = readPressure(measurement);
+      const rpm = readRpm(measurement);
+      if (!date || (pressure === null && rpm === null)) return null;
+
+      return {
+        id,
+        measurementId: measurement.id || id || "",
+        date,
+        pressure,
+        rpm,
+        source,
+        serviceStopId: measurement.serviceStopId || stopData?.serviceStopId || "",
+        status: measurement.status || "",
+        notes: stopData ? stopDataObservationValues(stopData).slice(0, 2) : [],
+      };
+    };
 
     const fetchPressureTrend = async () => {
-      if (!equipmentId || !recentlySelectedCompany) return;
+      if (!equipmentId || !recentlySelectedCompany || !equipmentIsFilter) {
+        setPressureTrendPoints([]);
+        setRecentEquipmentObservations([]);
+        setLoadingPressureTrend(false);
+        return;
+      }
 
       try {
         setLoadingPressureTrend(true);
@@ -929,6 +1028,7 @@ const EquipmentDetail = () => {
 
               return {
                 id: measurementDoc.id,
+                measurementId: data.id || measurementDoc.id,
                 date,
                 pressure,
                 source: measurementCollections[resultIndex],
@@ -938,6 +1038,7 @@ const EquipmentDetail = () => {
           .filter(Boolean);
 
         let stopDataPoints = [];
+        let stopDataObservations = [];
         if (equipment?.serviceLocationId) {
           const stopDataSnap = await getDocs(
             query(
@@ -963,11 +1064,30 @@ const EquipmentDetail = () => {
 
                 return {
                   id: `${stopDataDoc.id}_${measurement.id || equipmentId}`,
+                  measurementId: measurement.id || "",
                   date,
                   pressure,
                   source: "stopData",
                 };
               })
+              .filter(Boolean);
+          });
+
+          stopDataObservations = stopDataSnap.docs.flatMap((stopDataDoc) => {
+            const stopData = stopDataDoc.data();
+            const measurements = Array.isArray(stopData.equipmentMeasurements)
+              ? stopData.equipmentMeasurements
+              : [];
+
+            return measurements
+              .filter((measurement) => measurement.equipmentId === equipmentId)
+              .map((measurement) =>
+                buildObservation(measurement, {
+                  id: `${stopDataDoc.id}_${measurement.id || equipmentId}`,
+                  source: "stopData",
+                  stopData,
+                })
+              )
               .filter(Boolean);
           });
         }
@@ -977,18 +1097,36 @@ const EquipmentDetail = () => {
         )
           .sort((a, b) => a.date.getTime() - b.date.getTime())
           .slice(-60);
+        const subcollectionObservations = measurementSnapshots
+          .filter((result) => result.status === "fulfilled")
+          .flatMap((result, resultIndex) =>
+            result.value.docs.map((measurementDoc) =>
+              buildObservation(measurementDoc.data(), {
+                id: measurementDoc.id,
+                source: measurementCollections[resultIndex],
+              })
+            )
+          )
+          .filter(Boolean);
+        const uniqueObservations = Array.from(
+          new Map([...stopDataObservations, ...subcollectionObservations].map((observation) => [observationKey(observation), observation])).values()
+        )
+          .sort((a, b) => b.date.getTime() - a.date.getTime())
+          .slice(0, 5);
 
         setPressureTrendPoints(uniquePoints);
+        setRecentEquipmentObservations(uniqueObservations);
       } catch (error) {
         console.error("Error loading pressure trend:", error);
         setPressureTrendPoints([]);
+        setRecentEquipmentObservations([]);
       } finally {
         setLoadingPressureTrend(false);
       }
     };
 
     fetchPressureTrend();
-  }, [equipmentId, recentlySelectedCompany, equipment?.serviceLocationId]);
+  }, [equipmentId, recentlySelectedCompany, equipment?.serviceLocationId, equipmentIsFilter]);
 
 
   useEffect(() => {
@@ -1684,7 +1822,7 @@ const EquipmentDetail = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <ShareItemButton
               type="equipment"
               recordId={equipmentId}
@@ -1736,74 +1874,72 @@ const EquipmentDetail = () => {
                 )}
               </>
             )}
-          </div>
-        </div>
 
-        <div className="bg-white shadow-lg rounded-xl p-4">
-          <div className="flex justify-end">
-            <Menu as="div" className="relative inline-block text-left">
-              <MenuButton className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">
-                Actions
-                <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
-              </MenuButton>
-              <MenuItems className="absolute right-0 z-30 mt-2 w-64 origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg focus:outline-none">
-                {can("64") && (
-                  <>
-                    <EquipmentHeaderActionMenuItem
-                      label="Edit Make/Model"
-                      icon={PencilSquareIcon}
-                      onClick={openMakeModelModal}
-                    />
-                    <EquipmentHeaderActionMenuItem
-                      label="Record Maintenance"
-                      icon={WrenchScrewdriverIcon}
-                      tone="green"
-                      onClick={openMaintenanceModal}
-                    />
-                    <EquipmentHeaderActionMenuItem
-                      label="Record Repair"
-                      icon={WrenchScrewdriverIcon}
-                      tone="amber"
-                      onClick={() => setShowRepairHistoryModal(true)}
-                    />
-                    {equipment?.isActive && (
+            {(can("64") || can("32") || can("22")) && (
+              <Menu as="div" className="relative inline-block text-left">
+                <MenuButton className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">
+                  Actions
+                  <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+                </MenuButton>
+                <MenuItems className="absolute right-0 z-30 mt-2 w-64 origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg focus:outline-none">
+                  {can("64") && (
+                    <>
                       <EquipmentHeaderActionMenuItem
-                        label="Replace Equipment"
-                        icon={ArrowPathRoundedSquareIcon}
-                        tone="amber"
-                        onClick={openReplaceModal}
+                        label="Edit Make/Model"
+                        icon={PencilSquareIcon}
+                        onClick={openMakeModelModal}
                       />
-                    )}
-                  </>
-                )}
+                      <EquipmentHeaderActionMenuItem
+                        label="Record Maintenance"
+                        icon={WrenchScrewdriverIcon}
+                        tone="green"
+                        onClick={openMaintenanceModal}
+                      />
+                      <EquipmentHeaderActionMenuItem
+                        label="Record Repair"
+                        icon={WrenchScrewdriverIcon}
+                        tone="amber"
+                        onClick={() => setShowRepairHistoryModal(true)}
+                      />
+                      {equipment?.isActive && (
+                        <EquipmentHeaderActionMenuItem
+                          label="Replace Equipment"
+                          icon={ArrowPathRoundedSquareIcon}
+                          tone="amber"
+                          onClick={openReplaceModal}
+                        />
+                      )}
+                    </>
+                  )}
 
-                {can("32") && (
-                  <EquipmentHeaderActionMenuItem
-                    label="Add Repair Request"
-                    icon={WrenchScrewdriverIcon}
-                    tone="amber"
-                    onClick={createEquipmentRepairRequest}
-                  />
-                )}
-
-                {can("22") && (
-                  <>
+                  {can("32") && (
                     <EquipmentHeaderActionMenuItem
-                      label="Create Maintenance Job"
-                      icon={BriefcaseIcon}
-                      tone="green"
-                      onClick={() => createEquipmentJob("maintenance")}
-                    />
-                    <EquipmentHeaderActionMenuItem
-                      label="Create Repair Job"
-                      icon={BriefcaseIcon}
+                      label="Add Repair Request"
+                      icon={WrenchScrewdriverIcon}
                       tone="amber"
-                      onClick={() => createEquipmentJob("repair")}
+                      onClick={createEquipmentRepairRequest}
                     />
-                  </>
-                )}
-              </MenuItems>
-            </Menu>
+                  )}
+
+                  {can("22") && (
+                    <>
+                      <EquipmentHeaderActionMenuItem
+                        label="Create Maintenance Job"
+                        icon={BriefcaseIcon}
+                        tone="green"
+                        onClick={() => createEquipmentJob("maintenance")}
+                      />
+                      <EquipmentHeaderActionMenuItem
+                        label="Create Repair Job"
+                        icon={BriefcaseIcon}
+                        tone="amber"
+                        onClick={() => createEquipmentJob("repair")}
+                      />
+                    </>
+                  )}
+                </MenuItems>
+              </Menu>
+            )}
           </div>
         </div>
 
@@ -1930,13 +2066,21 @@ const EquipmentDetail = () => {
         {/* Detail Card */}
         <div className="bg-white shadow-lg rounded-xl p-6">
           {!edit ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={equipment?.isActive ? "green" : "gray"}>{equipment?.isActive ? "Active" : "Inactive"}</Badge>
-                <Badge tone={equipment?.needsService ? "red" : "green"}>
-                  {equipment?.needsService ? "Needs Maintenance" : "No Service Needed"}
-                </Badge>
-                {equipment?.status ? <Badge tone="blue">{displayEquipmentStatus(equipment.status)}</Badge> : null}
+            <div className="space-y-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-800">Equipment Information</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    {[equipment?.type, equipment?.make, equipment?.model].filter(Boolean).join(" - ") || "Core equipment details"}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge tone={equipment?.isActive ? "green" : "gray"}>{equipment?.isActive ? "Active" : "Inactive"}</Badge>
+                  <Badge tone={equipment?.needsService ? "red" : "green"}>
+                    {equipment?.needsService ? "Needs Maintenance" : "No Service Needed"}
+                  </Badge>
+                  {equipment?.status ? <Badge tone="blue">{displayEquipmentStatus(equipment.status)}</Badge> : null}
+                </div>
               </div>
 
               {attentionSummary && (
@@ -1951,19 +2095,19 @@ const EquipmentDetail = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Category</p>
                   <p className="mt-1 text-gray-800 font-semibold">{equipment?.type || "—"}</p>
                 </div>
 
-                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Make</p>
                     {can("64") && (
                       <button
                         type="button"
-	                        onClick={openMakeModelModal}
+                        onClick={openMakeModelModal}
                         className="text-xs font-bold text-blue-700 hover:text-blue-900"
                       >
                         Edit
@@ -1973,13 +2117,13 @@ const EquipmentDetail = () => {
                   <p className="mt-1 text-gray-800 font-semibold">{equipment?.make || "—"}</p>
                 </div>
 
-                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Model</p>
                     {can("64") && (
                       <button
                         type="button"
-	                        onClick={openMakeModelModal}
+                        onClick={openMakeModelModal}
                         className="text-xs font-bold text-blue-700 hover:text-blue-900"
                       >
                         Edit
@@ -1988,51 +2132,51 @@ const EquipmentDetail = () => {
                   </div>
                   <p className="mt-1 text-gray-800 font-semibold">{equipment?.model || "—"}</p>
                 </div>
-                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Installed</p>
                   <p className="mt-1 text-gray-800 font-semibold">
-                    {equipment?.dateInstalled ? format(equipment.dateInstalled, "PP") : "N/A"}
+                    {equipment?.dateInstalled ? format(equipment.dateInstalled, "PP") : "—"}
                   </p>
                 </div>
                 {!equipment?.isActive && (
-                  <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Uninstalled</p>
                     <p className="mt-1 text-gray-800 font-semibold">
-                      {equipment?.dateUninstalled ? format(equipment.dateUninstalled, "PP") : "N/A"}
+                      {equipment?.dateUninstalled ? format(equipment.dateUninstalled, "PP") : "—"}
                     </p>
                   </div>
                 )}
-                {isFilterEquipment(equipment) && (
+                {equipmentIsFilter && (
                   <>
-                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Clean Filter Pressure</p>
                       <p className="mt-1 text-gray-800 font-semibold">{equipment?.cleanFilterPressure ?? "—"}</p>
                     </div>
 
-                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Current Pressure</p>
                       <p className="mt-1 text-gray-800 font-semibold">{equipment?.currentPressure ?? "—"}</p>
                     </div>
                   </>
                 )}
 
-                {
-	                  equipment.needsService ? (<>
-                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                {equipment.needsService && (
+                  <>
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Service</p>
                       <p className="mt-1 text-gray-800 font-semibold">
-                        {equipment?.lastServiceDate ? format(equipment.lastServiceDate, "PP") : "N/A"}
+                        {equipment?.lastServiceDate ? format(equipment.lastServiceDate, "PP") : "—"}
                       </p>
                     </div>
 
-                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Next Service</p>
                       <p className="mt-1 text-gray-800 font-semibold">
-                        {equipment?.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "N/A"}
+                        {equipment?.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "—"}
                       </p>
                     </div>
 
-                    <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Service Frequency</p>
                       <p className="mt-1 text-gray-800 font-semibold">
                         {equipment?.serviceFrequency && equipment?.serviceFrequencyEvery
@@ -2040,26 +2184,54 @@ const EquipmentDetail = () => {
                           : "—"}
                       </p>
                     </div>
-                  </>) : (<></>)
-                }
+                  </>
+                )}
               </div>
 
-              <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</p>
-                <p className="mt-2 text-gray-700 whitespace-pre-wrap">{equipment?.notes || "—"}</p>
-              </div>
+              {catalogInfo.hasDetails && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">Universal Equipment</p>
+                      <p className="mt-1 text-base font-bold text-gray-900">{catalogInfo.name}</p>
+                    </div>
+                    {catalogInfo.manualPdfLink ? (
+                      <a
+                        href={catalogInfo.manualPdfLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white transition hover:bg-blue-700"
+                      >
+                        <DocumentTextIcon className="h-4 w-4" aria-hidden="true" />
+                        Manual
+                      </a>
+                    ) : (
+                      <span className="inline-flex rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700">
+                        No manual linked
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <Field label="Catalog Type">
+                      <p className="text-sm font-semibold text-gray-800">{displayCompactValue(catalogInfo.type)}</p>
+                    </Field>
+                    <Field label="Catalog Make">
+                      <p className="text-sm font-semibold text-gray-800">{displayCompactValue(catalogInfo.make)}</p>
+                    </Field>
+                    <Field label="Catalog Model">
+                      <p className="text-sm font-semibold text-gray-800">{displayCompactValue(catalogInfo.model)}</p>
+                    </Field>
+                    <Field label="Universal ID">
+                      <p className="truncate text-sm font-semibold text-gray-800">{displayCompactValue(catalogInfo.id)}</p>
+                    </Field>
+                  </div>
+                </div>
+              )}
 
-              {equipment?.manualPdfLink && (
-                <div className="p-4 rounded-xl bg-blue-50 border border-blue-200">
-                  <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider">Catalog Manual</p>
-                  <a
-                    href={equipment.manualPdfLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-2 inline-block font-semibold text-blue-700 hover:text-blue-900"
-                  >
-                    View Manual
-                  </a>
+              {equipment?.notes && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</p>
+                  <p className="mt-2 whitespace-pre-wrap text-gray-700">{equipment.notes}</p>
                 </div>
               )}
             </div>
@@ -2300,53 +2472,120 @@ const EquipmentDetail = () => {
           )}
         </div>
 
-	        {isFilterEquipment(equipment) && (
-	        <div className="bg-white shadow-lg rounded-xl p-6">
-	          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-	            <div>
-	              <h3 className="text-xl font-bold text-gray-800">Pressure Trend</h3>
-              <p className="mt-1 text-sm text-gray-500">Filter pressure readings captured from route stop observations.</p>
-            </div>
-            <Badge tone={pressureTrendPoints.length ? "blue" : "gray"}>
-              {pressureTrendPoints.length} Reading{pressureTrendPoints.length === 1 ? "" : "s"}
-            </Badge>
-          </div>
-
-          {loadingPressureTrend ? (
-            <p className="mt-5 text-gray-500">Loading pressure history...</p>
-          ) : pressureTrendPoints.length ? (
-            <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                <Chart
-                  options={pressureTrendChart.options}
-                  series={pressureTrendChart.series}
-                  type="line"
-                  height={300}
-                />
+        {equipmentIsFilter && (
+          <div className="bg-white shadow-lg rounded-xl p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-gray-800">Filter Observations</h3>
+                <p className="mt-1 text-sm text-gray-500">Pressure and RPM captured from route stop equipment observations.</p>
               </div>
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <h4 className="font-bold text-gray-800">Recent Readings</h4>
-                <div className="mt-3 space-y-2">
-                  {[...pressureTrendPoints].slice(-5).reverse().map((point) => (
-                    <div key={`${point.source}-${point.id}`} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm">
-                      <span className="font-semibold text-gray-700">
-                        {point.date ? format(point.date, "MMM d, yyyy") : "No date"}
-                      </span>
-                      <span className="font-bold text-blue-700">{point.pressure} PSI</span>
+              <div className="flex flex-wrap gap-2">
+                <Badge tone={pressureTrendPoints.length ? "blue" : "gray"}>
+                  {pressureTrendPoints.length} Reading{pressureTrendPoints.length === 1 ? "" : "s"}
+                </Badge>
+                <Badge tone={recentEquipmentObservations.length ? "blue" : "gray"}>
+                  {recentEquipmentObservations.length} Observation{recentEquipmentObservations.length === 1 ? "" : "s"}
+                </Badge>
+              </div>
+            </div>
+
+            {loadingPressureTrend ? (
+              <p className="mt-5 text-gray-500">Loading filter observations...</p>
+            ) : (
+              <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="space-y-4">
+                  {pressureTrendPoints.length ? (
+                    <>
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                        <Chart
+                          options={pressureTrendChart.options}
+                          series={pressureTrendChart.series}
+                          type="line"
+                          height={300}
+                        />
+                      </div>
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                        <h4 className="font-bold text-gray-800">Recent Readings</h4>
+                        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                          {[...pressureTrendPoints].slice(-5).reverse().map((point) => (
+                            <div key={`${point.source}-${point.id}`} className="rounded-lg bg-white px-3 py-2 text-sm">
+                              <p className="font-semibold text-gray-700">
+                                {point.date ? format(point.date, "MMM d, yyyy") : "No date"}
+                              </p>
+                              <p className="mt-1 font-bold text-blue-700">{point.pressure} PSI</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-sm text-gray-500">
+                      No pressure readings have been recorded for this equipment yet.
                     </div>
-                  ))}
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="font-bold text-gray-800">Recent Equipment Observations</h4>
+                    <span className="text-xs font-semibold text-gray-500">{recentEquipmentObservations.length}</span>
+                  </div>
+                  {recentEquipmentObservations.length ? (
+                    <div className="mt-3 space-y-3">
+                      {recentEquipmentObservations.map((observation) => (
+                        <div key={observation.id} className="rounded-lg border border-gray-200 bg-white p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-800">
+                                {observation.date ? format(observation.date, "MMM d, yyyy") : "No date"}
+                              </p>
+                              {observation.status && (
+                                <p className="mt-1 text-xs font-semibold text-gray-500">{observation.status}</p>
+                              )}
+                            </div>
+                            {observation.serviceStopId && (
+                              <Link
+                                to={`/company/serviceStops/detail/${observation.serviceStopId}`}
+                                className="text-xs font-bold text-blue-700 hover:text-blue-900"
+                              >
+                                Service Stop
+                              </Link>
+                            )}
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                            <Field label="Pressure">
+                              <p className="font-semibold text-gray-800">
+                                {observation.pressure === null ? "—" : `${observation.pressure} PSI`}
+                              </p>
+                            </Field>
+                            <Field label="RPM">
+                              <p className="font-semibold text-gray-800">
+                                {observation.rpm === null ? "—" : observation.rpm}
+                              </p>
+                            </Field>
+                          </div>
+                          {observation.notes.length ? (
+                            <ul className="mt-3 space-y-1 text-sm text-gray-600">
+                              {observation.notes.map((note, index) => (
+                                <li key={`${observation.id}-note-${index}`}>{note}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-white p-4 text-sm text-gray-500">
+                      No recent equipment observations have been saved from service stops yet.
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-sm text-gray-500">
-              No pressure readings have been recorded for this equipment yet.
-            </div>
-          )}
-	        </div>
-	        )}
+            )}
+          </div>
+        )}
 
-	        {/* History Cards */}
+        {/* History Cards */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Maintenance */}
           <div className="bg-white shadow-lg rounded-xl p-6">

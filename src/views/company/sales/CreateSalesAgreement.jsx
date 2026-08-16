@@ -1319,7 +1319,7 @@ const CreateSalesAgreement = () => {
               <div className="mt-4 space-y-4">
                 <div>
                   <label htmlFor="termsTemplateId" className="block text-sm font-semibold text-slate-700">
-                    Agreement Template
+                    Service Agreement Template
                   </label>
                   <select
                     id="termsTemplateId"
@@ -1635,7 +1635,7 @@ const CreateSalesAgreement = () => {
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-950">Line Items</h2>
+                  <h2 className="text-lg font-bold text-slate-950">Services & Products</h2>
                   <p className="mt-1 text-sm text-slate-500">
                     Customer-facing pricing rows for this service agreement.
                   </p>
@@ -1701,7 +1701,7 @@ const CreateSalesAgreement = () => {
 
                 {lineItems.length === 0 && (
                   <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                    Add pricing from the Sales Catalog or create a one-off manual row.
+                    Add pricing from the Service Catalog or create a one-off manual row.
                   </div>
                 )}
               </div>
@@ -1711,7 +1711,7 @@ const CreateSalesAgreement = () => {
                   <div>
                     <h3 className="text-sm font-bold text-slate-950">Add Line Item</h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Add pricing from the Sales Catalog or create a one-off manual row.
+                      Add pricing from the Service Catalog or create a one-off manual row.
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
@@ -1873,7 +1873,7 @@ const CreateSalesAgreement = () => {
                   <dd className="font-semibold text-slate-900">{form.serviceLocationIds.length}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-slate-500">Line Items</dt>
+                  <dt className="text-slate-500">Services & Products</dt>
                   <dd className="font-semibold text-slate-900">{saveReadyLineItems.length}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">

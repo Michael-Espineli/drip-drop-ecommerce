@@ -297,7 +297,7 @@ const Sales = () => {
       },
       (error) => {
         console.error('Unable to load terms templates', error);
-        setErrors((current) => [...current, `Terms Templates: ${error.message}`]);
+        setErrors((current) => [...current, `Service Agreement Templates: ${error.message}`]);
       }
     );
   }, [recentlySelectedCompany]);
@@ -802,7 +802,7 @@ const Sales = () => {
                 >
                   <span className="inline-flex items-center gap-2">
                     <FaTags className="text-xs" />
-                    Sales Catalog Items
+                    Service Catalog
                   </span>
                   <FaExternalLinkAlt className="text-xs" />
                 </Link>
@@ -852,7 +852,7 @@ const Sales = () => {
                 >
                   <span className="inline-flex items-center gap-2">
                     <FaFileSignature className="text-xs" />
-                    Terms Templates
+                    Service Agreement Templates
                   </span>
                   <FaExternalLinkAlt className="text-xs" />
                 </Link>
@@ -867,7 +867,7 @@ const Sales = () => {
 
               <div className="mt-4 space-y-3">
                 <label htmlFor="termsTemplate" className="block text-sm font-semibold text-slate-700">
-                  Terms Template
+                  Service Agreement Template
                 </label>
                 <select
                   id="termsTemplate"

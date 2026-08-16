@@ -641,7 +641,7 @@ const CreateSalesInvoice = () => {
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-bold text-slate-950">Line Items</h2>
+                <h2 className="text-lg font-bold text-slate-950">Services & Products</h2>
                 <Link to="/company/sales/catalog-items" className="text-sm font-semibold text-blue-700 hover:text-blue-800">
                   Manage catalog
                 </Link>

@@ -11,7 +11,7 @@ Sales is the finance workspace for customer billing. It should support two billi
 - Recurring billing for monthly pool service.
 - One-off billing from job detail views.
 
-The one-off flow should stay owned by jobs. When purchased materials are assigned to a job, the job should handle customer billing for those materials instead of the purchased item being billed separately.
+The one-off flow should stay owned by jobs. When purchased products are assigned to a job, the job should handle customer billing for those products instead of the purchased item being billed separately.
 
 ## Current Implementation Snapshot
 
@@ -20,7 +20,7 @@ The Sales workflow now has enough structure to support a real billing rollout in
 - `feature_flag_004` exposes the Sales workspace under Finance.
 - `src/views/company/sales/Sales.jsx` reads company-scoped sales records and summarizes agreements, billing profiles, billing subscriptions, invoices, accounts receivable, and payments.
 - `src/views/company/sales/SalesFinanceBoard.jsx` gives operators working views for invoices, payments, and subscriptions, including manual payment recording.
-- `src/views/company/sales/SalesCatalogItems.jsx` manages company-owned catalog building blocks for estimates, service agreements, invoices, and future Stripe handoff.
+- `src/views/company/sales/SalesCatalogItems.jsx` manages the company-owned Service Catalog for estimates, service agreements, invoices, and future Stripe handoff.
 - `src/views/company/sales/CreateSalesAgreement.jsx` and `src/views/company/sales/SalesAgreementDetail.jsx` support service agreement drafting, terms snapshots, pricing lines, internal manual acceptance, service agreement email send, and Stripe checkout handoff after acceptance.
 - `src/views/company/sales/CreateSalesInvoice.jsx` and `src/views/company/sales/SalesInvoiceDetail.jsx` support manual one-time invoices, editable invoice lines, customer email delivery, voiding, write-offs, and manual payment recording.
 - `src/views/company/sales/components/BillingReadinessCard.jsx` checks whether the selected company's connected Stripe account can bill customers and gives the company a setup link when action is needed.
@@ -44,10 +44,21 @@ Current working pricing assumptions:
 
 Important implementation note: Stripe subscription `application_fee_percent` is a single subscription-level percentage. If DripDrop truly needs different platform percentages for card vs ACH on the same subscription, that needs an explicit follow-up design instead of relying on one static `application_fee_percent`.
 
+### Payment Collection Modes
+
+The invoice system should support four company operating modes without changing the invoice data model:
+
+- Offline-only billing: companies can create invoices, send or print them, and record cash/check payments with amount, method, reference number, notes, and received date.
+- External processor billing: companies can track invoices in DripDrop while recording payments collected in QuickBooks, Venmo, Zelle, external card terminals, or bank transfers. These payments should stay marked as manually recorded/external and should not imply Stripe settlement.
+- Mixed billing: companies can collect some invoices through Stripe and record other payments manually against the same customer account or invoice balance.
+- Full Stripe billing: companies can send one-time invoices and recurring service invoices through the connected Stripe account, while DripDrop continues to own invoice snapshots, services/products, operations links, notes, and payment history.
+
+Next Stripe invoice build target: add a connected-account callable that can turn an open DripDrop `salesInvoices` record into a Stripe-hosted invoice or Checkout payment session, store `stripeInvoiceId`, `stripeHostedInvoiceUrl`, `stripeInvoicePdfUrl`, and sync paid/failed/void state through existing webhooks.
+
 ### Job Detail Estimates
 
 - Job Detail estimates should assemble company-owned building blocks into a customer-facing estimate snapshot.
-- Building blocks can come from labor, planned service stops, materials, fees, discounts, tax, and manual line items.
+- Building blocks should display as Services and Products. Services can come from labor lines, tasks, planned service stops, work types, fees, discounts, tax, and manual line items. Products can come from database products, shopping list items, purchased products, and manual product rows.
 - Do not create a permanent Stripe Product and Price for every custom job estimate.
 - When a job estimate is accepted and billed through Stripe, create Stripe invoice items or ad hoc price data on the connected account from the accepted DripDrop snapshot.
 - Keep the accepted estimate, invoice, payment records, Accounts Receivable, manual payments, and billing history in DripDrop.
@@ -61,11 +72,12 @@ Important implementation note: Stripe subscription `application_fee_percent` is 
 - Once autopay is active, Stripe subscription webhooks should continue syncing invoice, payment, and failure state back to Sales.
 - Application/platform fee percent can be sourced from the billing subscription, company configuration, or environment default.
 
-### Company-Owned Catalog
+### Service Catalog And Database Products Catalog
 
 - Company pricing building blocks should be company scoped because each pool company has its own pricing and terms.
-- Use `companies/{companyId}/salesCatalogItems` for reusable sales building blocks.
-- Keep Terms Templates at `companies/{companyId}/termsTemplates`. Do not move Terms Templates to a top-level collection without confirming the data model first.
+- Use `companies/{companyId}/salesCatalogItems` for reusable services, recurring services, fees, discounts, and tax rows.
+- Products should usually be sourced from the Database Products Catalog, shopping list items, purchased products, or manual product rows rather than duplicated into the Service Catalog.
+- Keep Service Agreement Templates at `companies/{companyId}/termsTemplates`. Do not move or rename the Firestore collection without confirming the data model first.
 
 ### Connected Account Ownership
 
@@ -93,7 +105,7 @@ Required before send:
 
 - A `salesAgreements` draft that includes company id, customer id, service location id, billing cadence, pricing, status, and owner references.
 - A copied terms snapshot from `companies/{companyId}/termsTemplates`, plus any company edits made for this specific customer. Future template edits should not rewrite already-sent agreements.
-- Line item snapshots from `companies/{companyId}/salesCatalogItems` or job estimate lines. Store names, descriptions, quantities, unit amounts, totals, tax flags, catalog item ids, and Stripe references if available.
+- Service and product snapshots from `companies/{companyId}/salesCatalogItems` or job estimate lines. Store names, descriptions, quantities, unit amounts, totals, tax flags, catalog item ids, source operation ids, and Stripe references if available.
 - A secure review URL for the customer portal. For homeowners without accounts, support a signed email link or a company-side manual acceptance flow.
 - Company email settings, including from address, reply-to address, display name, phone number, and support/contact URLs.
 - SendGrid dynamic template id for service agreements. The starter template lives at `docs/sendgrid-service-agreement-template.html`. The callable prefers `SEND_GRID_SERVICE_AGREEMENT_TEMPLATE_ID` and falls back to `d-866f4368544048aeabf108413f8b8c52` while the Sales slice is being tested.
@@ -132,7 +144,7 @@ Replacement direction for old recurring contracts:
 - Billing cadence and billing day.
 - Start date, optional end date, status.
 - Included service expectations.
-- Chemical/material inclusion rules.
+- Chemical/product inclusion rules.
 - Link to recurring service stop or route setup when applicable.
 
 ### Billing Run
@@ -159,7 +171,7 @@ Shared customer-facing bill:
 
 Reusable line item shape:
 
-- Source type: recurring service, job labor, service stop labor, purchased material, manual item, discount, credit, tax.
+- Source type: recurring service, job service line, service stop labor, purchased product, manual item, discount, credit, tax.
 - Source id.
 - Description.
 - Quantity.
