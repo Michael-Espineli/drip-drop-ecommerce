@@ -118,7 +118,7 @@ const RouteBuilder = () => {
         .map((type) => ({
           ...type,
           value: type.id,
-          label: type.name || "Unnamed Service Stop Type",
+          label: type.name || "Unnamed Pay Type",
         }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     [companyServiceStopTypes]
@@ -526,7 +526,7 @@ const RouteBuilder = () => {
     Promise.all([
       getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'))),
       getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'))),
-      getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes'))),
+      getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'companyPayTypes'))),
       getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop')))
     ])
       .then(async ([techSnapshot, stopsSnapshot, serviceStopTypesSnapshot, recurringStopsSnapshot]) => {
@@ -543,7 +543,17 @@ const RouteBuilder = () => {
         const stopList = stopsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setAllStops(stopList);
 
-        const typeList = serviceStopTypesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const typeList = serviceStopTypesSnapshot.docs.map(doc => {
+          const data = { id: doc.id, ...doc.data() };
+          return {
+            ...data,
+            imageName: data.imageName || data.iconName || "",
+            iconName: data.iconName || data.imageName || "",
+            stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
+            stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
+            defaultWorkTypeIds: [doc.id],
+          };
+        });
         setCompanyServiceStopTypes(typeList);
 
         const recurringStopList = recurringStopsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -1075,7 +1085,7 @@ const RouteBuilder = () => {
                           options={serviceStopTypeOptions}
                           value={availableStopTypeSelections[stopKey] || serviceStopTypeForStop(stop)}
                           onChange={(selectedType) => handleAvailableStopTypeChange(stopKey, selectedType)}
-                          placeholder="Service Stop Type"
+                          placeholder="Pay Type"
                           isLoading={isLoading}
                         />
                         <Button
@@ -1152,7 +1162,7 @@ const RouteBuilder = () => {
                                     options={serviceStopTypeOptions}
                                     value={serviceStopTypeForStop(stop)}
                                     onChange={(selectedType) => handleRouteStopTypeChange(stopKey, selectedType)}
-                                    placeholder="Service Stop Type"
+                                    placeholder="Pay Type"
                                     isLoading={isLoading}
                                   />
                                   <Button

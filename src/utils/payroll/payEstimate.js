@@ -52,7 +52,7 @@ const normalizeSettings = (settings = {}) => {
     payMode: safeSettings.payMode || "productionOnly",
     routePaySource: safeSettings.routePaySource || "serviceStopAndCompletedTasks",
     taskPaySource: safeSettings.taskPaySource || "technicianRateThenTaskContractedRate",
-    allowMultipleWorkTypesPerStop: safeSettings.allowMultipleWorkTypesPerStop !== false,
+    allowMultipleWorkTypesPerStop: safeSettings.allowMultipleWorkTypesPerStop === true,
   };
 };
 
@@ -77,6 +77,12 @@ const uniqueIds = (ids = []) => {
 
 const workTypeName = (workTypesById, workTypeId) =>
   workTypesById[workTypeId]?.name || "Service Work";
+
+const recordPayTypeId = (record = {}) =>
+  String(record?.payTypeId || record?.payWorkTypeId || record?.workTypeId || "").trim();
+
+const recordPayTypeName = (record = {}) =>
+  record?.payTypeName || record?.payWorkTypeName || record?.workTypeName || "";
 
 const workTypeSuggestedPayBasis = (workType) => {
   if (!workType) return "serviceStop";
@@ -232,17 +238,17 @@ const activeRate = ({
         rate.rateType === "hourly";
       if (!exactPayBasisMatch && !hourlyPayBasisFallback) return false;
 
-      const exactWorkTypeMatch = (rate.workTypeId || "") === (workTypeId || "");
+      const exactWorkTypeMatch = recordPayTypeId(rate) === (workTypeId || "");
       const generalHourlyFallback =
         allowGeneralHourlyFallback &&
-        !rate.workTypeId &&
+        !recordPayTypeId(rate) &&
         rate.rateType === "hourly";
 
       return exactWorkTypeMatch || generalHourlyFallback;
     })
     .sort((a, b) => {
-      if (a.workTypeId && !b.workTypeId) return -1;
-      if (!a.workTypeId && b.workTypeId) return 1;
+      if (recordPayTypeId(a) && !recordPayTypeId(b)) return -1;
+      if (!recordPayTypeId(a) && recordPayTypeId(b)) return 1;
       const bDate = dateFromValue(b.effectiveStartDate)?.getTime?.() || 0;
       const aDate = dateFromValue(a.effectiveStartDate)?.getTime?.() || 0;
       return bDate - aDate;
@@ -324,6 +330,8 @@ const lineFromRate = ({
       id: `estimate_missing_${source}_${sourceTaskId || workTypeId}`,
       source,
       sourceTaskId,
+      payTypeId: workTypeId,
+      payTypeName: workTypeName(workTypesById, workTypeId),
       workTypeId,
       workTypeName: workTypeName(workTypesById, workTypeId),
       title,
@@ -335,6 +343,10 @@ const lineFromRate = ({
       calculationStatus: "needsReview",
       notes: `No active technician rate found for ${userNameForRate(worker)} and ${workTypeName(workTypesById, workTypeId)}.`,
     };
+  }
+
+  if (source === "serviceStopTask" && cents(rate.amountCents) <= 0) {
+    return null;
   }
 
   const quantity = rate.rateType === "hourly" ? Number(estimatedMinutes || 0) : 1;
@@ -351,6 +363,8 @@ const lineFromRate = ({
     id: `estimate_rate_${rate.id}_${sourceTaskId || "stop"}`,
     source,
     sourceTaskId,
+    payTypeId: workTypeId,
+    payTypeName: workTypeName(workTypesById, workTypeId),
     workTypeId,
     workTypeName: workTypeName(workTypesById, workTypeId),
     title,
@@ -383,6 +397,8 @@ const lineFromTaskContractedRate = ({ task, workTypeId, workTypesById }) => ({
   id: `estimate_task_${task.id}`,
   source: "serviceStopTask",
   sourceTaskId: task.id,
+  payTypeId: workTypeId,
+  payTypeName: workTypeName(workTypesById, workTypeId),
   workTypeId,
   workTypeName: workTypeName(workTypesById, workTypeId),
   title: task.name || task.description || "Task",
@@ -399,6 +415,8 @@ const missingTaskLine = ({ task, notes }) => ({
   id: `estimate_task_needs_review_${task.id}`,
   source: "serviceStopTask",
   sourceTaskId: task.id,
+  payTypeId: null,
+  payTypeName: null,
   workTypeId: null,
   workTypeName: null,
   title: task.name || task.description || "Task",
@@ -418,10 +436,9 @@ const hasManualPayOverride = (serviceStop) =>
   serviceStop.manualPayOverrideCents !== undefined;
 
 const manualPayOverrideLine = ({ serviceStop, workTypesById }) => {
-  const workTypeId = serviceStop?.payWorkTypeId || serviceStop?.workTypeId || "";
+  const workTypeId = recordPayTypeId(serviceStop);
   const resolvedWorkTypeName =
-    serviceStop?.payWorkTypeName ||
-    serviceStop?.workTypeName ||
+    recordPayTypeName(serviceStop) ||
     workTypeName(workTypesById, workTypeId);
   const amountCents = Math.max(0, cents(serviceStop?.manualPayOverrideCents));
 
@@ -429,6 +446,8 @@ const manualPayOverrideLine = ({ serviceStop, workTypesById }) => {
     id: `estimate_manual_override_${serviceStop?.id || "stop"}`,
     source: "manualAdjustment",
     sourceTaskId: null,
+    payTypeId: workTypeId,
+    payTypeName: resolvedWorkTypeName,
     workTypeId,
     workTypeName: resolvedWorkTypeName,
     title: serviceStop?.type || serviceStop?.serviceStopTypeName || "Manual Pay Amount",
@@ -490,7 +509,13 @@ export const estimateServiceStopPay = ({
   const inferredServiceStopSourceId =
     serviceStopUseCaseSourceId ||
     inferPayrollServiceStopSourceId(serviceStop, serviceStopType);
-  const defaultStopWorkTypeIds = uniqueIds(serviceStopType?.defaultWorkTypeIds || []);
+  const directStopPayTypeId =
+    recordPayTypeId(serviceStop) ||
+    recordPayTypeId(serviceStopType) ||
+    String(serviceStopType?.id || serviceStop?.typeId || "").trim();
+  const defaultStopWorkTypeIds = directStopPayTypeId
+    ? [directStopPayTypeId]
+    : uniqueIds(serviceStopType?.defaultWorkTypeIds || []);
   const explicitStopWorkTypeIds = mappedWorkTypeIds({
     mappings,
     sourceType: "serviceStopType",
@@ -502,12 +527,12 @@ export const estimateServiceStopPay = ({
     sourceId: inferredServiceStopSourceId,
   });
   const stopWorkTypeIds = hasSelectedStopWorkTypes
-    ? uniqueIds(serviceStopWorkTypeIds)
+    ? uniqueIds(serviceStopWorkTypeIds).slice(0, 1)
     : defaultStopWorkTypeIds.length
-      ? defaultStopWorkTypeIds
+      ? defaultStopWorkTypeIds.slice(0, 1)
       : explicitStopWorkTypeIds.length
-        ? explicitStopWorkTypeIds
-        : inferredStopWorkTypeIds;
+        ? explicitStopWorkTypeIds.slice(0, 1)
+        : inferredStopWorkTypeIds.slice(0, 1);
 
   const debugContext = {
     serviceStopId: serviceStop?.id || "",
@@ -547,7 +572,7 @@ export const estimateServiceStopPay = ({
         quantityUnit: "each",
         totalAmountCents: 0,
         calculationStatus: "needsReview",
-        notes: `No service stop work type is connected. typeId: ${serviceStopTypeId || "blank"}, inferredSourceId: ${inferredServiceStopSourceId}.`,
+        notes: `No service stop pay type is connected. typeId: ${serviceStopTypeId || "blank"}, inferredSourceId: ${inferredServiceStopSourceId}.`,
       });
     } else if (!effectiveSettings.allowMultipleWorkTypesPerStop && stopWorkTypeIds.length > 1) {
       console.warn("[PayEstimate][multipleServiceStopWorkTypesBlocked]", {
@@ -568,7 +593,7 @@ export const estimateServiceStopPay = ({
         quantityUnit: "each",
         totalAmountCents: 0,
         calculationStatus: "needsReview",
-        notes: "Multiple work types matched this service stop, but company settings do not allow multiple work types per stop.",
+        notes: "Multiple pay types matched this service stop, but company settings do not allow multiple pay types per stop.",
       });
     } else {
       stopWorkTypeIds.forEach((workTypeId) => {
@@ -579,35 +604,36 @@ export const estimateServiceStopPay = ({
             ? otherProductionPayBasis(primaryPayBasis)
             : "serviceStop";
 
-        lines.push(
-          lineFromRate({
-            companyId,
-            worker,
-            source: "serviceStop",
-            title: workTypeName(workTypesById, workTypeId),
-            workTypeId,
-            payBasis: primaryPayBasis,
-            fallbackPayBasis,
-            preferredRateType: workType?.defaultRateType,
-            estimatedMinutes: tasks.reduce((sum, task) => sum + Number(task.estimatedTime || 0), 0),
-            rates,
-            workTypesById,
-            date,
-            allowGeneralHourlyFallback: true,
-            debugContext,
-          })
-        );
+        const line = lineFromRate({
+          companyId,
+          worker,
+          source: "serviceStop",
+          title: workTypeName(workTypesById, workTypeId),
+          workTypeId,
+          payBasis: primaryPayBasis,
+          fallbackPayBasis,
+          preferredRateType: workType?.defaultRateType,
+          estimatedMinutes: tasks.reduce((sum, task) => sum + Number(task.estimatedTime || 0), 0),
+          rates,
+          workTypesById,
+          date,
+          allowGeneralHourlyFallback: true,
+          debugContext,
+        });
+        if (line) lines.push(line);
       });
     }
   }
 
   if (effectiveSettings.taskPaySource !== "none") {
     tasks.forEach((task) => {
-      const workTypeId = mappedWorkTypeIds({
-        mappings,
-        sourceType: "jobTaskType",
-        sourceId: task.type || "",
-      })[0];
+      const workTypeId =
+        recordPayTypeId(task) ||
+        mappedWorkTypeIds({
+          mappings,
+          sourceType: "jobTaskType",
+          sourceId: task.type || "",
+        })[0];
 
       if (!workTypeId) {
         console.warn("[PayEstimate][missingTaskWorkTypeMapping]", {
@@ -622,7 +648,7 @@ export const estimateServiceStopPay = ({
         lines.push(
           missingTaskLine({
             task,
-            notes: `No work type mapping found for task type ${task.type || "Unknown"}.`,
+            notes: `No pay type selected for task type ${task.type || "Unknown"}.`,
           })
         );
         return;
@@ -633,13 +659,15 @@ export const estimateServiceStopPay = ({
 
       if (taskPaySource === "taskContractedRate") {
         if (cents(task.contractedRate) > 0) {
-          lines.push(lineFromTaskContractedRate({ task, workTypeId, workTypesById }));
+          const line = lineFromTaskContractedRate({ task, workTypeId, workTypesById });
+          if (line) lines.push(line);
         }
         return;
       }
 
       if (taskPaySource === "taskContractedRateThenTechnicianRate" && cents(task.contractedRate) > 0) {
-        lines.push(lineFromTaskContractedRate({ task, workTypeId, workTypesById }));
+        const line = lineFromTaskContractedRate({ task, workTypeId, workTypesById });
+        if (line) lines.push(line);
         return;
       }
 
@@ -671,14 +699,15 @@ export const estimateServiceStopPay = ({
 
       if (
         taskPaySource === "technicianRateThenTaskContractedRate" &&
-        rateLine.calculationStatus !== "calculated" &&
+        rateLine?.calculationStatus !== "calculated" &&
         cents(task.contractedRate) > 0
       ) {
-        lines.push(lineFromTaskContractedRate({ task, workTypeId, workTypesById }));
+        const line = lineFromTaskContractedRate({ task, workTypeId, workTypesById });
+        if (line) lines.push(line);
         return;
       }
 
-      lines.push(rateLine);
+      if (rateLine) lines.push(rateLine);
     });
   }
 

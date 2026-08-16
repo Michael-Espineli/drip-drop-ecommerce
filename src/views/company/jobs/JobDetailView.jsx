@@ -228,6 +228,7 @@ const EMPTY_TASK_EDIT_FORM = {
   laborCost: "",
   billingLaborPrice: "",
   estimatedTime: "",
+  payTypeId: "",
   bodyOfWaterId: "",
   equipmentId: "",
   dataBaseItemId: "",
@@ -909,6 +910,7 @@ const JobDetailView = () => {
   const [taskLaborCost, setTaskLaborCost] = useState("0");
   const [taskBillingLaborPrice, setTaskBillingLaborPrice] = useState("0");
   const [estimatedTime, setEstimatedTime] = useState("0");
+  const [selectedTaskPayType, setSelectedTaskPayType] = useState(null);
   const [taskBodyOfWaterList, setTaskBodyOfWaterList] = useState([]);
   const [taskEquipmentList, setTaskEquipmentList] = useState([]);
   const [selectedTaskBodyOfWater, setSelectedTaskBodyOfWater] = useState(null);
@@ -2570,6 +2572,51 @@ const JobDetailView = () => {
 
     return options;
   }, [editingTaskTypeValue, taskTypeList]);
+
+  const taskPayTypeOptions = useMemo(() => {
+    const normalize = (value = "") => String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+
+    return (companyWorkTypes || [])
+      .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive")
+      .filter((type) => {
+        const values = [
+          type.bucketId,
+          type.stopPayBucketId,
+          type.serviceStopCategory,
+          type.category,
+          type.bucketLabel,
+          type.stopPayBucketLabel,
+        ].map(normalize).filter(Boolean);
+
+        return !values.length || values.some((value) => (
+          value === "job" ||
+          value === "jobs" ||
+          value === "servicecall"
+        ));
+      })
+      .map((type) => ({
+        ...type,
+        value: type.id,
+        label: type.name || type.payTypeName || "Task Pay Type",
+      }))
+      .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.label.localeCompare(right.label));
+  }, [companyWorkTypes]);
+
+  const taskPayTypeById = useMemo(
+    () => new Map(taskPayTypeOptions.map((type) => [type.id, type])),
+    [taskPayTypeOptions]
+  );
+
+  useEffect(() => {
+    if (!taskPayTypeOptions.length) {
+      if (selectedTaskPayType) setSelectedTaskPayType(null);
+      return;
+    }
+
+    if (!selectedTaskPayType || !taskPayTypeOptions.some((type) => type.id === selectedTaskPayType.id)) {
+      setSelectedTaskPayType(taskPayTypeOptions[0]);
+    }
+  }, [selectedTaskPayType, taskPayTypeOptions]);
 
   const taskStatusSelectOptions = useMemo(() => {
     const currentStatus = taskEditForm.status || "";
@@ -5658,21 +5705,25 @@ const JobDetailView = () => {
         longitude: Number(serviceLocation.longitude || 0),
       };
       const selectedTaskIds = selectedWorkOfferTasks.map((task) => task.id);
-      const estimatedPayLines = selectedWorkOfferTasks.map((task) => ({
-        id: `offer_estimate_task_preview_${task.id}`,
-        sourceTaskId: task.id,
-        source: "Service Stop Task",
-        workTypeId: "",
-        workTypeName: task.type || "",
-        title: task.name || task.type || "Task",
-        rateAmountCents: cents(task.contractedRate),
-        rateType: "Flat Per Task",
-        quantity: 1,
-        quantityUnit: "Each",
-        totalAmountCents: cents(task.contractedRate),
-        calculationStatus: cents(task.contractedRate) > 0 ? "Calculated" : "Needs Review",
-        notes: `${task.type || "Task"} • ${Number(task.estimatedTime || 0)} min • Task contracted rate`,
-      }));
+      const estimatedPayLines = selectedWorkOfferTasks
+        .filter((task) => cents(task.contractedRate) > 0)
+        .map((task) => ({
+          id: `offer_estimate_task_preview_${task.id}`,
+          sourceTaskId: task.id,
+          source: "Service Stop Task",
+          payTypeId: task.payTypeId || task.workTypeId || "",
+          payTypeName: task.payTypeName || task.workTypeName || task.type || "",
+          workTypeId: task.payTypeId || task.workTypeId || "",
+          workTypeName: task.payTypeName || task.workTypeName || task.type || "",
+          title: task.name || task.type || "Task",
+          rateAmountCents: cents(task.contractedRate),
+          rateType: "Flat Per Task",
+          quantity: 1,
+          quantityUnit: "Each",
+          totalAmountCents: cents(task.contractedRate),
+          calculationStatus: "Calculated",
+          notes: `${task.type || "Task"} • ${Number(task.estimatedTime || 0)} min • Task contracted rate`,
+        }));
 
       const firestoreOffer = {
         id,
@@ -5733,6 +5784,8 @@ const JobDetailView = () => {
                 id: "offer_estimate_offered_amount",
                 sourceTaskId: null,
                 source: "Manual Adjustment",
+                payTypeId: "",
+                payTypeName: "",
                 workTypeId: "",
                 workTypeName: "",
                 title: "Offered Amount",
@@ -5751,6 +5804,8 @@ const JobDetailView = () => {
                   id: "offer_estimate_unpaid",
                   sourceTaskId: null,
                   source: "Manual Adjustment",
+                  payTypeId: "",
+                  payTypeName: "",
                   workTypeId: "",
                   workTypeName: "",
                   title: "Unpaid Work",
@@ -6189,30 +6244,39 @@ const JobDetailView = () => {
 
         const [
           paySettingsSnap,
-          serviceStopTypesSnap,
-          workTypesSnap,
-          mappingsSnap,
+          payTypesSnap,
           ratesSnap,
         ] = await Promise.all([
           getDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main")),
-          getDocs(collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes")),
-          getDocs(collection(db, "companies", recentlySelectedCompany, "companyWorkTypes")),
-          getDocs(collection(db, "companies", recentlySelectedCompany, "workTypeMappings")),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "companyPayTypes")),
           getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates")),
         ]);
 
         setPaySettings(paySettingsSnap.exists() ? paySettingsSnap.data() : null);
-        setCompanyServiceStopTypes(
-          serviceStopTypesSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-        );
-        setCompanyWorkTypes(
-          workTypesSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-        );
-        setWorkTypeMappings(
-          mappingsSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-        );
+        const normalizePayType = (docSnap) => {
+          const data = { id: docSnap.id, ...docSnap.data() };
+          return {
+            ...data,
+            imageName: data.imageName || data.iconName || "",
+            iconName: data.iconName || data.imageName || "",
+            stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
+            stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
+            defaultWorkTypeIds: [docSnap.id],
+          };
+        };
+        const payTypes = payTypesSnap.docs.map(normalizePayType);
+        setCompanyServiceStopTypes(payTypes);
+        setCompanyWorkTypes(payTypes);
+        setWorkTypeMappings([]);
         setTechnicianRates(
-          ratesSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+          ratesSnap.docs.map((docSnap) => {
+            const data = { id: docSnap.id, ...docSnap.data() };
+            return {
+              ...data,
+              workTypeId: data.workTypeId || data.payTypeId || "",
+              workTypeName: data.workTypeName || data.payTypeName || "",
+            };
+          })
         );
 
         const dbItemsQ = query(
@@ -7979,6 +8043,7 @@ const JobDetailView = () => {
   const clearNewTask = (e) => {
     e.preventDefault();
     setSelectedTaskType(null);
+    setSelectedTaskPayType(taskPayTypeOptions[0] || null);
     setTaskDescription("");
     setTaskLaborCost("0");
     setTaskBillingLaborPrice("0");
@@ -8002,6 +8067,7 @@ const JobDetailView = () => {
       laborCost: dollarsFromCents(task?.contractedRate),
       billingLaborPrice: dollarsFromCents(getTaskBillingLaborPriceCents(task)),
       estimatedTime: String(Number(task?.estimatedTime || 0)),
+      payTypeId: task?.payTypeId || task?.workTypeId || "",
       bodyOfWaterId: task?.bodyOfWaterId || "",
       equipmentId: task?.equipmentId || "",
       dataBaseItemId: task?.dataBaseItemId || linkedMaterial?.dbItemId || linkedMaterial?.itemId || "",
@@ -8222,6 +8288,7 @@ const JobDetailView = () => {
     const nextEstimatedMinutes = Number(taskEditForm.estimatedTime || 0);
     const nextQuantity = Number(taskEditForm.quantity || 0);
     const selectedDbItem = shoppingDbItemById.get(taskEditForm.dataBaseItemId);
+    const selectedPayType = taskPayTypeById.get(taskEditForm.payTypeId) || null;
 
     if (!nextName) return toast.error("Add a task description.");
     if (!nextType) return toast.error("Pick a task type.");
@@ -8255,6 +8322,8 @@ const JobDetailView = () => {
       contractedRate: nextLaborCents,
       billingLaborPriceCents: nextBillingLaborPriceCents,
       estimatedTime: nextEstimatedMinutes,
+      payTypeId: selectedPayType?.id || "",
+      payTypeName: selectedPayType?.name || selectedPayType?.label || "",
       customerApproval: Boolean(taskEditForm.customerApproval),
       bodyOfWaterId: editingTaskNeedsBodyOfWater ? taskEditForm.bodyOfWaterId : "",
       equipmentId: editingTaskNeedsEquipment ? taskEditForm.equipmentId : "",
@@ -8384,6 +8453,7 @@ const JobDetailView = () => {
       const costCents = centsFromCurrencyInput(taskLaborCost || "0");
       const billingLaborPriceCents = centsFromCurrencyInput(taskBillingLaborPrice || "0");
       const estMin = estimatedTimeNumber;
+      const taskPayType = selectedTaskPayType || taskPayTypeOptions[0] || null;
       const linkedShoppingListItemId = taskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
       const quantity = taskNeedsInstallItem ? parseFloat(taskQuantity) : 0;
 
@@ -8394,6 +8464,8 @@ const JobDetailView = () => {
         contractedRate: costCents,
         billingLaborPriceCents,
         estimatedTime: estMin,
+        payTypeId: taskPayType?.id || "",
+        payTypeName: taskPayType?.name || taskPayType?.label || "",
         status: "Unassigned",
 
         customerApproval: false,
@@ -8600,7 +8672,7 @@ const JobDetailView = () => {
     e.preventDefault();
     if (!requireUpdateCurrentJob("update jobs")) return;
     if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
-    if (!selectedPlannedStopType) return toast.error("Select a service stop type.");
+    if (!selectedPlannedStopType) return toast.error("Select a pay type.");
     const targetLaborLineId = newPlannedStopLaborLineId;
 
     const estimatedMinutesNumber = Number(plannedStopForm.estimatedMinutes || 0);
@@ -8632,14 +8704,15 @@ const JobDetailView = () => {
         name: stopName,
         description: plannedStopForm.description.trim(),
         type: typeName,
+        payTypeId: selectedPlannedStopType.id || "",
+        payTypeName: typeName,
         serviceStopTypeId: selectedPlannedStopType.id || "",
         serviceStopTypeName: typeName,
-        serviceStopTypeImage: selectedPlannedStopType.image || selectedPlannedStopType.typeImage || "",
+        serviceStopTypeImage: selectedPlannedStopType.iconName || selectedPlannedStopType.image || selectedPlannedStopType.typeImage || "",
         serviceStopTypeUseCaseRawValue:
           selectedPlannedStopType.serviceStopTypeUseCaseRawValue ||
           selectedPlannedStopType.useCase ||
           "jobVisit",
-        defaultWorkTypeIds: selectedPlannedStopType.defaultWorkTypeIds || [],
         estimatedMinutes: estimatedMinutesNumber,
         plannedLaborCostCents,
         estimatedLaborCostCents: plannedLaborCostCents,
@@ -8670,7 +8743,7 @@ const JobDetailView = () => {
         title: targetLaborLineId ? `Planned stop added to service line: ${stopName}` : `Planned stop added: ${stopName}`,
         description: payload.description,
         changes: [
-          buildHistoryChange("serviceStopTypeId", "Service Stop Type", "—", typeName),
+          buildHistoryChange("serviceStopTypeId", "Pay Type", "—", typeName),
           buildHistoryChange("estimatedMinutes", "Estimated Time", "—", `${estimatedMinutesNumber} minutes`),
           buildHistoryChange("plannedLaborCostCents", "Planning Labor Cost", "—", moneyFromCents(plannedLaborCostCents)),
           buildHistoryChange("taskIds", "Linked Tasks", "—", selectedTaskIds.length ? String(selectedTaskIds.length) : "All current tasks"),
@@ -11842,7 +11915,7 @@ const JobDetailView = () => {
               {stop.name || stop.serviceStopTypeName || "Planned Visit"}
             </p>
             <p className="mt-1 text-sm text-gray-600">
-              {stop.serviceStopTypeName || "Company Service Stop Type"}
+              {stop.serviceStopTypeName || "Company Pay Type"}
             </p>
           </div>
 
@@ -12949,6 +13022,19 @@ const JobDetailView = () => {
           </select>
         </label>
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+          Pay Type
+          <select
+            value={taskEditForm.payTypeId}
+            onChange={(event) => updateTaskEditForm("payTypeId", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+          >
+            <option value="">No task pay type</option>
+            {taskPayTypeOptions.map((type) => (
+              <option key={type.id} value={type.id}>{type.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
           Tech Labor Cost
           <input
             type="number"
@@ -13091,6 +13177,20 @@ const JobDetailView = () => {
               onChange={setSelectedTaskType}
               isSearchable
               placeholder="Select a task type"
+              theme={selectTheme}
+              styles={selectStyles}
+            />
+          </div>
+        </div>
+        <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+          Pay Type
+          <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+            <Select
+              value={selectedTaskPayType}
+              options={taskPayTypeOptions}
+              onChange={setSelectedTaskPayType}
+              isSearchable
+              placeholder="Select a task pay type"
               theme={selectTheme}
               styles={selectStyles}
             />
@@ -14837,6 +14937,22 @@ const JobDetailView = () => {
                                           </label>
 
                                           <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                            Pay Type
+                                            <select
+                                              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
+                                              value={taskEditForm.payTypeId}
+                                              onChange={(e) => updateTaskEditForm("payTypeId", e.target.value)}
+                                            >
+                                              <option value="">No task pay type</option>
+                                              {taskPayTypeOptions.map((type) => (
+                                                <option key={type.id} value={type.id}>
+                                                  {type.label}
+                                                </option>
+                                              ))}
+                                            </select>
+                                          </label>
+
+                                          <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
                                             Tech Labor Cost (USD)
                                             <input
                                               className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
@@ -15014,6 +15130,18 @@ const JobDetailView = () => {
                               onChange={setSelectedTaskType}
                               isSearchable
                               placeholder="Select a Task Type"
+                              theme={selectTheme}
+                              styles={selectStyles}
+                            />
+                          </div>
+
+                          <div className="w-full">
+                            <Select
+                              value={selectedTaskPayType}
+                              options={taskPayTypeOptions}
+                              onChange={setSelectedTaskPayType}
+                              isSearchable
+                              placeholder="Select Pay Type"
                               theme={selectTheme}
                               styles={selectStyles}
                             />
@@ -17021,16 +17149,16 @@ const JobDetailView = () => {
             <form onSubmit={handleAddPlannedServiceStop} className="grid grid-cols-1 gap-4 overflow-y-auto p-5 lg:grid-cols-3">
               <div className="space-y-4 lg:col-span-2">
                 <label className="block text-sm font-semibold text-slate-700">
-                  Service Stop Type
+                  Pay Type
                   <select
                     value={plannedStopForm.serviceStopTypeId}
                     onChange={(event) => updatePlannedStopForm("serviceStopTypeId", event.target.value)}
                     className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                   >
-                    <option value="">Select service stop type</option>
+                    <option value="">Select pay type</option>
                     {(companyServiceStopTypes || []).map((type) => (
                       <option key={type.id} value={type.id}>
-                        {type.name || type.label || type.type || "Service Stop Type"}
+                        {type.name || type.label || type.type || "Pay Type"}
                       </option>
                     ))}
                   </select>
@@ -17142,7 +17270,7 @@ const JobDetailView = () => {
 
                   {plannedStopFormPayRange.needsReview && (
                     <div className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs font-semibold text-amber-800">
-                      Some payroll mappings or technician rates need review for this estimate.
+                      Some pay types or technician rates need review for this estimate.
                     </div>
                   )}
                 </div>
@@ -17661,7 +17789,7 @@ const JobDetailView = () => {
 
                 <div>
                   <label className="block text-sm font-semibold text-gray-500 mb-2">
-                    Service Stop Type
+                    Pay Type
                   </label>
                   <select
                     value={workOfferForm.serviceStopTypeId}

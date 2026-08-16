@@ -144,14 +144,14 @@ const defaultPaySettings = (companyId) => ({
   routePaySource: "serviceStopAndCompletedTasks",
   taskPaySource: "technicianRateThenTaskContractedRate",
   hourlyPaySource: "none",
-  allowMultipleWorkTypesPerStop: true,
+  allowMultipleWorkTypesPerStop: false,
   defaultStackBehavior: "stackable",
   allowTechnicianRateOverrides: true,
   allowManualPayAdjustments: false,
-  payCommercialAsSeparateWorkType: true,
-  paySpaAsSeparateWorkType: true,
-  payPerBodyOfWater: true,
-  commercialMultiBodyPayStyle: "basePlusAdditionalBodyRate",
+  payCommercialAsSeparateWorkType: false,
+  paySpaAsSeparateWorkType: false,
+  payPerBodyOfWater: false,
+  commercialMultiBodyPayStyle: "singleCommercialRate",
   lockPayAfterApproval: true,
   recalculateUnapprovedPayWhenRatesChange: true,
 });
@@ -737,9 +737,7 @@ const Payroll = ({ mode = "payroll" }) => {
         const statementsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayStatements");
         const settingsRef = doc(db, "companies", recentlySelectedCompany, "paySettings", "main");
         const stopPayBucketsRef = collection(db, "companies", recentlySelectedCompany, "companyStopPayBuckets");
-        const serviceStopTypesRef = collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes");
-        const workTypesRef = collection(db, "companies", recentlySelectedCompany, "companyWorkTypes");
-        const workTypeMappingsRef = collection(db, "companies", recentlySelectedCompany, "workTypeMappings");
+        const payTypesRef = collection(db, "companies", recentlySelectedCompany, "companyPayTypes");
         const companyUsersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
         const technicianRatesRef = collection(db, "companies", recentlySelectedCompany, "technicianRates");
 
@@ -748,9 +746,7 @@ const Payroll = ({ mode = "payroll" }) => {
           statementsSnap,
           settingsSnap,
           stopPayBucketsSnap,
-          serviceStopTypesSnap,
-          workTypesSnap,
-          workTypeMappingsSnap,
+          payTypesSnap,
           companyUsersSnap,
           technicianRatesSnap,
         ] = await Promise.all([
@@ -758,9 +754,7 @@ const Payroll = ({ mode = "payroll" }) => {
           getDocs(statementsRef),
           getDoc(settingsRef),
           getDocs(stopPayBucketsRef),
-          getDocs(serviceStopTypesRef),
-          getDocs(workTypesRef),
-          getDocs(workTypeMappingsRef),
+          getDocs(payTypesRef),
           getDocs(companyUsersRef),
           getDocs(technicianRatesRef),
         ]);
@@ -768,7 +762,14 @@ const Payroll = ({ mode = "payroll" }) => {
         const visibleLineItemDocs = lineItemsSnap.docs.slice(0, LINE_ITEMS_PAGE_SIZE);
         const hasNextLineItemPage = lineItemsSnap.docs.length > LINE_ITEMS_PAGE_SIZE;
         const nextLineItems = visibleLineItemDocs
-          .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+          .map((docSnap) => {
+            const data = { id: docSnap.id, ...docSnap.data() };
+            return {
+              ...data,
+              workTypeId: data.workTypeId || data.payTypeId || "",
+              workTypeName: data.workTypeName || data.payTypeName || "",
+            };
+          })
           .sort((a, b) => (dateFromValue(b.completedDate)?.getTime() || 0) - (dateFromValue(a.completedDate)?.getTime() || 0));
 
         setLineItemHasNextPage(hasNextLineItemPage);
@@ -800,19 +801,22 @@ const Payroll = ({ mode = "payroll" }) => {
             .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
             .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.label || a.name || "").localeCompare(String(b.label || b.name || "")))
         );
-        setCompanyServiceStopTypes(
-          serviceStopTypesSnap.docs
-            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
-        );
-        setCompanyWorkTypes(
-          workTypesSnap.docs
-            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
-        );
-        setWorkTypeMappings(
-          workTypeMappingsSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-        );
+        const nextPayTypes = payTypesSnap.docs
+          .map((docSnap) => {
+            const data = { id: docSnap.id, ...docSnap.data() };
+            return {
+              ...data,
+              imageName: data.imageName || data.iconName || "",
+              iconName: data.iconName || data.imageName || "",
+              stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
+              stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
+              defaultWorkTypeIds: [docSnap.id],
+            };
+          })
+          .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")));
+        setCompanyServiceStopTypes(nextPayTypes);
+        setCompanyWorkTypes(nextPayTypes);
+        setWorkTypeMappings([]);
         setCompanyUsers(
           sortCompanyUsersByName(
             companyUsersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
@@ -820,7 +824,13 @@ const Payroll = ({ mode = "payroll" }) => {
         );
         setTechnicianRates(
           technicianRatesSnap.docs
-            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+            .map((docSnap) => {
+              const data = { id: docSnap.id, ...docSnap.data() };
+              return {
+                ...data,
+                workTypeId: data.workTypeId || data.payTypeId || "",
+              };
+            })
             .sort((a, b) => (dateFromValue(b.effectiveStartDate)?.getTime() || 0) - (dateFromValue(a.effectiveStartDate)?.getTime() || 0))
         );
       } catch (err) {
@@ -1030,7 +1040,7 @@ const Payroll = ({ mode = "payroll" }) => {
       .filter(isActiveCompanyWorkType)
       .map((workType) => workType.name || workType.id)
       .filter(Boolean);
-    if (activeNames.length === 0) return "No default work types";
+    if (activeNames.length === 0) return "No default pay types";
     return activeNames.join(", ");
   };
 
@@ -1149,7 +1159,7 @@ const Payroll = ({ mode = "payroll" }) => {
           const bucket = stopPayCategoryForWorkType(workType, stopPayCategories) || stopPayCategories[0] || {};
           return {
             id: workType.id,
-            label: workType.name || "Work Type",
+            label: workType.name || "Pay Type",
             helper: statusLabel(workType.category || suggestedPayBasisForMatrixWorkType(workType)),
             bucketId: bucket.id || "job",
             bucketLabel: bucket.label || "Job",
@@ -1348,11 +1358,11 @@ const Payroll = ({ mode = "payroll" }) => {
     try {
       const outstandingStops = await loadOutstandingStopsForServiceStopType(serviceStopType);
       const warning = outstandingStops.length > 0
-        ? `There are ${outstandingStops.length} unfinished service stop(s) using "${serviceStopType.name || "this type"}". Archiving keeps historical payroll references, but new setup screens will no longer show this stop type. Archive it anyway?`
-        : `Archive "${serviceStopType.name || "this service stop type"}"? Historical payroll and service stop references will stay stored.`;
+        ? `There are ${outstandingStops.length} unfinished service stop(s) using "${serviceStopType.name || "this type"}". Archiving keeps historical payroll references, but new setup screens will no longer show this pay type. Archive it anyway?`
+        : `Archive "${serviceStopType.name || "this pay type"}"? Historical payroll and service stop references will stay stored.`;
 
       const confirmed = await appConfirm({
-        title: "Archive Service Stop Type",
+        title: "Archive Pay Type",
         message: warning,
         confirmLabel: "Archive Type",
         variant: "danger",
@@ -1379,17 +1389,17 @@ const Payroll = ({ mode = "payroll" }) => {
         updatedByUserId: currentUserId,
       };
 
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyServiceStopTypes", serviceStopType.id), payload);
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyPayTypes", serviceStopType.id), payload);
       setCompanyServiceStopTypes((types) =>
         types.map((type) => (type.id === serviceStopType.id ? { ...type, ...payload } : type))
       );
       if (editingServiceStopTypeId === serviceStopType.id) {
         closeStopPayModal();
       }
-      setActionNotice("Service stop type archived. Historical payroll references were preserved.");
+      setActionNotice("Pay type archived. Historical payroll references were preserved.");
     } catch (err) {
-      console.error("Error archiving service stop type:", err);
-      setActionFailure("Could not archive that service stop type.");
+      console.error("Error archiving pay type:", err);
+      setActionFailure("Could not archive that pay type.");
     } finally {
       setSavingAction("");
     }
@@ -1407,13 +1417,13 @@ const Payroll = ({ mode = "payroll" }) => {
         Array.isArray(type.defaultWorkTypeIds) && type.defaultWorkTypeIds.includes(workType.id)
       );
       const warning = mappedServiceStopTypes.length > 0
-        ? `This work type is used by ${mappedServiceStopTypes.length} service stop type mapping(s). Archiving keeps historical payroll references, removes it from new setup choices, and removes it from those mappings. Archive it anyway?`
-        : `Archive "${workType.name || "this payroll work type"}"? Historical payroll references will stay stored.`;
+        ? `This pay type is referenced by ${mappedServiceStopTypes.length} older pay type record(s). Archiving keeps historical payroll references and removes it from new setup choices. Archive it anyway?`
+        : `Archive "${workType.name || "this pay type"}"? Historical payroll references will stay stored.`;
 
       const confirmed = await appConfirm({
-        title: "Archive Work Type",
+        title: "Archive Pay Type",
         message: warning,
-        confirmLabel: "Archive Work Type",
+        confirmLabel: "Archive Pay Type",
         variant: "danger",
       });
       if (!confirmed) {
@@ -1432,16 +1442,16 @@ const Payroll = ({ mode = "payroll" }) => {
         deletedByUserId: currentUserId,
         deletionMode: "company_soft_delete",
         deletionNotes: mappedServiceStopTypes.length > 0
-          ? `Archived and removed from ${mappedServiceStopTypes.length} service stop type mapping(s).`
+          ? `Archived and removed from ${mappedServiceStopTypes.length} older pay type reference(s).`
           : "Archived from payroll setup.",
         updatedAt: now,
         updatedByUserId: currentUserId,
       };
       const batch = writeBatch(db);
 
-      batch.update(doc(db, "companies", recentlySelectedCompany, "companyWorkTypes", workType.id), payload);
+      batch.update(doc(db, "companies", recentlySelectedCompany, "companyPayTypes", workType.id), payload);
       mappedServiceStopTypes.forEach((serviceStopType) => {
-        batch.update(doc(db, "companies", recentlySelectedCompany, "companyServiceStopTypes", serviceStopType.id), {
+        batch.update(doc(db, "companies", recentlySelectedCompany, "companyPayTypes", serviceStopType.id), {
           defaultWorkTypeIds: (serviceStopType.defaultWorkTypeIds || []).filter((id) => id !== workType.id),
           updatedAt: now,
           updatedByUserId: currentUserId,
@@ -1470,10 +1480,10 @@ const Payroll = ({ mode = "payroll" }) => {
       if (editingWorkTypeId === workType.id) {
         closeStopPayModal();
       }
-      setActionNotice("Payroll work type archived. Historical payroll references were preserved.");
+      setActionNotice("Payroll pay type archived. Historical payroll references were preserved.");
     } catch (err) {
-      console.error("Error archiving payroll work type:", err);
-      setActionFailure("Could not archive that payroll work type.");
+      console.error("Error archiving pay type:", err);
+      setActionFailure("Could not archive that pay type.");
     } finally {
       setSavingAction("");
     }
@@ -1532,14 +1542,14 @@ const Payroll = ({ mode = "payroll" }) => {
         updatedAt: new Date(),
         updatedByUserId: currentUserId,
       };
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyServiceStopTypes", serviceStopTypeId), payload);
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyPayTypes", serviceStopTypeId), payload);
       setCompanyServiceStopTypes((types) =>
         types.map((type) => (type.id === serviceStopTypeId ? { ...type, ...payload } : type))
       );
-      setActionNotice("Service stop type payroll mapping saved.");
+      setActionNotice("Pay type saved.");
     } catch (err) {
-      console.error("Error saving service stop type work types:", err);
-      setActionFailure("Could not save that service stop type mapping.");
+      console.error("Error saving pay type pay types:", err);
+      setActionFailure("Could not save that pay type.");
     } finally {
       setSavingAction("");
     }
@@ -1551,7 +1561,7 @@ const Payroll = ({ mode = "payroll" }) => {
 
     const cleanName = workTypeForm.name.trim();
     if (!cleanName) {
-      setActionFailure("Add a payroll work type name first.");
+      setActionFailure("Add a pay type name first.");
       return;
     }
 
@@ -1560,7 +1570,7 @@ const Payroll = ({ mode = "payroll" }) => {
       String(workType.name || "").trim().toLowerCase() === cleanName.toLowerCase()
     );
     if (duplicate) {
-      setActionFailure(`A payroll work type named ${cleanName} already exists.`);
+      setActionFailure(`A pay type named ${cleanName} already exists.`);
       return;
     }
 
@@ -1584,26 +1594,29 @@ const Payroll = ({ mode = "payroll" }) => {
         defaultRateType: workTypeForm.defaultRateType || category.defaultRateType,
         defaultStackBehavior: workTypeForm.defaultStackBehavior || "stackable",
         sortOrder: existingWorkType?.sortOrder ?? nextWorkTypeSortOrder(),
+        bucketId: category.id,
+        bucketLabel: category.label,
         stopPayBucketId: category.id,
         stopPayBucketLabel: category.label,
         serviceStopCategory: category.category,
+        payTypeModelVersion: 1,
         createdAt: existingWorkType?.createdAt || new Date(),
         createdByUserId: existingWorkType?.createdByUserId || currentUserId,
         updatedAt: new Date(),
         updatedByUserId: currentUserId,
       };
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "companyWorkTypes", workTypeId), payload, { merge: true });
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "companyPayTypes", workTypeId), payload, { merge: true });
       setCompanyWorkTypes((workTypes) =>
         [payload, ...workTypes.filter((workType) => workType.id !== workTypeId)]
           .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
       );
       resetWorkTypeForm();
       setStopPayModal(null);
-      setActionNotice(wasEditing ? "Payroll work type updated." : "Payroll work type created.");
+      setActionNotice(wasEditing ? "Payroll pay type updated." : "Payroll pay type created.");
     } catch (err) {
-      console.error("Error saving company work type:", err);
-      setActionFailure("Could not save that payroll work type.");
+      console.error("Error saving company pay type:", err);
+      setActionFailure("Could not save that pay type.");
     } finally {
       setSavingAction("");
     }
@@ -1615,7 +1628,7 @@ const Payroll = ({ mode = "payroll" }) => {
 
     const cleanName = serviceStopTypeForm.name.trim();
     if (!cleanName) {
-      setActionFailure("Add a service stop type name first.");
+      setActionFailure("Add a pay type name first.");
       return;
     }
 
@@ -1624,7 +1637,7 @@ const Payroll = ({ mode = "payroll" }) => {
       String(type.name || "").trim().toLowerCase() === cleanName.toLowerCase()
     );
     if (duplicate) {
-      setActionFailure(`A service stop type named ${cleanName} already exists.`);
+      setActionFailure(`A pay type named ${cleanName} already exists.`);
       return;
     }
 
@@ -1637,37 +1650,40 @@ const Payroll = ({ mode = "payroll" }) => {
       const category = stopPayCategories.find((item) => item.id === serviceStopTypeForm.categoryId) || stopPayCategories[1];
       const existingServiceStopType = companyServiceStopTypes.find((type) => type.id === editingServiceStopTypeId);
       const serviceStopTypeId = existingServiceStopType?.id || `comp_ss_type_${uuidv4()}`;
-      const allowedDefaultWorkTypeIds = new Set(serviceStopTypeFormWorkTypeOptions.map((workType) => workType.id));
       const payload = {
         id: serviceStopTypeId,
         companyId: recentlySelectedCompany,
         name: cleanName,
-        imageName: serviceStopTypeForm.imageName.trim() || category.defaultIconName,
+        iconName: serviceStopTypeForm.imageName.trim() || category.defaultIconName,
         isActive: existingServiceStopType?.isActive !== false,
         status: existingServiceStopType?.status || "Active",
         sortOrder: existingServiceStopType?.sortOrder ?? nextServiceStopTypeSortOrder(),
-        category: category.category,
+        category: category.defaultWorkCategory,
         serviceStopCategory: category.category,
+        defaultRateType: category.defaultRateType,
+        defaultStackBehavior: existingServiceStopType?.defaultStackBehavior || "stackable",
+        bucketId: category.id,
+        bucketLabel: category.label,
         stopPayBucketId: category.id,
         stopPayBucketLabel: category.label,
-        defaultWorkTypeIds: [...new Set((serviceStopTypeForm.defaultWorkTypeIds || []).filter((id) => id && allowedDefaultWorkTypeIds.has(id)))],
+        payTypeModelVersion: 1,
         createdAt: existingServiceStopType?.createdAt || new Date(),
         createdByUserId: existingServiceStopType?.createdByUserId || currentUserId,
         updatedAt: new Date(),
         updatedByUserId: currentUserId,
       };
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "companyServiceStopTypes", serviceStopTypeId), payload, { merge: true });
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "companyPayTypes", serviceStopTypeId), payload, { merge: true });
       setCompanyServiceStopTypes((types) =>
         [payload, ...types.filter((type) => type.id !== serviceStopTypeId)]
           .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
       );
       resetServiceStopTypeForm();
       setStopPayModal(null);
-      setActionNotice(wasEditing ? "Service stop type updated." : "Service stop type created.");
+      setActionNotice(wasEditing ? "Pay type updated." : "Pay type created.");
     } catch (err) {
-      console.error("Error saving company service stop type:", err);
-      setActionFailure("Could not save that service stop type.");
+      console.error("Error saving company pay type:", err);
+      setActionFailure("Could not save that pay type.");
     } finally {
       setSavingAction("");
     }
@@ -1677,7 +1693,7 @@ const Payroll = ({ mode = "payroll" }) => {
     setEditingRateId(rate.id);
     setRateForm({
       technicianId: rate.technicianId || "",
-      workTypeId: rate.workTypeId || "",
+      workTypeId: rate.payTypeId || rate.workTypeId || "",
       payBasis: rate.payBasis || "serviceStop",
       rateType: rate.rateType || "flatPerStop",
       amount: String(Number(rate.amountCents || 0) / 100),
@@ -1719,9 +1735,9 @@ const Payroll = ({ mode = "payroll" }) => {
     const matches = technicianRates.filter((rate) => {
       if ((rate.technicianId || "") !== technicianId) return false;
       if (column.isGeneralHourly) {
-        return rate.payBasis === "technicianHourly" && !rate.workTypeId;
+        return rate.payBasis === "technicianHourly" && !(rate.payTypeId || rate.workTypeId);
       }
-      return (rate.workTypeId || "") === column.workTypeId;
+      return (rate.payTypeId || rate.workTypeId || "") === column.workTypeId;
     });
 
     return sortedTechnicianRates(matches)[0] || null;
@@ -1828,7 +1844,8 @@ const Payroll = ({ mode = "payroll" }) => {
           technicianId: draft.technicianId,
           technicianName: draft.technicianName || null,
           payBasis: draft.payBasis || "serviceStop",
-          workTypeId: draft.workTypeId || null,
+          payTypeId: draft.workTypeId || null,
+          payTypeName: draft.workTypeName || null,
           amountCents: dollarsToCents(draft.amount),
           rateType: draft.rateType || "flatPerStop",
           effectiveStartDate: new Date(`${draft.effectiveStartDate || isoDate(new Date())}T12:00:00`),
@@ -1873,7 +1890,7 @@ const Payroll = ({ mode = "payroll" }) => {
       return;
     }
     if (rateForm.payBasis !== "technicianHourly" && !rateForm.workTypeId) {
-      setActionFailure("Select a work type for non-hourly technician rates.");
+      setActionFailure("Select a pay type for non-hourly technician rates.");
       return;
     }
 
@@ -1890,7 +1907,8 @@ const Payroll = ({ mode = "payroll" }) => {
         technicianId: rateForm.technicianId,
         technicianName: isBaseTechnicianRate ? "Base Technician Defaults" : workerName(rateForm.technicianId),
         payBasis: rateForm.payBasis,
-        workTypeId: rateForm.payBasis === "technicianHourly" ? null : rateForm.workTypeId,
+        payTypeId: rateForm.payBasis === "technicianHourly" ? null : rateForm.workTypeId,
+        payTypeName: rateForm.payBasis === "technicianHourly" ? null : workTypeName(rateForm.workTypeId),
         amountCents: dollarsToCents(rateForm.amount),
         rateType: rateForm.rateType,
         effectiveStartDate: new Date(`${rateForm.effectiveStartDate || isoDate(new Date())}T12:00:00`),
@@ -2001,12 +2019,14 @@ const Payroll = ({ mode = "payroll" }) => {
       serviceStopId: serviceStop.id,
       serviceStopTaskId,
       technicianId,
-      workTypeId: line.workTypeId || "",
+      workTypeId: line.payTypeId || line.workTypeId || "",
     });
     const category =
       stopPayCategoryForServiceStopType(serviceStopType, stopPayCategories) ||
       stopPayCategoryForServiceStopType(serviceStop, stopPayCategories);
-    const title = line.title || line.workTypeName || task?.name || serviceStop.type || "Payroll Line";
+    const payTypeId = line.payTypeId || line.workTypeId || "";
+    const payTypeName = line.payTypeName || line.workTypeName || "";
+    const title = line.title || payTypeName || task?.name || serviceStop.type || "Payroll Line";
     const subtitleParts = [
       serviceStop.customerName,
       serviceStopStreetAddress(serviceStop),
@@ -2024,8 +2044,8 @@ const Payroll = ({ mode = "payroll" }) => {
       serviceStopTaskId: serviceStopTaskId || null,
       activeRouteId: null,
       activeRouteLogId: null,
-      workTypeId: line.workTypeId || null,
-      workTypeName: line.workTypeName || null,
+      payTypeId: payTypeId || null,
+      payTypeName: payTypeName || null,
       rateId: line.rateId || null,
       rateAmountCents: Number(line.rateAmountCents || 0),
       rateType: line.rateType || "manual",
@@ -3216,7 +3236,7 @@ const Payroll = ({ mode = "payroll" }) => {
         <label className="text-sm font-semibold text-slate-700">
           Commercial Multi-BOW style
           <select
-            value={settingsForm.commercialMultiBodyPayStyle || "basePlusAdditionalBodyRate"}
+            value={settingsForm.commercialMultiBodyPayStyle || "singleCommercialRate"}
             onChange={(event) => setSettingsForm((form) => ({ ...form, commercialMultiBodyPayStyle: event.target.value }))}
             className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
           >
@@ -3227,11 +3247,11 @@ const Payroll = ({ mode = "payroll" }) => {
 
       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {[
-          ["allowMultipleWorkTypesPerStop", "Multiple work types per stop"],
+          ["allowMultipleWorkTypesPerStop", "Multiple pay types per stop"],
           ["allowTechnicianRateOverrides", "Technician rate overrides"],
           ["allowManualPayAdjustments", "Manual pay adjustments"],
-          ["payCommercialAsSeparateWorkType", "Commercial separate work type"],
-          ["paySpaAsSeparateWorkType", "Spa separate work type"],
+          ["payCommercialAsSeparateWorkType", "Commercial separate pay type"],
+          ["paySpaAsSeparateWorkType", "Spa separate pay type"],
           ["payPerBodyOfWater", "Pay per body of water"],
           ["lockPayAfterApproval", "Lock after approval"],
           ["recalculateUnapprovedPayWhenRatesChange", "Recalculate unapproved pay"],
@@ -3258,19 +3278,19 @@ const Payroll = ({ mode = "payroll" }) => {
         example: "Example: weekly pool route",
       },
       {
-        title: "Pick Stop Type",
-        subtitle: "What kind of work is being scheduled",
-        example: "Example: Weekly Route",
-      },
-      {
-        title: "Pays As",
-        subtitle: "Payroll work created from that stop",
-        example: "Example: Route",
+        title: "Pick Pay Type",
+        subtitle: "The single base pay type for the stop",
+        example: "Example: Route + Spa",
       },
       {
         title: "Technician Rate",
-        subtitle: "Worker-specific pay for that work",
+        subtitle: "Worker-specific pay for that type",
         example: "Example: Michael · $80",
+      },
+      {
+        title: "Task Pay",
+        subtitle: "Optional extra pay types on finished tasks",
+        example: "Example: Filter Clean · $20",
       },
       {
         title: "Payroll Line",
@@ -3307,8 +3327,8 @@ const Payroll = ({ mode = "payroll" }) => {
             onClick={() => setActiveTab("stopPay")}
             className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
           >
-            <h3 className="text-base font-bold text-slate-900">Stop Pay Setup</h3>
-            <p className="mt-2 text-sm text-slate-600">Choose which payroll work types each scheduled service stop type creates.</p>
+            <h3 className="text-base font-bold text-slate-900">Pay Types</h3>
+            <p className="mt-2 text-sm text-slate-600">Create the unified pay types available in each scheduling bucket.</p>
           </button>
           <button
             type="button"
@@ -3316,7 +3336,7 @@ const Payroll = ({ mode = "payroll" }) => {
             className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
           >
             <h3 className="text-base font-bold text-slate-900">Technician Rates</h3>
-            <p className="mt-2 text-sm text-slate-600">Set each technician's amount for each payroll work type.</p>
+            <p className="mt-2 text-sm text-slate-600">Set each technician's amount for each pay type.</p>
           </button>
           <button
             type="button"
@@ -3336,25 +3356,18 @@ const Payroll = ({ mode = "payroll" }) => {
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">Stop Pay Setup</h2>
+            <h2 className="text-lg font-bold text-slate-900">Pay Types</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Split service stop payroll by bucket, then map each stop type to payroll work.
+              Manage the unified pay types available for routes, jobs, estimates, service agreements, and customer relationships.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={openCreateServiceStopTypeModal}
-              className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-bold text-white hover:bg-indigo-700"
-            >
-              Create New Service Stop
-            </button>
-            <button
-              type="button"
               onClick={openCreateWorkTypeModal}
               className="rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-700"
             >
-              Create New Work Type
+              Create Pay Type
             </button>
           </div>
         </div>
@@ -3362,7 +3375,6 @@ const Payroll = ({ mode = "payroll" }) => {
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         {stopPayCategories.map((category) => {
-          const categoryTypes = serviceStopTypesByStopPayCategory[category.id] || [];
           const categoryWorkTypes = workTypesByStopPayCategory[category.id] || [];
 
           return (
@@ -3374,24 +3386,22 @@ const Payroll = ({ mode = "payroll" }) => {
                     <p className="mt-1 text-xs text-slate-500">{category.helper}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                      {categoryTypes.length} stop type{categoryTypes.length === 1 ? "" : "s"}
-                    </span>
                     <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
-                      {categoryWorkTypes.length} work type{categoryWorkTypes.length === 1 ? "" : "s"}
+                      {categoryWorkTypes.length} pay type{categoryWorkTypes.length === 1 ? "" : "s"}
                     </span>
                   </div>
                 </div>
-                <p className="truncate text-[11px] text-slate-400">Fallback source: {category.sourceId}</p>
               </div>
 
-              <div className="mt-3 rounded-md border border-slate-100 bg-slate-50 p-2">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Payroll Work Types</p>
+              <div className="mt-3 rounded-md border border-slate-100 bg-slate-50 p-2.5">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Pay Types</p>
                 <div className="mt-2 grid gap-1.5">
                   {categoryWorkTypes.length === 0 ? (
-                    <p className="text-xs text-slate-500">No payroll work types in this bucket.</p>
+                    <p className="rounded-md border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-500">
+                      No pay types in this bucket yet.
+                    </p>
                   ) : categoryWorkTypes.map((workType) => (
-                    <div key={workType.id} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1.5 text-xs">
+                    <div key={workType.id} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-2 text-xs">
                       <div className="min-w-0">
                         <p className="truncate font-semibold text-slate-800">{workType.name}</p>
                         <p className="truncate text-[11px] text-slate-500">{statusLabel(workType.defaultRateType)} / {statusLabel(workType.category)}</p>
@@ -3407,81 +3417,6 @@ const Payroll = ({ mode = "payroll" }) => {
                   ))}
                 </div>
               </div>
-
-              <div className="mt-3 rounded-md border border-slate-100 bg-slate-50 p-2">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Service Stop Types</p>
-                <div className="mt-2 grid gap-2.5">
-                  {categoryTypes.length === 0 ? (
-                    <p className="rounded-md border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-500">
-                      No service stop types are set up for this bucket yet.
-                    </p>
-                  ) : categoryTypes.map((type) => {
-                    const selectedIds = new Set(Array.isArray(type.defaultWorkTypeIds) ? type.defaultWorkTypeIds : []);
-                    const categoryWorkTypeIds = new Set(categoryWorkTypes.map((workType) => workType.id));
-                    const legacySelectedWorkTypes = activeCompanyWorkTypes.filter((workType) => selectedIds.has(workType.id) && !categoryWorkTypeIds.has(workType.id));
-                    const visibleWorkTypes = [...categoryWorkTypes, ...legacySelectedWorkTypes];
-                    return (
-                      <div key={type.id} className="rounded-md border border-slate-200 bg-white p-3">
-                        <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-                          <div className="min-w-0">
-                            <h4 className="truncate text-sm font-bold text-slate-900">{type.name || "Service stop type"}</h4>
-                            <p className="mt-0.5 text-xs text-slate-500">
-                              {(type.category || category.category)} - {serviceStopTypeWorkTypeNames(type)}
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => editServiceStopType(type)}
-                              className="rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => saveServiceStopTypeWorkTypes(type.id, [...selectedIds])}
-                              disabled={savingAction === `save-stop-type-${type.id}`}
-                              className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {savingAction === `save-stop-type-${type.id}` ? "Saving" : "Save Mapping"}
-                            </button>
-                          </div>
-                        </div>
-                        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-                          {visibleWorkTypes.length === 0 ? (
-                            <p className="text-xs text-slate-500">Create payroll work types before mapping this stop type.</p>
-                          ) : visibleWorkTypes.map((workType) => {
-                            const workTypeCategory = stopPayCategoryForWorkType(workType, stopPayCategories);
-                            const isOutsideBucket = workTypeCategory?.id !== category.id;
-
-                            return (
-                              <label key={workType.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
-                                <input
-                                  type="checkbox"
-                                  defaultChecked={selectedIds.has(workType.id)}
-                                  onChange={(event) => {
-                                    if (event.target.checked) {
-                                      selectedIds.add(workType.id);
-                                    } else {
-                                      selectedIds.delete(workType.id);
-                                    }
-                                  }}
-                                />
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate">{workType.name}</span>
-                                  {isOutsideBucket ? (
-                                    <span className="text-[11px] text-amber-600">Mapped from {workTypeCategory?.label || "another bucket"}</span>
-                                  ) : null}
-                                </span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           );
         })}
@@ -3491,8 +3426,9 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const renderStopPayEditorModal = () => {
     if (!stopPayModal) return null;
+    if (stopPayModal !== "workType") return null;
 
-    const isWorkTypeModal = stopPayModal === "workType";
+    const isWorkTypeModal = true;
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
@@ -3500,8 +3436,8 @@ const Payroll = ({ mode = "payroll" }) => {
           <form onSubmit={createCompanyWorkType} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">{editingWorkTypeId ? "Edit Payroll Work Type" : "Create New Work Type"}</h2>
-                <p className="mt-1 text-sm text-slate-500">Work types are the rows technicians get rates for.</p>
+                <h2 className="text-xl font-bold text-slate-900">{editingWorkTypeId ? "Edit Pay Type" : "Create Pay Type"}</h2>
+                <p className="mt-1 text-sm text-slate-500">Pay types are the rows technicians get rates for and the choices available in scheduling buckets.</p>
               </div>
               <button type="button" onClick={closeStopPayModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
                 Close
@@ -3533,7 +3469,7 @@ const Payroll = ({ mode = "payroll" }) => {
               </label>
 
               <label className="text-sm font-semibold text-slate-700">
-                Work Category
+                Pay Category
                 <select
                   value={workTypeForm.category}
                   onChange={(event) => setWorkTypeForm((form) => ({ ...form, category: event.target.value }))}
@@ -3603,7 +3539,7 @@ const Payroll = ({ mode = "payroll" }) => {
                   disabled={["create-work-type", "update-work-type"].includes(savingAction)}
                   className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingAction === "update-work-type" ? "Updating" : savingAction === "create-work-type" ? "Creating" : editingWorkTypeId ? "Update Work Type" : "Create Work Type"}
+                  {savingAction === "update-work-type" ? "Updating" : savingAction === "create-work-type" ? "Creating" : editingWorkTypeId ? "Update Pay Type" : "Create Pay Type"}
                 </button>
               </div>
             </div>
@@ -3612,8 +3548,8 @@ const Payroll = ({ mode = "payroll" }) => {
           <form onSubmit={createCompanyServiceStopType} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">{editingServiceStopTypeId ? "Edit Service Stop Type" : "Create New Service Stop"}</h2>
-                <p className="mt-1 text-sm text-slate-500">Stop types point to default payroll work.</p>
+                <h2 className="text-xl font-bold text-slate-900">{editingServiceStopTypeId ? "Edit Pay Type" : "Create Pay Type"}</h2>
+                <p className="mt-1 text-sm text-slate-500">Pay types define the payroll row available in a scheduling bucket.</p>
               </div>
               <button type="button" onClick={closeStopPayModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
                 Close
@@ -3651,7 +3587,7 @@ const Payroll = ({ mode = "payroll" }) => {
               />
 
               <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
-                Default Payroll Work Types
+                Default Pay Types
                 <select
                   multiple
                   value={serviceStopTypeForm.defaultWorkTypeIds}
@@ -3667,7 +3603,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 </select>
                 {serviceStopTypeFormWorkTypeOptions.length === 0 ? (
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Create a payroll work type in this bucket before selecting defaults.
+                    Create a pay type in this bucket before selecting defaults.
                   </span>
                 ) : null}
               </label>
@@ -3698,7 +3634,7 @@ const Payroll = ({ mode = "payroll" }) => {
                   disabled={["create-service-stop-type", "update-service-stop-type"].includes(savingAction)}
                   className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingAction === "update-service-stop-type" ? "Updating" : savingAction === "create-service-stop-type" ? "Creating" : editingServiceStopTypeId ? "Update Stop Type" : "Create Stop Type"}
+                  {savingAction === "update-service-stop-type" ? "Updating" : savingAction === "create-service-stop-type" ? "Creating" : editingServiceStopTypeId ? "Update Pay Type" : "Create Pay Type"}
                 </button>
               </div>
             </div>
@@ -3714,7 +3650,7 @@ const Payroll = ({ mode = "payroll" }) => {
         <div>
           <h2 className="text-lg font-bold text-slate-900">Technician Rates</h2>
           <p className="mt-1 text-sm text-slate-500">
-            {rateMatrixFullscreen ? "Full-screen matrix view." : "Rate amounts by technician and payroll work type."}
+            {rateMatrixFullscreen ? "Full-screen matrix view." : "Rate amounts by technician and pay type."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -3785,7 +3721,7 @@ const Payroll = ({ mode = "payroll" }) => {
             <div>
               <p className="text-sm font-bold text-slate-900">Matrix Filters</p>
               <p className="mt-1 text-xs text-slate-500">
-                Showing {filteredRateMatrixRows.length} of {rateMatrixRows.length} rate rows and {filteredRateMatrixColumns.length} of {rateMatrixColumns.length} work types.
+                Showing {filteredRateMatrixRows.length} of {rateMatrixRows.length} rate rows and {filteredRateMatrixColumns.length} of {rateMatrixColumns.length} pay types.
               </p>
             </div>
             {activeRateMatrixFilterCount > 0 ? (
@@ -3816,7 +3752,7 @@ const Payroll = ({ mode = "payroll" }) => {
               </div>
             </section>
             <section>
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Work Types</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Pay Types</p>
               <div className="mt-2 grid max-h-56 gap-2 overflow-auto sm:grid-cols-2">
                 {rateMatrixColumns.map((column) => (
                   <label key={column.id} className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
@@ -3837,7 +3773,7 @@ const Payroll = ({ mode = "payroll" }) => {
 
       {rateMatrixRows.length === 0 || rateMatrixColumns.length === 0 ? (
         <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-          Add technicians and payroll work types before editing rates.
+          Add technicians and pay types before editing rates.
         </div>
       ) : filteredRateMatrixRows.length === 0 || filteredRateMatrixColumns.length === 0 ? (
         <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
@@ -3866,7 +3802,7 @@ const Payroll = ({ mode = "payroll" }) => {
                         <div className="min-w-0">
                           <span className="block truncate text-sm font-bold text-blue-950">{group.bucketLabel}</span>
                           <span className="mt-0.5 block truncate text-[11px] font-normal text-blue-700">
-                            {group.columns.length} work type{group.columns.length === 1 ? "" : "s"}
+                            {group.columns.length} pay type{group.columns.length === 1 ? "" : "s"}
                           </span>
                         </div>
                         <button
@@ -3989,7 +3925,7 @@ const Payroll = ({ mode = "payroll" }) => {
               </select>
             </label>
             <label className="text-sm font-semibold text-slate-700 lg:col-span-2">
-              Work type
+              Pay type
               <select value={rateForm.workTypeId} onChange={(event) => setRateForm((form) => ({ ...form, workTypeId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
                 <option value="">General / hourly</option>
                 {activeCompanyWorkTypes.map((workType) => <option key={workType.id} value={workType.id}>{workType.name}</option>)}
@@ -4042,7 +3978,7 @@ const Payroll = ({ mode = "payroll" }) => {
               <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3">Technician</th>
-                  <th className="px-4 py-3">Work Type</th>
+                  <th className="px-4 py-3">Pay Type</th>
                   <th className="px-4 py-3">Basis</th>
                   <th className="px-4 py-3">Rate</th>
                   <th className="px-4 py-3">Status</th>
@@ -4077,7 +4013,7 @@ const Payroll = ({ mode = "payroll" }) => {
   const tabItems = isSetupMode
     ? [
       ["overview", "Overview"],
-      ["stopPay", "Stop Pay Setup"],
+      ["stopPay", "Pay Types"],
       ["rates", "Technician Rates"],
       ["settings", "Pay Rules"],
     ]
@@ -4355,10 +4291,10 @@ const Payroll = ({ mode = "payroll" }) => {
                 <DetailField label="Worker Type" value={detailLineItem.workerType} />
                 <DetailField label="Company" value={detailLineItem.companyName || (detailLineItem.companyId || recentlySelectedCompany ? "Selected company" : "")} />
                 <DetailField label="Service Stop" value={detailLineItem.serviceStopInternalId || (detailLineItem.serviceStopId ? "Service stop" : "")} accent />
-                <DetailField label="Service Stop Type" value={detailLineItem.serviceStopTypeName} />
+                <DetailField label="Stop Pay Type" value={detailLineItem.payTypeName || detailLineItem.serviceStopTypeName} />
                 <DetailField label="Job" value={detailLineItem.jobInternalId || (detailLineItem.jobId ? "Job" : "")} />
                 <DetailField label="Task" value={detailLineItem.displayTitle || detailLineItem.workTypeName || (detailLineItem.serviceStopTaskId || detailLineItem.taskId ? "Task" : "")} />
-                <DetailField label="Work Type" value={detailLineItem.workTypeName || (detailLineItem.workTypeId ? "General" : "")} accent />
+                <DetailField label="Pay Type" value={detailLineItem.payTypeName || detailLineItem.workTypeName || (detailLineItem.payTypeId || detailLineItem.workTypeId ? "General" : "")} accent />
                 <DetailField label="Pay Basis" value={detailLineItem.payBasis} accent />
                 <DetailField label="Rate Type" value={rateTypeLabel(detailLineItem)} />
                 <DetailField label="Rate Amount" value={moneyFromCents(detailLineItem.rateAmountCents)} />

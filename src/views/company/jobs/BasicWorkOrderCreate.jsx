@@ -1117,6 +1117,8 @@ const BasicWorkOrderCreate = () => {
             || scheduledTasks.reduce((total, task) => total + Number(task.estimatedTime || 0), 0)
             || Number(customEstimatedMinutes || 0)
             || 60;
+        const payTypeId = selectedPlannedStop?.payTypeId || selectedPlannedStop?.serviceStopTypeId || "system_job_service_stop";
+        const payTypeName = selectedPlannedStop?.payTypeName || selectedPlannedStop?.serviceStopTypeName || "Job Visit";
 
         await setDoc(counterRef, { increment: nextCount }, { merge: true });
 
@@ -1151,13 +1153,10 @@ const BasicWorkOrderCreate = () => {
             includeReadings: true,
             estimatedPayCents: 0,
             estimatedPayLines: [],
-            payWorkTypeId: "",
-            payWorkTypeName: "",
-            workTypeId: "",
-            workTypeName: "",
+            payTypeId,
+            payTypeName,
             manualPayOverrideCents: null,
             manualPayOverrideNotes: "",
-            defaultWorkTypeIds: [],
             plannedServiceStopId: selectedPlannedStop?.id || "",
             rate: scheduledTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0),
             recurringServiceStopId: "",
@@ -1194,6 +1193,8 @@ const BasicWorkOrderCreate = () => {
                     internalId: "",
                 },
                 jobTaskId: task.id,
+                payTypeId: task.payTypeId || task.workTypeId || "",
+                payTypeName: task.payTypeName || task.workTypeName || "",
                 workOrderTaskId: task.id,
             });
 

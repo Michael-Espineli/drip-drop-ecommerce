@@ -57,8 +57,18 @@ export default function ScheduleEstimate() {
 
                     setLead(enhancedLead);
                     setFormData(prev => ({ ...prev, description: enhancedLead.serviceDescription || '' }));
-                    const serviceStopTypesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes'));
-                    setCompanyServiceStopTypes(serviceStopTypesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                    const payTypesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyPayTypes'));
+                    setCompanyServiceStopTypes(payTypesSnapshot.docs.map(doc => {
+                        const data = { id: doc.id, ...doc.data() };
+                        return {
+                            ...data,
+                            imageName: data.imageName || data.iconName || "",
+                            iconName: data.iconName || data.imageName || "",
+                            stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
+                            stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
+                            defaultWorkTypeIds: [doc.id],
+                        };
+                    }));
                 } else {
                     toast.error("Lead not found.");
                     navigate('/company/leads');
@@ -115,6 +125,8 @@ export default function ScheduleEstimate() {
                 useCase: SERVICE_STOP_TYPE_USE_CASES.serviceEstimate,
                 context: 'ScheduleEstimate.handleSubmit',
             });
+            const payTypeId = resolvedTypeFields.typeId || "";
+            const payTypeName = resolvedTypeFields.type || "";
             const serviceStopPayload = {
                 internalId: '',
                 companyId: recentlySelectedCompany,
@@ -136,6 +148,8 @@ export default function ScheduleEstimate() {
                 typeId: resolvedTypeFields.typeId,
                 type: resolvedTypeFields.type,
                 typeImage: resolvedTypeFields.typeImage,
+                payTypeId,
+                payTypeName,
                 category: resolvedTypeFields.category,
                 serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
                 jobId: '',

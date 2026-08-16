@@ -1028,7 +1028,7 @@ const CompanyUserDetails = () => {
                     technicianRatesSnapshot,
                     legacyRateSheetSnapshot,
                 ] = await Promise.all([
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "companyWorkTypes")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "companyPayTypes")),
                     lookupIds.length > 0 ? getDocs(rateQuery) : Promise.resolve({ docs: [] }),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers", user.id, "rateSheet")),
                 ]);
@@ -1037,12 +1037,29 @@ const CompanyUserDetails = () => {
 
                 setCompanyWorkTypes(
                     workTypesSnapshot.docs
-                        .map((workTypeDoc) => ({ id: workTypeDoc.id, ...workTypeDoc.data() }))
+                        .map((workTypeDoc) => {
+                            const data = { id: workTypeDoc.id, ...workTypeDoc.data() };
+                            return {
+                                ...data,
+                                imageName: data.imageName || data.iconName || "",
+                                iconName: data.iconName || data.imageName || "",
+                                stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
+                                stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
+                                defaultWorkTypeIds: [workTypeDoc.id],
+                            };
+                        })
                         .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || String(left.name || "").localeCompare(String(right.name || "")))
                 );
                 setTechnicianRates(
                     technicianRatesSnapshot.docs
-                        .map((rateDoc) => ({ id: rateDoc.id, ...rateDoc.data() }))
+                        .map((rateDoc) => {
+                            const data = { id: rateDoc.id, ...rateDoc.data() };
+                            return {
+                                ...data,
+                                workTypeId: data.workTypeId || data.payTypeId || "",
+                                workTypeName: data.workTypeName || data.payTypeName || "",
+                            };
+                        })
                         .sort(compareRates)
                 );
                 setLegacyRateSheets(
@@ -3165,7 +3182,7 @@ const CompanyUserDetails = () => {
                                         <table className="min-w-full divide-y divide-slate-200 text-sm">
                                             <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                                                 <tr>
-                                                    <th className="px-4 py-3 text-left">Work Type</th>
+                                                    <th className="px-4 py-3 text-left">Pay Type</th>
                                                     <th className="px-4 py-3 text-left">Pay Basis</th>
                                                     <th className="px-4 py-3 text-left">Rate Type</th>
                                                     <th className="px-4 py-3 text-right">Amount</th>

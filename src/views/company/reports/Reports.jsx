@@ -5690,9 +5690,9 @@ const Reports = () => {
         needsPayrollFallback
           ? getDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main")).then((snap) => (snap.exists() ? snap.data() : null))
           : Promise.resolve(null),
-        needsPayrollFallback ? getCollection(recentlySelectedCompany, "companyServiceStopTypes") : Promise.resolve([]),
-        needsPayrollFallback ? getCollection(recentlySelectedCompany, "companyWorkTypes") : Promise.resolve([]),
-        needsPayrollFallback ? getCollection(recentlySelectedCompany, "workTypeMappings") : Promise.resolve([]),
+        needsPayrollFallback ? getCollection(recentlySelectedCompany, "companyPayTypes") : Promise.resolve([]),
+        needsPayrollFallback ? getCollection(recentlySelectedCompany, "companyPayTypes") : Promise.resolve([]),
+        Promise.resolve([]),
         needsPayrollFallback ? getCollection(recentlySelectedCompany, "technicianRates") : Promise.resolve([]),
         needsPipeline
           ? Promise.all([

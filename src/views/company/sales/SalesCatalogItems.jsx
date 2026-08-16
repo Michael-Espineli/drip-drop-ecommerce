@@ -202,7 +202,6 @@ const billingBehaviorOptions = Object.values(SalesCatalogBillingBehavior);
 const sourceTypeOptions = [
   SalesCatalogSourceType.manual,
   SalesCatalogSourceType.serviceStopType,
-  SalesCatalogSourceType.workType,
   SalesCatalogSourceType.databaseItem,
   SalesCatalogSourceType.stripeProductPrice,
 ];
@@ -210,20 +209,20 @@ const recurringIntervalOptions = ['day', 'week', 'month', 'year'];
 
 const sourceTypeLabels = {
   [SalesCatalogSourceType.manual]: 'Manual Service',
-  [SalesCatalogSourceType.serviceStopType]: 'Service Stop Type',
-  [SalesCatalogSourceType.workType]: 'Work Type',
+  [SalesCatalogSourceType.serviceStopType]: 'Pay Type',
+  [SalesCatalogSourceType.workType]: 'Pay Type',
   [SalesCatalogSourceType.databaseItem]: 'Database Product',
   [SalesCatalogSourceType.stripeProductPrice]: 'Stripe Product / Price',
 };
 
 const sourcePickerConfig = {
   [SalesCatalogSourceType.serviceStopType]: {
-    label: 'Service Stop Type',
-    helper: 'Use this when the service is based on a reusable service stop type.',
+    label: 'Pay Type',
+    helper: 'Use this when the service is based on a reusable pay type.',
   },
   [SalesCatalogSourceType.workType]: {
-    label: 'Work Type',
-    helper: 'Use this when the service is based on a reusable labor/work type.',
+    label: 'Pay Type',
+    helper: 'Use this when the service is based on a reusable pay type.',
   },
   [SalesCatalogSourceType.databaseItem]: {
     label: 'Database Product',
@@ -286,11 +285,7 @@ const SalesCatalogItems = () => {
     const sourceCollections = [
       {
         sourceType: SalesCatalogSourceType.serviceStopType,
-        ref: collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes'),
-      },
-      {
-        sourceType: SalesCatalogSourceType.workType,
-        ref: collection(db, 'companies', recentlySelectedCompany, 'companyWorkTypes'),
+        ref: collection(db, 'companies', recentlySelectedCompany, 'companyPayTypes'),
       },
       {
         sourceType: SalesCatalogSourceType.databaseItem,
@@ -467,7 +462,10 @@ const SalesCatalogItems = () => {
       description: item.description || '',
       type: item.type || SalesCatalogItemType.service,
       billingBehavior: item.billingBehavior || SalesCatalogBillingBehavior.oneTime,
-      sourceType: item.sourceType || SalesCatalogSourceType.manual,
+      sourceType:
+        item.sourceType === SalesCatalogSourceType.workType
+          ? SalesCatalogSourceType.serviceStopType
+          : item.sourceType || SalesCatalogSourceType.manual,
       sourceId: item.sourceId || '',
       unitAmount: centsToDollarsInput(item.unitAmountCents),
       unitCost: centsToDollarsInput(item.unitCostCents),

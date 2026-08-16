@@ -344,7 +344,7 @@ const CreateNewServiceStop = () => {
                 .map((type) => ({
                     ...type,
                     value: type.id,
-                    label: type.name || "Unnamed Service Stop Type",
+                    label: type.name || "Unnamed Pay Type",
                 }))
                 .sort((a, b) => a.label.localeCompare(b.label)),
         [companyServiceStopTypes]
@@ -382,7 +382,7 @@ const CreateNewServiceStop = () => {
                 .map((type) => ({
                     ...type,
                     value: type.id,
-                    label: type.name || type.workTypeName || "Unnamed Work Type",
+                    label: type.name || type.workTypeName || "Unnamed Pay Type",
                 }))
                 .sort((a, b) => a.label.localeCompare(b.label)),
         [companyWorkTypes]
@@ -433,6 +433,8 @@ const CreateNewServiceStop = () => {
                     id: "manual_pay_override",
                     source: "Manual Adjustment",
                     sourceTaskId: null,
+                    payTypeId: selectedPayWorkType?.id || "",
+                    payTypeName: selectedPayWorkType?.label || selectedPayWorkType?.name || "",
                     workTypeId: selectedPayWorkType?.id || "",
                     workTypeName: selectedPayWorkType?.label || selectedPayWorkType?.name || "",
                     title: "Manual Pay Amount",
@@ -512,9 +514,9 @@ const CreateNewServiceStop = () => {
                 ] = await Promise.all([
                     getDocs(collection(db, "companies", recentlySelectedCompany, 'companyUsers')),
                     getDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "companyWorkTypes")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "workTypeMappings")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "companyPayTypes")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "companyPayTypes")),
+                    Promise.resolve({ docs: [] }),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates")),
                     getDocs(collection(db, "universal", "settings", "taskTypes")),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup")),
@@ -536,8 +538,17 @@ const CreateNewServiceStop = () => {
                 })));
 
                 setPaySettings(paySettingsSnap.exists() ? paySettingsSnap.data() : null);
-                setCompanyServiceStopTypes(serviceStopTypesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
-                setCompanyWorkTypes(workTypesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
+                const normalizePayType = (docSnap) => {
+                    const data = { id: docSnap.id, ...docSnap.data() };
+                    return {
+                        ...data,
+                        imageName: data.imageName || data.iconName || "",
+                        iconName: data.iconName || data.imageName || "",
+                        defaultWorkTypeIds: [docSnap.id],
+                    };
+                };
+                setCompanyServiceStopTypes(serviceStopTypesSnap.docs.map(normalizePayType));
+                setCompanyWorkTypes(workTypesSnap.docs.map(normalizePayType));
                 setWorkTypeMappings(mappingsSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
                 setTechnicianRates(ratesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
                 setTaskTypeList(jobTaskTypeOptionsFromDocs(taskTypesSnap.docs));
@@ -1100,8 +1111,8 @@ const CreateNewServiceStop = () => {
         let rate = 0
 
         const internalId = "SS" + String(serviceStopCount)
-        const payWorkTypeId = selectedPayWorkType?.id || "";
-        const payWorkTypeName = selectedPayWorkType?.name || selectedPayWorkType?.label || "";
+        const payTypeId = selectedPayWorkType?.id || selectedServiceStopType?.id || "";
+        const payTypeName = selectedPayWorkType?.name || selectedPayWorkType?.label || selectedServiceStopType?.name || "";
         const resolvedTypeFields = resolveServiceStopTypeFields({
             companyServiceStopTypes,
             selectedType: selectedServiceStopType,
@@ -1119,8 +1130,8 @@ const CreateNewServiceStop = () => {
                 selectedUserName: selectedUser.userName,
                 selectedServiceStopTypeId: resolvedTypeFields.typeId,
                 selectedServiceStopTypeName: resolvedTypeFields.type,
-                selectedPayWorkTypeId: payWorkTypeId,
-                selectedPayWorkTypeName: payWorkTypeName,
+                selectedPayTypeId: payTypeId,
+                selectedPayTypeName: payTypeName,
                 totalAmountCents: effectivePaySummary.totalAmountCents,
                 lines: effectivePaySummary.lines,
             });
@@ -1157,15 +1168,12 @@ const CreateNewServiceStop = () => {
             includeReadings: selectedCategory.id === "serviceAgreementEstimate" || selectedCategory.id === "jobVisit",
             estimatedPayCents: effectivePaySummary.totalAmountCents,
             estimatedPayLines: effectivePaySummary.lines,
-            payWorkTypeId,
-            payWorkTypeName,
-            workTypeId: payWorkTypeId,
-            workTypeName: payWorkTypeName,
+            payTypeId,
+            payTypeName,
             manualPayOverrideCents: manualPayOverrideEnabled ? manualPayOverrideCents : null,
             manualPayOverrideNotes: manualPayOverrideEnabled
                 ? (manualPayOverrideNotes.trim() || "Manual payroll amount set while scheduling this service stop.")
                 : "",
-            defaultWorkTypeIds: resolvedTypeFields.defaultWorkTypeIds,
             plannedServiceStopId: selectedPlannedStop?.id || "",
             rate: rate ?? 0,
             recurringServiceStopId: "",
@@ -1210,8 +1218,8 @@ const CreateNewServiceStop = () => {
                     internalId: "",
                 },
                 jobTaskId: task.id,
-                workTypeId: task.workTypeId || payWorkTypeId,
-                workTypeName: task.workTypeName || payWorkTypeName,
+                payTypeId: task.payTypeId || task.workTypeId || payTypeId,
+                payTypeName: task.payTypeName || task.workTypeName || payTypeName,
                 workOrderTaskId: jobId ? task.id : "",
             });
             rate += Number(task.rate || task.contractedRate || 0)
@@ -1511,7 +1519,7 @@ const SiteInfoTab = ({
         ? {
             ...selectedServiceStopType,
             value: selectedServiceStopType.id,
-            label: selectedServiceStopType.name || selectedServiceStopType.label || "Service Stop Type",
+            label: selectedServiceStopType.name || selectedServiceStopType.label || "Pay Type",
         }
         : null;
 
@@ -1609,22 +1617,22 @@ const SiteInfoTab = ({
 
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
             <label className="block text-sm font-semibold text-gray-700 mb-1">
-                Service Stop Type
+                Pay Type
             </label>
             <Select
                 options={serviceStopTypeOptions}
                 value={selectedPlannedStop ? selectedServiceStopOption : selectedManualServiceStopType || selectedServiceStopOption}
                 onChange={setSelectedManualServiceStopType}
-                placeholder="Select service stop type"
+                placeholder="Select pay type"
                 isDisabled={Boolean(selectedPlannedStop)}
                 styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
             />
             <p className="mt-2 text-xs text-gray-500">
-                This classifies the stop. Payroll work types are derived from this unless you set a pay override later.
+                This classifies the stop and sets the base pay type unless you choose an override later.
             </p>
             {selectedPlannedStop && (
                 <p className="mt-1 text-xs font-semibold text-blue-700">
-                    Using the service stop type from the planned service stop.
+                    Using the pay type from the planned service stop.
                 </p>
             )}
         </div>
@@ -1691,7 +1699,7 @@ const PaySummaryCard = ({ selectedPaySummary, moneyFromCents }) => (
             <div>
                 <p className="text-sm font-semibold text-gray-800">Expected Technician Pay</p>
                 <p className="text-sm text-gray-600 mt-1">
-                    Based on selected technician, service stop type, selected tasks, and active technician rates.
+                    Based on selected technician, pay type, selected tasks, and active technician rates.
                 </p>
             </div>
             <span className="px-3 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 text-sm font-bold">
@@ -1773,7 +1781,7 @@ const AssignTechTab = ({
             <p className="mt-1 text-xs text-gray-500">Minutes scheduled for the field visit.</p>
         </div>
         <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Pay Work Type Override</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Pay Type Override</label>
             <Select
                 options={workTypeOptions}
                 value={selectedPayWorkType}
@@ -1783,7 +1791,7 @@ const AssignTechTab = ({
                 styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
             />
             <p className="mt-1 text-xs text-gray-500">
-                Overrides which payroll work type is used for the automatic preview.
+                Overrides which pay type is used for the automatic preview.
             </p>
         </div>
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 md:col-span-full">
@@ -2075,8 +2083,8 @@ const ReviewTab = ({
                 <p><strong>Location:</strong> {location?.nickName || location?.name || "Service Location"}{locationAddress ? ` at ${locationAddress}` : ""}</p>
                 <p><strong>Technician:</strong> {tech || 'Not Assigned'}</p>
                 <p><strong>Service Date:</strong> {date.toLocaleDateString()}</p>
-                <p><strong>Service Stop Type:</strong> {selectedServiceStopType?.label || selectedServiceStopType?.name || selectedCategory?.fallbackType || "Service Stop"}</p>
-                <p><strong>Pay Work Type Override:</strong> {selectedPayWorkType?.label || "Using service stop type defaults"}</p>
+                <p><strong>Pay Type:</strong> {selectedServiceStopType?.label || selectedServiceStopType?.name || selectedCategory?.fallbackType || "Service Stop"}</p>
+                <p><strong>Pay Type Override:</strong> {selectedPayWorkType?.label || "Using selected pay type"}</p>
                 <p><strong>Total Duration:</strong> {duration} minutes</p>
                 <p><strong>{manualPayOverrideEnabled ? "Manual Pay" : "Expected Pay"}:</strong> {moneyFromCents(selectedPaySummary.totalAmountCents)}</p>
                 {description && <p><strong>Planned Work:</strong> {description}</p>}

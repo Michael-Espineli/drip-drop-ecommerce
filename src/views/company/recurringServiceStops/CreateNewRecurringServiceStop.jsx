@@ -312,7 +312,7 @@ const CreateNewRecurringServiceStop = () => {
                 .map((type) => ({
                     ...type,
                     value: type.id,
-                    label: type.name || "Unnamed Service Stop Type",
+                    label: type.name || "Unnamed Pay Type",
                 }))
                 .sort((a, b) => a.label.localeCompare(b.label)),
         [companyServiceStopTypes]
@@ -474,8 +474,18 @@ const CreateNewRecurringServiceStop = () => {
                 }));
                 setTechList(techs);
 
-                const serviceStopTypesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes'));
-                setCompanyServiceStopTypes(serviceStopTypesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                const payTypesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyPayTypes'));
+                setCompanyServiceStopTypes(payTypesSnapshot.docs.map(doc => {
+                    const data = { id: doc.id, ...doc.data() };
+                    return {
+                        ...data,
+                        imageName: data.imageName || data.iconName || "",
+                        iconName: data.iconName || data.imageName || "",
+                        stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
+                        stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
+                        defaultWorkTypeIds: [doc.id],
+                    };
+                }));
 
                 let preselectedCustomerId = customerId && customerId !== 'NA' ? customerId : '';
                 const descriptionParts = [];
@@ -760,12 +770,16 @@ const CreateNewRecurringServiceStop = () => {
                 useCase: SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
                 context: "CreateNewRecurringServiceStop.createNewStop",
             });
+            const payTypeId = selectedServiceStopType?.id || resolvedTypeFields.typeId || "";
+            const payTypeName = selectedServiceStopType?.name || selectedServiceStopType?.label || resolvedTypeFields.type || "";
             newRSSData = {
                 id: stopId,
                 internalId: internalId,
                 type: resolvedTypeFields.type,
                 typeId: resolvedTypeFields.typeId,
                 typeImage: resolvedTypeFields.typeImage,
+                payTypeId,
+                payTypeName,
                 category: resolvedTypeFields.category,
                 serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
                 customerName: `${customer.firstName} ${customer.lastName}`,
@@ -882,7 +896,7 @@ const CreateNewRecurringServiceStop = () => {
                         <div className="min-w-0">
                             <h1 className="text-3xl font-bold text-slate-950">Add New Recurring Service Stop</h1>
                             <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                                Assign the customer, route schedule, technician, and service stop type.
+                                Assign the customer, route schedule, technician, and pay type.
                             </p>
                         </div>
                         <button
@@ -901,7 +915,7 @@ const CreateNewRecurringServiceStop = () => {
                             <SelectField label="Customer" value={customer} options={customerList} onChange={handleCustomerChange} placeholder="Select a Customer" isDisabled={!!customerId && customerId !== 'NA'} isLoading={isLoading} />
                             <SelectField label="Service Location" value={serviceLocation} options={serviceLocationList} onChange={setServiceLocation} placeholder="Select a Service Location" isDisabled={!customer} />
                             <SelectField label="Assigned Technician" value={tech} options={techList} onChange={setTech} placeholder="Assign a Technician" />
-                            <SelectField label="Service Stop Type" value={selectedServiceStopType} options={serviceStopTypeOptions} onChange={setSelectedServiceStopType} placeholder="Select a Service Stop Type" />
+                            <SelectField label="Pay Type" value={selectedServiceStopType} options={serviceStopTypeOptions} onChange={setSelectedServiceStopType} placeholder="Select a Pay Type" />
                             <SelectField label="Day of Week" value={dayOfWeek} options={dayOptions} onChange={setDayOfWeek} placeholder="Select a Day" />
                             <SelectField label="Frequency" value={frequency} options={frequencyOptions} onChange={setFrequency} placeholder="Select Frequency" />
 

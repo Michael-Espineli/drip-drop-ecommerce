@@ -350,6 +350,7 @@ const getWorkOrderTypeLabel = (stop = {}) => {
         currentStop.workOrderTypeName ||
         currentStop.jobType ||
         currentStop.jobTypeName ||
+        currentStop.payTypeName ||
         currentStop.payWorkTypeName ||
         currentStop.workTypeName ||
         currentStop.workType ||
@@ -1012,8 +1013,10 @@ const ServiceStopDetails = () => {
                         workOrderTypeName: rawStopData.workOrderTypeName || "",
                         jobType: rawStopData.jobType || "",
                         jobTypeName: rawStopData.jobTypeName || "",
+                        payTypeId: rawStopData.payTypeId || "",
+                        payTypeName: rawStopData.payTypeName || "",
                         payWorkTypeName: rawStopData.payWorkTypeName || "",
-                        workTypeName: rawStopData.workTypeName || "",
+                        workTypeName: rawStopData.workTypeName || rawStopData.payTypeName || "",
                         workType: rawStopData.workType || "",
                         serviceStopTypeName: rawStopData.serviceStopTypeName || "",
                         typeName: rawStopData.typeName || "",
@@ -2900,7 +2903,7 @@ const ServiceStopDetails = () => {
                                     </span>
                                 </div>
                                 <Field label="Work Order Type" value={getWorkOrderTypeLabel(serviceStop)} />
-                                <Field label="Service Stop Type" value={getServiceStopTypeLabel(serviceStop)} />
+                                <Field label="Pay Type" value={getServiceStopTypeLabel(serviceStop)} />
                             </div>
 
                             <div className="mt-3 grid grid-cols-1 gap-x-5 gap-y-3 border-t border-slate-200 pt-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">

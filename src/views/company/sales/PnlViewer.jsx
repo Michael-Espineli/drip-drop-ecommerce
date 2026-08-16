@@ -439,9 +439,9 @@ const PnlViewer = () => {
         getDoc(doc(db, 'companies', recentlySelectedCompany, 'paySettings', 'main')).then((snapshot) => (
           snapshot.exists() ? snapshot.data() : null
         )),
-        getCollectionRecords(recentlySelectedCompany, 'companyServiceStopTypes'),
-        getCollectionRecords(recentlySelectedCompany, 'companyWorkTypes'),
-        getCollectionRecords(recentlySelectedCompany, 'workTypeMappings'),
+        getCollectionRecords(recentlySelectedCompany, 'companyPayTypes'),
+        getCollectionRecords(recentlySelectedCompany, 'companyPayTypes'),
+        Promise.resolve([]),
         getCollectionRecords(recentlySelectedCompany, 'technicianRates'),
       ]);
 

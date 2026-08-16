@@ -75,7 +75,7 @@ const isActiveType = (type) =>
     type.status !== "Inactive";
 
 const imageNameForType = (type) =>
-    type?.imageName || type?.typeImage || type?.image || "";
+    type?.imageName || type?.iconName || type?.typeImage || type?.image || "";
 
 const isCommercialTypeName = (value) => normalize(value).includes("commercial");
 
@@ -188,10 +188,12 @@ export const resolveServiceStopTypeFields = ({
             typeId: matchedType.id,
             type: matchedType.name || fallbackName || fallback.type,
             typeImage: imageNameForType(matchedType) || fallbackImage || fallback.typeImage,
+            payTypeId: matchedType.id,
+            payTypeName: matchedType.name || fallbackName || fallback.type,
             serviceStopTypeUseCaseRawValue: normalizedUseCase,
-            category: matchedType.category || fallback.category,
-            defaultWorkTypeIds: Array.isArray(matchedType.defaultWorkTypeIds) ? matchedType.defaultWorkTypeIds : [],
-            source: "companyServiceStopType",
+            category: matchedType.serviceStopCategory || matchedType.category || fallback.category,
+            defaultWorkTypeIds: Array.isArray(matchedType.defaultWorkTypeIds) ? matchedType.defaultWorkTypeIds : [matchedType.id],
+            source: "companyPayType",
         };
 
         if (!fields.defaultWorkTypeIds.length) {
@@ -210,9 +212,11 @@ export const resolveServiceStopTypeFields = ({
         typeId: selectedId || fallback.typeId,
         type: fallbackName || selectedType?.name || fallback.type,
         typeImage: fallbackImage || imageNameForType(selectedType) || fallback.typeImage,
+        payTypeId: selectedId || fallback.typeId,
+        payTypeName: fallbackName || selectedType?.name || fallback.type,
         serviceStopTypeUseCaseRawValue: normalizedUseCase,
         category: selectedType?.category || fallback.category,
-        defaultWorkTypeIds: [],
+        defaultWorkTypeIds: selectedId ? [selectedId] : [],
         source: "systemFallback",
     };
 

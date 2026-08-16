@@ -2290,6 +2290,8 @@ export default function EquipmentList() {
         Number(selectedPlannedStop?.estimatedMinutes || 0) ||
         scheduledTasks.reduce((total, task) => total + Number(task.estimatedTime || 0), 0) ||
         60;
+      const payTypeId = selectedPlannedStop?.payTypeId || selectedPlannedStop?.serviceStopTypeId || "system_job_service_stop";
+      const payTypeName = selectedPlannedStop?.payTypeName || selectedPlannedStop?.serviceStopTypeName || scheduleJobIntentConfig.label;
 
       await setDoc(serviceStopCounterRef, { increment: nextServiceStopCount }, { merge: true });
 
@@ -2324,13 +2326,10 @@ export default function EquipmentList() {
         includeReadings: false,
         estimatedPayCents: 0,
         estimatedPayLines: [],
-        payWorkTypeId: "",
-        payWorkTypeName: "",
-        workTypeId: "",
-        workTypeName: "",
+        payTypeId,
+        payTypeName,
         manualPayOverrideCents: null,
         manualPayOverrideNotes: "",
-        defaultWorkTypeIds: [],
         plannedServiceStopId: selectedPlannedStop?.id || "",
         rate: scheduledTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0),
         recurringServiceStopId: "",
@@ -2376,6 +2375,8 @@ export default function EquipmentList() {
             internalId: "",
           },
           jobTaskId: task.id,
+          payTypeId: task.payTypeId || task.workTypeId || "",
+          payTypeName: task.payTypeName || task.workTypeName || "",
           workOrderTaskId: task.id,
         });
 

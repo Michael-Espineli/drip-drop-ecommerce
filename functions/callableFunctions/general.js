@@ -150,7 +150,7 @@ const getCompanyDisplayName = (company = {}, fallback = "") => (
 
 const technicianRateCopyKey = (rate = {}) => [
   String(rate.payBasis || "").trim(),
-  String(rate.workTypeId || "").trim(),
+  String(rate.payTypeId || rate.workTypeId || "").trim(),
 ].join("__");
 
 const isCopyableBaseTechnicianRate = (rate = {}) => {
@@ -552,36 +552,71 @@ const defaultServiceStopCategoryEmailSettings = (companyName = "your pool compan
   },
 });
 
-const DEFAULT_COMPANY_SERVICE_STOP_TYPES = [
+const DEFAULT_COMPANY_PAY_TYPES = [
   {
     id: "system_recurring_service_stop",
-    name: "Recurring Service Stop",
-    imageName: "figure.pool.swim",
-    category: "Route",
+    name: "Route",
+    iconName: "figure.pool.swim",
+    category: "route",
+    serviceStopCategory: "Route",
+    bucketId: "route",
+    bucketLabel: "Routes",
+    stopPayBucketId: "route",
+    stopPayBucketLabel: "Routes",
+    defaultRateType: "flatPerStop",
+    defaultStackBehavior: "stackable",
   },
   {
     id: "system_job_service_stop",
     name: "Job Visit",
-    imageName: "briefcase",
-    category: "Job",
+    iconName: "briefcase",
+    category: "serviceCall",
+    serviceStopCategory: "Job",
+    bucketId: "job",
+    bucketLabel: "Jobs",
+    stopPayBucketId: "job",
+    stopPayBucketLabel: "Jobs",
+    defaultRateType: "flatPerStop",
+    defaultStackBehavior: "stackable",
   },
   {
     id: "system_job_estimate_service_stop",
     name: "Job Estimate",
-    imageName: "doc.text.magnifyingglass",
-    category: "Job Estimate",
+    iconName: "doc.text.magnifyingglass",
+    category: "serviceCall",
+    serviceStopCategory: "Job Estimate",
+    bucketId: "jobEstimate",
+    bucketLabel: "Job Estimates",
+    stopPayBucketId: "jobEstimate",
+    stopPayBucketLabel: "Job Estimates",
+    defaultRateType: "flatPerStop",
+    defaultStackBehavior: "stackable",
   },
   {
     id: "system_service_agreement_estimate_service_stop",
     name: "Service Agreement Estimate",
-    imageName: "list.clipboard",
-    category: "Service Agreement Estimate",
+    iconName: "list.clipboard",
+    category: "startup",
+    serviceStopCategory: "Service Agreement Estimate",
+    bucketId: "serviceAgreementEstimate",
+    bucketLabel: "Service Agreement Estimates",
+    stopPayBucketId: "serviceAgreementEstimate",
+    stopPayBucketLabel: "Service Agreement Estimates",
+    defaultRateType: "flatPerStop",
+    defaultStackBehavior: "stackable",
   },
   {
     id: "system_customer_relationship_service_stop",
     name: "Customer Relationship",
-    imageName: "person.wave.2",
-    category: "Customer Relationship",
+    iconName: "person.wave.2",
+    category: "custom",
+    serviceStopCategory: "Customer Relationship",
+    bucketId: "customerRelationship",
+    bucketLabel: "Customer Relationships",
+    stopPayBucketId: "customerRelationship",
+    stopPayBucketLabel: "Customer Relationships",
+    defaultRateType: "flatPerStop",
+    defaultStackBehavior: "stackable",
   },
 ];
 
@@ -3543,26 +3578,27 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       routePaySource: "serviceStopAndCompletedTasks",
       taskPaySource: "technicianRateThenTaskContractedRate",
       hourlyPaySource: "none",
-      allowMultipleWorkTypesPerStop: true,
+      allowMultipleWorkTypesPerStop: false,
       defaultStackBehavior: "stackable",
       allowTechnicianRateOverrides: true,
       allowManualPayAdjustments: false,
-      payCommercialAsSeparateWorkType: true,
-      paySpaAsSeparateWorkType: true,
-      payPerBodyOfWater: true,
-      commercialMultiBodyPayStyle: "basePlusAdditionalBodyRate",
+      payCommercialAsSeparateWorkType: false,
+      paySpaAsSeparateWorkType: false,
+      payPerBodyOfWater: false,
+      commercialMultiBodyPayStyle: "singleCommercialRate",
       lockPayAfterApproval: true,
       recalculateUnapprovedPayWhenRatesChange: true
     }
     await getFirestore().collection("companies").doc(companyId).collection("paySettings").doc("main").set(CompanyPaySettings);
-    const serviceStopTypesRef = getFirestore().collection("companies").doc(companyId).collection("companyServiceStopTypes");
-    await Promise.all(DEFAULT_COMPANY_SERVICE_STOP_TYPES.map((serviceStopType, index) =>
-      serviceStopTypesRef.doc(serviceStopType.id).set({
-        ...serviceStopType,
+    const payTypesRef = getFirestore().collection("companies").doc(companyId).collection("companyPayTypes");
+    await Promise.all(DEFAULT_COMPANY_PAY_TYPES.map((payType, index) =>
+      payTypesRef.doc(payType.id).set({
+        ...payType,
+        imageName: payType.iconName,
         companyId,
         isActive: true,
         sortOrder: index,
-        defaultWorkTypeIds: [],
+        payTypeModelVersion: 1,
         createdAt: new Date(),
         createdByUserId: ownerId,
       }, { merge: true })
