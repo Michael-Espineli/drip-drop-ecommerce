@@ -4,6 +4,7 @@ import { collection, getDocs, query, Timestamp, where } from 'firebase/firestore
 import {
     BriefcaseIcon,
     CalendarDaysIcon,
+    MapPinIcon,
     WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import {
@@ -14,6 +15,17 @@ import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { SalesAgreementSourceType, salesCollectionNames } from '../../../utils/models/Sales';
 import { isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
+import {
+    buildCustomerActiveById,
+    equipmentNeedsMaintenanceForActiveBoard,
+} from '../../../utils/equipmentMaintenance';
+import {
+    compareServiceStopsBySchedule,
+    serviceStopActivityLabel,
+    serviceStopDateValue,
+    serviceStopIsOperationsActivity,
+    serviceStopDateMillis,
+} from '../../../utils/serviceStops/operationsServiceStops';
 
 const activeJobStatuses = ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"];
 const acceptedStatuses = new Set(["accepted", "active", "trialing"]);
@@ -65,6 +77,14 @@ const endOfToday = () => {
     return date;
 };
 
+const startOfTomorrow = () => endOfToday();
+
+const endOfNextSevenDays = () => {
+    const date = startOfToday();
+    date.setDate(date.getDate() + 8);
+    return date;
+};
+
 const sortFresh = (records) => (
     [...records].sort((left, right) => (
         toMillis(right.serviceDate || right.dateCreated || right.requestDate || right.createdAt || right.updatedAt)
@@ -88,7 +108,7 @@ const ProgressBar = ({ value, tone = 'blue' }) => {
     );
 };
 
-const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate' }) => {
+const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate', to }) => {
     const tones = {
         slate: 'text-slate-500',
         blue: 'text-blue-600',
@@ -97,37 +117,22 @@ const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate' }) => {
         rose: 'text-rose-600',
     };
 
-    return (
-        <div className="min-w-0 border-l border-slate-200 px-4 first:border-l-0 first:pl-0">
+    const content = (
+        <>
             <div className="flex items-center gap-2">
                 <Icon className={`h-4 w-4 ${tones[tone] || tones.slate}`} />
                 <p className="truncate text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
             </div>
             <p className="mt-2 truncate text-2xl font-bold leading-none text-slate-950">{value}</p>
             {helper && <p className="mt-1 truncate text-xs font-semibold text-slate-500">{helper}</p>}
-        </div>
+        </>
     );
-};
 
-const QueueLink = ({ to, label, value, helper, tone = 'slate' }) => {
-    const tones = {
-        slate: 'bg-white text-slate-950',
-        amber: 'bg-amber-300 text-slate-950',
-        rose: 'bg-rose-300 text-slate-950',
-        emerald: 'bg-emerald-300 text-slate-950',
-    };
+    const className = "block min-w-0 rounded-md border border-slate-200 px-3 py-3 transition hover:border-blue-200 hover:bg-blue-50/60 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2";
 
-    return (
-        <Link to={to} className="block rounded-md bg-white/10 px-3 py-3 transition hover:bg-white/15">
-            <div className="flex items-start justify-between gap-3">
-                <span className="min-w-0">
-                    <span className="block truncate text-sm font-bold text-white">{label}</span>
-                    {helper && <span className="mt-0.5 block truncate text-xs text-slate-300">{helper}</span>}
-                </span>
-                <span className={`shrink-0 rounded px-2 py-1 text-xs font-bold ${tones[tone] || tones.slate}`}>{value}</span>
-            </div>
-        </Link>
-    );
+    if (to) return <Link to={to} className={className}>{content}</Link>;
+
+    return <div className={className}>{content}</div>;
 };
 
 const FlowRow = ({ label, value, maxValue, tone = 'blue' }) => (
@@ -140,26 +145,32 @@ const FlowRow = ({ label, value, maxValue, tone = 'blue' }) => (
     </div>
 );
 
-const TodayStopBar = ({ summary }) => {
+const TodayStopBar = ({ summary, completionPercent }) => {
     const finishedWidth = percentOf(summary.finished, summary.total);
     const activeWidth = percentOf(summary.inProgress, summary.total);
     const openWidth = percentOf(summary.open, summary.total);
 
     return (
-        <div>
-            <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
-                <span>Service stops today</span>
-                <span>{summary.finished}/{summary.total} complete</span>
+        <div className="grid gap-4 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-start">
+            <div className="rounded-md bg-slate-900 px-3 py-3 text-white">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-300">Complete</p>
+                <p className="mt-1 text-3xl font-bold leading-none">{completionPercent}%</p>
             </div>
-            <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
-                <span className="bg-emerald-500" style={{ width: `${finishedWidth}%` }} />
-                <span className="bg-blue-500" style={{ width: `${activeWidth}%` }} />
-                <span className="bg-amber-300" style={{ width: `${openWidth}%` }} />
-            </div>
-            <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
-                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Finished</span>
-                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" /> In progress</span>
-                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-300" /> Open</span>
+            <div>
+                <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+                    <span>Service stops today</span>
+                    <span>{summary.finished}/{summary.total} complete</span>
+                </div>
+                <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
+                    <span className="bg-emerald-500" style={{ width: `${finishedWidth}%` }} />
+                    <span className="bg-blue-500" style={{ width: `${activeWidth}%` }} />
+                    <span className="bg-amber-300" style={{ width: `${openWidth}%` }} />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
+                    <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Finished</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" /> In progress</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-300" /> Open</span>
+                </div>
             </div>
         </div>
     );
@@ -201,9 +212,9 @@ const OperationsDashboard = () => {
     const [loading, setLoading] = useState(true);
     const [jobs, setJobs] = useState([]);
     const [repairRequests, setRepairRequests] = useState([]);
-    const [routes, setRoutes] = useState([]);
     const [equipmentDue, setEquipmentDue] = useState([]);
-    const [serviceStopsToday, setServiceStopsToday] = useState([]);
+    const [serviceStopsWindow, setServiceStopsWindow] = useState([]);
+    const [operationsServiceStops, setOperationsServiceStops] = useState([]);
     const [recurringServiceStops, setRecurringServiceStops] = useState([]);
     const [serviceAgreements, setServiceAgreements] = useState([]);
     const [billingSubscriptions, setBillingSubscriptions] = useState([]);
@@ -219,13 +230,13 @@ const OperationsDashboard = () => {
             setLoading(true);
             try {
                 const todayStart = Timestamp.fromDate(startOfToday());
-                const todayEnd = Timestamp.fromDate(endOfToday());
+                const nextSevenDaysEnd = Timestamp.fromDate(endOfNextSevenDays());
                 const [
                     jobsSnap,
                     internalRepairsSnap,
                     externalRepairsSnap,
-                    routesSnap,
                     equipmentSnap,
+                    customersSnap,
                     serviceStopsSnap,
                     recurringStopsSnap,
                     agreementsSnap,
@@ -235,27 +246,36 @@ const OperationsDashboard = () => {
                     getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'workOrders'), where('operationStatus', 'in', activeJobStatuses))),
                     getDocs(collection(db, 'companies', recentlySelectedCompany, 'repairRequests')),
                     getDocs(query(collection(db, 'homeownerRepairRequests'), where('companyId', '==', recentlySelectedCompany))),
-                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes')),
-                    getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'equipment'), where('nextServiceDate', '<=', Timestamp.now()))),
+                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'equipment')),
+                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers')).catch((customerError) => {
+                        console.warn("Unable to load customers for equipment maintenance dashboard count:", customerError);
+                        return { docs: [] };
+                    }),
                     getDocs(query(
                         collection(db, 'companies', recentlySelectedCompany, 'serviceStops'),
                         where('serviceDate', '>=', todayStart),
-                        where('serviceDate', '<', todayEnd)
+                        where('serviceDate', '<', nextSevenDaysEnd)
                     )),
                     getDocs(collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop')),
                     getDocs(query(collection(db, salesCollectionNames.agreements), where('companyId', '==', recentlySelectedCompany))),
                     getDocs(query(collection(db, salesCollectionNames.billingSubscriptions), where('companyId', '==', recentlySelectedCompany))),
                     getDocs(query(collection(db, 'contracts'), where('senderId', '==', recentlySelectedCompany))),
                 ]);
+                const customerActiveById = buildCustomerActiveById(
+                    customersSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+                );
 
                 setJobs(jobsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
                 setRepairRequests([
                     ...internalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'internal', ...itemDoc.data() })),
                     ...externalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'external', ...itemDoc.data() })),
                 ]);
-                setRoutes(routesSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
-                setEquipmentDue(equipmentSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
-                setServiceStopsToday(serviceStopsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setEquipmentDue(equipmentSnap.docs
+                    .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+                    .filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById)));
+                const serviceStopsInWindow = serviceStopsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }));
+                setServiceStopsWindow(serviceStopsInWindow);
+                setOperationsServiceStops(serviceStopsInWindow.filter(serviceStopIsOperationsActivity));
                 setRecurringServiceStops(recurringStopsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
                 setServiceAgreements(agreementsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
                 setBillingSubscriptions(billingSubscriptionsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
@@ -283,9 +303,44 @@ const OperationsDashboard = () => {
         return buckets;
     }, [jobs]);
 
-    const upcomingJobs = useMemo(() => sortFresh(jobs).slice(0, 8), [jobs]);
     const recentRepairs = useMemo(() => sortFresh(openRepairs).slice(0, 6), [openRepairs]);
     const dueEquipment = useMemo(() => sortFresh(equipmentDue).slice(0, 6), [equipmentDue]);
+    const serviceStopsToday = useMemo(() => {
+        const startMillis = startOfToday().getTime();
+        const endMillis = endOfToday().getTime();
+
+        return serviceStopsWindow
+            .filter((stop) => {
+                const millis = serviceStopDateMillis(stop);
+                return millis >= startMillis && millis < endMillis;
+            })
+            .sort(compareServiceStopsBySchedule);
+    }, [serviceStopsWindow]);
+    const operationsStopsToday = useMemo(() => {
+        const startMillis = startOfToday().getTime();
+        const endMillis = endOfToday().getTime();
+
+        return operationsServiceStops
+            .filter((stop) => {
+                const millis = serviceStopDateMillis(stop);
+                return millis >= startMillis && millis < endMillis;
+            })
+            .sort(compareServiceStopsBySchedule);
+    }, [operationsServiceStops]);
+    const operationsStopsNextSevenDays = useMemo(() => {
+        const startMillis = startOfTomorrow().getTime();
+        const endMillis = endOfNextSevenDays().getTime();
+
+        return operationsServiceStops
+            .filter((stop) => {
+                const millis = serviceStopDateMillis(stop);
+                return millis >= startMillis && millis < endMillis;
+            })
+            .sort(compareServiceStopsBySchedule);
+    }, [operationsServiceStops]);
+    const previewOperationsStops = useMemo(() => (
+        [...operationsStopsToday, ...operationsStopsNextSevenDays].slice(0, 8)
+    ), [operationsStopsNextSevenDays, operationsStopsToday]);
     const billingSubscriptionByAgreementId = useMemo(() => {
         const map = new Map();
         billingSubscriptions.forEach((subscription) => {
@@ -403,76 +458,43 @@ const OperationsDashboard = () => {
                 </header>
 
                 <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                    <div className="grid xl:grid-cols-[minmax(0,1fr)_390px]">
-                        <div className="p-5">
-                            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                                <div>
-                                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Operations Pulse</p>
-                                    <h2 className="mt-1 text-xl font-bold text-slate-950">Workload and service health</h2>
-                                </div>
-                                <div className="rounded-md bg-slate-900 px-4 py-3 text-white">
-                                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-300">Today Complete</p>
-                                    <p className="mt-1 text-3xl font-bold leading-none">{todayCompletionPercent}%</p>
-                                </div>
-                            </div>
-
-                            <div className="mt-5 grid gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
-                                <PulseMetric icon={BriefcaseIcon} label="Active Jobs" value={jobs.length} helper={`${jobBuckets["In Progress"] || 0} in progress`} tone="amber" />
-                                <PulseMetric icon={WrenchScrewdriverIcon} label="Open Repairs" value={openRepairs.length} helper="repair intake" tone={openRepairs.length ? 'rose' : 'emerald'} />
-                                <PulseMetric icon={CalendarDaysIcon} label="Stops Today" value={serviceStopsToday.length} helper={`${todayStopSummary.open} open`} tone="blue" />
-                                <PulseMetric icon={FaSwimmingPool} label="Equipment Due" value={equipmentDue.length} helper="maintenance due now" tone={equipmentDue.length ? 'amber' : 'emerald'} />
-                            </div>
-
-                            <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
-                                <TodayStopBar summary={todayStopSummary} />
-                                <div className="space-y-3">
-                                    {activeJobStatuses.map((status) => (
-                                        <FlowRow
-                                            key={status}
-                                            label={status}
-                                            value={jobBuckets[status] || 0}
-                                            maxValue={jobFlowMax}
-                                            tone={status === 'In Progress' ? 'emerald' : status === 'Estimate Pending' ? 'blue' : 'amber'}
-                                        />
-                                    ))}
-                                </div>
+                    <div className="p-5">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                            <div>
+                                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Operations Pulse</p>
+                                <h2 className="mt-1 text-xl font-bold text-slate-950">Workload and service health</h2>
                             </div>
                         </div>
 
-                        <aside className="border-t border-slate-800 bg-slate-900 p-5 text-white xl:border-l xl:border-t-0">
-                            <div className="flex items-start justify-between gap-3">
-                                <div>
-                                    <p className="text-xs font-bold uppercase tracking-wide text-amber-300">Action Queue</p>
-                                    <h2 className="mt-1 text-xl font-bold">Needs a decision</h2>
+                        <div className="mt-5 grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px] xl:items-start">
+                            <div className="space-y-5">
+                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                                    <PulseMetric to="/company/jobs" icon={BriefcaseIcon} label="Active Jobs" value={jobs.length} helper={`${jobBuckets["In Progress"] || 0} in progress`} tone="amber" />
+                                    <PulseMetric to="/company/repair-requests" icon={WrenchScrewdriverIcon} label="Open Repairs" value={openRepairs.length} helper="repair intake" tone={openRepairs.length ? 'rose' : 'emerald'} />
+                                    <PulseMetric to="/company/route-day-management" icon={CalendarDaysIcon} label="Stops Today" value={serviceStopsToday.length} helper={`${todayStopSummary.open} open`} tone="blue" />
+                                    <PulseMetric to="/company/route-day-management" icon={MapPinIcon} label="Non Route Stops" value={operationsServiceStops.length} helper="today + next 7 days" tone="blue" />
+                                    <PulseMetric to="/company/equipment/needs-maintenance" icon={FaSwimmingPool} label="Equipment Due" value={equipmentDue.length} helper="maintenance due now" tone={equipmentDue.length ? 'amber' : 'emerald'} />
                                 </div>
-                                <WrenchScrewdriverIcon className={openRepairs.length || equipmentDue.length || agreementsNeedRouting.length ? 'mt-1 h-5 w-5 text-amber-300' : 'mt-1 h-5 w-5 text-emerald-300'} />
+
+                                <TodayStopBar summary={todayStopSummary} completionPercent={todayCompletionPercent} />
                             </div>
 
-                            <div className="mt-5 space-y-3">
-                                <QueueLink to="/company/repair-requests" label="Open repair requests" value={openRepairs.length} helper="internal and homeowner requests" tone={openRepairs.length ? 'rose' : 'emerald'} />
-                                <QueueLink to="/company/equipment" label="Equipment due" value={equipmentDue.length} helper="maintenance due now" tone={equipmentDue.length ? 'amber' : 'emerald'} />
-                                <QueueLink to="/company/sales/agreements" label="Needs routing" value={agreementsNeedRouting.length} helper="accepted recurring agreements" tone={agreementsNeedRouting.length ? 'amber' : 'emerald'} />
-                                <QueueLink to="/company/jobs" label="Estimates to schedule" value={acceptedEstimatesNeedScheduling.length} helper="accepted work without a clear date" tone={acceptedEstimatesNeedScheduling.length ? 'amber' : 'emerald'} />
-                            </div>
-
-                            <div className="mt-5 border-t border-white/10 pt-4">
-                                <p className="text-xs font-bold uppercase tracking-wide text-slate-300">Route context</p>
-                                <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
-                                    <div>
-                                        <p className="text-2xl font-bold leading-none">{routes.length}</p>
-                                        <p className="mt-1 text-xs font-semibold text-slate-300">routes</p>
-                                    </div>
-                                    <div>
-                                        <p className="text-2xl font-bold leading-none">{recurringServiceStops.length}</p>
-                                        <p className="mt-1 text-xs font-semibold text-slate-300">recurring</p>
-                                    </div>
-                                    <div>
-                                        <p className="text-2xl font-bold leading-none">{todayStopSummary.inProgress}</p>
-                                        <p className="mt-1 text-xs font-semibold text-slate-300">active</p>
-                                    </div>
+                            <div className="w-full space-y-3 xl:self-start xl:justify-self-end">
+                                <div className="flex items-center justify-between gap-3">
+                                    <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">Job Statuses</h3>
+                                    <span className="text-xs font-semibold text-slate-400">{jobs.length} active</span>
                                 </div>
+                                {activeJobStatuses.map((status) => (
+                                    <FlowRow
+                                        key={status}
+                                        label={status}
+                                        value={jobBuckets[status] || 0}
+                                        maxValue={jobFlowMax}
+                                        tone={status === 'In Progress' ? 'emerald' : status === 'Estimate Pending' ? 'blue' : 'amber'}
+                                    />
+                                ))}
                             </div>
-                        </aside>
+                        </div>
                     </div>
                 </section>
 
@@ -521,20 +543,24 @@ const OperationsDashboard = () => {
                         </div>
 
                         <div className="grid gap-4 lg:grid-cols-2">
-                            <ListCard title="Upcoming Jobs" helper="Newest active work orders" to="/company/jobs">
-                                {upcomingJobs.length === 0 ? (
-                                    <EmptyRow>No upcoming jobs.</EmptyRow>
-                                ) : upcomingJobs.map((job) => (
-                                    <Link key={job.id} to={`/company/jobs/detail/${job.id}`} className="block px-5 py-4 transition hover:bg-slate-50">
+                            <ListCard title="Upcoming Non Route Service Stops" helper={`${operationsStopsToday.length} today - ${operationsStopsNextSevenDays.length} in the next 7 days`} to="/company/serviceStops">
+                                {previewOperationsStops.length === 0 ? (
+                                    <EmptyRow>No non-recurring service stops scheduled today or in the next 7 days.</EmptyRow>
+                                ) : previewOperationsStops.map((stop) => {
+                                    const stopState = getStopState(stop);
+
+                                    return (
+                                    <Link key={stop.id} to={`/company/serviceStops/detail/${stop.id}`} className="block px-5 py-4 transition hover:bg-slate-50">
                                         <div className="flex items-start justify-between gap-3">
                                             <div className="min-w-0">
-                                                <p className="truncate text-sm font-semibold text-slate-900">{job.internalId || job.description || "Job"}</p>
-                                                <p className="mt-1 text-sm text-slate-500">{job.customerName || 'Customer not set'}</p>
+                                                <p className="truncate text-sm font-semibold text-slate-900">{stop.customerName || stop.jobName || 'Service stop'}</p>
+                                                <p className="mt-1 text-sm text-slate-500">{formatDate(serviceStopDateValue(stop))} - {stop.tech || stop.operationStatus || 'Unassigned'}</p>
                                             </div>
-                                            <StatusPill tone={job.operationStatus === 'In Progress' ? 'emerald' : 'amber'}>{job.operationStatus || 'Open'}</StatusPill>
+                                            <StatusPill tone={stopState === 'finished' ? 'emerald' : stopState === 'inProgress' ? 'blue' : 'amber'}>{serviceStopActivityLabel(stop)}</StatusPill>
                                         </div>
                                     </Link>
-                                ))}
+                                    );
+                                })}
                             </ListCard>
 
                             <ListCard title="Repair Requests" helper="Open repair pressure" to="/company/repair-requests">
@@ -556,7 +582,7 @@ const OperationsDashboard = () => {
                     </div>
 
                     <aside className="space-y-4">
-                        <ListCard title="Equipment Due" helper="Maintenance and service attention" to="/company/equipment">
+                        <ListCard title="Equipment Due" helper="Maintenance and service attention" to="/company/equipment/needs-maintenance">
                             {dueEquipment.length === 0 ? (
                                 <EmptyRow>No equipment due right now.</EmptyRow>
                             ) : dueEquipment.map((equipment) => (
@@ -572,15 +598,15 @@ const OperationsDashboard = () => {
                             ))}
                         </ListCard>
 
-                        <ListCard title="Today" helper="Service stop workload" to="/company/route-day-management">
-                            {serviceStopsToday.length === 0 ? (
-                                <EmptyRow>No service stops scheduled today.</EmptyRow>
-                            ) : serviceStopsToday.slice(0, 8).map((stop) => (
+                        <ListCard title="Today" helper="Non-recurring service stop workload" to="/company/serviceStops">
+                            {operationsStopsToday.length === 0 ? (
+                                <EmptyRow>No non-recurring service stops scheduled today.</EmptyRow>
+                            ) : operationsStopsToday.slice(0, 8).map((stop) => (
                                 <Link key={stop.id} to={`/company/serviceStops/detail/${stop.id}`} className="block px-5 py-4 transition hover:bg-slate-50">
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
                                             <p className="truncate text-sm font-semibold text-slate-900">{stop.customerName || stop.jobName || 'Service stop'}</p>
-                                            <p className="mt-1 text-sm text-slate-500">{stop.tech || stop.routeName || stop.operationStatus || 'Unassigned'}</p>
+                                            <p className="mt-1 text-sm text-slate-500">{serviceStopActivityLabel(stop)} - {stop.tech || stop.operationStatus || 'Unassigned'}</p>
                                         </div>
                                         <FaArrowRight className="mt-1 text-xs text-slate-400" />
                                     </div>

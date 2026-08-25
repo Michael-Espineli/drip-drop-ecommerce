@@ -16,6 +16,7 @@ import {
   serviceFrequencyCountForAgreement,
   serviceFrequencyForAgreement,
 } from './agreementCadence';
+import { AgreementBillingType, getAgreementBillingType } from './agreementRouting';
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
@@ -229,15 +230,58 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
   if (!agreement?.id) throw new Error('Missing agreement id.');
 
   const agreementRef = doc(db, salesCollectionNames.agreements, agreement.id);
+  const companyBillingEnabled = options.customerBillingEnabled !== undefined
+    ? options.customerBillingEnabled !== false
+    : options.billingEnabled !== undefined
+      ? options.billingEnabled !== false
+      : options.billingAutomationEnabled !== false;
+  const shouldCreateBillingSubscription = companyBillingEnabled && options.billingAutomationEnabled !== false;
+
+  if (!companyBillingEnabled && options.requireBillingAutomationEnabled) {
+    throw new Error('Turn on customer billing before creating billing subscriptions.');
+  }
 
   const subscription = await runTransaction(db, async (transaction) => {
     const agreementSnap = await transaction.get(agreementRef);
     if (!agreementSnap.exists()) throw new Error('Service agreement no longer exists.');
 
     const currentAgreement = { id: agreementSnap.id, ...agreementSnap.data() };
+    const agreementBillingSubscriptionEligible = getAgreementBillingType(currentAgreement) === AgreementBillingType.recurring;
+    const billingAutomationEnabled = shouldCreateBillingSubscription &&
+      agreementBillingSubscriptionEligible;
+    const billingSkippedReason = !companyBillingEnabled
+      ? 'billingAutomationDisabled'
+      : !agreementBillingSubscriptionEligible
+        ? 'oneTimeAgreement'
+        : 'acceptanceBillingSkipped';
+    const skippedBillingFlowStatus = !companyBillingEnabled
+      ? 'billingDisabled'
+      : !agreementBillingSubscriptionEligible
+        ? 'billingNotApplicable'
+        : SalesBillingSubscriptionStatus.notStarted;
+    const skippedBillingFlowNextAction = !companyBillingEnabled
+      ? 'enableBillingAutomation'
+      : !agreementBillingSubscriptionEligible
+        ? 'convertToInvoice'
+        : 'createBillingSubscription';
+    const skippedBillingCollectionMethod = !companyBillingEnabled
+      ? 'externalBilling'
+      : SalesBillingCollectionMethod.manualInvoices;
+
+    if (!shouldCreateBillingSubscription && options.requireBillingAutomationEnabled) {
+      throw new Error('Create billing subscriptions is turned off for this action.');
+    }
+
+    const billingSubscriptionCreatable = shouldCreateBillingSubscription &&
+      getAgreementBillingType(currentAgreement) === AgreementBillingType.recurring;
+
+    if (!billingSubscriptionCreatable && options.requireBillingAutomationEnabled) {
+      throw new Error('Billing subscriptions are only created for recurring service agreements.');
+    }
+
     const subscription = buildBillingSubscriptionFromAgreement(currentAgreement, options);
     const subscriptionRef = doc(db, salesCollectionNames.billingSubscriptions, subscription.id);
-    const shouldReadExistingSubscription = Boolean(currentAgreement.billingSubscriptionId);
+    const shouldReadExistingSubscription = billingAutomationEnabled && Boolean(currentAgreement.billingSubscriptionId);
     const subscriptionSnap = shouldReadExistingSubscription
       ? await transaction.get(subscriptionRef)
       : null;
@@ -368,7 +412,7 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       const previousAgreementSnap = await transaction.get(previousAgreementRef);
       if (previousAgreementSnap.exists()) {
         previousAgreement = { id: previousAgreementSnap.id, ...previousAgreementSnap.data() };
-        if (previousAgreement.billingSubscriptionId) {
+        if (billingAutomationEnabled && previousAgreement.billingSubscriptionId) {
           previousSubscriptionRef = doc(db, salesCollectionNames.billingSubscriptions, previousAgreement.billingSubscriptionId);
           const previousSubscriptionSnap = await transaction.get(previousSubscriptionRef);
           if (previousSubscriptionSnap.exists()) {
@@ -401,24 +445,8 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       }
       : {};
 
-    transaction.set(subscriptionRef, nextSubscription, { merge: true });
-    transaction.update(agreementRef, {
-      billingSubscriptionId: subscription.id,
-      billingFlowStatus: nextSubscription.status,
-      billingFlowNextAction: nextSubscription.nextAction,
-      billingFlowUpdatedAt: acceptedTimestamp,
-      billingCollectionMethod: nextSubscription.billingCollectionMethod,
-      autopayStatus: nextSubscription.autopayStatus,
-      manualBillingEnabled: nextSubscription.manualBillingEnabled,
-      manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
-      customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
-      ...operationsSetupUpdates,
-      ...renewalActivationUpdates,
-      updatedAt: acceptedTimestamp,
-      ...options.agreementUpdates,
-      acceptedSnapshot: {
-        ...(currentAgreement.acceptedSnapshot || {}),
-        ...(options.agreementUpdates?.acceptedSnapshot || {}),
+    const billingFlowUpdates = billingAutomationEnabled
+      ? {
         billingSubscriptionId: subscription.id,
         billingFlowStatus: nextSubscription.status,
         billingFlowNextAction: nextSubscription.nextAction,
@@ -426,6 +454,55 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
         autopayStatus: nextSubscription.autopayStatus,
         manualBillingEnabled: nextSubscription.manualBillingEnabled,
         manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+        customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
+        salesBillingAutomationEnabled: true,
+        billingAutomationDisabledAtAcceptance: false,
+      }
+      : {
+        salesBillingAutomationEnabled: false,
+        billingAutomationDisabledAtAcceptance: !companyBillingEnabled && willBeAccepted,
+        billingFlowStatus: skippedBillingFlowStatus,
+        billingFlowNextAction: skippedBillingFlowNextAction,
+        billingCollectionMethod: skippedBillingCollectionMethod,
+        autopayStatus: SalesAutopayStatus.unavailable,
+        manualBillingEnabled: false,
+        manualBillingAutoSendEnabled: false,
+        customerCanPayImmediately: false,
+      };
+    const billingSnapshotUpdates = billingAutomationEnabled
+      ? {
+        billingSubscriptionId: subscription.id,
+        billingFlowStatus: nextSubscription.status,
+        billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+      }
+      : {
+        billingFlowStatus: skippedBillingFlowStatus,
+        billingFlowNextAction: skippedBillingFlowNextAction,
+        billingCollectionMethod: skippedBillingCollectionMethod,
+        autopayStatus: SalesAutopayStatus.unavailable,
+        manualBillingEnabled: false,
+        manualBillingAutoSendEnabled: false,
+      };
+
+    if (billingAutomationEnabled) {
+      transaction.set(subscriptionRef, nextSubscription, { merge: true });
+    }
+
+    transaction.update(agreementRef, {
+      billingFlowUpdatedAt: acceptedTimestamp,
+      ...billingFlowUpdates,
+      ...operationsSetupUpdates,
+      ...renewalActivationUpdates,
+      updatedAt: acceptedTimestamp,
+      ...options.agreementUpdates,
+      acceptedSnapshot: {
+        ...(currentAgreement.acceptedSnapshot || {}),
+        ...(options.agreementUpdates?.acceptedSnapshot || {}),
+        ...billingSnapshotUpdates,
       },
     });
 
@@ -443,7 +520,7 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       });
     }
 
-    if (previousSubscriptionRef && previousSubscription) {
+    if (billingAutomationEnabled && previousSubscriptionRef && previousSubscription) {
       transaction.update(previousSubscriptionRef, {
         ...supersededSubscriptionUpdates(previousSubscription, acceptedTimestamp),
         supersededByAgreementId: currentAgreement.id,
@@ -451,7 +528,17 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       });
     }
 
-    return nextSubscription;
+    return billingAutomationEnabled
+      ? nextSubscription
+      : {
+        id: '',
+        billingSkipped: true,
+        billingSkippedReason,
+        salesBillingAutomationEnabled: false,
+        status: skippedBillingFlowStatus,
+        nextAction: skippedBillingFlowNextAction,
+        customerCanPayImmediately: false,
+      };
   });
 
   return subscription;

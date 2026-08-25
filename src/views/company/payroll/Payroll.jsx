@@ -15,24 +15,29 @@ import {
   where,
   writeBatch,
 } from "firebase/firestore";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { estimateServiceStopPay } from "../../../utils/payroll/payEstimate";
+import {
+  COMPANY_WIDE_SETTINGS_DOC_ID,
+  PAYROLL_ENABLED_FIELD,
+  isPayrollEnabled,
+} from "../../../utils/companyWorkSettings";
 import { appConfirm } from "../../../utils/appDialog";
+import FeatureInfoButton from "../../../components/FeatureInfoButton";
 import { sortCompanyUsersByName } from "../../../utils/companyUsers";
 import { v4 as uuidv4 } from "uuid";
 import {
   IoBriefcaseOutline,
   IoBuildOutline,
   IoBusinessOutline,
+  IoAddOutline,
   IoCalendarOutline,
   IoCallOutline,
   IoCardOutline,
   IoCarOutline,
   IoCashOutline,
-  IoChevronDownOutline,
-  IoChevronUpOutline,
   IoChatbubbleEllipsesOutline,
   IoCheckmarkCircleOutline,
   IoClipboardOutline,
@@ -132,6 +137,26 @@ const DetailField = ({ label, value, accent }) => (
   </div>
 );
 
+const InfoOptionList = ({ items }) => (
+  <div className="space-y-2">
+    {items.map((item) => (
+      <div key={item.label} className="rounded-md bg-slate-50 p-2">
+        <p className="font-semibold text-slate-800">{item.label}</p>
+        <p className="mt-0.5 text-xs leading-5 text-slate-600">{item.description}</p>
+      </div>
+    ))}
+  </div>
+);
+
+const FieldLabelWithInfo = ({ label, infoTitle, infoItems, children, align = "right" }) => (
+  <div className="mb-1 flex items-center gap-2">
+    <span>{label}</span>
+    <FeatureInfoButton label={`${label} information`} title={infoTitle} align={align}>
+      {children || <InfoOptionList items={infoItems} />}
+    </FeatureInfoButton>
+  </div>
+);
+
 const emptyPaymentForm = () => ({
   paidDate: isoDate(new Date()),
   paymentReference: "",
@@ -140,6 +165,7 @@ const emptyPaymentForm = () => ({
 
 const defaultPaySettings = (companyId) => ({
   companyId,
+  payrollEnabled: true,
   payMode: "productionOnly",
   routePaySource: "serviceStopAndCompletedTasks",
   taskPaySource: "technicianRateThenTaskContractedRate",
@@ -180,6 +206,7 @@ const normalizePaySettingsForIos = (settings = {}, companyId = "") => {
     ...defaultPaySettings(companyId),
     ...settings,
     companyId,
+    payrollEnabled: isPayrollEnabled(settings),
   };
 
   if (normalized.hourlyPaySource === "activeRouteLog") {
@@ -209,7 +236,72 @@ const hourlyPaySourceOptions = ["activeRouteDuration", "activeRouteLogs", "servi
 const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifier"];
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
 const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
-const workCategoryOptions = ["route", "serviceCall", "repair", "installation", "cleaning", "commercial", "startup", "drainAndRefill", "estimate", "extra", "custom"];
+const workCategoryOptions = ["route", "maintenance", "serviceCall", "repair", "installation", "cleaning", "commercial", "startup", "drainAndRefill", "estimate", "extra", "custom"];
+const payCategoryInfoItems = [
+  {
+    label: "Route",
+    description: "Recurring route or weekly service work. Payroll looks for a service-stop rate first.",
+  },
+  {
+    label: "Maintenance",
+    description: "Routine maintenance work paid as the visit itself. Payroll looks for a service-stop rate first.",
+  },
+  {
+    label: "Service Call",
+    description: "General visit or customer service work. Payroll looks for a service-stop rate first.",
+  },
+  {
+    label: "Repair",
+    description: "Repair work usually tied to a completed task. Payroll looks for a task rate first.",
+  },
+  {
+    label: "Installation",
+    description: "Install work usually tied to a completed task. Payroll looks for a task rate first.",
+  },
+  {
+    label: "Cleaning",
+    description: "Cleaning add-ons like filters or salt cells. Payroll looks for a task rate first.",
+  },
+  {
+    label: "Commercial",
+    description: "Commercial route/service work. Payroll looks for a service-stop rate first.",
+  },
+  {
+    label: "Startup",
+    description: "New pool, onboarding, or setup visits. Payroll looks for a service-stop rate first.",
+  },
+  {
+    label: "Drain / Refill",
+    description: "Drain and refill work usually tied to a completed task. Payroll looks for a task rate first.",
+  },
+  {
+    label: "Estimate",
+    description: "Estimate visits. Payroll treats this as service-stop pay by default.",
+  },
+  {
+    label: "Extra",
+    description: "Extra add-on work. Payroll looks for a task rate first.",
+  },
+  {
+    label: "Custom",
+    description: "Company-specific work. Payroll looks for a task rate first unless the rate type is hourly.",
+  },
+];
+const rateTypeInfoItems = [
+  { label: "Flat Per Stop", description: "One fixed amount for the completed visit." },
+  { label: "Flat Per Task", description: "One fixed amount for each completed payable task." },
+  { label: "Hourly", description: "Amount is multiplied by minutes or hours, depending on the pay source." },
+  { label: "Per Body of Water", description: "Amount is multiplied by the number of bodies of water." },
+  { label: "Per Service Location", description: "Amount is multiplied by the number of service locations." },
+  { label: "Percentage", description: "Marks the line for review until there is an invoice or base amount to calculate from." },
+  { label: "Manual", description: "Used for manually entered or reviewed payroll amounts." },
+];
+const stackBehaviorInfoItems = [
+  { label: "Stackable", description: "Intended to pay alongside other matching stop or task pay." },
+  { label: "Exclusive", description: "Intended for cases where only one matching pay type should win." },
+  { label: "Replaces Base", description: "Intended for pay that replaces the normal base stop pay." },
+  { label: "Modifier", description: "Intended for pay that adjusts another pay amount." },
+];
 const lineItemStatusFilterOptions = [
   { value: "active", label: "Active" },
   { value: "all", label: "All Statuses" },
@@ -414,7 +506,7 @@ const stopPayCategoryForServiceStopType = (type = {}, categories = defaultStopPa
   if (searchable.includes("estimate")) {
     return categories.find((category) => category.id === "jobEstimate");
   }
-  if (searchable.includes("route") || searchable.includes("weekly")) {
+  if (searchable.includes("route") || searchable.includes("weekly") || searchable.includes("maintenance")) {
     return categories.find((category) => category.id === "route");
   }
   if (searchable.includes("customer") || searchable.includes("follow up") || searchable.includes("courtesy")) {
@@ -443,7 +535,7 @@ const stopPayCategoryForWorkType = (type = {}, categories = defaultStopPayCatego
   if (searchable.includes("estimate")) {
     return categories.find((category) => category.id === "jobEstimate");
   }
-  if (searchable.includes("route") || searchable.includes("weekly") || type.category === "route") {
+  if (searchable.includes("route") || searchable.includes("weekly") || searchable.includes("maintenance") || type.category === "route" || type.category === "maintenance") {
     return categories.find((category) => category.id === "route");
   }
   if (searchable.includes("customer") || searchable.includes("follow up") || searchable.includes("courtesy")) {
@@ -484,9 +576,11 @@ const suggestedPayBasisForMatrixWorkType = (workType = {}) => {
 
   switch (workType.category) {
     case "route":
+    case "maintenance":
     case "serviceCall":
     case "commercial":
     case "startup":
+    case "estimate":
       return "serviceStop";
     case "repair":
     case "installation":
@@ -520,12 +614,17 @@ const compareTechnicianRates = (left = {}, right = {}) => {
 
 const sortedTechnicianRates = (rates = []) => [...rates].sort(compareTechnicianRates);
 
-const displayWorkTitle = (item) =>
-  item.taskName ||
-  item.workTypeName ||
-  item.serviceStopTypeName ||
-  item.displayTitle ||
-  "Payroll Line";
+const displayWorkTitle = (item) => {
+  if (item?.source === "workOfferIncentive") {
+    return item.displayTitle || "Work Offer Incentive";
+  }
+
+  return item.taskName ||
+    item.workTypeName ||
+    item.serviceStopTypeName ||
+    item.displayTitle ||
+    "Payroll Line";
+};
 
 const rateTypeLabel = (item) => {
   const isMissingRate =
@@ -602,8 +701,9 @@ const payStatementReference = (statementNumber) => `PS-${String(statementNumber)
 
 const Payroll = ({ mode = "payroll" }) => {
   const isSetupMode = mode === "setup";
-  const { recentlySelectedCompany, user } = useContext(Context);
+  const { recentlySelectedCompany, setPayrollEnabled, user } = useContext(Context);
   const location = useLocation();
+  const navigate = useNavigate();
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 30);
@@ -632,7 +732,10 @@ const Payroll = ({ mode = "payroll" }) => {
   const [activeTab, setActiveTab] = useState(() => {
     const requestedTab = new URLSearchParams(location.search).get("tab");
     const payrollTabs = ["statements", "lineItems"];
-    return isSetupMode ? "overview" : payrollTabs.includes(requestedTab) ? requestedTab : "statements";
+    const setupTabs = ["overview", "stopPay", "rates", "settings"];
+    return isSetupMode
+      ? setupTabs.includes(requestedTab) ? requestedTab : "overview"
+      : payrollTabs.includes(requestedTab) ? requestedTab : "statements";
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -651,20 +754,35 @@ const Payroll = ({ mode = "payroll" }) => {
   const [rateMatrixDrafts, setRateMatrixDrafts] = useState({});
   const [rateMatrixFiltersOpen, setRateMatrixFiltersOpen] = useState(false);
   const [rateMatrixFullscreen, setRateMatrixFullscreen] = useState(false);
-  const [collapsedRateMatrixBucketIds, setCollapsedRateMatrixBucketIds] = useState([]);
+  const [hiddenRateMatrixBucketIds, setHiddenRateMatrixBucketIds] = useState([]);
   const [rateMatrixTechnicianFilterIds, setRateMatrixTechnicianFilterIds] = useState([]);
   const [rateMatrixWorkTypeFilterIds, setRateMatrixWorkTypeFilterIds] = useState([]);
 
   useEffect(() => {
-    setActiveTab((currentTab) => {
+    setActiveTab(() => {
       const setupTabs = ["overview", "stopPay", "rates", "settings"];
       const payrollTabs = ["statements", "lineItems"];
       const allowedTabs = isSetupMode ? setupTabs : payrollTabs;
       const requestedTab = new URLSearchParams(location.search).get("tab");
-      if (!isSetupMode && allowedTabs.includes(requestedTab)) return requestedTab;
-      return allowedTabs.includes(currentTab) ? currentTab : allowedTabs[0];
+      if (allowedTabs.includes(requestedTab)) return requestedTab;
+      return allowedTabs[0];
     });
   }, [isSetupMode, location.search]);
+
+  const handleTabChange = (nextTab) => {
+    const defaultTab = isSetupMode ? "overview" : "statements";
+    const nextSearchParams = new URLSearchParams(location.search);
+
+    if (nextTab === defaultTab) {
+      nextSearchParams.delete("tab");
+    } else {
+      nextSearchParams.set("tab", nextTab);
+    }
+
+    const nextSearch = nextSearchParams.toString();
+    setActiveTab(nextTab);
+    navigate(`${location.pathname}${nextSearch ? `?${nextSearch}` : ""}`);
+  };
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -695,7 +813,7 @@ const Payroll = ({ mode = "payroll" }) => {
       setRateMatrixDrafts({});
       setRateMatrixFiltersOpen(false);
       setRateMatrixFullscreen(false);
-      setCollapsedRateMatrixBucketIds([]);
+      setHiddenRateMatrixBucketIds([]);
       setRateMatrixTechnicianFilterIds([]);
       setRateMatrixWorkTypeFilterIds([]);
       return;
@@ -736,6 +854,7 @@ const Payroll = ({ mode = "payroll" }) => {
 
         const statementsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayStatements");
         const settingsRef = doc(db, "companies", recentlySelectedCompany, "paySettings", "main");
+        const companyWideSettingsRef = doc(db, "companies", recentlySelectedCompany, "settings", COMPANY_WIDE_SETTINGS_DOC_ID);
         const stopPayBucketsRef = collection(db, "companies", recentlySelectedCompany, "companyStopPayBuckets");
         const payTypesRef = collection(db, "companies", recentlySelectedCompany, "companyPayTypes");
         const companyUsersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
@@ -745,6 +864,7 @@ const Payroll = ({ mode = "payroll" }) => {
           lineItemsSnap,
           statementsSnap,
           settingsSnap,
+          companyWideSettingsSnap,
           stopPayBucketsSnap,
           payTypesSnap,
           companyUsersSnap,
@@ -753,6 +873,7 @@ const Payroll = ({ mode = "payroll" }) => {
           getDocs(lineItemsQuery),
           getDocs(statementsRef),
           getDoc(settingsRef),
+          getDoc(companyWideSettingsRef),
           getDocs(stopPayBucketsRef),
           getDocs(payTypesRef),
           getDocs(companyUsersRef),
@@ -791,8 +912,15 @@ const Payroll = ({ mode = "payroll" }) => {
 
         setLineItems(nextLineItems);
         setStatements(nextStatements);
+        const savedPaySettings = settingsSnap.exists() ? settingsSnap.data() : {};
+        const companyWideSettings = companyWideSettingsSnap.exists() ? companyWideSettingsSnap.data() : {};
         const nextPaySettings = normalizePaySettingsForIos(
-          settingsSnap.exists() ? settingsSnap.data() : {},
+          {
+            ...savedPaySettings,
+            payrollEnabled: companyWideSettingsSnap.exists()
+              ? isPayrollEnabled(companyWideSettings)
+              : savedPaySettings.payrollEnabled,
+          },
           recentlySelectedCompany
         );
         setSettingsForm(nextPaySettings);
@@ -1216,6 +1344,12 @@ const Payroll = ({ mode = "payroll" }) => {
 
     return groups;
   }, [filteredRateMatrixColumns]);
+  const visibleRateMatrixColumnGroups = useMemo(
+    () => filteredRateMatrixColumnGroups.filter((group) => !hiddenRateMatrixBucketIds.includes(group.bucketId)),
+    [filteredRateMatrixColumnGroups, hiddenRateMatrixBucketIds]
+  );
+  const visibleRateMatrixColumnCount = visibleRateMatrixColumnGroups.reduce((total, group) => total + group.columns.length, 0);
+  const hiddenCurrentRateMatrixBucketCount = filteredRateMatrixColumnGroups.filter((group) => hiddenRateMatrixBucketIds.includes(group.bucketId)).length;
   const activeRateMatrixFilterCount = rateMatrixTechnicianFilterIds.length + rateMatrixWorkTypeFilterIds.length;
 
   useEffect(() => {
@@ -1224,7 +1358,7 @@ const Payroll = ({ mode = "payroll" }) => {
     const availableBucketIds = new Set(rateMatrixColumns.map((column) => column.bucketId || "uncategorized"));
     setRateMatrixTechnicianFilterIds((ids) => ids.filter((id) => availableTechnicianIds.has(id)));
     setRateMatrixWorkTypeFilterIds((ids) => ids.filter((id) => availableWorkTypeIds.has(id)));
-    setCollapsedRateMatrixBucketIds((ids) => ids.filter((id) => availableBucketIds.has(id)));
+    setHiddenRateMatrixBucketIds((ids) => ids.filter((id) => availableBucketIds.has(id)));
   }, [rateMatrixRows, rateMatrixColumns]);
 
   useEffect(() => {
@@ -1279,6 +1413,19 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const openCreateWorkTypeModal = () => {
     resetWorkTypeForm();
+    setStopPayModal("workType");
+  };
+
+  const openCreateWorkTypeForCategory = (categoryId) => {
+    const category = stopPayCategories.find((item) => item.id === categoryId) || stopPayCategories[1] || stopPayCategories[0];
+    setEditingWorkTypeId("");
+    setWorkTypeForm({
+      ...emptyWorkTypeForm(),
+      stopPayCategoryId: category.id,
+      category: category.defaultWorkCategory,
+      iconName: category.defaultIconName,
+      defaultRateType: category.defaultRateType,
+    });
     setStopPayModal("workType");
   };
 
@@ -1497,13 +1644,25 @@ const Payroll = ({ mode = "payroll" }) => {
     setActionNotice();
 
     try {
+      const now = new Date();
       const payload = {
         ...normalizePaySettingsForIos(settingsForm, recentlySelectedCompany),
-        updatedAt: new Date(),
+        updatedAt: now,
         updatedByUserId: currentUserId,
       };
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main"), payload, { merge: true });
+      const payrollEnabled = isPayrollEnabled(payload);
+      const syncPayload = {
+        [PAYROLL_ENABLED_FIELD]: payrollEnabled,
+        payrollSettingsUpdatedAt: now,
+        payrollSettingsUpdatedByUserId: currentUserId,
+      };
+      const batch = writeBatch(db);
+      batch.set(doc(db, "companies", recentlySelectedCompany, "paySettings", "main"), payload, { merge: true });
+      batch.set(doc(db, "companies", recentlySelectedCompany, "settings", COMPANY_WIDE_SETTINGS_DOC_ID), syncPayload, { merge: true });
+      batch.set(doc(db, "companies", recentlySelectedCompany), syncPayload, { merge: true });
+      await batch.commit();
       setSettingsForm(payload);
+      setPayrollEnabled(payrollEnabled);
       setActionNotice("Payroll settings saved.");
     } catch (err) {
       console.error("Error saving payroll settings:", err);
@@ -1524,6 +1683,7 @@ const Payroll = ({ mode = "payroll" }) => {
     setSettingsForm((form) => ({
       ...form,
       ...presetSettings,
+      payrollEnabled: isPayrollEnabled(form),
       companyId: recentlySelectedCompany || form.companyId || "",
     }));
   };
@@ -1725,10 +1885,14 @@ const Payroll = ({ mode = "payroll" }) => {
     setRateMatrixWorkTypeFilterIds([]);
   };
 
-  const toggleRateMatrixBucket = (bucketId) => {
-    setCollapsedRateMatrixBucketIds((ids) =>
+  const toggleRateMatrixBucketVisibility = (bucketId) => {
+    setHiddenRateMatrixBucketIds((ids) =>
       ids.includes(bucketId) ? ids.filter((id) => id !== bucketId) : [...ids, bucketId]
     );
+  };
+
+  const showAllRateMatrixBuckets = () => {
+    setHiddenRateMatrixBucketIds([]);
   };
 
   const rateForMatrixCell = (technicianId, column) => {
@@ -2042,6 +2206,8 @@ const Payroll = ({ mode = "payroll" }) => {
       source,
       serviceStopId: serviceStop.id,
       serviceStopTaskId: serviceStopTaskId || null,
+      workOfferId: serviceStop.workOfferId || line.workOfferId || null,
+      workOfferIncentive: serviceStop.workOfferIncentive || line.workOfferIncentive || null,
       activeRouteId: null,
       activeRouteLogId: null,
       payTypeId: payTypeId || null,
@@ -3139,12 +3305,15 @@ const Payroll = ({ mode = "payroll" }) => {
     );
   };
 
-  const renderSettings = () => (
+  const renderSettings = () => {
+    const payrollIsEnabled = isPayrollEnabled(settingsForm);
+
+    return (
     <form onSubmit={savePaySettings} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-900">Payroll Settings</h2>
-          <p className="mt-1 text-sm text-slate-500">These fields mirror the iOS CompanyPaySettings document.</p>
+          <p className="mt-1 text-sm text-slate-500">Turn payroll on or off and control the rules used for pay lines.</p>
         </div>
         <button
           type="submit"
@@ -3153,6 +3322,26 @@ const Payroll = ({ mode = "payroll" }) => {
         >
           {savingAction === "save-pay-settings" ? "Saving" : "Save Settings"}
         </button>
+      </div>
+
+      <div className={`mt-5 rounded-lg border p-4 ${payrollIsEnabled ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}>
+        <label className="flex cursor-pointer items-start justify-between gap-4">
+          <span>
+            <span className="block text-sm font-bold text-slate-900">Payroll enabled</span>
+            <span className="mt-1 block text-sm leading-6 text-slate-600">
+              When off, new scheduled work will not estimate or generate technician payroll line items. Existing payroll history stays visible for review and statements.
+            </span>
+          </span>
+          <span className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${payrollIsEnabled ? "bg-emerald-600" : "bg-slate-300"}`}>
+            <input
+              type="checkbox"
+              checked={payrollIsEnabled}
+              onChange={(event) => setSettingsForm((form) => ({ ...form, payrollEnabled: event.target.checked }))}
+              className="sr-only"
+            />
+            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${payrollIsEnabled ? "left-5" : "left-0.5"}`} />
+          </span>
+        </label>
       </div>
 
       <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 p-4">
@@ -3268,7 +3457,8 @@ const Payroll = ({ mode = "payroll" }) => {
         ))}
       </div>
     </form>
-  );
+    );
+  };
 
   const renderSetupOverview = () => {
     const flowSteps = [
@@ -3290,7 +3480,7 @@ const Payroll = ({ mode = "payroll" }) => {
       {
         title: "Task Pay",
         subtitle: "Optional extra pay types on finished tasks",
-        example: "Example: Filter Clean · $20",
+        example: "Example: Maintenance · $20",
       },
       {
         title: "Payroll Line",
@@ -3324,7 +3514,7 @@ const Payroll = ({ mode = "payroll" }) => {
         <section className="grid gap-4 lg:grid-cols-3">
           <button
             type="button"
-            onClick={() => setActiveTab("stopPay")}
+            onClick={() => handleTabChange("stopPay")}
             className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
           >
             <h3 className="text-base font-bold text-slate-900">Pay Types</h3>
@@ -3332,7 +3522,7 @@ const Payroll = ({ mode = "payroll" }) => {
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab("rates")}
+            onClick={() => handleTabChange("rates")}
             className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
           >
             <h3 className="text-base font-bold text-slate-900">Technician Rates</h3>
@@ -3340,11 +3530,11 @@ const Payroll = ({ mode = "payroll" }) => {
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab("settings")}
+            onClick={() => handleTabChange("settings")}
             className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
           >
             <h3 className="text-base font-bold text-slate-900">Pay Rules</h3>
-            <p className="mt-2 text-sm text-slate-600">Control approval behavior, route pay source, task pay source, and recalculation.</p>
+            <p className="mt-2 text-sm text-slate-600">Turn payroll on or off and control approval behavior, pay sources, and recalculation.</p>
           </button>
         </section>
       </div>
@@ -3385,10 +3575,19 @@ const Payroll = ({ mode = "payroll" }) => {
                     <h3 className="text-sm font-bold text-slate-900">{category.label}</h3>
                     <p className="mt-1 text-xs text-slate-500">{category.helper}</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
                       {categoryWorkTypes.length} pay type{categoryWorkTypes.length === 1 ? "" : "s"}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => openCreateWorkTypeForCategory(category.id)}
+                      aria-label={`Add pay type to ${category.label}`}
+                      title={`Add pay type to ${category.label}`}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <IoAddOutline className="h-4 w-4" aria-hidden="true" />
+                    </button>
                   </div>
                 </div>
               </div>
@@ -3426,14 +3625,14 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const renderStopPayEditorModal = () => {
     if (!stopPayModal) return null;
-    if (stopPayModal !== "workType") return null;
+    if (!["workType", "serviceStopType"].includes(stopPayModal)) return null;
 
-    const isWorkTypeModal = true;
+    const isWorkTypeModal = stopPayModal === "workType";
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
         {isWorkTypeModal ? (
-          <form onSubmit={createCompanyWorkType} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
+          <form onSubmit={createCompanyWorkType} className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-bold text-slate-900">{editingWorkTypeId ? "Edit Pay Type" : "Create Pay Type"}</h2>
@@ -3455,57 +3654,94 @@ const Payroll = ({ mode = "payroll" }) => {
                 />
               </label>
 
-              <label className="text-sm font-semibold text-slate-700">
-                Stop Bucket
+              <div className="text-sm font-semibold text-slate-700">
+                <FieldLabelWithInfo
+                  label="Stop Bucket"
+                  infoTitle="Stop Bucket Options"
+                  infoItems={stopPayCategories.map((category) => ({
+                    label: category.label,
+                    description: `${category.helper} New pay types in this bucket default to ${statusLabel(category.defaultWorkCategory)} / ${statusLabel(category.defaultRateType)}.`,
+                  }))}
+                  align="left"
+                />
                 <select
+                  aria-label="Stop Bucket"
                   value={workTypeForm.stopPayCategoryId}
                   onChange={(event) => updateWorkTypeStopPayCategory(event.target.value)}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                 >
                   {stopPayCategories.map((category) => (
                     <option key={category.id} value={category.id}>{category.label}</option>
                   ))}
                 </select>
-              </label>
+              </div>
 
-              <label className="text-sm font-semibold text-slate-700">
-                Pay Category
+              <div className="text-sm font-semibold text-slate-700">
+                <FieldLabelWithInfo
+                  label="Pay Category"
+                  infoTitle="Pay Category Options"
+                  infoItems={payCategoryInfoItems}
+                  align="left"
+                >
+                  <p>
+                    This does not set the dollar amount. It tells payroll what kind of work this pay type represents, which controls the default rate basis.
+                  </p>
+                  <InfoOptionList items={payCategoryInfoItems} />
+                </FieldLabelWithInfo>
                 <select
+                  aria-label="Pay Category"
                   value={workTypeForm.category}
                   onChange={(event) => setWorkTypeForm((form) => ({ ...form, category: event.target.value }))}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                 >
                   {workCategoryOptions.map((category) => (
                     <option key={category} value={category}>{statusLabel(category)}</option>
                   ))}
                 </select>
-              </label>
+              </div>
 
-              <label className="text-sm font-semibold text-slate-700">
-                Rate Type
+              <div className="text-sm font-semibold text-slate-700">
+                <FieldLabelWithInfo
+                  label="Rate Type"
+                  infoTitle="Rate Type Options"
+                  infoItems={rateTypeInfoItems}
+                  align="left"
+                />
                 <select
+                  aria-label="Rate Type"
                   value={workTypeForm.defaultRateType}
                   onChange={(event) => setWorkTypeForm((form) => ({ ...form, defaultRateType: event.target.value }))}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                 >
                   {rateTypeOptions.map((option) => (
                     <option key={option} value={option}>{statusLabel(option)}</option>
                   ))}
                 </select>
-              </label>
+              </div>
 
-              <label className="text-sm font-semibold text-slate-700">
-                Stack
+              <div className="text-sm font-semibold text-slate-700">
+                <FieldLabelWithInfo
+                  label="Stack"
+                  infoTitle="Stack Options"
+                  infoItems={stackBehaviorInfoItems}
+                  align="left"
+                >
+                  <p>
+                    This stores the intended stacking behavior for this pay type. Automatic payroll still follows the company pay-source rules first.
+                  </p>
+                  <InfoOptionList items={stackBehaviorInfoItems} />
+                </FieldLabelWithInfo>
                 <select
+                  aria-label="Stack"
                   value={workTypeForm.defaultStackBehavior}
                   onChange={(event) => setWorkTypeForm((form) => ({ ...form, defaultStackBehavior: event.target.value }))}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                 >
                   {stackBehaviorOptions.map((option) => (
                     <option key={option} value={option}>{statusLabel(option)}</option>
                   ))}
                 </select>
-              </label>
+              </div>
 
               <IosIconPicker
                 label="Icon"
@@ -3567,18 +3803,27 @@ const Payroll = ({ mode = "payroll" }) => {
                 />
               </label>
 
-              <label className="text-sm font-semibold text-slate-700">
-                Stop Bucket
+              <div className="text-sm font-semibold text-slate-700">
+                <FieldLabelWithInfo
+                  label="Stop Bucket"
+                  infoTitle="Stop Bucket Options"
+                  infoItems={stopPayCategories.map((category) => ({
+                    label: category.label,
+                    description: `${category.helper} Default pay types for this record must come from the same bucket.`,
+                  }))}
+                  align="left"
+                />
                 <select
+                  aria-label="Stop Bucket"
                   value={serviceStopTypeForm.categoryId}
                   onChange={(event) => updateServiceStopTypeCategory(event.target.value)}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                 >
                   {stopPayCategories.map((category) => (
                     <option key={category.id} value={category.id}>{category.label}</option>
                   ))}
                 </select>
-              </label>
+              </div>
 
               <IosIconPicker
                 label="Icon"
@@ -3586,16 +3831,24 @@ const Payroll = ({ mode = "payroll" }) => {
                 onChange={(imageName) => setServiceStopTypeForm((form) => ({ ...form, imageName }))}
               />
 
-              <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
-                Default Pay Types
+              <div className="text-sm font-semibold text-slate-700 sm:col-span-2">
+                <FieldLabelWithInfo label="Default Pay Types" infoTitle="Default Pay Types" align="left">
+                  <p>
+                    These are the pay types the stop will use by default. The payroll engine uses the selected pay type IDs to find technician rates.
+                  </p>
+                  <p>
+                    Only pay types from the selected Stop Bucket are available here.
+                  </p>
+                </FieldLabelWithInfo>
                 <select
+                  aria-label="Default Pay Types"
                   multiple
                   value={serviceStopTypeForm.defaultWorkTypeIds}
                   onChange={(event) => {
                     const selectedIds = Array.from(event.target.selectedOptions).map((option) => option.value);
                     setServiceStopTypeForm((form) => ({ ...form, defaultWorkTypeIds: selectedIds }));
                   }}
-                  className="mt-1 min-h-[8rem] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  className="min-h-[8rem] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                 >
                   {serviceStopTypeFormWorkTypeOptions.map((workType) => (
                     <option key={workType.id} value={workType.id}>{workType.name}</option>
@@ -3606,7 +3859,7 @@ const Payroll = ({ mode = "payroll" }) => {
                     Create a pay type in this bucket before selecting defaults.
                   </span>
                 ) : null}
-              </label>
+              </div>
             </div>
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -3715,6 +3968,55 @@ const Payroll = ({ mode = "payroll" }) => {
         </div>
       </div>
 
+      {rateMatrixRows.length > 0 && filteredRateMatrixColumnGroups.length > 0 ? (
+        <div className="mt-4 shrink-0 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-bold text-slate-900">Rate Buckets</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Showing {visibleRateMatrixColumnCount} of {filteredRateMatrixColumns.length} pay types.
+              </p>
+            </div>
+            {hiddenCurrentRateMatrixBucketCount > 0 ? (
+              <button
+                type="button"
+                onClick={showAllRateMatrixBuckets}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Show All
+              </button>
+            ) : null}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {filteredRateMatrixColumnGroups.map((group) => {
+              const checked = !hiddenRateMatrixBucketIds.includes(group.bucketId);
+              return (
+                <label
+                  key={group.bucketId}
+                  className={[
+                    "flex min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition",
+                    checked
+                      ? "border-blue-200 bg-white text-blue-800"
+                      : "border-slate-200 bg-slate-100 text-slate-500",
+                  ].join(" ")}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleRateMatrixBucketVisibility(group.bucketId)}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                  />
+                  <span className="truncate">{group.bucketLabel}</span>
+                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-600">
+                    {group.columns.length}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {rateMatrixFiltersOpen ? (
         <div id="rate-matrix-filters" className="mt-4 shrink-0 rounded-lg border border-slate-200 bg-slate-50 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -3782,6 +4084,13 @@ const Payroll = ({ mode = "payroll" }) => {
             Clear Filters
           </button>
         </div>
+      ) : visibleRateMatrixColumnCount === 0 ? (
+        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+          <p>No rate buckets selected.</p>
+          <button type="button" onClick={showAllRateMatrixBuckets} className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+            Show All Buckets
+          </button>
+        </div>
       ) : (
         <div className={rateMatrixFullscreen ? "mt-5 min-h-0 flex-1 overflow-auto rounded-lg border border-slate-200" : "mt-5 max-h-[72vh] overflow-auto rounded-lg border border-slate-200"}>
           <table className="min-w-max border-separate border-spacing-0 text-xs">
@@ -3790,55 +4099,24 @@ const Payroll = ({ mode = "payroll" }) => {
                 <th rowSpan={2} className="sticky left-0 top-0 z-40 w-56 min-w-[14rem] border-b border-r border-slate-200 bg-slate-100 px-3 py-3 text-left align-top font-bold text-slate-800">
                   Technician
                 </th>
-                {filteredRateMatrixColumnGroups.map((group) => {
-                  const isCollapsed = collapsedRateMatrixBucketIds.includes(group.bucketId);
-                  return (
-                    <th
-                      key={group.bucketId}
-                      colSpan={isCollapsed ? 1 : group.columns.length}
-                      className="sticky top-0 z-30 h-14 border-b border-r border-blue-200 bg-blue-50 px-3 py-2 text-left align-middle"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <span className="block truncate text-sm font-bold text-blue-950">{group.bucketLabel}</span>
-                          <span className="mt-0.5 block truncate text-[11px] font-normal text-blue-700">
-                            {group.columns.length} pay type{group.columns.length === 1 ? "" : "s"}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => toggleRateMatrixBucket(group.bucketId)}
-                          aria-expanded={!isCollapsed}
-                          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] font-bold text-blue-700 hover:bg-blue-100"
-                        >
-                          {isCollapsed ? (
-                            <IoChevronDownOutline className="h-3.5 w-3.5" aria-hidden="true" />
-                          ) : (
-                            <IoChevronUpOutline className="h-3.5 w-3.5" aria-hidden="true" />
-                          )}
-                          {isCollapsed ? "Expand" : "Collapse"}
-                        </button>
-                      </div>
-                    </th>
-                  );
-                })}
+                {visibleRateMatrixColumnGroups.map((group) => (
+                  <th
+                    key={group.bucketId}
+                    colSpan={group.columns.length}
+                    className="sticky top-0 z-30 h-14 border-b border-r border-blue-200 bg-blue-50 px-3 py-2 text-left align-middle"
+                  >
+                    <div className="min-w-0">
+                      <span className="block truncate text-sm font-bold text-blue-950">{group.bucketLabel}</span>
+                      <span className="mt-0.5 block truncate text-[11px] font-normal text-blue-700">
+                        {group.columns.length} pay type{group.columns.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  </th>
+                ))}
               </tr>
               <tr>
-                {filteredRateMatrixColumnGroups.map((group) => {
-                  const isCollapsed = collapsedRateMatrixBucketIds.includes(group.bucketId);
-                  if (isCollapsed) {
-                    return (
-                      <th
-                        key={`${group.bucketId}-collapsed`}
-                        className="sticky top-14 z-20 w-36 min-w-[9rem] border-b border-r border-slate-200 bg-slate-100 px-3 py-3 text-left align-top"
-                      >
-                        <span className="block text-sm font-bold text-slate-700">{group.columns.length} hidden</span>
-                        <span className="mt-1 block text-[11px] font-normal text-slate-500">Expand bucket to edit rates.</span>
-                      </th>
-                    );
-                  }
-
-                  return group.columns.map((column) => (
+                {visibleRateMatrixColumnGroups.map((group) => (
+                  group.columns.map((column) => (
                     <th
                       key={column.id}
                       className="sticky top-14 z-20 w-52 min-w-[13rem] border-b border-r border-slate-200 bg-slate-100 px-3 py-3 text-left align-top"
@@ -3848,8 +4126,8 @@ const Payroll = ({ mode = "payroll" }) => {
                         {column.isGeneralHourly ? column.helper : `${statusLabel(column.defaultPayBasis)} / ${statusLabel(column.defaultRateType)}`}
                       </span>
                     </th>
-                  ));
-                })}
+                  ))
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -3859,24 +4137,25 @@ const Payroll = ({ mode = "payroll" }) => {
                     <span className="block text-sm font-bold text-slate-900">{worker.matrixName}</span>
                     <span className={`mt-1 block truncate text-[11px] font-normal ${worker.isRateTemplate ? "text-amber-700" : "text-slate-500"}`}>{worker.workerType || worker.role || worker.matrixTechnicianId}</span>
                   </th>
-                  {filteredRateMatrixColumnGroups.map((group) => {
-                    const isCollapsed = collapsedRateMatrixBucketIds.includes(group.bucketId);
-                    if (isCollapsed) {
-                      return (
-                        <td key={`${worker.matrixTechnicianId}-${group.bucketId}-collapsed`} className="w-36 min-w-[9rem] border-b border-r border-slate-200 bg-slate-50 p-3 text-center align-middle">
-                          <span className="text-xs font-semibold text-slate-400">{group.columns.length} hidden</span>
-                        </td>
-                      );
-                    }
-
-                    return group.columns.map((column) => {
+                  {visibleRateMatrixColumnGroups.map((group) => (
+                    group.columns.map((column) => {
                       const key = rateMatrixCellKey(worker.matrixTechnicianId, column.id);
                       const draft = rateMatrixDrafts[key] || matrixDraftForCell(worker, column);
                       const hasRate = Boolean(draft.rateId);
                       const hasAmount = String(draft.amount || "").trim() !== "";
+                      const missingRateAmount = rateMatrixEditMode && !hasAmount;
+                      const matrixCellFillClass = missingRateAmount
+                        ? "bg-red-50"
+                        : worker.isRateTemplate ? "bg-amber-50/50" : "bg-white";
+                      const matrixAmountInputClass = [
+                        "mt-1 w-full rounded-md px-2 py-1.5 text-sm font-semibold text-slate-900",
+                        missingRateAmount
+                          ? "border border-red-300 bg-red-100"
+                          : "border border-slate-300 bg-white",
+                      ].join(" ");
 
                       return (
-                        <td key={key} className={`w-52 min-w-[13rem] border-b border-r border-slate-200 p-2 align-top ${worker.isRateTemplate ? "bg-amber-50/50" : "bg-white"}`}>
+                        <td key={key} className={`w-52 min-w-[13rem] border-b border-r border-slate-200 p-2 align-top ${matrixCellFillClass}`}>
                           {rateMatrixEditMode ? (
                             <div className="grid gap-1.5">
                               <label className="text-[11px] font-semibold text-slate-500">
@@ -3886,7 +4165,7 @@ const Payroll = ({ mode = "payroll" }) => {
                                   step="0.01"
                                   value={draft.amount}
                                   onChange={(event) => updateRateMatrixDraft(key, "amount", event.target.value)}
-                                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm font-semibold text-slate-900"
+                                  className={matrixAmountInputClass}
                                 />
                               </label>
                               <p className="truncate text-[11px] text-slate-400">{statusLabel(draft.rateType)} / {statusLabel(draft.payBasis)}</p>
@@ -3903,8 +4182,8 @@ const Payroll = ({ mode = "payroll" }) => {
                           )}
                         </td>
                       );
-                    });
-                  })}
+                    })
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -4012,15 +4291,16 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const tabItems = isSetupMode
     ? [
-      ["overview", "Overview"],
-      ["stopPay", "Pay Types"],
-      ["rates", "Technician Rates"],
-      ["settings", "Pay Rules"],
+      ["overview", "Overview", "Setup flow and payroll model"],
+      ["stopPay", "Pay Types", "Scheduling buckets and pay rows"],
+      ["rates", "Technician Rates", "Worker rates by pay type"],
+      ["settings", "Pay Rules", "Approval, source, and recalculation rules"],
     ]
     : [
-      ["statements", "Statements"],
-      ["lineItems", "Line Items"],
+      ["statements", "Statements", "Pay statements and paid status"],
+      ["lineItems", "Line Items", "Payroll line review"],
     ];
+
   const backfillProgressPercent = backfillProgress?.total
     ? Math.max(5, Math.round((backfillProgress.current / backfillProgress.total) * 100))
     : 8;
@@ -4159,7 +4439,7 @@ const Payroll = ({ mode = "payroll" }) => {
           {tabItems.map(([tab, label]) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => handleTabChange(tab)}
               className={`rounded-md px-4 py-2 text-sm font-bold transition ${activeTab === tab ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
                 }`}
             >

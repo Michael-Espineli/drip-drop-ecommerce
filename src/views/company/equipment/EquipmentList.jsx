@@ -17,13 +17,14 @@ import {
 } from "firebase/firestore";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  EQUIPMENT_STATUS,
   EQUIPMENT_STATUS_OPTIONS,
   Equipment,
   displayEquipmentStatus,
   equipmentDefaultsToNeedsService,
   normalizeEquipmentStatus,
 } from "../../../utils/models/Equipment";
-import { addDays, addMonths, addWeeks, addYears, endOfToday, format, isBefore, isEqual } from "date-fns";
+import { addDays, addMonths, addWeeks, addYears, format } from "date-fns";
 import * as XLSX from "xlsx";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
@@ -50,11 +51,27 @@ import {
   SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
 } from "../../../utils/companyPermissions";
 import {
+  DEFAULT_ISSUE_PRIORITY,
   DEFAULT_JOB_PLAN_TIER,
   JOB_PLAN_STATUS,
   getIssuePriorityLabel,
   getJobPlanRecommendationLabel,
+  normalizeIssuePriority,
 } from "../../../utils/models/JobPlan";
+import {
+  SalesCatalogBillingBehavior,
+  SalesCatalogItemType,
+  SalesCatalogSourceType,
+} from "../../../utils/models/Sales";
+import { canonicalJobTaskType } from "../../../utils/jobTaskTypes";
+import {
+  buildCustomerActiveById,
+  equipmentDateIsDueThroughToday as dateIsDue,
+  equipmentMatchesActiveFilter,
+  equipmentNeedsMaintenance as isNeedsMaintenance,
+  equipmentNeedsMaintenanceForActiveBoard,
+} from "../../../utils/equipmentMaintenance";
+import { normalizeAddress } from "../../../utils/customerLocationData";
 
 const EMPTY_TOP_COUNTS = {
   all: 0,
@@ -64,6 +81,12 @@ const EMPTY_TOP_COUNTS = {
 };
 
 const DEFAULT_EQUIPMENT_FILTER = "maintenance";
+const DEFAULT_ACTIVE_STATUS_FILTER = "active";
+const ACTIVE_STATUS_FILTER_LABELS = {
+  active: "Active",
+  inactive: "Inactive",
+  both: "Both",
+};
 const EQUIPMENT_FILTER_PATH_SEGMENTS = {
   all: "all-equipment",
   maintenance: "needs-maintenance",
@@ -127,7 +150,9 @@ const EQUIPMENT_TABLE_SORT_COLUMNS = [
   { field: "nextServiceDate", label: "Next Service" },
   { field: "status", label: "Status" },
   { field: "activeJobs", label: "Active Jobs" },
+  { field: "recurringServiceStops", label: "RSS" },
 ];
+const EQUIPMENT_TABLE_COLUMN_COUNT = EQUIPMENT_TABLE_SORT_COLUMNS.length + 2;
 const inputBase =
   "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 const modalSecondaryButton =
@@ -192,6 +217,79 @@ const plannedMaterialTotalPriceCents = (item = {}) => {
   return Math.round(Number(item.plannedUnitPriceCents || item.price || 0) * quantityNumber(item.quantity));
 };
 
+const scheduleTemplateDetailsEmpty = () => ({
+  tasks: [],
+  plannedServiceStops: [],
+  shoppingItems: [],
+  laborLineItems: [],
+});
+
+const laborLineIdValue = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  return value.id || value.value || value.docId || "";
+};
+
+const splitTemplateIdList = (value = "") => String(value || "")
+  .split(",")
+  .map((idValue) => idValue.trim())
+  .filter(Boolean);
+
+const laborLineIdArray = (value) => (
+  Array.isArray(value)
+    ? value.map(laborLineIdValue).filter(Boolean)
+    : laborLineIdValue(value)
+      ? splitTemplateIdList(laborLineIdValue(value))
+      : []
+);
+
+const getLaborLineTaskIds = (line = {}) => laborLineIdArray(
+  line.taskTemplateIds?.length
+    ? line.taskTemplateIds
+    : line.taskIds?.length
+      ? line.taskIds
+      : line.laborLineTaskIds
+);
+
+const getLaborLinePlannedStopIds = (line = {}) => laborLineIdArray(
+  line.plannedServiceStopTemplateIds?.length
+    ? line.plannedServiceStopTemplateIds
+    : line.plannedServiceStopIds?.length
+      ? line.plannedServiceStopIds
+      : line.laborLinePlannedServiceStopIds
+);
+
+const laborLineTotalPriceCents = (line = {}) => {
+  const quantity = Math.max(Number(line.quantity || line.defaultQuantity || 1) || 1, 1);
+  const explicitTotal = line.totalPriceCents ?? line.totalAmountCents ?? line.amount ?? line.price;
+  if (explicitTotal !== undefined && explicitTotal !== null && explicitTotal !== "") return Number(explicitTotal || 0);
+  return Math.round(Number(line.unitPriceCents ?? line.unitAmountCents ?? line.rateAmountCents ?? line.rate ?? 0) * quantity);
+};
+
+const laborLineUnitPriceCents = (line = {}) => {
+  const quantity = Math.max(Number(line.quantity || line.defaultQuantity || 1) || 1, 1);
+  const explicitUnit = line.unitPriceCents ?? line.unitAmountCents ?? line.rateAmountCents;
+  if (explicitUnit !== undefined && explicitUnit !== null && explicitUnit !== "") return Number(explicitUnit || 0);
+  return quantity ? Math.round(laborLineTotalPriceCents(line) / quantity) : laborLineTotalPriceCents(line);
+};
+
+const laborLineInternalCostCents = (line = {}) => Number(
+  line.internalCostCents ??
+  line.internalLaborCostCents ??
+  line.laborCostCents ??
+  line.unitCostCents ??
+  line.cost ??
+  0
+);
+
+const laborLineCatalogItemId = (line = {}) => (
+  line.salesCatalogItemId ||
+  line.catalogItemId ||
+  line.sourceCatalogItemId ||
+  ""
+);
+
 const dateInputToLocalDate = (value) => {
   if (!value) return null;
   const [year, month, day] = value.split("-").map(Number);
@@ -219,13 +317,13 @@ const Field = ({ label, children }) => (
   </div>
 );
 
-const ModalShell = ({ title, children, onClose, footer }) => (
+const ModalShell = ({ title, description = "Make a quick update without leaving the list.", children, onClose, footer }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
     <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-xl font-bold text-slate-950">{title}</h3>
-          <p className="mt-1 text-sm text-slate-500">Make a quick update without leaving the list.</p>
+          {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
         </div>
         <button
           onClick={onClose}
@@ -242,30 +340,35 @@ const ModalShell = ({ title, children, onClose, footer }) => (
   </div>
 );
 
-const dateIsDue = (d) => {
-  if (!d) return false;
-  const dueThrough = endOfToday();
-  return isBefore(d, dueThrough) || isEqual(d, dueThrough);
+const equipmentMatchesDetailFilters = (
+  equipment,
+  {
+    activeStatusFilter = DEFAULT_ACTIVE_STATUS_FILTER,
+    customerActiveById = {},
+    typeFilter = "",
+    needsServiceFilter = "",
+  } = {}
+) => {
+  if (!equipmentMatchesActiveFilter(equipment, activeStatusFilter, customerActiveById)) return false;
+  if (typeFilter && equipment?.type !== typeFilter) return false;
+  if (needsServiceFilter === "true") return equipment?.needsService === true;
+  if (needsServiceFilter === "false") return equipment?.needsService !== true;
+  return true;
 };
 
-/**
- * Needs Maintenance filter rule:
- * Include an operational item if EITHER:
- * 1) status indicates maintenance
- * OR
- * 2) nextServiceDate is today or earlier
- */
-const isNeedsMaintenance = (eq) => {
-  if (!eq) return false;
-  const status = normalizeEquipmentStatus(eq.status);
-  if (status === "nonoperational") return false;
+const equipmentListRecordFromSnapshot = (equipmentDoc) => {
+  const rawData = equipmentDoc.data() || {};
+  const modeledEquipment = Equipment.fromFirestore(equipmentDoc);
 
-  const statusSaysMaintenance =
-    status === "needsmaintenance" ||
-    status === "maintenance" ||
-    status === "needsservice";
-
-  return statusSaysMaintenance || (eq.needsService === true && dateIsDue(eq.nextServiceDate));
+  return {
+    ...rawData,
+    ...modeledEquipment,
+    id: equipmentDoc.id,
+    active: rawData.active ?? modeledEquipment.isActive,
+    operationStatus: rawData.operationStatus || "",
+    equipmentStatus: rawData.equipmentStatus || "",
+    status: modeledEquipment.status || rawData.status || rawData.operationStatus || rawData.equipmentStatus || "",
+  };
 };
 
 const isNeedsRepair = (eq) => normalizeEquipmentStatus(eq?.status) === "needsrepair";
@@ -337,6 +440,14 @@ const jobTemplateIsScheduleable = (template = {}) => (
   template.technicianCanAdd === true
 );
 
+const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriority(
+  template.defaultIssuePriorityLevel ??
+  template.issuePriorityLevel ??
+  template.priorityLevel ??
+  template.solutionTier ??
+  DEFAULT_ISSUE_PRIORITY
+);
+
 const templateIntentMatches = (template = {}, intent = "") => {
   const searchable = `${template.name || ""} ${template.type || ""} ${template.jobType || ""} ${template.description || ""}`.toLowerCase();
   if (intent === "repair") return searchable.includes("repair");
@@ -350,24 +461,41 @@ const formatAddressLine = (address = {}) => {
   if (typeof address === "string") return address.trim();
   if (!address || typeof address !== "object") return "";
 
-  const street = address.streetAddress || address.address1 || address.line1 || "";
+  const normalizedAddress = normalizeAddress(address);
+  const street = normalizedAddress.streetAddress || "";
   const cityStateZip = [
-    address.city,
-    address.state,
-    address.zip || address.zipCode,
+    normalizedAddress.city,
+    normalizedAddress.state,
+    normalizedAddress.zip || normalizedAddress.zipCode,
   ].filter(Boolean).join(" ");
 
   return [street, cityStateZip].filter(Boolean).join(", ");
 };
+
+const serviceLocationSearchValues = (serviceLocation = {}, equipment = {}) => [
+  serviceLocation?.nickName,
+  serviceLocation?.name,
+  serviceLocation?.label,
+  serviceLocation?.customerName,
+  formatAddressLine(serviceLocation?.address),
+  formatAddressLine(serviceLocation?.serviceLocationAddress),
+  formatAddressLine(serviceLocation?.locationAddress),
+  formatAddressLine(equipment?.serviceLocationAddress),
+  formatAddressLine(equipment?.locationAddress),
+  formatAddressLine(equipment?.address),
+  equipment?.serviceLocationName,
+  equipment?.locationName,
+  equipment?.addressLabel,
+];
 
 const serviceLocationDisplayAddress = (serviceLocation = {}) => {
   const location = serviceLocation || {};
 
   return (
     formatAddressLine(location.address) ||
-    location.serviceLocationAddress ||
-    location.locationAddress ||
-    location.addressLabel ||
+    formatAddressLine(location.serviceLocationAddress) ||
+    formatAddressLine(location.locationAddress) ||
+    formatAddressLine(location.addressLabel) ||
     location.label ||
     location.nickName ||
     ""
@@ -385,6 +513,12 @@ const serviceLocationDisplayName = (serviceLocation = {}) => {
     "Service Location"
   );
 };
+
+const getRecordEquipmentIds = (record = {}) => [
+  record.equipmentId,
+  ...(Array.isArray(record.equipmentIds) ? record.equipmentIds : []),
+  ...(Array.isArray(record.companyEquipmentIds) ? record.companyEquipmentIds : []),
+].filter(Boolean).map(String);
 
 const isActiveEquipmentJob = (job = {}) => {
   const operationStatus = normalizeJobStatus(job.operationStatus || job.status);
@@ -438,6 +572,81 @@ const getJobStatusLabel = (job = {}) => (
   [job.operationStatus, job.billingStatus].filter(Boolean).join(" / ") || "Active"
 );
 
+const isLiveRecurringEquipmentStop = (stop = {}) => {
+  if (stop.active === false || stop.isActive === false) return false;
+
+  const normalizedStatus = String(stop.status || "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase();
+  if (["inactive", "cancelled", "canceled", "deleted", "ended"].includes(normalizedStatus)) return false;
+
+  const endMillis = sortableDateMillis(stop.endDate);
+  return stop.noEndDate || !endMillis || endMillis >= Date.now();
+};
+
+const compactRecurringStop = (stop = {}, equipmentTaskCount = 0, equipmentTaskNames = []) => ({
+  id: stop.id,
+  internalId: stop.internalId || "",
+  customerName: stop.customerName || "",
+  type: stop.type || "",
+  frequency: stop.frequency || "",
+  day: stop.day || stop.daysOfWeek || "",
+  tech: stop.tech || stop.techName || stop.technicianName || stop.workerName || "",
+  dateMillis: sortableDateMillis(stop.startDate || stop.dateCreated) || 0,
+  equipmentTaskCount,
+  equipmentTaskNames: [...new Set(equipmentTaskNames.filter(Boolean))],
+});
+
+const addRecurringStopToEquipmentLookup = (lookup, equipmentId, stop, equipmentTaskCount = 0, equipmentTaskNames = []) => {
+  if (!equipmentId || !stop?.id) return;
+
+  const currentStops = lookup[equipmentId] || [];
+  const existingIndex = currentStops.findIndex((currentStop) => currentStop.id === stop.id);
+  const nextStop = compactRecurringStop(stop, equipmentTaskCount, equipmentTaskNames);
+
+  if (existingIndex >= 0) {
+    const nextStops = [...currentStops];
+    nextStops[existingIndex] = {
+      ...nextStops[existingIndex],
+      equipmentTaskCount: Math.max(nextStops[existingIndex].equipmentTaskCount || 0, equipmentTaskCount),
+      equipmentTaskNames: [
+        ...new Set([
+          ...(nextStops[existingIndex].equipmentTaskNames || []),
+          ...nextStop.equipmentTaskNames,
+        ]),
+      ],
+    };
+    lookup[equipmentId] = nextStops;
+    return;
+  }
+
+  lookup[equipmentId] = [...currentStops, nextStop];
+};
+
+const sortRecurringStopLookup = (lookup = {}) => {
+  Object.keys(lookup).forEach((equipmentId) => {
+    lookup[equipmentId] = lookup[equipmentId].sort((a, b) => (
+      String(a.day || "").localeCompare(String(b.day || "")) ||
+      String(a.internalId || "").localeCompare(String(b.internalId || "")) ||
+      b.dateMillis - a.dateMillis
+    ));
+  });
+
+  return lookup;
+};
+
+const recurringStopDayLabel = (stop = {}) => (
+  Array.isArray(stop.day)
+    ? stop.day.join(", ")
+    : Array.isArray(stop.daysOfWeek)
+      ? stop.daysOfWeek.join(", ")
+      : stop.day || stop.daysOfWeek || "No day"
+);
+
+const recurringStopFrequencyLabel = (stop = {}) => stop.frequency || "No frequency";
+
+const recurringStopTechnicianLabel = (stop = {}) => stop.tech || "Unassigned";
+
 const ActiveJobsCell = ({ jobs = [], loading = false }) => {
   if (loading && jobs.length === 0) {
     return <span className="text-xs text-slate-400">Checking...</span>;
@@ -449,36 +658,83 @@ const ActiveJobsCell = ({ jobs = [], loading = false }) => {
 
   const visibleJobs = jobs.slice(0, 2);
   const remainingCount = Math.max(0, jobs.length - visibleJobs.length);
+  const firstJob = jobs[0] || {};
+  const firstJobSummary = firstJob.equipmentTaskNames?.length
+    ? firstJob.equipmentTaskNames.slice(0, 2).join(", ")
+    : firstJob.description || firstJob.type || getJobStatusLabel(firstJob);
 
   return (
-    <div className="min-w-[220px] space-y-1.5">
-      {visibleJobs.map((job) => (
-        <Link
-          key={job.id}
-          to={`/company/jobs/detail/${job.id}`}
-          className="block rounded-md border border-blue-100 bg-blue-50 px-2.5 py-2 text-xs transition hover:border-blue-300 hover:bg-blue-100"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-bold text-blue-800">{job.internalId || "Job"}</span>
-            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 font-semibold text-blue-700">
-              {getJobStatusLabel(job)}
+    <div className="min-w-[150px] max-w-[190px] space-y-1">
+      <div className="flex items-center gap-1.5">
+        <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-800">
+          {jobs.length}
+        </span>
+        <span className="text-xs font-semibold text-slate-600">active</span>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {visibleJobs.map((job) => (
+          <Link
+            key={job.id}
+            to={`/company/jobs/detail/${job.id}`}
+            title={[job.internalId || "Job", getJobStatusLabel(job)].filter(Boolean).join(" - ")}
+            className="max-w-[78px] truncate rounded-md border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[11px] font-bold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100"
+          >
+            {job.internalId || "Job"}
+          </Link>
+        ))}
+        {remainingCount > 0 && (
+          <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold text-slate-600">
+            +{remainingCount}
+          </span>
+        )}
+      </div>
+      {firstJobSummary && (
+        <p className="truncate text-[11px] font-medium text-slate-500" title={firstJobSummary}>
+          {firstJobSummary}
+        </p>
+      )}
+    </div>
+  );
+};
+
+const RecurringStopsCell = ({ stops = [], loading = false }) => {
+  if (loading && stops.length === 0) {
+    return <span className="text-xs text-slate-400">Checking...</span>;
+  }
+
+  if (stops.length === 0) {
+    return <span className="text-sm text-slate-400">—</span>;
+  }
+
+  const visibleStops = stops.slice(0, 2);
+  const remainingCount = Math.max(0, stops.length - visibleStops.length);
+
+  return (
+    <div className="min-w-[170px] max-w-[230px] space-y-1.5">
+      <div className="space-y-1">
+        {visibleStops.map((stop) => (
+          <Link
+            key={stop.id}
+            to={`/company/recurringServiceStop/details/${stop.id}`}
+            title={[
+              recurringStopTechnicianLabel(stop),
+              recurringStopDayLabel(stop),
+              recurringStopFrequencyLabel(stop),
+            ].filter(Boolean).join(" - ")}
+            className="block rounded-md border border-emerald-100 bg-emerald-50 px-2 py-1.5 text-xs transition hover:border-emerald-300 hover:bg-emerald-100"
+          >
+            <span className="block truncate font-bold text-emerald-800">
+              {recurringStopTechnicianLabel(stop)}
             </span>
-          </div>
-          <p className="mt-1 text-slate-700">
-            {job.equipmentTaskNames?.length
-              ? job.equipmentTaskNames.slice(0, 2).join(", ")
-              : job.description || job.type || "Open work order"}
-          </p>
-          {job.equipmentTaskCount > 0 && (
-            <p className="mt-1 text-[11px] font-semibold text-slate-500">
-              {job.equipmentTaskCount} equipment task{job.equipmentTaskCount === 1 ? "" : "s"}
-            </p>
-          )}
-        </Link>
-      ))}
+            <span className="mt-0.5 block truncate text-[11px] font-semibold text-slate-600">
+              {recurringStopDayLabel(stop)} · {recurringStopFrequencyLabel(stop)}
+            </span>
+          </Link>
+        ))}
+      </div>
       {remainingCount > 0 && (
-        <p className="text-xs font-semibold text-slate-500">
-          +{remainingCount} more active job{remainingCount === 1 ? "" : "s"}
+        <p className="text-[11px] font-bold text-slate-500">
+          +{remainingCount} more schedule{remainingCount === 1 ? "" : "s"}
         </p>
       )}
     </div>
@@ -581,8 +837,11 @@ export default function EquipmentList() {
   const [equipmentList, setEquipmentList] = useState([]);
   const [filteredEquipmentList, setFilteredEquipmentList] = useState([]);
   const [serviceLocationsById, setServiceLocationsById] = useState({});
+  const [customerActiveById, setCustomerActiveById] = useState({});
   const [activeJobsByEquipmentId, setActiveJobsByEquipmentId] = useState({});
   const [loadingActiveJobs, setLoadingActiveJobs] = useState(false);
+  const [recurringStopsByEquipmentId, setRecurringStopsByEquipmentId] = useState({});
+  const [loadingRecurringStops, setLoadingRecurringStops] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState({});
   const [savingNoteIds, setSavingNoteIds] = useState({});
   const [noteErrors, setNoteErrors] = useState({});
@@ -593,6 +852,8 @@ export default function EquipmentList() {
   // ✅ NEW: routine maintenance filter (needsService)
   // "" | "true" | "false"
   const [needsServiceFilter, setNeedsServiceFilter] = useState("");
+  const [activeStatusFilter, setActiveStatusFilter] = useState(DEFAULT_ACTIVE_STATUS_FILTER);
+  const [showFilterModal, setShowFilterModal] = useState(false);
 
   const [sortBy, setSortBy] = useState("nextServiceDate");
   const [sortOrder, setSortOrder] = useState("asc");
@@ -614,11 +875,7 @@ export default function EquipmentList() {
   const [loadingJobTemplates, setLoadingJobTemplates] = useState(false);
   const [scheduleJobIntent, setScheduleJobIntent] = useState("maintenance");
   const [scheduleTemplateId, setScheduleTemplateId] = useState("");
-  const [scheduleTemplateDetails, setScheduleTemplateDetails] = useState({
-    tasks: [],
-    plannedServiceStops: [],
-    shoppingItems: [],
-  });
+  const [scheduleTemplateDetails, setScheduleTemplateDetails] = useState(scheduleTemplateDetailsEmpty);
   const [loadingScheduleTemplateDetails, setLoadingScheduleTemplateDetails] = useState(false);
   const [scheduleAdminId, setScheduleAdminId] = useState("");
   const [scheduleTechnicianId, setScheduleTechnicianId] = useState("");
@@ -682,6 +939,12 @@ export default function EquipmentList() {
     equipmentList.map((equipment) => equipment.id).filter(Boolean).sort().join("|")
   ), [equipmentList]);
 
+  const customerIdSignature = useMemo(() => (
+    [...new Set(equipmentList.map((equipment) => equipment.customerId).filter(Boolean))]
+      .sort()
+      .join("|")
+  ), [equipmentList]);
+
   const serviceLocationIdSignature = useMemo(() => (
     [...new Set(equipmentList.map((equipment) => equipment.serviceLocationId).filter(Boolean))]
       .sort()
@@ -693,6 +956,13 @@ export default function EquipmentList() {
     const canonicalTab = getEquipmentFilterPath(nextFilter);
 
     setTopFilter(nextFilter);
+
+    if (nextFilter === "maintenance") {
+      setSearchTerm("");
+      setTypeFilter("");
+      setNeedsServiceFilter("");
+      setActiveStatusFilter(DEFAULT_ACTIVE_STATUS_FILTER);
+    }
 
     if (tab !== canonicalTab) {
       navigate(`/company/equipment/${canonicalTab}`, { replace: true });
@@ -769,7 +1039,7 @@ export default function EquipmentList() {
 
   useEffect(() => {
     if (activeQuickModal !== SCHEDULE_JOB_MODAL || !recentlySelectedCompany || !scheduleTemplateId) {
-      setScheduleTemplateDetails({ tasks: [], plannedServiceStops: [], shoppingItems: [] });
+      setScheduleTemplateDetails(scheduleTemplateDetailsEmpty());
       setLoadingScheduleTemplateDetails(false);
       return;
     }
@@ -780,10 +1050,11 @@ export default function EquipmentList() {
       try {
         setLoadingScheduleTemplateDetails(true);
         const templateRef = doc(db, "companies", recentlySelectedCompany, "jobTemplates", scheduleTemplateId);
-        const [tasksSnap, stopsSnap, shoppingSnap] = await Promise.all([
+        const [tasksSnap, stopsSnap, shoppingSnap, laborLinesSnap] = await Promise.all([
           getDocs(collection(templateRef, "tasks")),
           getDocs(collection(templateRef, "plannedServiceStops")),
           getDocs(collection(templateRef, "shoppingItems")),
+          getDocs(collection(templateRef, "laborLineItems")),
         ]);
 
         if (cancelled) return;
@@ -798,11 +1069,14 @@ export default function EquipmentList() {
           shoppingItems: shoppingSnap.docs
             .map((itemDoc) => ({ id: itemDoc.data().id || itemDoc.id, ...itemDoc.data() }))
             .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
+          laborLineItems: laborLinesSnap.docs
+            .map((lineDoc) => ({ id: lineDoc.data().id || lineDoc.id, ...lineDoc.data() }))
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
         });
       } catch (error) {
         console.error("Error loading equipment schedule template details:", error);
         if (!cancelled) {
-          setScheduleTemplateDetails({ tasks: [], plannedServiceStops: [], shoppingItems: [] });
+          setScheduleTemplateDetails(scheduleTemplateDetailsEmpty());
           toast.error("Could not load template details.");
         }
       } finally {
@@ -834,6 +1108,45 @@ export default function EquipmentList() {
       return nextErrors;
     });
   }, [equipmentList]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !customerIdSignature) {
+      setCustomerActiveById({});
+      return;
+    }
+
+    let cancelled = false;
+    const customerIds = customerIdSignature.split("|").filter(Boolean);
+
+    const fetchCustomerActiveStates = async () => {
+      try {
+        const customerEntries = await Promise.all(
+          customerIds.map(async (customerId) => {
+            const customerSnap = await getDoc(
+              doc(db, "companies", recentlySelectedCompany, "customers", customerId)
+            );
+
+            if (!customerSnap.exists()) return [customerId, true];
+            const customerData = customerSnap.data() || {};
+            return [customerId, (customerData.active ?? customerData.isActive ?? true) !== false];
+          })
+        );
+
+        if (!cancelled) {
+          setCustomerActiveById(Object.fromEntries(customerEntries));
+        }
+      } catch (error) {
+        console.error("Error loading equipment customer active states:", error);
+        if (!cancelled) setCustomerActiveById({});
+      }
+    };
+
+    fetchCustomerActiveStates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [customerIdSignature, recentlySelectedCompany]);
 
   useEffect(() => {
     if (!recentlySelectedCompany || !serviceLocationIdSignature) {
@@ -904,13 +1217,7 @@ export default function EquipmentList() {
         const activeJobs = [...activeJobsById.values()];
 
         activeJobs.forEach((job) => {
-          const linkedEquipmentIds = new Set([
-            job.equipmentId,
-            ...(Array.isArray(job.equipmentIds) ? job.equipmentIds : []),
-            ...(Array.isArray(job.companyEquipmentIds) ? job.companyEquipmentIds : []),
-          ].filter(Boolean));
-
-          linkedEquipmentIds.forEach((equipmentId) => {
+          getRecordEquipmentIds(job).forEach((equipmentId) => {
             if (equipmentIds.has(equipmentId)) {
               addJobToEquipmentLookup(nextLookup, equipmentId, job);
             }
@@ -924,13 +1231,14 @@ export default function EquipmentList() {
 
             taskSnap.docs.forEach((taskDoc) => {
               const task = taskDoc.data() || {};
-              const taskEquipmentId = task.equipmentId || "";
-              if (!equipmentIds.has(taskEquipmentId)) return;
+              getRecordEquipmentIds(task).forEach((equipmentId) => {
+                if (!equipmentIds.has(equipmentId)) return;
 
-              const current = taskDetailsByEquipmentId.get(taskEquipmentId) || { count: 0, names: [] };
-              taskDetailsByEquipmentId.set(taskEquipmentId, {
-                count: current.count + 1,
-                names: [...current.names, task.name || task.description || task.type || ""].filter(Boolean),
+                const current = taskDetailsByEquipmentId.get(equipmentId) || { count: 0, names: [] };
+                taskDetailsByEquipmentId.set(equipmentId, {
+                  count: current.count + 1,
+                  names: [...current.names, task.name || task.description || task.type || ""].filter(Boolean),
+                });
               });
             });
 
@@ -961,6 +1269,108 @@ export default function EquipmentList() {
       cancelled = true;
     };
   }, [recentlySelectedCompany, equipmentIdSignature]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !equipmentIdSignature) {
+      setRecurringStopsByEquipmentId({});
+      setLoadingRecurringStops(false);
+      return;
+    }
+
+    let cancelled = false;
+    const equipmentIds = new Set(equipmentIdSignature.split("|").filter(Boolean));
+    const equipmentIdsByServiceLocationId = new Map();
+    const equipmentIdsByCustomerId = new Map();
+
+    equipmentList.forEach((equipment) => {
+      if (!equipment?.id) return;
+
+      if (equipment.serviceLocationId) {
+        const serviceLocationEquipmentIds = equipmentIdsByServiceLocationId.get(equipment.serviceLocationId) || [];
+        equipmentIdsByServiceLocationId.set(equipment.serviceLocationId, [...serviceLocationEquipmentIds, equipment.id]);
+      }
+
+      if (equipment.customerId) {
+        const customerEquipmentIds = equipmentIdsByCustomerId.get(equipment.customerId) || [];
+        equipmentIdsByCustomerId.set(equipment.customerId, [...customerEquipmentIds, equipment.id]);
+      }
+    });
+
+    const fetchRecurringStops = async () => {
+      try {
+        setLoadingRecurringStops(true);
+
+        const stopsSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "recurringServiceStop"));
+        const liveStops = stopsSnap.docs
+          .map((stopDoc) => ({ id: stopDoc.id, ref: stopDoc.ref, ...stopDoc.data() }))
+          .filter(isLiveRecurringEquipmentStop);
+        const nextLookup = {};
+
+        liveStops.forEach((stop) => {
+          const stopEquipmentIds = new Set(
+            getRecordEquipmentIds(stop).filter((equipmentId) => equipmentIds.has(equipmentId))
+          );
+          const stopServiceLocationId = stop.serviceLocationId || stop.locationId || "";
+          const stopCustomerId = stop.customerId || "";
+
+          if (stopServiceLocationId) {
+            (equipmentIdsByServiceLocationId.get(stopServiceLocationId) || []).forEach((equipmentId) => {
+              stopEquipmentIds.add(equipmentId);
+            });
+          } else if (stopCustomerId) {
+            (equipmentIdsByCustomerId.get(stopCustomerId) || []).forEach((equipmentId) => {
+              stopEquipmentIds.add(equipmentId);
+            });
+          }
+
+          stopEquipmentIds.forEach((equipmentId) => {
+            addRecurringStopToEquipmentLookup(nextLookup, equipmentId, stop);
+          });
+        });
+
+        await Promise.all(liveStops.map(async (stop) => {
+          try {
+            const taskSnap = await getDocs(collection(stop.ref, "tasks"));
+            const taskDetailsByEquipmentId = new Map();
+
+            taskSnap.docs.forEach((taskDoc) => {
+              const task = taskDoc.data() || {};
+              getRecordEquipmentIds(task).forEach((equipmentId) => {
+                if (!equipmentIds.has(equipmentId)) return;
+
+                const current = taskDetailsByEquipmentId.get(equipmentId) || { count: 0, names: [] };
+                taskDetailsByEquipmentId.set(equipmentId, {
+                  count: current.count + 1,
+                  names: [...current.names, task.name || task.description || task.type || ""].filter(Boolean),
+                });
+              });
+            });
+
+            taskDetailsByEquipmentId.forEach((taskDetails, equipmentId) => {
+              addRecurringStopToEquipmentLookup(nextLookup, equipmentId, stop, taskDetails.count, taskDetails.names);
+            });
+          } catch (error) {
+            console.error("Error loading equipment recurring stop tasks:", error);
+          }
+        }));
+
+        sortRecurringStopLookup(nextLookup);
+
+        if (!cancelled) setRecurringStopsByEquipmentId(nextLookup);
+      } catch (error) {
+        console.error("Error loading equipment recurring stops:", error);
+        if (!cancelled) setRecurringStopsByEquipmentId({});
+      } finally {
+        if (!cancelled) setLoadingRecurringStops(false);
+      }
+    };
+
+    fetchRecurringStops();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [equipmentIdSignature, equipmentList, recentlySelectedCompany]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1073,16 +1483,21 @@ export default function EquipmentList() {
         setLoadingEquipment(true);
         setEquipmentError("");
 
-        const equipmentSnap = await getDocs(
-          query(
-            collection(db, "companies", recentlySelectedCompany, "equipment"),
-            where("isActive", "==", true)
-          )
+        const [equipmentSnap, customersSnap] = await Promise.all([
+          getDocs(collection(db, "companies", recentlySelectedCompany, "equipment")),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "customers")).catch((customerError) => {
+            console.warn("Unable to load customers for equipment maintenance list:", customerError);
+            return { docs: [] };
+          }),
+        ]);
+        const equipmentData = equipmentSnap.docs.map(equipmentListRecordFromSnapshot);
+        const nextCustomerActiveById = buildCustomerActiveById(
+          customersSnap.docs.map((customerDoc) => ({ id: customerDoc.id, ...customerDoc.data() }))
         );
-        const equipmentData = equipmentSnap.docs.map((equipmentDoc) => Equipment.fromFirestore(equipmentDoc));
 
         if (cancelled) return;
 
+        setCustomerActiveById(nextCustomerActiveById);
         setEquipmentList(equipmentData);
       } catch (error) {
         console.error("Equipment Data Error!:", error);
@@ -1107,24 +1522,41 @@ export default function EquipmentList() {
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
-    const { types: uniqueTypes, topCounts: nextTopCounts } = getEquipmentListMeta(equipmentList);
+    const { types: uniqueTypes } = getEquipmentListMeta(equipmentList);
+    const countableEquipment = equipmentList.filter((equipment) => equipmentMatchesDetailFilters(equipment, {
+      activeStatusFilter,
+      customerActiveById,
+      typeFilter,
+      needsServiceFilter,
+    }));
+    const { topCounts: nextTopCounts } = getEquipmentListMeta(countableEquipment);
+    const maintenanceBoardCount = equipmentList
+      .filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById))
+      .length;
+
     setTypes(uniqueTypes);
-    setTopCounts(nextTopCounts);
-  }, [equipmentList]);
+    setTopCounts({
+      ...nextTopCounts,
+      maintenance: maintenanceBoardCount,
+    });
+  }, [activeStatusFilter, customerActiveById, equipmentList, needsServiceFilter, typeFilter]);
 
   // -----------------------------
   // ✅ Unique customer count
   // -----------------------------
   const uniqueCustomerCount = useMemo(() => {
     const ids = new Set(
-      (equipmentList || [])
+      (filteredEquipmentList || [])
         .map((e) => (e?.customerId ?? "").toString().trim())
         .filter(Boolean)
     );
     return ids.size;
-  }, [equipmentList]);
+  }, [filteredEquipmentList]);
 
-  const maintenanceDueCount = topCounts.maintenance;
+  const maintenanceBoardEquipment = useMemo(() => (
+    equipmentList.filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById))
+  ), [customerActiveById, equipmentList]);
+  const maintenanceDueCount = maintenanceBoardEquipment.length;
   const quickDefaultsToNeedsService = useMemo(() => equipmentDefaultsToNeedsService({
     name: quickName,
     type: quickType,
@@ -1193,6 +1625,10 @@ export default function EquipmentList() {
   ), [scheduleTechnicianId, scheduleTechnicianOptions]);
 
   const scheduleGeneratedPriceCents = useMemo(() => {
+    const laborLinePrice = scheduleTemplateDetails.laborLineItems.reduce(
+      (total, line) => total + laborLineTotalPriceCents(line),
+      0
+    );
     const taskPrice = scheduleTemplateDetails.tasks.reduce(
       (total, task) => total + getTaskBillingLaborPriceCents(task),
       0
@@ -1206,7 +1642,7 @@ export default function EquipmentList() {
       0
     );
 
-    return taskPrice + stopPrice + materialPrice;
+    return (scheduleTemplateDetails.laborLineItems.length ? laborLinePrice : taskPrice + stopPrice) + materialPrice;
   }, [scheduleTemplateDetails]);
 
   const selectedQuickEquipmentServiceLocation = useMemo(() => (
@@ -1216,8 +1652,9 @@ export default function EquipmentList() {
   ), [selectedQuickEquipment, serviceLocationsById]);
 
   const selectedQuickEquipmentServiceAddress = serviceLocationDisplayAddress(selectedQuickEquipmentServiceLocation) ||
-    selectedQuickEquipment?.serviceLocationAddress ||
-    selectedQuickEquipment?.locationAddress ||
+    formatAddressLine(selectedQuickEquipment?.serviceLocationAddress) ||
+    formatAddressLine(selectedQuickEquipment?.locationAddress) ||
+    formatAddressLine(selectedQuickEquipment?.address) ||
     "";
 
   const scheduleEquipmentIsMissingLocation =
@@ -1269,8 +1706,9 @@ export default function EquipmentList() {
 
   const getEquipmentServiceAddress = useCallback((equipment) => (
     serviceLocationDisplayAddress(getEquipmentServiceLocation(equipment)) ||
-    equipment?.serviceLocationAddress ||
-    equipment?.locationAddress ||
+    formatAddressLine(equipment?.serviceLocationAddress) ||
+    formatAddressLine(equipment?.locationAddress) ||
+    formatAddressLine(equipment?.address) ||
     ""
   ), [getEquipmentServiceLocation]);
 
@@ -1278,18 +1716,34 @@ export default function EquipmentList() {
     activeJobsByEquipmentId[equipment?.id] || []
   ), [activeJobsByEquipmentId]);
 
+  const getEquipmentRecurringStops = useCallback((equipment) => (
+    recurringStopsByEquipmentId[equipment?.id] || []
+  ), [recurringStopsByEquipmentId]);
+
   const getSortValue = useCallback((equipment, field) => {
     if (field === "serviceAddress") return getEquipmentServiceAddress(equipment);
     if (field === "activeJobs") return getEquipmentActiveJobs(equipment).length;
+    if (field === "recurringServiceStops") return getEquipmentRecurringStops(equipment).length;
     return equipment?.[field];
-  }, [getEquipmentActiveJobs, getEquipmentServiceAddress]);
+  }, [getEquipmentActiveJobs, getEquipmentRecurringStops, getEquipmentServiceAddress]);
 
   useEffect(() => {
-    let filtered = [...equipmentList];
+    let filtered = topFilter === "maintenance"
+      ? [...maintenanceBoardEquipment]
+      : equipmentList.filter((equipment) => equipmentMatchesDetailFilters(equipment, {
+        activeStatusFilter,
+        customerActiveById,
+        typeFilter,
+        needsServiceFilter,
+      }));
 
-    // Top filter
     if (topFilter === "maintenance") {
-      filtered = filtered.filter(isNeedsMaintenance);
+      filtered = filtered.filter((equipment) => equipmentMatchesDetailFilters(equipment, {
+        activeStatusFilter: DEFAULT_ACTIVE_STATUS_FILTER,
+        customerActiveById,
+        typeFilter,
+        needsServiceFilter,
+      }));
     } else if (topFilter === "repair") {
       filtered = filtered.filter(isNeedsRepair);
     } else if (topFilter === "nonOperational") {
@@ -1308,6 +1762,7 @@ export default function EquipmentList() {
           item.notes,
           item.status,
           getEquipmentServiceAddress(item),
+          ...serviceLocationSearchValues(getEquipmentServiceLocation(item), item),
           ...getEquipmentActiveJobs(item).flatMap((job) => [
             job.internalId,
             job.description,
@@ -1316,23 +1771,16 @@ export default function EquipmentList() {
             job.billingStatus,
             ...(job.equipmentTaskNames || []),
           ]),
+          ...getEquipmentRecurringStops(item).flatMap((stop) => [
+            stop.internalId,
+            stop.type,
+            stop.frequency,
+            stop.day,
+            stop.tech,
+            ...(stop.equipmentTaskNames || []),
+          ]),
         ].some((value) => String(value || "").toLowerCase().includes(s))
       );
-    }
-
-    // Type dropdown
-    if (typeFilter) {
-      filtered = filtered.filter((item) => item?.type === typeFilter);
-    }
-
-    // ✅ NEW: Needs Service filter
-    // "" => all
-    // "true" => only eq.needsService === true
-    // "false" => only eq.needsService === false
-    if (needsServiceFilter === "true") {
-      filtered = filtered.filter((item) => item?.needsService === true);
-    } else if (needsServiceFilter === "false") {
-      filtered = filtered.filter((item) => item?.needsService === false);
     }
 
     // Sort
@@ -1368,10 +1816,15 @@ export default function EquipmentList() {
 
     setFilteredEquipmentList(filtered);
   }, [
+    activeStatusFilter,
+    customerActiveById,
     equipmentList,
     getEquipmentActiveJobs,
+    getEquipmentRecurringStops,
     getEquipmentServiceAddress,
+    getEquipmentServiceLocation,
     getSortValue,
+    maintenanceBoardEquipment,
     needsServiceFilter,
     searchTerm,
     sortBy,
@@ -1394,6 +1847,80 @@ export default function EquipmentList() {
       setSortBy("nextServiceDate");
       setSortOrder("asc");
     }
+  };
+
+  const activeStatusFilterLabel = ACTIVE_STATUS_FILTER_LABELS[activeStatusFilter] || ACTIVE_STATUS_FILTER_LABELS.active;
+  const routineServiceFilterLabel = needsServiceFilter === "true"
+    ? "Needs Service: Yes"
+    : needsServiceFilter === "false"
+      ? "Needs Service: No"
+      : "Needs Service: All";
+  const topFilterLabel = topFilter === "all"
+    ? "All equipment"
+    : topFilter === "maintenance"
+      ? "Needs maintenance"
+      : topFilter === "repair"
+        ? "Needs repair"
+        : "Non-operational";
+  const appliedDetailFilterCount = [
+    typeFilter,
+    needsServiceFilter,
+    activeStatusFilter !== DEFAULT_ACTIVE_STATUS_FILTER ? activeStatusFilter : "",
+  ].filter(Boolean).length;
+  const maintenanceTableFiltersActive = Boolean(typeFilter || needsServiceFilter || searchTerm.trim());
+  const maintenanceEmptyAfterFilters =
+    topFilter === "maintenance" &&
+    !loadingEquipment &&
+    maintenanceDueCount > 0 &&
+    filteredEquipmentList.length === 0 &&
+    maintenanceTableFiltersActive;
+  const maintenanceTableMismatch =
+    topFilter === "maintenance" &&
+    !loadingEquipment &&
+    maintenanceDueCount > 0 &&
+    filteredEquipmentList.length === 0 &&
+    !maintenanceTableFiltersActive;
+  const maintenanceTroubleshooting = useMemo(() => ({
+    equipmentLoaded: equipmentList.length,
+    dueByOperationsRule: maintenanceDueCount,
+    shownInTable: filteredEquipmentList.length,
+    activeStatusFilter,
+    typeFilter: typeFilter || "All",
+    needsServiceFilter: needsServiceFilter || "All",
+    searchTerm: searchTerm || "None",
+  }), [
+    activeStatusFilter,
+    equipmentList.length,
+    filteredEquipmentList.length,
+    maintenanceDueCount,
+    needsServiceFilter,
+    searchTerm,
+    typeFilter,
+  ]);
+
+  useEffect(() => {
+    if (!maintenanceTableMismatch) return;
+
+    console.warn("Equipment maintenance page mismatch", {
+      ...maintenanceTroubleshooting,
+      dueEquipmentIds: maintenanceBoardEquipment.map((equipment) => equipment.id),
+      dueEquipmentPreview: maintenanceBoardEquipment.slice(0, 10).map((equipment) => ({
+        id: equipment.id,
+        name: equipment.name || equipment.type || equipment.model || "",
+        customerName: equipment.customerName || "",
+        status: equipment.status || equipment.operationStatus || equipment.equipmentStatus || "",
+        needsService: equipment.needsService,
+        nextServiceDate: equipment.nextServiceDate,
+        isActive: equipment.isActive,
+        active: equipment.active,
+      })),
+    });
+  }, [maintenanceBoardEquipment, maintenanceTableMismatch, maintenanceTroubleshooting]);
+
+  const resetDetailFilters = () => {
+    setTypeFilter("");
+    setNeedsServiceFilter("");
+    setActiveStatusFilter(DEFAULT_ACTIVE_STATUS_FILTER);
   };
 
   const getStatusClass = (status, maintenanceFlag) => {
@@ -1793,47 +2320,92 @@ export default function EquipmentList() {
       : null;
   };
 
-  const buildScheduleLineItems = ({ planId, normalizedTasks, normalizedPlannedStops, normalizedShoppingItems }) => ([
-    ...normalizedPlannedStops.map((stop) => {
-      const amount = Number(stop.plannedLaborCostCents || 0);
-      return {
-        id: `${planId}_${stop.id}`,
-        sourceType: "serviceStopType",
-        sourceId: stop.serviceStopTypeId || stop.id,
-        salesItemType: "service",
-        billingBehavior: "oneTime",
-        type: "Planned Stop",
-        name: stop.name || "Planned Service Stop",
-        description: stop.description || stop.plannedLaborNotes || "",
-        quantity: 1,
-        unitAmountCents: amount,
-        totalAmountCents: amount,
-        amount,
-        taxable: false,
-        displayAmount: moneyFromCents(amount),
-      };
-    }),
-    ...normalizedTasks.map((task) => {
-      const amount = getTaskBillingLaborPriceCents(task);
-      return {
-        id: `${planId}_${task.id}`,
-        sourceType: "task",
-        sourceId: task.id,
-        salesItemType: "labor",
-        billingBehavior: "oneTime",
-        type: "Task",
-        name: task.name || "Task",
-        description: task.description || task.type || "",
-        quantity: 1,
-        unitAmountCents: amount,
-        totalAmountCents: amount,
-        amount,
-        billingLaborPriceCents: amount,
-        internalLaborCostCents: Number(task.contractedRate || 0),
-        taxable: false,
-        displayAmount: moneyFromCents(amount),
-      };
-    }),
+  const buildScheduleLineItems = ({
+    planId,
+    normalizedTasks,
+    normalizedPlannedStops,
+    normalizedShoppingItems,
+    normalizedLaborLineItems = [],
+  }) => ([
+    ...(normalizedLaborLineItems.length
+      ? normalizedLaborLineItems.map((line, index) => {
+        const amount = Number(line.totalPriceCents || 0);
+        const quantity = Number(line.quantity || 1) || 1;
+        const catalogItemId = laborLineCatalogItemId(line);
+        const salesItemType = line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor);
+        const lineType = salesItemType === SalesCatalogItemType.labor ? "Labor" : "Service";
+        return {
+          id: `${planId}_${line.id}`,
+          catalogItemId,
+          salesCatalogItemId: catalogItemId,
+          sourceType: line.sourceType || SalesCatalogSourceType.manual,
+          sourceId: line.sourceId || catalogItemId || line.id,
+          salesItemType,
+          billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+          type: line.type || lineType,
+          name: line.name || `Service ${index + 1}`,
+          description: [
+            line.description || "",
+            line.taskIds?.length ? `${line.taskIds.length} task${line.taskIds.length === 1 ? "" : "s"}` : "",
+            line.plannedServiceStopIds?.length ? `${line.plannedServiceStopIds.length} planned stop${line.plannedServiceStopIds.length === 1 ? "" : "s"}` : "",
+          ].filter(Boolean).join(" - "),
+          quantity,
+          unitAmountCents: Number(line.unitPriceCents || 0),
+          totalAmountCents: amount,
+          amount,
+          billingLaborPriceCents: amount,
+          internalLaborCostCents: Number(line.internalCostCents || 0),
+          taskIds: line.taskIds || [],
+          plannedServiceStopIds: line.plannedServiceStopIds || [],
+          taxable: Boolean(line.taxable),
+          stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+          stripeProductId: line.stripeProductId || "",
+          stripePriceId: line.stripePriceId || "",
+          displayAmount: moneyFromCents(amount),
+        };
+      })
+      : [
+        ...normalizedPlannedStops.map((stop) => {
+          const amount = Number(stop.plannedLaborCostCents || 0);
+          return {
+            id: `${planId}_${stop.id}`,
+            sourceType: SalesCatalogSourceType.serviceStopType,
+            sourceId: stop.serviceStopTypeId || stop.id,
+            salesItemType: SalesCatalogItemType.service,
+            billingBehavior: SalesCatalogBillingBehavior.oneTime,
+            type: "Planned Stop",
+            name: stop.name || "Planned Service Stop",
+            description: stop.description || stop.plannedLaborNotes || "",
+            quantity: 1,
+            unitAmountCents: amount,
+            totalAmountCents: amount,
+            amount,
+            taxable: false,
+            displayAmount: moneyFromCents(amount),
+          };
+        }),
+        ...normalizedTasks.map((task) => {
+          const amount = getTaskBillingLaborPriceCents(task);
+          return {
+            id: `${planId}_${task.id}`,
+            sourceType: SalesCatalogSourceType.task,
+            sourceId: task.id,
+            salesItemType: SalesCatalogItemType.labor,
+            billingBehavior: SalesCatalogBillingBehavior.oneTime,
+            type: "Task",
+            name: task.name || "Task",
+            description: task.description || task.type || "",
+            quantity: 1,
+            unitAmountCents: amount,
+            totalAmountCents: amount,
+            amount,
+            billingLaborPriceCents: amount,
+            internalLaborCostCents: Number(task.contractedRate || 0),
+            taxable: false,
+            displayAmount: moneyFromCents(amount),
+          };
+        }),
+      ]),
     ...normalizedShoppingItems.map((item) => {
       const quantity = quantityNumber(item.quantity) || 1;
       const amount = plannedMaterialTotalPriceCents(item);
@@ -1926,7 +2498,7 @@ export default function EquipmentList() {
         sourceTemplateId: selectedScheduleTemplate.id,
         sourceTemplateTaskId: task.id || "",
         name: task.name || task.description || "Task",
-        type: task.type || scheduleJobIntentConfig.jobType || "General",
+        type: canonicalJobTaskType(task.type || scheduleJobIntentConfig.jobType || "General"),
         description: task.description || "",
         contractedRate: Number(task.contractedRate || 0),
         billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
@@ -2011,6 +2583,62 @@ export default function EquipmentList() {
           createdAt: nowTimestamp,
           createdByUserId: createdByUserId || "",
         }];
+      const plannedStopIdMap = normalizedPlannedStops.reduce((map, stop) => ({
+        ...map,
+        [stop.sourceTemplatePlannedStopId || stop.id]: stop.id,
+      }), {});
+      const normalizedLaborLineItems = scheduleTemplateDetails.laborLineItems.map((line, index) => {
+        const quantity = Math.max(Number(line.quantity || line.defaultQuantity || 1) || 1, 1);
+        const sourceTaskIds = getLaborLineTaskIds(line);
+        const sourcePlannedStopIds = getLaborLinePlannedStopIds(line);
+        const taskIds = sourceTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean);
+        const plannedServiceStopIds = sourcePlannedStopIds.map((stopId) => plannedStopIdMap[stopId]).filter(Boolean);
+        const catalogItemId = laborLineCatalogItemId(line);
+        const laborLineId = `comp_job_labor_line_${uuidv4()}`;
+
+        return {
+          id: laborLineId,
+          laborLineId,
+          companyId: recentlySelectedCompany,
+          jobId,
+          sourcePlanId: planId,
+          sourceSolutionId: planId,
+          sourceTemplateId: selectedScheduleTemplate.id,
+          sourceTemplateLaborLineId: line.id || "",
+          name: line.name || line.title || `Service ${index + 1}`,
+          description: line.description || "",
+          quantity,
+          unitPriceCents: laborLineUnitPriceCents(line),
+          totalPriceCents: laborLineTotalPriceCents(line),
+          internalCostCents: laborLineInternalCostCents(line),
+          unitCostCents: laborLineInternalCostCents(line),
+          taskIds,
+          laborLineTaskIds: taskIds,
+          plannedServiceStopIds,
+          laborLinePlannedServiceStopIds: plannedServiceStopIds,
+          sourceTemplateTaskIds: sourceTaskIds,
+          sourceTemplatePlannedServiceStopIds: sourcePlannedStopIds,
+          salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
+          billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+          sourceType: line.sourceType || SalesCatalogSourceType.manual,
+          sourceId: line.sourceId || catalogItemId || "",
+          catalogItemId,
+          salesCatalogItemId: catalogItemId,
+          sourceCatalogItemId: line.sourceCatalogItemId || catalogItemId,
+          catalogItemName: line.catalogItemName || line.sourceCatalogItemName || line.name || "",
+          stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+          stripeProductId: line.stripeProductId || "",
+          stripePriceId: line.stripePriceId || "",
+          taxable: Boolean(line.taxable),
+          sortOrder: Number(line.sortOrder ?? index),
+          createdAt: nowTimestamp,
+          createdAtMillis: nowMillis,
+          createdByUserId: createdByUserId || "",
+          createdByUserName: createdByUserName || "",
+          updatedAt: nowTimestamp,
+          updatedAtMillis: nowMillis,
+        };
+      });
       const normalizedShoppingItems = scheduleTemplateDetails.shoppingItems.map((item, index) => {
         const quantity = item.quantity !== undefined && item.quantity !== null ? String(item.quantity) : "1";
 
@@ -2028,7 +2656,7 @@ export default function EquipmentList() {
           sourceTemplateShoppingItemId: item.id || "",
           category: "Job",
           subCategory: item.subCategory || "Custom",
-          status: "Needs Customer Approval",
+          status: "Need to Purchase",
           purchaserId: createdByUserId || "",
           purchaserName: createdByUserName || "",
           genericItemId: item.genericItemId || "",
@@ -2057,11 +2685,18 @@ export default function EquipmentList() {
         normalizedTasks,
         normalizedPlannedStops,
         normalizedShoppingItems,
+        normalizedLaborLineItems,
       });
       const subtotalAmountCents = lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
       const totalAmountCents = subtotalAmountCents || scheduleGeneratedPriceCents;
-      const plannedLaborCostCents = normalizedTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0) +
-        normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+      const plannedLaborCostCents = normalizedLaborLineItems.length
+        ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.internalCostCents || 0), 0)
+        : normalizedTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0) +
+          normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+      const plannedLaborPriceCents = normalizedLaborLineItems.length
+        ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.totalPriceCents || 0), 0)
+        : normalizedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0) +
+          normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
       const materialCostCents = normalizedShoppingItems.reduce(
         (total, item) => total + plannedMaterialTotalCostCents(item),
         0
@@ -2075,7 +2710,8 @@ export default function EquipmentList() {
       const profitMarginPercent = totalAmountCents > 0
         ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
         : 0;
-      const issuePriorityLabel = getIssuePriorityLabel(DEFAULT_JOB_PLAN_TIER);
+      const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedScheduleTemplate);
+      const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
       const planTierLabel = getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER);
       const planName = selectedScheduleTemplate.name ? `${selectedScheduleTemplate.name} Plan` : `${scheduleJobIntentConfig.label} Plan`;
 
@@ -2104,25 +2740,27 @@ export default function EquipmentList() {
         solutionTierLabel: planTierLabel,
         recommendationRank: DEFAULT_JOB_PLAN_TIER,
         recommendationRankLabel: planTierLabel,
-        issuePriorityLevel: DEFAULT_JOB_PLAN_TIER,
+        issuePriorityLevel,
         issuePriorityLabel,
         isActivePlan: true,
         isAccepted: false,
         rateAmountCents: totalAmountCents,
-        totalAmountCents,
-        subtotalAmountCents,
-        laborCostCents: plannedLaborCostCents,
-        plannedLaborCostCents,
-        materialCostCents,
-        materialPriceCents,
-        internalCostCents,
+	        totalAmountCents,
+	        subtotalAmountCents,
+	        laborCostCents: plannedLaborCostCents,
+	        plannedLaborCostCents,
+	        plannedLaborPriceCents,
+	        materialCostCents,
+	        materialPriceCents,
+	        internalCostCents,
         projectedProfitCents,
         profitMarginPercent,
-        costSummary: {
-          plannedLaborCostCents,
-          plannedMaterialCostCents: materialCostCents,
-          plannedMaterialPriceCents: materialPriceCents,
-          internalCostCents,
+	        costSummary: {
+	          plannedLaborCostCents,
+	          plannedLaborPriceCents,
+	          plannedMaterialCostCents: materialCostCents,
+	          plannedMaterialPriceCents: materialPriceCents,
+	          internalCostCents,
         },
         billingSummary: {
           pricingSource: "templateGeneratedPrice",
@@ -2144,19 +2782,32 @@ export default function EquipmentList() {
             plannedLaborCostCents: Number(task.contractedRate || 0),
             billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
           })),
-          plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
-            id: stop.id,
-            sortOrder: Number(stop.sortOrder ?? index),
-            name: stop.name || `Visit ${index + 1}`,
+	          plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
+	            id: stop.id,
+	            sortOrder: Number(stop.sortOrder ?? index),
+	            name: stop.name || `Visit ${index + 1}`,
             serviceStopTypeId: stop.serviceStopTypeId || "",
             serviceStopTypeName: stop.serviceStopTypeName || "",
             estimatedMinutes: Number(stop.estimatedMinutes || 0),
-            plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
-            taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
-          })),
-          materialSummaries: normalizedShoppingItems.map((item, index) => ({
-            id: item.id,
-            sortOrder: Number(item.sortOrder ?? index),
+	            plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
+	            taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
+	          })),
+	          laborLineSummaries: normalizedLaborLineItems.map((line, index) => ({
+	            id: line.id,
+	            sortOrder: Number(line.sortOrder ?? index),
+	            name: line.name || `Service ${index + 1}`,
+	            description: line.description || "",
+	            quantity: Number(line.quantity || 1),
+	            unitPriceCents: Number(line.unitPriceCents || 0),
+	            totalPriceCents: Number(line.totalPriceCents || 0),
+	            internalCostCents: Number(line.internalCostCents || 0),
+	            catalogItemId: laborLineCatalogItemId(line),
+	            taskIds: Array.isArray(line.taskIds) ? line.taskIds : [],
+	            plannedServiceStopIds: Array.isArray(line.plannedServiceStopIds) ? line.plannedServiceStopIds : [],
+	          })),
+	          materialSummaries: normalizedShoppingItems.map((item, index) => ({
+	            id: item.id,
+	            sortOrder: Number(item.sortOrder ?? index),
             name: item.name || `Material ${index + 1}`,
             description: item.description || "",
             quantity: item.quantity || "1",
@@ -2164,20 +2815,24 @@ export default function EquipmentList() {
             plannedTotalPriceCents: plannedMaterialTotalPriceCents(item),
           })),
           counts: {
-            tasks: normalizedTasks.length,
-            plannedServiceStops: normalizedPlannedStops.length,
-            shoppingItems: normalizedShoppingItems.length,
-            lineItems: lineItems.length,
-          },
-        },
-        tasks: normalizedTasks,
-        plannedServiceStops: normalizedPlannedStops,
-        shoppingItems: normalizedShoppingItems,
-        lineItems,
-        estimateLineItems: lineItems,
-        taskCount: normalizedTasks.length,
-        plannedStopCount: normalizedPlannedStops.length,
-        materialCount: normalizedShoppingItems.length,
+	            tasks: normalizedTasks.length,
+	            plannedServiceStops: normalizedPlannedStops.length,
+	            shoppingItems: normalizedShoppingItems.length,
+	            laborLineItems: normalizedLaborLineItems.length,
+	            lineItems: lineItems.length,
+	          },
+	        },
+	        tasks: normalizedTasks,
+	        plannedServiceStops: normalizedPlannedStops,
+	        shoppingItems: normalizedShoppingItems,
+	        laborLineItems: normalizedLaborLineItems,
+	        estimateLaborLineItems: normalizedLaborLineItems,
+	        lineItems,
+	        estimateLineItems: lineItems,
+	        taskCount: normalizedTasks.length,
+	        plannedStopCount: normalizedPlannedStops.length,
+	        materialCount: normalizedShoppingItems.length,
+	        laborLineCount: normalizedLaborLineItems.length,
         createdAt: nowTimestamp,
         createdAtMillis: nowMillis,
         createdByUserId,
@@ -2197,11 +2852,11 @@ export default function EquipmentList() {
         description,
         operationStatus: "Scheduled",
         billingStatus: "Draft",
-        issuePriorityLevel: DEFAULT_JOB_PLAN_TIER,
+        issuePriorityLevel,
         issuePriorityLabel,
-        priorityLevel: DEFAULT_JOB_PLAN_TIER,
+        priorityLevel: issuePriorityLevel,
         priorityLabel: issuePriorityLabel,
-        solutionTier: DEFAULT_JOB_PLAN_TIER,
+        solutionTier: issuePriorityLevel,
         solutionTierLabel: issuePriorityLabel,
         activePlanId: planId,
         activePlanTier: DEFAULT_JOB_PLAN_TIER,
@@ -2222,10 +2877,22 @@ export default function EquipmentList() {
         adminId,
         adminName,
         adminAssignmentSource: "Equipment schedule popup",
-        purchasedItemsIds: [],
-        rate: totalAmountCents,
-        laborCost: plannedLaborCostCents,
-        otherCompany: false,
+	        purchasedItemsIds: [],
+	        rate: totalAmountCents,
+	        laborCost: plannedLaborCostCents,
+	        plannedLaborPriceCents,
+	        plannedMaterialCostCents: materialCostCents,
+	        plannedMaterialPriceCents: materialPriceCents,
+	        estimateSubtotalCents: subtotalAmountCents,
+	        estimateTotalCents: totalAmountCents,
+	        estimateLineItems: lineItems,
+	        laborLineItems: normalizedLaborLineItems,
+	        estimateLaborLineItems: normalizedLaborLineItems,
+	        laborLineCount: normalizedLaborLineItems.length,
+	        taskCount: normalizedTasks.length,
+	        plannedStopCount: normalizedPlannedStops.length,
+	        materialCount: normalizedShoppingItems.length,
+	        otherCompany: false,
         receivedLaborContractId: "",
         receiverId: "",
         senderId: recentlySelectedCompany,
@@ -2265,13 +2932,17 @@ export default function EquipmentList() {
         await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops", stop.id), stop);
       }
 
-      for (const task of normalizedTasks) {
-        await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task);
-      }
+	      for (const task of normalizedTasks) {
+	        await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task);
+	      }
 
-      for (const item of normalizedShoppingItems) {
-        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item);
-      }
+	      for (const line of normalizedLaborLineItems) {
+	        await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "laborLineItems", line.id), line);
+	      }
+
+	      for (const item of normalizedShoppingItems) {
+	        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item);
+	      }
 
       const selectedPlannedStop = normalizedPlannedStops[0] || null;
       const serviceStopId = `comp_ss_${uuidv4()}`;
@@ -2441,8 +3112,9 @@ export default function EquipmentList() {
           { field: "serviceLocationName", label: "Service Location", before: "-", after: serviceLocationName || "-" },
           { field: "equipmentName", label: "Equipment", before: "-", after: getEquipmentDisplayName(selectedQuickEquipment) },
           { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
-          { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(totalAmountCents) },
-        ],
+	          { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(totalAmountCents) },
+	          { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
+	        ],
         metadata: {
           sourceTemplateId: selectedScheduleTemplate.id,
           sourceTemplateName: selectedScheduleTemplate.name || "",
@@ -2541,6 +3213,10 @@ export default function EquipmentList() {
         lastServiceDate: maintenanceDateValue,
         nextServiceDate,
       };
+      const currentMaintenanceStatus = normalizeEquipmentStatus(selectedQuickEquipment?.status);
+      if (["needsmaintenance", "maintenance", "needsservice"].includes(currentMaintenanceStatus)) {
+        updates.status = EQUIPMENT_STATUS.OPERATIONAL;
+      }
 
       await updateDoc(equipmentRef, updates);
       updateEquipmentInLists(selectedQuickEquipment.id, updates);
@@ -2612,7 +3288,12 @@ export default function EquipmentList() {
         jobId: "",
         partIds,
       });
+      const updates = {
+        status: EQUIPMENT_STATUS.OPERATIONAL,
+      };
 
+      await updateDoc(equipmentRef, updates);
+      updateEquipmentInLists(selectedQuickEquipment.id, updates);
       closeQuickModal();
       toast.success("Repair record saved");
     } catch (error) {
@@ -2686,6 +3367,13 @@ export default function EquipmentList() {
               getJobStatusLabel(job),
             ].filter(Boolean).join(" - "))
             .join("\n"),
+          RSS: getEquipmentRecurringStops(eq)
+            .map((stop) => [
+              recurringStopTechnicianLabel(stop),
+              recurringStopDayLabel(stop),
+              recurringStopFrequencyLabel(stop),
+            ].filter(Boolean).join(" - "))
+            .join("\n"),
           "Needs Service (bool)": eq?.needsService ?? "",
           "Last Service Date": eq?.needsService && eq?.lastServiceDate ? format(eq.lastServiceDate, "yyyy-MM-dd") : "",
           "Next Service Date": eq?.needsService && eq?.nextServiceDate ? format(eq.nextServiceDate, "yyyy-MM-dd") : "",
@@ -2723,7 +3411,7 @@ export default function EquipmentList() {
                 Customers shown: {uniqueCustomerCount}
               </span>
               <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                Equipment shown: {equipmentList.length}
+                Equipment shown: {filteredEquipmentList.length}
               </span>
             </div>
           </div>
@@ -2784,6 +3472,40 @@ export default function EquipmentList() {
           </div>
         )}
 
+        {(maintenanceEmptyAfterFilters || maintenanceTableMismatch) && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900" role="alert">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="font-bold">Maintenance list troubleshooting</p>
+                <p className="mt-1">
+                  {maintenanceEmptyAfterFilters
+                    ? "Due equipment was loaded, but your current search or filters hide it from the table."
+                    : "Due equipment was loaded, but the table is empty. Try resetting filters or refreshing the page."}
+                </p>
+                <div className="mt-3 grid gap-2 text-xs font-semibold sm:grid-cols-2 lg:grid-cols-4">
+                  <span>Loaded: {maintenanceTroubleshooting.equipmentLoaded}</span>
+                  <span>Due: {maintenanceTroubleshooting.dueByOperationsRule}</span>
+                  <span>Shown: {maintenanceTroubleshooting.shownInTable}</span>
+                  <span>Search: {maintenanceTroubleshooting.searchTerm}</span>
+                  <span>Active: {maintenanceTroubleshooting.activeStatusFilter}</span>
+                  <span>Type: {maintenanceTroubleshooting.typeFilter}</span>
+                  <span>Needs Service: {maintenanceTroubleshooting.needsServiceFilter}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  resetDetailFilters();
+                  setSearchTerm("");
+                }}
+                className="inline-flex shrink-0 items-center justify-center rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 transition hover:bg-amber-100"
+              >
+                Reset Filters
+              </button>
+            </div>
+          </div>
+        )}
+
         {equipmentError && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">
             {equipmentError}
@@ -2793,44 +3515,29 @@ export default function EquipmentList() {
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           {/* Filters */}
           <div className="border-b border-slate-200 bg-white p-5">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center">
               <input
                 onChange={(e) => setSearchTerm(e.target.value)}
                 value={searchTerm}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 md:col-span-1"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 type="text"
                 placeholder="Search customer, address, job, make, model, status, notes..."
               />
 
-              <select
-                onChange={(e) => setTypeFilter(e.target.value)}
-                value={typeFilter}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              <button
+                type="button"
+                onClick={() => setShowFilterModal(true)}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
               >
-                <option value="">All Types</option>
-                {types.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-
-              {/* ✅ Replaces the date box */}
-              <select
-                onChange={(e) => setNeedsServiceFilter(e.target.value)}
-                value={needsServiceFilter}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              >
-                <option value="">Routine Service (All)</option>
-                <option value="true">Routine Service: Yes</option>
-                <option value="false">Routine Service: No</option>
-              </select>
+                <AdjustmentsHorizontalIcon className="h-5 w-5" />
+                <span>Filters{appliedDetailFilterCount ? ` (${appliedDetailFilterCount})` : ""}</span>
+              </button>
             </div>
           </div>
 
           <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
             <div>Showing {filteredEquipmentList.length} of {equipmentList.length} item{equipmentList.length === 1 ? "" : "s"}</div>
-            <div>{topFilter === "all" ? "All equipment" : topFilter === "maintenance" ? "Needs maintenance" : topFilter === "repair" ? "Needs repair" : "Non-operational"} - {typeFilter || "All types"}</div>
+            <div>{[topFilterLabel, activeStatusFilterLabel, typeFilter || "All types", routineServiceFilterLabel].join(" - ")}</div>
           </div>
 
           {/* Table */}
@@ -2856,7 +3563,7 @@ export default function EquipmentList() {
               <tbody className="divide-y divide-slate-200">
                 {loadingEquipment && (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center text-sm text-slate-500">
+                    <td colSpan={EQUIPMENT_TABLE_COLUMN_COUNT} className="px-6 py-12 text-center text-sm text-slate-500">
                       Loading equipment...
                     </td>
                   </tr>
@@ -2869,6 +3576,7 @@ export default function EquipmentList() {
                   const serviceLocation = getEquipmentServiceLocation(equipment);
                   const serviceAddress = getEquipmentServiceAddress(equipment);
                   const activeJobs = getEquipmentActiveJobs(equipment);
+                  const recurringStops = getEquipmentRecurringStops(equipment);
                   const noteDraft = noteDrafts[equipment.id] ?? equipment.notes ?? "";
                   const noteDirty = noteDraft !== (equipment.notes || "");
                   const noteSaving = !!savingNoteIds[equipment.id];
@@ -2934,6 +3642,10 @@ export default function EquipmentList() {
                         <ActiveJobsCell jobs={activeJobs} loading={loadingActiveJobs} />
                       </td>
 
+                      <td className="px-5 py-3 text-sm text-slate-700">
+                        <RecurringStopsCell stops={recurringStops} loading={loadingRecurringStops} />
+                      </td>
+
                       <td className="min-w-[260px] px-5 py-3 text-sm text-slate-700">
                         <textarea
                           value={noteDraft}
@@ -2994,7 +3706,7 @@ export default function EquipmentList() {
 
                 {!loadingEquipment && filteredEquipmentList.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center text-sm text-slate-500">
+                    <td colSpan={EQUIPMENT_TABLE_COLUMN_COUNT} className="px-6 py-12 text-center text-sm text-slate-500">
                       No equipment found for the selected filters.
                     </td>
                   </tr>
@@ -3069,6 +3781,73 @@ export default function EquipmentList() {
               )}
             </div>
           </>
+        )}
+
+        {showFilterModal && (
+          <ModalShell
+            title="Equipment Filters"
+            description="Choose which equipment appears on the board."
+            onClose={() => setShowFilterModal(false)}
+            footer={
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={resetDetailFilters}
+                  className={modalSecondaryButton}
+                  type="button"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={() => setShowFilterModal(false)}
+                  className={modalPrimaryButton}
+                  type="button"
+                >
+                  Done
+                </button>
+              </div>
+            }
+          >
+            <div className="grid grid-cols-1 gap-4">
+              <Field label="Equipment Status">
+                <select
+                  onChange={(event) => setActiveStatusFilter(event.target.value)}
+                  value={activeStatusFilter}
+                  className={inputBase}
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                  <option value="both">Both</option>
+                </select>
+              </Field>
+
+              <Field label="Type">
+                <select
+                  onChange={(event) => setTypeFilter(event.target.value)}
+                  value={typeFilter}
+                  className={inputBase}
+                >
+                  <option value="">All Types</option>
+                  {types.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Needs Service">
+                <select
+                  onChange={(event) => setNeedsServiceFilter(event.target.value)}
+                  value={needsServiceFilter}
+                  className={inputBase}
+                >
+                  <option value="">All</option>
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </Field>
+            </div>
+          </ModalShell>
         )}
 
         {activeQuickModal === "makeModel" && selectedQuickEquipment && (
@@ -3435,10 +4214,14 @@ export default function EquipmentList() {
               </Field>
 
               {selectedScheduleTemplate && (
-                <div className="grid gap-3 text-sm sm:grid-cols-4">
+                <div className="grid gap-3 text-sm sm:grid-cols-5">
                   <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
                     <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
                     <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.tasks.length}</p>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Services</p>
+                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.laborLineItems.length}</p>
                   </div>
                   <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
                     <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Stops</p>
@@ -3540,6 +4323,17 @@ export default function EquipmentList() {
             }
           >
             <div className="grid grid-cols-1 gap-4">
+              <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-2">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Customer</p>
+                  <p className="mt-1 font-semibold text-slate-900">{selectedQuickEquipment.customerName || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Address</p>
+                  <p className="mt-1 font-semibold text-slate-900">{selectedQuickEquipmentServiceAddress || "—"}</p>
+                </div>
+              </div>
+
               <Field label="Name">
                 <input
                   value={maintenanceName}
@@ -3632,6 +4426,17 @@ export default function EquipmentList() {
             }
           >
             <div className="grid grid-cols-1 gap-4">
+              <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-2">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Customer</p>
+                  <p className="mt-1 font-semibold text-slate-900">{selectedQuickEquipment.customerName || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Address</p>
+                  <p className="mt-1 font-semibold text-slate-900">{selectedQuickEquipmentServiceAddress || "—"}</p>
+                </div>
+              </div>
+
               <Field label="Name">
                 <input
                   value={repairName}

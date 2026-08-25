@@ -1,5 +1,6 @@
 export const JOB_OPERATION_STATUS = {
   draft: "Draft",
+  unscheduled: "Unscheduled",
   scheduled: "Scheduled",
   finished: "Finished",
 };
@@ -40,7 +41,7 @@ export const isDraftOperationJob = (job = {}) => (
 
 export const isAcceptedNotScheduledJob = (job = {}) => (
   jobStatusMatches(getBillingStatus(job), JOB_BILLING_STATUS.accepted) &&
-  !jobStatusMatches(getOperationStatus(job), JOB_OPERATION_STATUS.scheduled)
+  jobStatusMatches(getOperationStatus(job), JOB_OPERATION_STATUS.unscheduled)
 );
 
 export const isActionableOperationsJob = (job = {}) => (

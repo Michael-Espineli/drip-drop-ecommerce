@@ -12,6 +12,7 @@ import {
     arrayUnion,
     writeBatch,
     Timestamp,
+    orderBy,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../../../utils/config";
@@ -20,7 +21,7 @@ import { ServiceStop } from "../../../utils/models/ServiceStop";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
 import { runWorkCompletionEffects } from "../../../utils/workCompletionEffects";
-import { promptForReplacementInstallDetails } from "../../../utils/replacementTasks";
+import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import {
     buildStopDataRecord,
     fetchStopDataForServiceStop,
@@ -48,18 +49,37 @@ import {
     isShoppingItemDelivered,
     partApprovalTotalPriceCents,
 } from "../../../utils/partApprovalShopping";
+import { SHOPPING_LIST_STATUS } from "../../../utils/shoppingListStatus";
+import { createAndSendShoppingItemInstallInvoice } from "../../../utils/sales/shoppingItemInvoiceAutomation";
 import { isFilterEquipment } from "../../../utils/models/Equipment";
 import { PaperAirplaneIcon, PrinterIcon } from "@heroicons/react/24/outline";
 import ShareItemButton from "../../components/share/ShareItemButton";
 import ConnectAgreementModal from "../marketing/ConnectAgreementModal";
+import {
+    canonicalJobTaskType,
+    isRetiredFilterMaintenanceTaskType,
+    isInstallOrReplaceTaskType,
+    taskTypeRequiresBodyOfWater,
+    taskTypeRequiresEquipment,
+    taskTypeRequiresInstallItem,
+} from "../../../utils/jobTaskTypes";
+import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import {
+    EQUIPMENT_DATABASE_CATEGORY,
+    databaseEquipmentMappingFromItem,
+    databaseEquipmentMappingPatch,
+    emptyDatabaseEquipmentMapping,
+    equipmentDatabaseItemLabel,
+    hasDatabaseEquipmentMapping,
+    isEquipmentDatabaseItem,
+} from "../../../utils/databaseEquipmentItems";
 
 const jobTaskTypeOptions = [
     "Basic",
     "Clean",
-    "Clean Filter",
     "Maintenance",
     "Repair",
-    "Empty Water",
+    "Drain Water",
     "Fill Water",
     "Inspection",
     "Install",
@@ -67,15 +87,36 @@ const jobTaskTypeOptions = [
     "Replace",
 ];
 
-const equipmentTaskTypes = new Set([
-    "Clean Filter",
-    "Maintenance",
-    "Repair",
-    "Remove",
-    "Replace",
-]);
+const taskNeedsEquipment = (type) =>
+    taskTypeRequiresEquipment(type) || isRetiredFilterMaintenanceTaskType(type);
 
-const taskNeedsEquipment = (type) => equipmentTaskTypes.has(type);
+const buildEquipmentDatabaseItemOption = (data = {}, docId = "") => {
+    const id = data.id || docId;
+    return {
+        id,
+        value: id,
+        label: equipmentDatabaseItemLabel({ ...data, id }),
+        name: data.name || "Equipment item",
+        description: data.description || "",
+        category: data.category || "",
+        subCategory: data.subCategory || "",
+        rate: Number(data.rate || 0),
+        cost: Number(data.cost || data.rate || 0),
+        sellPrice: Number(data.sellPrice ?? data.billingRate ?? data.rate ?? 0),
+        billingRate: Number(data.billingRate ?? data.sellPrice ?? data.rate ?? 0),
+        dbItemId: id,
+        itemId: id,
+        ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(data)),
+    };
+};
+
+const taskDataBaseItemIdFor = (task = {}) => (
+    task.dataBaseItemId ||
+    task.dbItemId ||
+    task.itemId ||
+    task.installedDataBaseItemId ||
+    ""
+);
 
 const getDateValue = (value) => {
     if (!value) return null;
@@ -906,7 +947,13 @@ const SurveyPhotoGrid = ({ photos = [], title }) => {
 };
 
 const ServiceStopDetails = () => {
-    const { recentlySelectedCompany, user, dataBaseUser, companyUserAccess } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        user,
+        dataBaseUser,
+        companyUserAccess,
+        shoppingItemInstallInvoiceAutomationEnabled,
+    } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const { serviceStopId } = useParams();
     const navigate = useNavigate();
@@ -918,6 +965,7 @@ const ServiceStopDetails = () => {
     const [serviceLocation, setServiceLocation] = useState(null);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipmentList, setEquipmentList] = useState([]);
+    const [equipmentDatabaseItems, setEquipmentDatabaseItems] = useState([]);
     const [readingTemplates, setReadingTemplates] = useState([]);
     const [dosageTemplates, setDosageTemplates] = useState([]);
     const [stopDataRecords, setStopDataRecords] = useState([]);
@@ -971,9 +1019,11 @@ const ServiceStopDetails = () => {
         equipmentId: "",
         serviceLocationId: "",
         bodyOfWaterId: "",
+        dataBaseItemId: "",
         shoppingListItemId: "",
         addToRecurringServiceStop: false,
     });
+    const [newTaskEquipmentMapping, setNewTaskEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
 
     useEffect(() => {
         const fetchServiceStopDetails = async () => {
@@ -1177,6 +1227,43 @@ const ServiceStopDetails = () => {
         fetchServiceStopDetails();
     }, [recentlySelectedCompany, serviceStopId]);
 
+    useEffect(() => {
+        if (!recentlySelectedCompany) {
+            setEquipmentDatabaseItems([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadEquipmentDatabaseItems = async () => {
+            try {
+                const itemsSnap = await getDocs(
+                    query(
+                        collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"),
+                        orderBy("name")
+                    )
+                );
+                if (cancelled) return;
+                setEquipmentDatabaseItems(
+                    itemsSnap.docs
+                        .map((itemDoc) => buildEquipmentDatabaseItemOption(itemDoc.data(), itemDoc.id))
+                        .filter(isEquipmentDatabaseItem)
+                );
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Failed to load equipment database items:", error);
+                    setEquipmentDatabaseItems([]);
+                }
+            }
+        };
+
+        loadEquipmentDatabaseItems();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [recentlySelectedCompany]);
+
     const loadPartWorkflow = useCallback(async () => {
         if (!recentlySelectedCompany || !serviceStopId) {
             setPartApprovals([]);
@@ -1348,6 +1435,20 @@ const ServiceStopDetails = () => {
     const bodyOfWaterById = useMemo(() => (
         new Map(bodiesOfWater.map((body) => [body.id, body]))
     ), [bodiesOfWater]);
+    const equipmentById = useMemo(() => (
+        new Map(equipmentList.map((equipment) => [equipment.id, equipment]))
+    ), [equipmentList]);
+    const equipmentDatabaseItemById = useMemo(() => (
+        new Map(equipmentDatabaseItems.map((item) => [item.id, item]))
+    ), [equipmentDatabaseItems]);
+    const newTaskTypeValue = canonicalJobTaskType(newTask.type || "");
+    const newTaskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(newTaskTypeValue);
+    const newTaskNeedsEquipment = taskNeedsEquipment(newTaskTypeValue);
+    const newTaskNeedsInstallItem = taskTypeRequiresInstallItem(newTaskTypeValue);
+    const newTaskNeedsEquipmentDatabaseItem = isInstallOrReplaceTaskType(newTaskTypeValue);
+    const selectedNewTaskEquipmentItem = newTask.dataBaseItemId
+        ? equipmentDatabaseItemById.get(newTask.dataBaseItemId) || null
+        : null;
     const selectedBodyOfWater = selectedBodyOfWaterId ? bodyOfWaterById.get(selectedBodyOfWaterId) : null;
     const stopDataBodyIds = useMemo(() => (
         new Set(stopDataRecords.map((record) => record.bodyOfWaterId).filter(Boolean))
@@ -1356,6 +1457,36 @@ const ServiceStopDetails = () => {
     const selectedBodyEquipment = useMemo(() => (
         equipmentList.filter((equipment) => !selectedBodyOfWaterId || equipment.bodyOfWaterId === selectedBodyOfWaterId)
     ), [equipmentList, selectedBodyOfWaterId]);
+
+    useEffect(() => {
+        if (!newTaskNeedsInstallItem) {
+            if (newTask.dataBaseItemId) {
+                setNewTask((current) => ({ ...current, dataBaseItemId: "" }));
+            }
+            setNewTaskEquipmentMapping(emptyDatabaseEquipmentMapping());
+            return;
+        }
+
+        setNewTaskEquipmentMapping(
+            selectedNewTaskEquipmentItem
+                ? databaseEquipmentMappingFromItem(selectedNewTaskEquipmentItem)
+                : emptyDatabaseEquipmentMapping()
+        );
+    }, [newTask.dataBaseItemId, newTaskNeedsInstallItem, selectedNewTaskEquipmentItem]);
+
+    useEffect(() => {
+        if (!newTaskNeedsBodyOfWater || newTask.bodyOfWaterId || !newTask.equipmentId) return;
+
+        const selectedEquipment = equipmentById.get(newTask.equipmentId);
+        if (!selectedEquipment?.bodyOfWaterId) return;
+
+        setNewTask((current) => (
+            current.bodyOfWaterId
+                ? current
+                : { ...current, bodyOfWaterId: selectedEquipment.bodyOfWaterId }
+        ));
+    }, [equipmentById, newTask.bodyOfWaterId, newTask.equipmentId, newTaskNeedsBodyOfWater]);
+
     const serviceStopAddressText = useMemo(() => [
         serviceStop?.address?.streetAddress,
         [serviceStop?.address?.city, serviceStop?.address?.state].filter(Boolean).join(", "),
@@ -2079,6 +2210,91 @@ const ServiceStopDetails = () => {
         setManualFinishTaskIds(checked ? unfinishedManualFinishTasks.map((task) => task.id) : []);
     };
 
+    const completionContextForTask = (task = {}) => {
+        const taskType = canonicalJobTaskType(task.type || "");
+        const equipment = task.equipmentId ? equipmentById.get(task.equipmentId) || null : null;
+        const shoppingItem = task.shoppingListItemId
+            ? serviceStopShoppingItems.find((item) => item.id === task.shoppingListItemId) || null
+            : null;
+        const dataBaseItemId =
+            taskDataBaseItemIdFor(task) ||
+            shoppingItem?.dataBaseItemId ||
+            shoppingItem?.dbItemId ||
+            shoppingItem?.itemId ||
+            "";
+
+        return {
+            taskType,
+            equipment,
+            dataBaseItem: dataBaseItemId ? equipmentDatabaseItemById.get(dataBaseItemId) || null : null,
+            dataBaseItemId,
+            bodyOfWaterId:
+                task.bodyOfWaterId ||
+                equipment?.bodyOfWaterId ||
+                serviceStop?.bodyOfWaterId ||
+                (bodiesOfWater.length === 1 ? bodiesOfWater[0].id : "") ||
+                "",
+        };
+    };
+
+    const validateTaskCompletionPrerequisites = (task = {}) => {
+        const context = completionContextForTask(task);
+
+        if (taskTypeRequiresBodyOfWater(context.taskType) && !context.bodyOfWaterId) {
+            toast.error("Select a body of water before finishing this task");
+            return null;
+        }
+
+        if (taskNeedsEquipment(context.taskType) && !task.equipmentId) {
+            toast.error("Select equipment before finishing this task");
+            return null;
+        }
+
+        if (isInstallOrReplaceTaskType(context.taskType)) {
+            if (!context.dataBaseItem || !isEquipmentDatabaseItem(context.dataBaseItem)) {
+                toast.error("Select an equipment database item before finishing this task");
+                return null;
+            }
+
+            if (!hasDatabaseEquipmentMapping(context.dataBaseItem)) {
+                toast.error("Connect that database item to equipment type, make, and model before finishing");
+                return null;
+            }
+        }
+
+        return context;
+    };
+
+    const saveEquipmentMappingForDatabaseItem = async (dbItem, mapping) => {
+        if (!dbItem?.id) return null;
+
+        if (!hasDatabaseEquipmentMapping(mapping)) {
+            toast.error("Connect this database item to equipment type, make, and model");
+            return null;
+        }
+
+        const patch = {
+            ...databaseEquipmentMappingPatch(mapping),
+            category: EQUIPMENT_DATABASE_CATEGORY,
+            dateUpdated: Timestamp.fromDate(new Date()),
+        };
+        const nextItem = {
+            ...dbItem,
+            ...patch,
+            label: equipmentDatabaseItemLabel({ ...dbItem, ...patch }),
+        };
+
+        await updateDoc(
+            doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", dbItem.id),
+            patch
+        );
+        setEquipmentDatabaseItems((current) =>
+            current.map((item) => (item.id === dbItem.id ? nextItem : item))
+        );
+
+        return nextItem;
+    };
+
     const finishServiceStopManually = async () => {
         if (!requirePermission("244", "update service stops")) return;
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
@@ -2087,12 +2303,11 @@ const ServiceStopDetails = () => {
         const tasksToFinish = unfinishedManualFinishTasks.filter((task) => selectedTaskIdSet.has(task.id));
         const taskPlans = [];
         for (const task of tasksToFinish) {
-            const installDetails = await promptForReplacementInstallDetails(task);
-            if (installDetails === null) {
-                toast.error("Replacement install details are required before finishing this service stop");
+            const completionContext = validateTaskCompletionPrerequisites(task);
+            if (!completionContext) {
                 return;
             }
-            taskPlans.push({ task, installDetails });
+            taskPlans.push({ task, completionContext });
         }
 
         try {
@@ -2103,7 +2318,7 @@ const ServiceStopDetails = () => {
             const duration = minutesBetween(startAt, completedAt) || fallbackDuration;
             let nextTasks = [...taskList];
 
-            for (const { task, installDetails } of taskPlans) {
+            for (const { task, completionContext } of taskPlans) {
                 const taskRef = doc(
                     db,
                     "companies",
@@ -2115,7 +2330,11 @@ const ServiceStopDetails = () => {
                 );
                 const finishedTask = {
                     ...task,
-                    ...installDetails,
+                    type: completionContext.taskType,
+                    bodyOfWaterId: completionContext.bodyOfWaterId,
+                    dataBaseItemId: isInstallOrReplaceTaskType(completionContext.taskType)
+                        ? completionContext.dataBaseItemId
+                        : task.dataBaseItemId || "",
                     status: "Finished",
                     workerId: task.workerId || serviceStop.techId || "",
                     workerName: task.workerName || serviceStop.tech || "",
@@ -2134,16 +2353,14 @@ const ServiceStopDetails = () => {
                     workerName: finishedTask.workerName,
                     completedAt: Timestamp.fromDate(completedAt),
                     updatedAt: Timestamp.fromDate(completedAt),
-                    ...(installDetails?.installedEquipmentName ? { installedEquipmentName: installDetails.installedEquipmentName } : {}),
-                    ...(installDetails?.installedEquipmentType ? { installedEquipmentType: installDetails.installedEquipmentType } : {}),
-                    ...(installDetails?.installedEquipmentMake ? { installedEquipmentMake: installDetails.installedEquipmentMake } : {}),
-                    ...(installDetails?.installedEquipmentModel ? { installedEquipmentModel: installDetails.installedEquipmentModel } : {}),
-                    ...(installDetails?.installedEquipmentNotes ? { installedEquipmentNotes: installDetails.installedEquipmentNotes } : {}),
+                    type: finishedTask.type,
+                    bodyOfWaterId: finishedTask.bodyOfWaterId,
+                    dataBaseItemId: finishedTask.dataBaseItemId || "",
                     ...(effects.equipmentHistory?.replacementEquipmentId
-                        ? {
-                            replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
-                            installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
-                        }
+                        ? { replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId }
+                        : {}),
+                    ...(effects.equipmentHistory?.installedEquipmentId
+                        ? { installedEquipmentId: effects.equipmentHistory.installedEquipmentId }
                         : {}),
                     ...(effects.equipmentHistory?.installedPurchasedItemId
                         ? {
@@ -2230,9 +2447,11 @@ const ServiceStopDetails = () => {
             equipmentId: "",
             serviceLocationId: serviceStop?.serviceLocationId || "",
             bodyOfWaterId: "",
+            dataBaseItemId: "",
             shoppingListItemId: "",
             addToRecurringServiceStop: false,
         });
+        setNewTaskEquipmentMapping(emptyDatabaseEquipmentMapping());
     };
 
     const statusForTasks = (tasks = []) => {
@@ -2330,11 +2549,17 @@ const ServiceStopDetails = () => {
                 shoppingListItemId,
                 shoppingListPath: `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}`,
                 shoppingListGeneratedAt: approval.shoppingListGeneratedAt || now,
+                autoInvoiceOnInstall: approval.autoInvoiceOnInstall === undefined
+                    ? shoppingItemInstallInvoiceAutomationEnabled === true
+                    : approval.autoInvoiceOnInstall === true,
                 updatedAt: now,
             };
             const enrichedApproval = approvalWithStopContext({
                 ...approval,
                 ...approvalUpdates,
+                autoInvoiceOnInstall: approval.autoInvoiceOnInstall === undefined
+                    ? shoppingItemInstallInvoiceAutomationEnabled === true
+                    : approval.autoInvoiceOnInstall === true,
             });
             const shoppingPayload = buildPartApprovalShoppingItemPayload({
                 approval: enrichedApproval,
@@ -2400,7 +2625,7 @@ const ServiceStopDetails = () => {
 
     const markShoppingItemDelivered = async (item) => {
         if (!canManagePartWorkflow) {
-            toast.error("Only the assigned technician or an admin can deliver this part from the stop.");
+            toast.error("Only the assigned technician or an admin can install this part from the stop.");
             return;
         }
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !item?.id) return;
@@ -2410,13 +2635,16 @@ const ServiceStopDetails = () => {
             const now = Timestamp.fromDate(new Date());
             const deliveredByName = actorName();
             const updates = {
-                status: "Delivered",
-                deliveryStatus: "delivered",
-                fulfillmentStatus: "delivered",
+                status: "Installed",
+                deliveryStatus: "installed",
+                fulfillmentStatus: "installed",
                 needsAction: false,
                 deliveredAt: now,
                 deliveredByUserId: user?.uid || "",
                 deliveredByUserName: deliveredByName,
+                installedAt: now,
+                installedByUserId: user?.uid || "",
+                installedByUserName: deliveredByName,
                 serviceStopId: item.serviceStopId || serviceStopId,
                 serviceStopInternalId: item.serviceStopInternalId || serviceStop.internalId || "",
                 scheduledServiceStopId: item.scheduledServiceStopId || serviceStopId,
@@ -2432,10 +2660,13 @@ const ServiceStopDetails = () => {
                 batch.set(
                     doc(db, "customerPartApprovals", approvalId),
                     {
-                        fulfillmentStatus: "delivered",
+                        fulfillmentStatus: "installed",
                         deliveredAt: now,
                         deliveredByUserId: user?.uid || "",
                         deliveredByUserName: deliveredByName,
+                        installedAt: now,
+                        installedByUserId: user?.uid || "",
+                        installedByUserName: deliveredByName,
                         updatedAt: now,
                     },
                     { merge: true }
@@ -2443,17 +2674,90 @@ const ServiceStopDetails = () => {
             }
 
             await batch.commit();
-            toast.success("Part marked delivered");
+            toast.success("Part marked installed");
+
+            const shouldAutoInvoiceOnInstall = item.autoInvoiceOnInstall === undefined
+                ? shoppingItemInstallInvoiceAutomationEnabled === true
+                : item.autoInvoiceOnInstall === true;
+            if (shouldAutoInvoiceOnInstall && !item.invoiced && !item.invoiceId && !item.salesInvoiceId) {
+                const invoiceResult = await createAndSendShoppingItemInstallInvoice({
+                    db,
+                    functions,
+                    companyId: recentlySelectedCompany,
+                    shoppingItem: {
+                        ...item,
+                        ...updates,
+                        id: item.id,
+                        status: SHOPPING_LIST_STATUS.installed,
+                    },
+                    user,
+                    getCallableAuthPayload,
+                });
+
+                if (invoiceResult.status === "sent") {
+                    toast.success("Invoice created and sent.");
+                } else if (invoiceResult.status === "created_email_failed") {
+                    toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_billable_amount") {
+                    toast.error("Part installed, but no invoice was created because it has no billable amount.");
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_customer_email") {
+                    toast.error("Part installed, but no invoice was created because the customer is missing an email.");
+                }
+            }
             await loadPartWorkflow();
         } catch (error) {
-            console.error("Failed to mark part delivered:", error);
-            toast.error("Failed to mark part delivered");
+            console.error("Failed to mark part installed:", error);
+            toast.error("Failed to mark part installed");
         } finally {
             setPartWorkflowActionId("");
         }
     };
 
     const handleTaskFieldChange = (field, value) => {
+        if (field === "type") {
+            const canonicalType = canonicalJobTaskType(value);
+            const needsBodyOfWater = taskTypeRequiresBodyOfWater(canonicalType);
+            const needsExistingEquipment = taskNeedsEquipment(canonicalType);
+            const needsInstallItem = taskTypeRequiresInstallItem(canonicalType);
+
+            setNewTask((prev) => {
+                const selectedEquipment = prev.equipmentId ? equipmentById.get(prev.equipmentId) : null;
+                return {
+                    ...prev,
+                    type: canonicalType,
+                    equipmentId: needsExistingEquipment ? prev.equipmentId : "",
+                    bodyOfWaterId: needsBodyOfWater
+                        ? prev.bodyOfWaterId ||
+                        selectedEquipment?.bodyOfWaterId ||
+                        (bodiesOfWater.length === 1 ? bodiesOfWater[0].id : "")
+                        : "",
+                    dataBaseItemId: needsInstallItem ? prev.dataBaseItemId : "",
+                    shoppingListItemId: needsInstallItem ? prev.shoppingListItemId : "",
+                };
+            });
+
+            if (!needsInstallItem) {
+                setNewTaskEquipmentMapping(emptyDatabaseEquipmentMapping());
+            }
+            return;
+        }
+
+        if (field === "equipmentId") {
+            const selectedEquipment = equipmentById.get(value);
+            setNewTask((prev) => {
+                const taskType = canonicalJobTaskType(prev.type);
+                return {
+                    ...prev,
+                    equipmentId: value,
+                    serviceLocationId: selectedEquipment?.serviceLocationId || prev.serviceLocationId || serviceStop?.serviceLocationId || "",
+                    bodyOfWaterId: taskTypeRequiresBodyOfWater(taskType)
+                        ? selectedEquipment?.bodyOfWaterId || prev.bodyOfWaterId || ""
+                        : prev.bodyOfWaterId,
+                };
+            });
+            return;
+        }
+
         setNewTask((prev) => ({
             ...prev,
             [field]: value,
@@ -2476,30 +2780,62 @@ const ServiceStopDetails = () => {
             return;
         }
 
-        if (["Fill Water", "Empty Water"].includes(newTask.type) && !newTask.bodyOfWaterId) {
+        const newTaskType = canonicalJobTaskType(newTask.type);
+        const selectedEquipment = newTask.equipmentId ? equipmentById.get(newTask.equipmentId) || null : null;
+        const resolvedBodyOfWaterId =
+            newTask.bodyOfWaterId ||
+            selectedEquipment?.bodyOfWaterId ||
+            serviceStop.bodyOfWaterId ||
+            (bodiesOfWater.length === 1 ? bodiesOfWater[0].id : "") ||
+            "";
+        const needsBodyOfWater = taskTypeRequiresBodyOfWater(newTaskType);
+        const needsExistingEquipment = taskNeedsEquipment(newTaskType);
+        const needsInstallItem = taskTypeRequiresInstallItem(newTaskType);
+        const needsEquipmentDatabaseItem = isInstallOrReplaceTaskType(newTaskType);
+
+        if (needsBodyOfWater && !resolvedBodyOfWaterId) {
             toast.error("Select a body of water for this task");
             return;
         }
 
-        if (taskNeedsEquipment(newTask.type) && !newTask.equipmentId) {
+        if (needsExistingEquipment && !newTask.equipmentId) {
             toast.error("Select equipment for this task");
             return;
         }
 
+        let taskDbItem = selectedNewTaskEquipmentItem;
+        let equipmentMapping = newTaskEquipmentMapping;
+
+        if (needsEquipmentDatabaseItem) {
+            if (!taskDbItem || !isEquipmentDatabaseItem(taskDbItem)) {
+                toast.error("Select an equipment database item for this task");
+                return;
+            }
+
+            if (!hasDatabaseEquipmentMapping(equipmentMapping)) {
+                equipmentMapping = databaseEquipmentMappingFromItem(taskDbItem);
+            }
+
+            if (!hasDatabaseEquipmentMapping(equipmentMapping)) {
+                toast.error("Connect this database item to equipment type, make, and model");
+                return;
+            }
+        }
+
         try {
             setSavingTask(true);
-            const replacementInstallDetails =
-                newTask.status === "Finished" ? await promptForReplacementInstallDetails(newTask) : {};
 
-            if (replacementInstallDetails === null) {
-                toast.error("Replacement install details are required before finishing this task");
-                setSavingTask(false);
-                return;
+            if (needsEquipmentDatabaseItem) {
+                taskDbItem = await saveEquipmentMappingForDatabaseItem(taskDbItem, equipmentMapping);
+                if (!taskDbItem) {
+                    setSavingTask(false);
+                    return;
+                }
             }
 
             const serviceStopTaskPayload = {
                 name: newTask.name.trim(),
-                type: newTask.type,
+                type: newTaskType,
                 status: newTask.status || "Not Finished",
                 contractedRate: Number(newTask.contractedRate || 0),
                 estimatedTime: Number(newTask.estimatedTime || 0),
@@ -2527,11 +2863,13 @@ const ServiceStopDetails = () => {
                 jobTaskId: "",
                 recurringServiceStopTaskId: "",
 
-                equipmentId: newTask.equipmentId || "",
-                serviceLocationId: newTask.serviceLocationId || "",
-                bodyOfWaterId: newTask.bodyOfWaterId || "",
-                shoppingListItemId: newTask.shoppingListItemId || "",
-                ...(replacementInstallDetails || {}),
+                customerId: serviceStop.customerId || "",
+                customerName: serviceStop.customerName || "",
+                equipmentId: needsExistingEquipment ? newTask.equipmentId || "" : "",
+                serviceLocationId: newTask.serviceLocationId || serviceStop.serviceLocationId || "",
+                bodyOfWaterId: needsBodyOfWater ? resolvedBodyOfWaterId : "",
+                dataBaseItemId: needsInstallItem ? taskDbItem?.id || newTask.dataBaseItemId || "" : "",
+                shoppingListItemId: needsInstallItem ? newTask.shoppingListItemId || "" : "",
             };
 
             const taskRef = await addDoc(
@@ -2561,10 +2899,14 @@ const ServiceStopDetails = () => {
                     syncJobStatus: true,
                 });
 
-                if (effects.equipmentHistory?.replacementEquipmentId) {
+                if (effects.equipmentHistory?.replacementEquipmentId || effects.equipmentHistory?.installedEquipmentId) {
                     const replacementUpdates = {
-                        replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
-                        installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                        ...(effects.equipmentHistory.replacementEquipmentId
+                            ? { replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId }
+                            : {}),
+                        ...(effects.equipmentHistory.installedEquipmentId
+                            ? { installedEquipmentId: effects.equipmentHistory.installedEquipmentId }
+                            : {}),
                         ...(effects.equipmentHistory.installedPurchasedItemId
                             ? {
                                 purchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
@@ -2584,11 +2926,13 @@ const ServiceStopDetails = () => {
                 const recurringTaskPayload = {
                     id: `comp_rss_task_${crypto.randomUUID()}`,
                     name: newTask.name.trim(),
-                    type: newTask.type,
+                    type: newTaskType,
                     contractedRate: Number(newTask.contractedRate || 0),
                     estimatedTime: Number(newTask.estimatedTime || 0),
                     status: newTask.status || "Not Finished",
-                    bodyOfWaterId: newTask.bodyOfWaterId || "",
+                    bodyOfWaterId: needsBodyOfWater ? resolvedBodyOfWaterId : "",
+                    equipmentId: needsExistingEquipment ? newTask.equipmentId || "" : "",
+                    dataBaseItemId: needsInstallItem ? taskDbItem?.id || newTask.dataBaseItemId || "" : "",
                 };
 
                 const rssRef = doc(
@@ -2623,6 +2967,9 @@ const ServiceStopDetails = () => {
         if (!requirePermission("244", "update service stops")) return;
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !task?.id) return;
 
+        const completionContext = validateTaskCompletionPrerequisites(task);
+        if (!completionContext) return;
+
         try {
             const taskRef = doc(
                 db,
@@ -2634,13 +2981,15 @@ const ServiceStopDetails = () => {
                 task.id
             );
 
-            const installDetails = await promptForReplacementInstallDetails(task);
-            if (installDetails === null) {
-                toast.error("Replacement install details are required before finishing this task");
-                return;
-            }
-
-            const finishedTask = { ...task, ...installDetails, status: "Finished" };
+            const finishedTask = {
+                ...task,
+                type: completionContext.taskType,
+                bodyOfWaterId: completionContext.bodyOfWaterId,
+                dataBaseItemId: isInstallOrReplaceTaskType(completionContext.taskType)
+                    ? completionContext.dataBaseItemId
+                    : task.dataBaseItemId || "",
+                status: "Finished",
+            };
 
             const effects = await runWorkCompletionEffects({
                 db,
@@ -2653,16 +3002,14 @@ const ServiceStopDetails = () => {
 
             const taskUpdates = {
                 status: "Finished",
-                ...(installDetails?.installedEquipmentName ? { installedEquipmentName: installDetails.installedEquipmentName } : {}),
-                ...(installDetails?.installedEquipmentType ? { installedEquipmentType: installDetails.installedEquipmentType } : {}),
-                ...(installDetails?.installedEquipmentMake ? { installedEquipmentMake: installDetails.installedEquipmentMake } : {}),
-                ...(installDetails?.installedEquipmentModel ? { installedEquipmentModel: installDetails.installedEquipmentModel } : {}),
-                ...(installDetails?.installedEquipmentNotes ? { installedEquipmentNotes: installDetails.installedEquipmentNotes } : {}),
+                type: finishedTask.type,
+                bodyOfWaterId: finishedTask.bodyOfWaterId,
+                dataBaseItemId: finishedTask.dataBaseItemId || "",
                 ...(effects.equipmentHistory?.replacementEquipmentId
-                    ? {
-                        replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
-                        installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
-                    }
+                    ? { replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId }
+                    : {}),
+                ...(effects.equipmentHistory?.installedEquipmentId
+                    ? { installedEquipmentId: effects.equipmentHistory.installedEquipmentId }
                     : {}),
                 ...(effects.equipmentHistory?.installedPurchasedItemId
                     ? {
@@ -3139,7 +3486,7 @@ const ServiceStopDetails = () => {
                                                                     disabled={partWorkflowActionId === actionId}
                                                                     className="mt-4 rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                                                                 >
-                                                                    {partWorkflowActionId === actionId ? "Saving..." : "Mark Delivered"}
+                                                                    {partWorkflowActionId === actionId ? "Saving..." : "Mark Installed"}
                                                                 </button>
                                                             )}
                                                         </div>
@@ -3919,7 +4266,7 @@ const ServiceStopDetails = () => {
                                             </select>
                                         </div>
 
-                                        {["Fill Water", "Empty Water"].includes(newTask.type) && (
+                                        {newTaskNeedsBodyOfWater && (
                                             <div>
                                                 <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                     Body of Water
@@ -3939,7 +4286,7 @@ const ServiceStopDetails = () => {
                                             </div>
                                         )}
 
-                                        {taskNeedsEquipment(newTask.type) && (
+                                        {newTaskNeedsEquipment && (
                                             <div>
                                                 <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                     Equipment
@@ -3953,6 +4300,26 @@ const ServiceStopDetails = () => {
                                                     {equipmentList.map((equipment) => (
                                                         <option key={equipment.id} value={equipment.id}>
                                                             {equipment.name || equipment.model || equipment.type || "Unnamed Equipment"}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {newTaskNeedsInstallItem && (
+                                            <div>
+                                                <label className="block text-sm font-semibold text-slate-600 mb-1">
+                                                    Equipment Item
+                                                </label>
+                                                <select
+                                                    value={newTask.dataBaseItemId}
+                                                    onChange={(e) => handleTaskFieldChange("dataBaseItemId", e.target.value)}
+                                                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+                                                >
+                                                    <option value="">Select equipment item</option>
+                                                    {equipmentDatabaseItems.map((item) => (
+                                                        <option key={item.id} value={item.id}>
+                                                            {item.label || item.name || "Equipment item"}
                                                         </option>
                                                     ))}
                                                 </select>
@@ -4031,6 +4398,19 @@ const ServiceStopDetails = () => {
                                             />
                                         </div>
                                     </div>
+
+                                    {newTaskNeedsEquipmentDatabaseItem && selectedNewTaskEquipmentItem && (
+                                        <div className="rounded-md border border-slate-200 bg-white p-3">
+                                            <p className="text-sm font-semibold text-slate-700">
+                                                Equipment Mapping
+                                            </p>
+                                            <EquipmentCatalogPicker
+                                                value={newTaskEquipmentMapping}
+                                                onChange={setNewTaskEquipmentMapping}
+                                                className="mt-3"
+                                            />
+                                        </div>
+                                    )}
 
                                     <label className="flex items-center gap-2 text-sm text-slate-700">
                                         <input

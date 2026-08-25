@@ -1,8 +1,10 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, onSnapshot, query } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
+import Select from 'react-select';
 import {
   FaArchive,
   FaArrowLeft,
@@ -15,7 +17,7 @@ import {
   FaTimes,
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
-import { db } from '../../../utils/config';
+import { db, functions } from '../../../utils/config';
 import {
   SalesCatalogBillingBehavior,
   SalesCatalogItem,
@@ -28,6 +30,7 @@ import {
 } from '../../../utils/sales/salesFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { appConfirm } from '../../../utils/appDialog';
+import { jobTaskTypeOptionsFromDocs } from '../../../utils/jobTaskTypes';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -203,7 +206,6 @@ const sourceTypeOptions = [
   SalesCatalogSourceType.manual,
   SalesCatalogSourceType.serviceStopType,
   SalesCatalogSourceType.databaseItem,
-  SalesCatalogSourceType.stripeProductPrice,
 ];
 const recurringIntervalOptions = ['day', 'week', 'month', 'year'];
 
@@ -230,10 +232,36 @@ const sourcePickerConfig = {
   },
 };
 
+const selectTheme = (theme) => ({
+  ...theme,
+  borderRadius: 6,
+  colors: {
+    ...theme.colors,
+    primary: '#2563eb',
+    primary25: '#dbeafe',
+  },
+});
+
+const selectStyles = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: 38,
+    borderColor: state.isFocused ? '#3b82f6' : '#cbd5e1',
+    boxShadow: state.isFocused ? '0 0 0 2px #dbeafe' : 'none',
+    '&:hover': {
+      borderColor: state.isFocused ? '#3b82f6' : '#94a3b8',
+    },
+  }),
+  menuPortal: (base) => ({
+    ...base,
+    zIndex: 60,
+  }),
+};
+
 const SalesCatalogItems = () => {
   const { catalogItemId } = useParams();
   const navigate = useNavigate();
-  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId } = useContext(Context);
+  const { recentlySelectedCompany, stripeConnectedAccountId } = useContext(Context);
   const [catalogItems, setCatalogItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -241,11 +269,33 @@ const SalesCatalogItems = () => {
   const [editingItemId, setEditingItemId] = useState('');
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [filterType, setFilterType] = useState('all');
+  const [taskTypeList, setTaskTypeList] = useState([]);
+  const [creatingStripeCatalogItemId, setCreatingStripeCatalogItemId] = useState('');
   const [sourceOptions, setSourceOptions] = useState({
     [SalesCatalogSourceType.serviceStopType]: [],
     [SalesCatalogSourceType.workType]: [],
     [SalesCatalogSourceType.databaseItem]: [],
   });
+
+  useEffect(() => {
+    let canceled = false;
+
+    const loadTaskTypes = async () => {
+      try {
+        const taskTypeSnap = await getDocs(query(collection(db, 'universal', 'settings', 'taskTypes')));
+        if (!canceled) setTaskTypeList(jobTaskTypeOptionsFromDocs(taskTypeSnap.docs));
+      } catch (error) {
+        console.error('Unable to load task type options', error);
+        if (!canceled) setTaskTypeList([]);
+      }
+    };
+
+    loadTaskTypes();
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -316,8 +366,6 @@ const SalesCatalogItems = () => {
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [recentlySelectedCompany]);
 
-  const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
-
   const activeCatalogItems = useMemo(
     () => catalogItems.filter((item) => item.active !== false),
     [catalogItems]
@@ -335,6 +383,29 @@ const SalesCatalogItems = () => {
 
   const currentSourceOptions = sourceOptions[form.sourceType] || [];
   const currentSourceConfig = sourcePickerConfig[form.sourceType] || null;
+  const sourceTypeSelectOptions = useMemo(() => {
+    if (!form.sourceType || sourceTypeOptions.includes(form.sourceType)) return sourceTypeOptions;
+    return [form.sourceType, ...sourceTypeOptions];
+  }, [form.sourceType]);
+  const taskTypeOptionsFor = (currentValue = '') => {
+    const options = (taskTypeList || [])
+      .map((option) => ({
+        value: option.value || option.name || option.label || '',
+        label: option.label || option.name || option.value || '',
+      }))
+      .filter((option) => option.value);
+    const normalizedValue = String(currentValue || '').trim();
+
+    if (normalizedValue && !options.some((option) => option.value === normalizedValue)) {
+      return [{ value: normalizedValue, label: normalizedValue }, ...options];
+    }
+
+    return options;
+  };
+  const taskTypeOptionFor = (currentValue = '') => {
+    const options = taskTypeOptionsFor(currentValue);
+    return options.find((option) => option.value === currentValue) || null;
+  };
 
   const summary = useMemo(() => (
     activeCatalogItems.reduce(
@@ -519,6 +590,64 @@ const SalesCatalogItems = () => {
     });
   };
 
+  const createStripeObjectForCatalogItem = async (catalogItem, { showToast = true } = {}) => {
+    if (!recentlySelectedCompany || !catalogItem?.id) {
+      throw new Error('Missing catalog item context.');
+    }
+
+    setCreatingStripeCatalogItemId(catalogItem.id);
+
+    try {
+      const callable = httpsCallable(functions, 'createStripeObjectForSalesCatalogItem');
+      const result = await callable({
+        companyId: recentlySelectedCompany,
+        catalogItemId: catalogItem.id,
+      });
+      const stripeData = result?.data || {};
+      const stripeProductId = stripeData.stripeProductId || '';
+      const stripePriceId = stripeData.stripePriceId || '';
+      const updatedItem = {
+        ...catalogItem,
+        stripeProductId,
+        stripePriceId,
+        stripeConnectedAccountId: stripeData.stripeConnectedAccountId || catalogItem.stripeConnectedAccountId || stripeConnectedAccountId || '',
+      };
+
+      setCatalogItems((current) => (
+        current.map((item) => (item.id === catalogItem.id ? { ...item, ...updatedItem } : item))
+      ));
+
+      if (editingItemId === catalogItem.id) {
+        setForm((current) => ({
+          ...current,
+          stripeProductId,
+          stripePriceId,
+        }));
+      }
+
+      if (showToast) {
+        toast.success(
+          stripeData.createdProduct || stripeData.createdPrice
+            ? 'Stripe object created.'
+            : 'Stripe object already connected.'
+        );
+      }
+
+      return {
+        ...updatedItem,
+        ...stripeData,
+      };
+    } catch (error) {
+      console.error('Unable to create Stripe object for service catalog item', error);
+      if (showToast) {
+        toast.error(error.message || 'Failed to create Stripe object.');
+      }
+      throw error;
+    } finally {
+      setCreatingStripeCatalogItemId('');
+    }
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
 
@@ -537,7 +666,18 @@ const SalesCatalogItems = () => {
     try {
       const item = buildCatalogItem();
       await saveSalesCatalogItem(db, recentlySelectedCompany, item);
-      toast.success(editingItemId ? 'Service updated.' : 'Service created.');
+
+      if (!editingItemId) {
+        try {
+          await createStripeObjectForCatalogItem(item, { showToast: false });
+          toast.success('Service created with Stripe object.');
+        } catch (stripeError) {
+          toast.error(stripeError.message || 'Service created, but Stripe object creation failed.');
+        }
+      } else {
+        toast.success('Service updated.');
+      }
+
       setFormModalOpen(false);
       resetForm();
       if (!editingItemId) {
@@ -577,6 +717,58 @@ const SalesCatalogItems = () => {
     }
   };
 
+  const renderStripeReferencePanel = (item = null) => {
+    const stripeProductId = item?.stripeProductId || form.stripeProductId || '';
+    const stripePriceId = item?.stripePriceId || form.stripePriceId || '';
+    const hasStripeObject = Boolean(stripeProductId && stripePriceId);
+    const canCreateStripeObject = Boolean(item?.id && !hasStripeObject);
+    const creatingStripe = Boolean(item?.id && creatingStripeCatalogItemId === item.id);
+
+    return (
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+        <p className="text-sm font-semibold text-slate-800">Stripe Object</p>
+        <p className="mt-1 text-xs text-slate-500">
+          {item
+            ? 'Stripe Product and Price IDs are managed by DripDrop.'
+            : 'A Stripe Product and Price will be created when this service is created.'}
+        </p>
+
+        <div className="mt-3 space-y-2 text-xs">
+          <div>
+            <p className="font-semibold uppercase tracking-wide text-slate-500">Product</p>
+            <p className="mt-1 break-all rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-slate-800">
+              {stripeProductId || 'Not connected'}
+            </p>
+          </div>
+          <div>
+            <p className="font-semibold uppercase tracking-wide text-slate-500">Price</p>
+            <p className="mt-1 break-all rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-slate-800">
+              {stripePriceId || 'Not connected'}
+            </p>
+          </div>
+        </div>
+
+        {canCreateStripeObject && (
+          <button
+            type="button"
+            onClick={() => createStripeObjectForCatalogItem(item)}
+            disabled={creatingStripe || saving}
+            className="mt-3 w-full rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {creatingStripe ? 'Creating in Stripe...' : 'Create object in Stripe'}
+          </button>
+        )}
+
+        {hasStripeObject && (
+          <p className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+            <FaCheckCircle className="text-xs" />
+            Connected
+          </p>
+        )}
+      </div>
+    );
+  };
+
   const renderTaskTemplateEditor = () => (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -604,19 +796,9 @@ const SalesCatalogItems = () => {
         <div className="mt-3 space-y-3">
           {form.taskTemplates.map((template, index) => (
             <div key={template.id} className="rounded-md border border-slate-200 bg-white p-3">
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</p>
-                <button
-                  type="button"
-                  onClick={() => removeTaskTemplate(template.id)}
-                  className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                >
-                  Remove
-                </button>
-              </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 xl:grid-cols-[minmax(180px,1.1fr)_minmax(170px,0.9fr)_minmax(240px,1.4fr)_110px_120px_120px_minmax(140px,auto)_auto] xl:items-end">
                 <label className="block text-sm font-semibold text-slate-700">
-                  Task Name
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</span>
                   <input
                     type="text"
                     value={template.name}
@@ -625,22 +807,27 @@ const SalesCatalogItems = () => {
                     placeholder="Clean filter"
                   />
                 </label>
-                <label className="block text-sm font-semibold text-slate-700">
+                <div className="block text-sm font-semibold text-slate-700">
                   Task Type
-                  <input
-                    type="text"
-                    value={template.type}
-                    onChange={(event) => updateTaskTemplate(template.id, 'type', event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="General"
-                  />
-                </label>
-                <label className="block text-sm font-semibold text-slate-700 sm:col-span-2">
-                  Task Notes
+                  <div className="mt-1 font-normal">
+                    <Select
+                      value={taskTypeOptionFor(template.type)}
+                      options={taskTypeOptionsFor(template.type)}
+                      onChange={(option) => updateTaskTemplate(template.id, 'type', option?.value || '')}
+                      isSearchable
+                      placeholder="Select type"
+                      theme={selectTheme}
+                      styles={selectStyles}
+                      menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
+                    />
+                  </div>
+                </div>
+                <label className="block text-sm font-semibold text-slate-700">
+                  Notes
                   <textarea
                     value={template.description}
                     onChange={(event) => updateTaskTemplate(template.id, 'description', event.target.value)}
-                    rows={2}
+                    rows={1}
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     placeholder="Spray grids, check grids, reassemble filter"
                   />
@@ -678,7 +865,7 @@ const SalesCatalogItems = () => {
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   />
                 </label>
-                <label className="mt-6 flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                <label className="flex min-h-[38px] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
                   <input
                     type="checkbox"
                     checked={Boolean(template.customerApprovalRequired)}
@@ -687,6 +874,13 @@ const SalesCatalogItems = () => {
                   />
                   Customer approval
                 </label>
+                <button
+                  type="button"
+                  onClick={() => removeTaskTemplate(template.id)}
+                  className="min-h-[38px] rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                >
+                  Remove
+                </button>
               </div>
             </div>
           ))}
@@ -702,7 +896,7 @@ const SalesCatalogItems = () => {
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
         <form
           onSubmit={handleSubmit}
-          className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+          className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
         >
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
             <div>
@@ -725,7 +919,7 @@ const SalesCatalogItems = () => {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-5">
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
               <div className="space-y-4">
                 <div>
                   <label htmlFor="catalogName" className="block text-sm font-semibold text-slate-700">
@@ -837,7 +1031,6 @@ const SalesCatalogItems = () => {
                   </div>
                 </div>
 
-                {renderTaskTemplateEditor()}
               </div>
 
               <div className="space-y-4">
@@ -861,7 +1054,7 @@ const SalesCatalogItems = () => {
                     onChange={(event) => handleSourceTypeChange(event.target.value)}
                     className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   >
-                    {sourceTypeOptions.map((option) => (
+                    {sourceTypeSelectOptions.map((option) => (
                       <option key={option} value={option}>{sourceTypeLabels[option] || labelize(option)}</option>
                     ))}
                   </select>
@@ -935,29 +1128,11 @@ const SalesCatalogItems = () => {
                   </div>
                 )}
 
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-sm font-semibold text-slate-800">Stripe References</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Optional for now. Use these when a reusable Stripe Product and Price already exist.
-                  </p>
-                  <div className="mt-3 grid gap-3">
-                    <input
-                      type="text"
-                      value={form.stripeProductId}
-                      onChange={(event) => handleFieldChange('stripeProductId', event.target.value)}
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      placeholder="prod_..."
-                    />
-                    <input
-                      type="text"
-                      value={form.stripePriceId}
-                      onChange={(event) => handleFieldChange('stripePriceId', event.target.value)}
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      placeholder="price_..."
-                    />
-                  </div>
-                </div>
+                {renderStripeReferencePanel(editingItemId ? catalogItems.find((item) => item.id === editingItemId) : null)}
               </div>
+            </div>
+            <div className="mt-5">
+              {renderTaskTemplateEditor()}
             </div>
           </div>
 
@@ -1010,15 +1185,7 @@ const SalesCatalogItems = () => {
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-              Feature Flag 004
-            </span>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-              {selectedCompanyName}
-            </span>
-          </div>
-          <div className="mt-3 flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <h1 className="text-3xl font-bold text-slate-950">
               {catalogItemId && selectedCatalogItem ? selectedCatalogItem.name : 'Service Catalog'}
             </h1>
@@ -1147,19 +1314,31 @@ const SalesCatalogItems = () => {
                       <p className="font-semibold text-slate-900">{templates.length}</p>
                       <p className="mt-1 text-xs text-slate-500">{minutesToLabel(totals.minutes)}</p>
                     </td>
-                    <td className="px-5 py-4 text-slate-600">
-                      {item.stripeProductId || item.stripePriceId ? (
-                        <div className="space-y-1 text-xs">
-                          {item.stripeProductId && <p className="break-all">{item.stripeProductId}</p>}
-                          {item.stripePriceId && <p className="break-all">{item.stripePriceId}</p>}
-                        </div>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-slate-400">
-                          <FaCheckCircle className="text-xs" />
-                          App only
-                        </span>
-                      )}
-                    </td>
+	                    <td className="px-5 py-4 text-slate-600">
+	                      {item.stripeProductId && item.stripePriceId ? (
+	                        <div className="space-y-1 text-xs">
+	                          <p className="break-all font-mono">{item.stripeProductId}</p>
+	                          <p className="break-all font-mono">{item.stripePriceId}</p>
+	                        </div>
+	                      ) : (
+	                        <div className="space-y-2">
+	                          {(item.stripeProductId || item.stripePriceId) && (
+	                            <div className="space-y-1 text-xs">
+	                              {item.stripeProductId && <p className="break-all font-mono">{item.stripeProductId}</p>}
+	                              {item.stripePriceId && <p className="break-all font-mono">{item.stripePriceId}</p>}
+	                            </div>
+	                          )}
+	                          <button
+	                            type="button"
+	                            onClick={() => createStripeObjectForCatalogItem(item)}
+	                            disabled={Boolean(creatingStripeCatalogItemId)}
+	                            className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+	                          >
+	                            {creatingStripeCatalogItemId === item.id ? 'Creating...' : 'Create object in Stripe'}
+	                          </button>
+	                        </div>
+	                      )}
+	                    </td>
                     <td className="px-5 py-4">
                       <div className="flex justify-end gap-2">
                         <Link
@@ -1354,20 +1533,30 @@ const SalesCatalogItems = () => {
           </div>
         </section>
 
-        <aside className="space-y-5">
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stripe References</p>
-            <div className="mt-3 space-y-2 text-sm">
-              <div>
-                <p className="text-xs font-semibold text-slate-500">Product</p>
-                <p className="mt-1 break-all font-semibold text-slate-900">{selectedCatalogItem.stripeProductId || 'Not connected'}</p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-slate-500">Price</p>
-                <p className="mt-1 break-all font-semibold text-slate-900">{selectedCatalogItem.stripePriceId || 'Not connected'}</p>
-              </div>
-            </div>
-          </section>
+	        <aside className="space-y-5">
+	          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+	            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stripe References</p>
+	            <div className="mt-3 space-y-2 text-sm">
+	              <div>
+	                <p className="text-xs font-semibold text-slate-500">Product</p>
+	                <p className="mt-1 break-all font-mono font-semibold text-slate-900">{selectedCatalogItem.stripeProductId || 'Not connected'}</p>
+	              </div>
+	              <div>
+	                <p className="text-xs font-semibold text-slate-500">Price</p>
+	                <p className="mt-1 break-all font-mono font-semibold text-slate-900">{selectedCatalogItem.stripePriceId || 'Not connected'}</p>
+	              </div>
+	            </div>
+	            {!(selectedCatalogItem.stripeProductId && selectedCatalogItem.stripePriceId) && (
+	              <button
+	                type="button"
+	                onClick={() => createStripeObjectForCatalogItem(selectedCatalogItem)}
+	                disabled={Boolean(creatingStripeCatalogItemId)}
+	                className="mt-4 w-full rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+	              >
+	                {creatingStripeCatalogItemId === selectedCatalogItem.id ? 'Creating in Stripe...' : 'Create object in Stripe'}
+	              </button>
+	            )}
+	          </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Used For</p>

@@ -1,8 +1,5 @@
 import React, {useState, useContext} from 'react';
-import { setDoc, doc,Timestamp  } from "firebase/firestore";
-import { db } from "../../../utils/config";
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import {v4 as uuidv4} from 'uuid';
 import { Link, useNavigate } from 'react-router-dom';
 import { FaChevronLeft } from "react-icons/fa";
 import toast from 'react-hot-toast';
@@ -62,52 +59,25 @@ const AddNewSubscription = () => {
     }
     async function addNewSubscription(e) {
         e.preventDefault()
-        //Guard Email For customer / client Id
-        
-        let id = 'sub_' + uuidv4();
-
-        console.log('Contract Submitted   ' + id)
-        const currentTime = Timestamp.now();
-        //Create Stripe Product and Stripe Price
-
-            // Handle the result from the function
         let newCents = parseFloat(cents)*100
-        const getSubcriptionList = httpsCallable(functions, 'createStripeSubscription');
-        getSubcriptionList({ 
-            name: name,
-            price: newCents,
-            description: description,
-            method: "POST",
-        })
-        .then((result) => result.data)            
-        .then(async (receivedData) => {
-            console.log(receivedData)
-            // Handle the result from the function
+        const toastId = toast.loading('Creating subscription plan...');
+        const createStripeSubscription = httpsCallable(functions, 'createStripeSubscription');
 
-            let newSub = {
-                id: id,
-                stripeProductId: receivedData.product.id,
-                stripePriceId: receivedData.price.id,
+        try {
+            const result = await createStripeSubscription({
+                name,
                 price: newCents,
-                name: name,
-                description: description,
+                description,
                 internalNotes: internalNotes,
                 active: true,
-                dateCreated: currentTime,
-                lastUpdated: currentTime,
-            }
-            console.log('newSub')
-            console.log(newSub)
-            await setDoc(doc(db, "subscriptions", id), newSub);
-            console.log('Successfully Uploaded. ')
-            toast.success('Uploaded')
-            navigate(`/admin/subscriptions/detail/${id}`)
-        })
-        .catch((error) => {
-            // Handle any errors
+            });
+            const subscriptionId = result.data?.subscription?.id;
+            toast.success('Subscription plan created.', { id: toastId });
+            navigate(`/admin/subscriptions/detail/${subscriptionId}`);
+        } catch (error) {
             console.error(error);
-            toast.error('Failed To Upload')
-        });
+            toast.error(error.message || 'Failed to create subscription plan.', { id: toastId });
+        }
 
     }
     return (

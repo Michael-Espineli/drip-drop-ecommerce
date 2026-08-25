@@ -1,4 +1,5 @@
 const functions1 = require("firebase-functions/v1");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 
@@ -23,7 +24,7 @@ const companyCustomerNameTargets = [
   { collectionName: "serviceLocations", label: "Service locations" },
   { collectionName: "bodiesOfWater", label: "Bodies of water" },
   { collectionName: "equipment", label: "Equipment" },
-  { collectionName: "serviceStops", label: "Future service stops", shouldUpdate: shouldUpdateFutureOrOpenServiceStop },
+  { collectionName: "serviceStops", label: "Service stops" },
   { collectionName: "stopData", label: "Stop data" },
   { collectionName: "recurringServiceStop", label: "Recurring service stops" },
   { collectionName: "workOrders", label: "Jobs" },
@@ -252,6 +253,63 @@ const asBoolean = (value) => {
     if (["false", "no", "0"].includes(normalized)) return false;
   }
   return false;
+};
+
+const getCallablePayload = (data) => data?.data ?? data ?? {};
+
+const getVerifiedCallableAuth = async (payload = {}, request = {}) => {
+  if (request.auth?.uid) {
+    return {
+      uid: request.auth.uid,
+      token: request.auth.token || {},
+    };
+  }
+
+  const authorizationHeader =
+    request.rawRequest?.headers?.authorization ||
+    request.rawRequest?.headers?.Authorization ||
+    "";
+  const bearerToken = String(authorizationHeader).startsWith("Bearer ")
+    ? String(authorizationHeader).slice("Bearer ".length).trim()
+    : "";
+  const idToken = [
+    payload.idToken,
+    payload.auth?.idToken,
+    payload.data?.idToken,
+    bearerToken,
+  ].find((candidate) => String(candidate || "").trim());
+
+  if (!idToken) return null;
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    return {
+      uid: decodedToken.uid,
+      token: decodedToken,
+    };
+  } catch (error) {
+    console.error("[syncCustomerNameReferencesForCustomer] Unable to verify auth token", error);
+    return null;
+  }
+};
+
+const assertCompanyAccess = async (db, companyId, authContext) => {
+  const uid = authContext?.uid || "";
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in to sync customer name references.");
+  }
+
+  const [userSnapshot, accessSnapshot] = await Promise.all([
+    db.collection("users").doc(uid).get(),
+    db.collection("users").doc(uid).collection("userAccess").doc(companyId).get(),
+  ]);
+  const userData = userSnapshot.exists ? userSnapshot.data() || {} : {};
+
+  if (userData.accountType === "Admin" || accessSnapshot.exists) {
+    return;
+  }
+
+  throw new HttpsError("permission-denied", "You do not have access to this company.");
 };
 
 const customerDisplayName = (customer = {}, fallbackId = "") => {
@@ -627,6 +685,54 @@ async function syncCustomerNameReferences({ db, companyId, customerId, customerN
     targetCounts,
   };
 }
+
+exports.syncCustomerNameReferencesForCustomer = onCall(async (request) => {
+  const payload = getCallablePayload(request.data);
+  const companyId = cleanString(payload.companyId);
+  const customerId = cleanString(payload.customerId);
+
+  if (!companyId || !customerId) {
+    throw new HttpsError("invalid-argument", "companyId and customerId are required.");
+  }
+
+  const authContext = await getVerifiedCallableAuth(payload, request);
+  const db = getFirestore();
+  await assertCompanyAccess(db, companyId, authContext);
+
+  const customerSnapshot = await db
+    .collection("companies")
+    .doc(companyId)
+    .collection("customers")
+    .doc(customerId)
+    .get();
+
+  if (!customerSnapshot.exists) {
+    throw new HttpsError("not-found", "Customer not found.");
+  }
+
+  const customerName = customerDisplayName(customerSnapshot.data() || {}, customerId);
+  const result = await syncCustomerNameReferences({
+    db,
+    companyId,
+    customerId,
+    customerName,
+  });
+
+  console.log("[syncCustomerNameReferencesForCustomer] Synced customer name references", {
+    companyId,
+    customerId,
+    customerName,
+    writeCount: result.writeCount,
+    targetCounts: result.targetCounts,
+    requestedBy: authContext.uid,
+  });
+
+  return {
+    status: 200,
+    customerName,
+    ...result,
+  };
+});
 
 exports.syncCustomerNameReferencesOnCustomerUpdate = functions1.firestore
   .document("companies/{companyId}/customers/{customerId}")

@@ -49,24 +49,34 @@ import { promptForReplacementInstallDetails } from "../../../utils/replacementTa
 import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from "../../../utils/models/Equipment";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
+  INCENTIVIZE_OFFERED_WORK_PERMISSION_ID,
   EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
   UPDATE_JOBS_PERMISSION_ID,
 } from "../../../utils/companyPermissions";
+import {
+  getWorkOfferBasePayCents,
+  getWorkOfferIncentiveCents,
+  getWorkOfferIncentiveText,
+  normalizeWorkOfferIncentive,
+} from "../../../utils/workOffers";
 import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import {
   salesCollectionNames,
   SalesAgreementSourceType,
-  SalesAgreementStatus,
-  SalesCatalogBillingBehavior,
-  SalesCatalogItemType,
-  SalesCatalogSourceType,
-} from "../../../utils/models/Sales";
-import { salesCatalogCollection } from "../../../utils/sales/salesFirestore";
+	  SalesAgreementStatus,
+	  SalesCatalogBillingBehavior,
+	  SalesCatalogItem,
+	  SalesCatalogItemType,
+	  SalesCatalogSourceType,
+	} from "../../../utils/models/Sales";
+	import { salesCatalogCollection, saveSalesCatalogItem } from "../../../utils/sales/salesFirestore";
 import {
-  BODY_OF_WATER_JOB_TASK_TYPES,
-  EQUIPMENT_JOB_TASK_TYPES,
-  INSTALL_ITEM_JOB_TASK_TYPES,
+  canonicalJobTaskType,
+  isInstallOrReplaceTaskType,
   jobTaskTypeOptionsFromDocs,
+  taskTypeRequiresBodyOfWater,
+  taskTypeRequiresEquipment,
+  taskTypeRequiresInstallItem,
 } from "../../../utils/jobTaskTypes";
 import {
   SUGGESTED_WORK_STATUS,
@@ -109,12 +119,30 @@ import {
   isShoppingListStatusClosed,
   syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
+import {
+  SHOPPING_LIST_STATUS,
+  SHOPPING_LIST_STATUS_OPTIONS,
+  canonicalShoppingListStatus,
+} from "../../../utils/shoppingListStatus";
+import { createAndSendShoppingItemInstallInvoice } from "../../../utils/sales/shoppingItemInvoiceAutomation";
+import { deleteShoppingListItemWithLinks } from "../../../utils/shoppingListDelete";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import ShareItemButton from "../../components/share/ShareItemButton";
 import {
   JOB_BILLING_STATUS,
   JOB_OPERATION_STATUS,
 } from "../../../utils/jobStatusFilters";
+import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import {
+  EQUIPMENT_DATABASE_CATEGORY,
+  databaseEquipmentMappingFromItem,
+  databaseEquipmentMappingPatch,
+  emptyDatabaseEquipmentMapping,
+  equipmentDatabaseItemLabel,
+  hasDatabaseEquipmentMapping,
+  isEquipmentDatabaseCategory,
+  isEquipmentDatabaseItem,
+} from "../../../utils/databaseEquipmentItems";
 
 /**
  * JobDetailView
@@ -147,6 +175,21 @@ const clearSectionLoadingState = () =>
   }, {});
 
 const TASK_STATUS_OPTIONS = ["Unassigned", "Scheduled", "In Progress", "Finished"];
+const isFinishedTaskStatus = (status = "") => String(status || "").trim().toLowerCase() === "finished";
+const equipmentCompletionTypeFromJob = (job = {}) => {
+  const intentText = [
+    job.jobIntent,
+    job.equipmentContext?.jobIntent,
+    job.type,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (intentText.includes("repair") || job.repairRequestId) return "Repair";
+  if (intentText.includes("maintenance")) return "Maintenance";
+  return "";
+};
 const CUSTOMER_NOTE_AUDIENCE_OPTIONS = [
   { value: "all", label: "All" },
   { value: "office", label: "Office" },
@@ -267,13 +310,7 @@ const EMPTY_SHOPPING_EDIT_FORM = {
 };
 
 const PLANNED_MATERIAL_STATUS_OPTIONS = [
-  "Needs Customer Approval",
-  "Ready to Purchase",
-  "Need to Purchase",
-  "Purchased",
-  "Delivered",
-  "Installed",
-  "Customer Rejected",
+  ...SHOPPING_LIST_STATUS_OPTIONS,
   "Cancelled",
 ];
 
@@ -313,6 +350,56 @@ const JobHeaderActionMenuItem = ({
   );
 };
 
+const JobProgressTimeline = ({ steps = [] }) => {
+  const completedCount = steps.filter((step) => step.done).length;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Job Progress</h2>
+          <p className="mt-1 text-sm font-semibold text-slate-900">
+            {completedCount} of {steps.length} steps complete
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+        {steps.map((step, index) => {
+          const done = Boolean(step.done);
+
+          return (
+            <div
+              key={step.id}
+              className={[
+                "rounded-lg border p-3",
+                done
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                  : "border-slate-200 bg-slate-50 text-slate-600",
+              ].join(" ")}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className={[
+                    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold",
+                    done
+                      ? "border-emerald-300 bg-white text-emerald-700"
+                      : "border-slate-300 bg-white text-slate-500",
+                  ].join(" ")}
+                >
+                  {done ? <CheckCircleIcon className="h-4 w-4" aria-hidden="true" /> : index + 1}
+                </span>
+                <span className="text-sm font-bold">{step.label}</span>
+              </div>
+              <p className="mt-2 text-xs leading-5 opacity-80">{step.detail}</p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
+
 const createEmptyShoppingDbItemForm = (vendor = null) => ({
   name: "",
   rate: "",
@@ -327,6 +414,7 @@ const createEmptyShoppingDbItemForm = (vendor = null) => ({
   size: "",
   description: "",
   tracking: "",
+  equipmentMapping: emptyDatabaseEquipmentMapping(),
 });
 
 const buildShoppingDbItemOption = (data = {}, docId = "") => {
@@ -361,7 +449,10 @@ const buildShoppingDbItemOption = (data = {}, docId = "") => {
     imageUrl: data.imageUrl || data.imageURL || "",
     primaryPhotoUrl: data.primaryPhotoUrl || "",
     photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
-    label: [name, sku].filter(Boolean).join(" - "),
+    ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(data)),
+    label: isEquipmentDatabaseItem(data)
+      ? equipmentDatabaseItemLabel({ ...data, id })
+      : [name, sku].filter(Boolean).join(" - "),
     value: id,
   };
 };
@@ -477,11 +568,7 @@ const normalizeJobLaborLineItems = (items = []) => (
         (quantity ? Math.round(totalPriceCents / quantity) : totalPriceCents)
       );
       const taskIds = laborLineSnapshotArray(item.taskIds?.length ? item.taskIds : item.laborLineTaskIds);
-      const plannedServiceStopIds = laborLineSnapshotArray(
-        item.plannedServiceStopIds?.length
-          ? item.plannedServiceStopIds
-          : item.laborLinePlannedServiceStopIds
-      );
+      const plannedServiceStopIds = [];
 
       return {
         ...item,
@@ -532,6 +619,58 @@ const getCatalogServiceTaskTemplates = (item = {}) => {
 
   return Array.isArray(templates) ? templates.filter(Boolean) : [];
 };
+
+const jobCatalogMoneyToCents = (value) => {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+};
+
+const emptyJobCatalogTaskTemplate = () => ({
+  id: `service_task_template_${uuidv4()}`,
+  name: "",
+  type: "General",
+  description: "",
+  estimatedMinutes: "",
+  laborCost: "",
+  billingLaborPrice: "",
+  customerApprovalRequired: false,
+});
+
+const emptyJobCatalogServiceForm = () => ({
+  name: "",
+  description: "",
+  type: SalesCatalogItemType.service,
+  billingBehavior: SalesCatalogBillingBehavior.oneTime,
+  unitAmount: "",
+  unitCost: "",
+  defaultQuantity: "1",
+  taxable: false,
+  taskTemplates: [],
+});
+
+const normalizeJobCatalogTaskTemplatesForSave = (templates = []) => (
+  templates
+    .map((template) => {
+      const name = String(template.name || "").trim();
+      if (!name) return null;
+      const estimatedMinutes = Number(template.estimatedMinutes || 0);
+      const type = String(template.type || "General").trim() || "General";
+
+      return {
+        id: template.id || `service_task_template_${uuidv4()}`,
+        name,
+        title: name,
+        type,
+        taskType: type,
+        description: String(template.description || "").trim(),
+        estimatedMinutes: Number.isFinite(estimatedMinutes) ? Math.max(estimatedMinutes, 0) : 0,
+        laborCostCents: jobCatalogMoneyToCents(template.laborCost),
+        billingLaborPriceCents: jobCatalogMoneyToCents(template.billingLaborPrice),
+        customerApprovalRequired: Boolean(template.customerApprovalRequired),
+      };
+    })
+    .filter(Boolean)
+);
 
 const buildPlanEditorSnapshot = ({
   planId = "",
@@ -614,13 +753,7 @@ const buildPlanEditorSnapshot = ({
               ? item.laborLineTaskIds
               : []),
         ].map(cleanString).sort(),
-        plannedServiceStopIds: [
-          ...(Array.isArray(item.plannedServiceStopIds)
-            ? item.plannedServiceStopIds
-            : Array.isArray(item.laborLinePlannedServiceStopIds)
-              ? item.laborLinePlannedServiceStopIds
-              : []),
-        ].map(cleanString).sort(),
+        plannedServiceStopIds: [],
       };
     }),
     materials: sortEditableItems(materials).map(({ item, index }) => ({
@@ -650,6 +783,8 @@ const JobDetailView = () => {
   // Auth / company context
   const authCtx = useContext(Context);
   const { recentlySelectedCompany, dataBaseUser } = authCtx;
+  const shoppingItemInstallInvoiceAutomationEnabled =
+    authCtx?.shoppingItemInstallInvoiceAutomationEnabled === true;
   const { can, requirePermission } = useCompanyPermissions();
   const salesWorkflowEnabled = authCtx?.isFeatureEnabled?.("feature_flag_004") === true;
 
@@ -753,6 +888,7 @@ const JobDetailView = () => {
   const [showAllActualServiceStops, setShowAllActualServiceStops] = useState(false);
   const [plannedServiceStops, setPlannedServiceStops] = useState([]);
   const [newPlannedStop, setNewPlannedStop] = useState(false);
+  const [editingPlannedStopId, setEditingPlannedStopId] = useState("");
   const [savingPlannedStop, setSavingPlannedStop] = useState(false);
   const [plannedStopForm, setPlannedStopForm] = useState(EMPTY_PLANNED_STOP_FORM);
   const [laborLineItems, setLaborLineItems] = useState([]);
@@ -764,8 +900,14 @@ const JobDetailView = () => {
   const [loadingServiceCatalogItems, setLoadingServiceCatalogItems] = useState(false);
   const [showServiceCatalogPicker, setShowServiceCatalogPicker] = useState(false);
   const [addingCatalogServiceId, setAddingCatalogServiceId] = useState("");
+  const [serviceCatalogSearchTerm, setServiceCatalogSearchTerm] = useState("");
+  const [showServiceCatalogCreator, setShowServiceCatalogCreator] = useState(false);
+  const [savingServiceCatalogCreator, setSavingServiceCatalogCreator] = useState(false);
+  const [serviceCatalogCreatorForm, setServiceCatalogCreatorForm] = useState(() => emptyJobCatalogServiceForm());
   const [newTaskLaborLineId, setNewTaskLaborLineId] = useState("");
-  const [newPlannedStopLaborLineId, setNewPlannedStopLaborLineId] = useState("");
+  const [taskSelectorLaborLineId, setTaskSelectorLaborLineId] = useState("");
+  const [laborLineTaskSelectorSearch, setLaborLineTaskSelectorSearch] = useState("");
+  const [attachingLaborLineTaskId, setAttachingLaborLineTaskId] = useState("");
   const [workOffers, setWorkOffers] = useState([]);
   const [showAllWorkOffers, setShowAllWorkOffers] = useState(false);
   const [purchasedItems, setPurchasedItems] = useState([]);
@@ -775,11 +917,12 @@ const JobDetailView = () => {
   const [selectedPurchasedItemIds, setSelectedPurchasedItemIds] = useState([]);
   const [purchasedItemStartDate, setPurchasedItemStartDate] = useState(() => {
     const date = new Date();
-    date.setDate(date.getDate() - 30);
+    date.setDate(date.getDate() - 7);
     return format(date, "yyyy-MM-dd");
   });
   const [purchasedItemEndDate, setPurchasedItemEndDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [purchasedItemCategoryFilter, setPurchasedItemCategoryFilter] = useState("All");
+  const [purchasedItemTechnicianFilter, setPurchasedItemTechnicianFilter] = useState("All");
   const [purchasedItemBillableFilter, setPurchasedItemBillableFilter] = useState("Billable");
   const [purchasedItemInvoicedFilter, setPurchasedItemInvoicedFilter] = useState("Not Invoiced");
   const [purchasedItemSearchTerm, setPurchasedItemSearchTerm] = useState("");
@@ -892,6 +1035,35 @@ const JobDetailView = () => {
     );
   }, [recentlySelectedCompany]);
 
+  const filteredServiceCatalogItems = useMemo(() => {
+    const term = serviceCatalogSearchTerm.trim().toLowerCase();
+    if (!term) return serviceCatalogItems;
+
+    return serviceCatalogItems.filter((item) => {
+      const taskTemplates = getCatalogServiceTaskTemplates(item);
+      const searchText = [
+        item.name,
+        item.description,
+        item.type,
+        item.billingBehavior,
+        item.sourceType,
+        item.catalogItemName,
+        item.stripeProductId,
+        item.stripePriceId,
+        ...taskTemplates.flatMap((template) => [
+          template.name,
+          template.title,
+          template.description,
+          template.type,
+          template.taskType,
+          template.taskTypeName,
+        ]),
+      ].filter(Boolean).join(" ").toLowerCase();
+
+      return searchText.includes(term);
+    });
+  }, [serviceCatalogItems, serviceCatalogSearchTerm]);
+
   const handleJobTabChange = useCallback((nextTab) => {
     const sectionId = JOB_DETAIL_SECTION_ID_BY_TAB[nextTab] || DEFAULT_JOB_DETAIL_SECTION_ID;
     setActiveTab(nextTab);
@@ -903,6 +1075,10 @@ const JobDetailView = () => {
   // Tasks
   const [taskTypeList, setTaskTypeList] = useState([]);
   const [taskList, setTaskList] = useState([]);
+  const [taskGroupList, setTaskGroupList] = useState([]);
+  const [loadingTaskGroups, setLoadingTaskGroups] = useState(false);
+  const [selectedTaskGroup, setSelectedTaskGroup] = useState(null);
+  const [applyingTaskGroup, setApplyingTaskGroup] = useState(false);
   const [taskEquipmentStatusDrafts, setTaskEquipmentStatusDrafts] = useState({});
   const [newTask, setNewTask] = useState(false);
   const [selectedTaskType, setSelectedTaskType] = useState(null);
@@ -916,10 +1092,61 @@ const JobDetailView = () => {
   const [selectedTaskBodyOfWater, setSelectedTaskBodyOfWater] = useState(null);
   const [selectedTaskEquipment, setSelectedTaskEquipment] = useState(null);
   const [selectedTaskDbItem, setSelectedTaskDbItem] = useState(null);
+  const [selectedTaskDbItemEquipmentMapping, setSelectedTaskDbItemEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
   const [taskQuantity, setTaskQuantity] = useState("1");
   const [editingTaskId, setEditingTaskId] = useState("");
   const [savingTaskEdit, setSavingTaskEdit] = useState(false);
   const [taskEditForm, setTaskEditForm] = useState(EMPTY_TASK_EDIT_FORM);
+  const [taskEditDbItemEquipmentMapping, setTaskEditDbItemEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
+
+  useEffect(() => {
+    const loadTaskGroups = async () => {
+      if (!recentlySelectedCompany) {
+        setTaskGroupList([]);
+        setSelectedTaskGroup(null);
+        setLoadingTaskGroups(false);
+        return;
+      }
+
+      setLoadingTaskGroups(true);
+
+      try {
+        const [legacyTaskGroupsSnap, taskGroupsSnap] = await Promise.all([
+          getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup")),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups")),
+        ]);
+
+        const normalizeTaskGroup = (docSnap, sourcePath) => {
+          const data = docSnap.data();
+          const id = data.id || docSnap.id;
+          const label = data.name || data.groupName || "Task Group";
+
+          return {
+            ...data,
+            id,
+            value: id,
+            label,
+            sourcePath,
+          };
+        };
+
+        setTaskGroupList(
+          [
+            ...legacyTaskGroupsSnap.docs.map((docSnap) => normalizeTaskGroup(docSnap, "legacy")),
+            ...taskGroupsSnap.docs.map((docSnap) => normalizeTaskGroup(docSnap, "current")),
+          ].sort((left, right) => String(left.label || "").localeCompare(String(right.label || "")))
+        );
+      } catch (error) {
+        console.error("[JobDetailView] Failed to load task groups", error);
+        toast.error("Failed to load task groups.");
+        setTaskGroupList([]);
+      } finally {
+        setLoadingTaskGroups(false);
+      }
+    };
+
+    loadTaskGroups();
+  }, [recentlySelectedCompany]);
 
   // Shopping list
   const [shoppingList, setShoppingList] = useState([]);
@@ -1045,6 +1272,9 @@ const JobDetailView = () => {
   const [sendingEstimateEmail, setSendingEstimateEmail] = useState(false);
   const [sendingInvoiceEmail, setSendingInvoiceEmail] = useState(false);
   const [markingJobFinished, setMarkingJobFinished] = useState(false);
+  const [showJobFinishConfirm, setShowJobFinishConfirm] = useState(false);
+  const [jobFinishTaskIds, setJobFinishTaskIds] = useState([]);
+  const [jobFinishShoppingItemActions, setJobFinishShoppingItemActions] = useState({});
   const [markingJobInvoiced, setMarkingJobInvoiced] = useState(false);
   const [linkedSalesAgreement, setLinkedSalesAgreement] = useState(null);
   const [linkedSalesInvoice, setLinkedSalesInvoice] = useState(null);
@@ -1271,21 +1501,13 @@ const JobDetailView = () => {
       String(status || "").trim().toLowerCase()
     )
   );
-  const initialJobMaterialStatus = ({ customerApprovalRequired = false, requestedStatus = "" } = {}) => {
-    if (customerApprovalRequired) return "Needs Customer Approval";
-
-    if (!isJobAcceptedForMaterials()) return "Needs Customer Approval";
-
+  const initialJobMaterialStatus = ({ requestedStatus = "" } = {}) => {
     const normalizedRequestedStatus = String(requestedStatus || "").trim();
-    if (
-      normalizedRequestedStatus &&
-      normalizedRequestedStatus !== "Need to Purchase" &&
-      normalizedRequestedStatus !== "Needs Customer Approval"
-    ) {
-      return normalizedRequestedStatus;
+    if (normalizedRequestedStatus && normalizedRequestedStatus !== SHOPPING_LIST_STATUS.needToPurchase) {
+      return canonicalShoppingListStatus(normalizedRequestedStatus);
     }
 
-    return "Ready to Purchase";
+    return SHOPPING_LIST_STATUS.needToPurchase;
   };
 
   const canSaveShoppingItem = useMemo(() => {
@@ -1302,8 +1524,16 @@ const JobDetailView = () => {
     const hasName = shoppingDbItemForm.name.trim() !== "";
     const validRate = shoppingDbItemForm.rate === "" || Number(shoppingDbItemForm.rate) >= 0;
     const validSellPrice = shoppingDbItemForm.sellPrice === "" || Number(shoppingDbItemForm.sellPrice) >= 0;
+    const needsEquipmentMapping = isEquipmentDatabaseCategory(shoppingDbItemForm.category?.label || shoppingDbItemForm.category);
+    const hasEquipmentMapping =
+      !needsEquipmentMapping ||
+      Boolean(
+        shoppingDbItemForm.equipmentMapping?.type &&
+        shoppingDbItemForm.equipmentMapping?.make &&
+        shoppingDbItemForm.equipmentMapping?.model
+      );
 
-    return hasName && validRate && validSellPrice && !savingShoppingDbItem;
+    return hasName && validRate && validSellPrice && hasEquipmentMapping && !savingShoppingDbItem;
   }, [savingShoppingDbItem, shoppingDbItemForm]);
 
   const cents = (value) => {
@@ -2026,7 +2256,11 @@ const JobDetailView = () => {
 
   const getPlannedStopTasks = (stop) => {
     const taskIds = Array.isArray(stop?.taskIds) ? stop.taskIds : [];
-    if (!taskIds.length) return taskList || [];
+    if (!taskIds.length) {
+      return stop?.taskAssignmentMode === "all" || stop?.appliesToAllTasks === true
+        ? taskList || []
+        : [];
+    }
 
     return (taskList || []).filter((task) => taskIds.includes(task.id));
   };
@@ -2070,33 +2304,36 @@ const JobDetailView = () => {
         : line.laborLinePlannedServiceStopIds
     );
 
-  const laborLineScopeTotals = ({ taskIds = [], plannedServiceStopIds = [] } = {}) => {
+  const getLaborLineDisplayName = (line = {}) => {
+    const source = line || {};
+    return (
+      source.name ||
+      source.description ||
+      source.serviceName ||
+      "another service line"
+    );
+  };
+
+  const laborLineScopeTotals = ({ taskIds = [] } = {}) => {
     const taskIdSet = new Set(taskIds);
-    const stopIdSet = new Set(plannedServiceStopIds);
     const selectedTasks = (taskList || []).filter((task) => taskIdSet.has(task.id));
-    const selectedStops = (plannedServiceStops || []).filter((stop) => stopIdSet.has(stop.id));
     const taskCostCents = selectedTasks.reduce((total, task) => total + cents(task.contractedRate), 0);
     const taskPriceCents = selectedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0);
-    const stopCostCents = selectedStops.reduce((total, stop) => total + getPlannedStopCostCents(stop), 0);
 
     return {
       selectedTasks,
-      selectedStops,
-      costCents: taskCostCents + stopCostCents,
-      priceCents: taskPriceCents + stopCostCents,
+      selectedStops: [],
+      costCents: taskCostCents,
+      priceCents: taskPriceCents,
     };
   };
 
   const laborLineScopeLabel = (line = {}) => {
     const taskCount = getLaborLineTaskIds(line).length;
-    const stopCount = getLaborLinePlannedStopIds(line).length;
 
-    if (!taskCount && !stopCount) return "No tasks or stops attached";
+    if (!taskCount) return "No tasks attached";
 
-    return [
-      taskCount ? `${taskCount} task${taskCount === 1 ? "" : "s"}` : "",
-      stopCount ? `${stopCount} planned stop${stopCount === 1 ? "" : "s"}` : "",
-    ].filter(Boolean).join(" • ");
+    return `${taskCount} task${taskCount === 1 ? "" : "s"}`;
   };
 
   const buildLaborLineFormFromLine = (line = {}) => ({
@@ -2107,21 +2344,16 @@ const JobDetailView = () => {
     unitPrice: dollarsFromCents(line.unitPriceCents ?? line.unitAmountCents ?? line.totalPriceCents ?? line.totalAmountCents),
     internalCost: dollarsFromCents(line.internalCostCents ?? line.internalLaborCostCents ?? line.laborCostCents),
     taskIds: getLaborLineTaskIds(line),
-    plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+    plannedServiceStopIds: [],
   });
 
   const buildSuggestedLaborLineForm = () => {
     const assignedTaskIds = new Set((laborLineItems || []).flatMap((line) => getLaborLineTaskIds(line)));
-    const assignedStopIds = new Set((laborLineItems || []).flatMap((line) => getLaborLinePlannedStopIds(line)));
     const defaultTaskIds = (taskList || [])
       .filter((task) => task.id && (!assignedTaskIds.has(task.id) || !(laborLineItems || []).length))
       .map((task) => task.id);
-    const defaultStopIds = (plannedServiceStops || [])
-      .filter((stop) => stop.id && (!assignedStopIds.has(stop.id) || !(laborLineItems || []).length))
-      .map((stop) => stop.id);
     const totals = laborLineScopeTotals({
       taskIds: defaultTaskIds,
-      plannedServiceStopIds: defaultStopIds,
     });
 
     return {
@@ -2131,7 +2363,7 @@ const JobDetailView = () => {
       unitPrice: dollarsFromCents(totals.priceCents),
       internalCost: dollarsFromCents(totals.costCents),
       taskIds: defaultTaskIds,
-      plannedServiceStopIds: defaultStopIds,
+      plannedServiceStopIds: [],
     };
   };
 
@@ -2532,34 +2764,23 @@ const JobDetailView = () => {
   const fieldInputClass =
     "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
-  const selectedTaskTypeValue = selectedTaskType?.value || "";
-  const taskNeedsBodyOfWater = BODY_OF_WATER_JOB_TASK_TYPES.has(selectedTaskTypeValue);
-  const taskNeedsEquipment = EQUIPMENT_JOB_TASK_TYPES.has(selectedTaskTypeValue);
-  const taskNeedsInstallItem = INSTALL_ITEM_JOB_TASK_TYPES.has(selectedTaskTypeValue);
-  const editingTaskTypeValue = taskEditForm.type || "";
-  const editingTaskNeedsBodyOfWater = BODY_OF_WATER_JOB_TASK_TYPES.has(editingTaskTypeValue);
-  const editingTaskNeedsEquipment = EQUIPMENT_JOB_TASK_TYPES.has(editingTaskTypeValue);
-  const editingTaskNeedsInstallItem = INSTALL_ITEM_JOB_TASK_TYPES.has(editingTaskTypeValue);
+  const selectedTaskTypeValue = canonicalJobTaskType(selectedTaskType?.value || "");
+  const taskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(selectedTaskTypeValue);
+  const taskNeedsEquipment = taskTypeRequiresEquipment(selectedTaskTypeValue);
+  const taskNeedsInstallItem = taskTypeRequiresInstallItem(selectedTaskTypeValue);
+  const taskNeedsEquipmentDatabaseItem = isInstallOrReplaceTaskType(selectedTaskTypeValue);
+  const editingTaskTypeValue = canonicalJobTaskType(taskEditForm.type || "");
+  const editingTaskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(editingTaskTypeValue);
+  const editingTaskNeedsEquipment = taskTypeRequiresEquipment(editingTaskTypeValue);
+  const editingTaskNeedsInstallItem = taskTypeRequiresInstallItem(editingTaskTypeValue);
+  const editingTaskNeedsEquipmentDatabaseItem = isInstallOrReplaceTaskType(editingTaskTypeValue);
 
-  const taskEquipmentOptions = useMemo(() => {
-    if (selectedTaskTypeValue !== "Clean Filter") return taskEquipmentList;
+  const taskEquipmentOptions = taskEquipmentList;
+  const editingTaskEquipmentOptions = taskEquipmentList;
 
-    return (taskEquipmentList || []).filter((item) =>
-      String(item.type || item.category || "").toLowerCase().includes("filter")
-    );
-  }, [selectedTaskTypeValue, taskEquipmentList]);
-
-  const editingTaskEquipmentOptions = useMemo(() => {
-    if (editingTaskTypeValue !== "Clean Filter") return taskEquipmentList;
-
-    return (taskEquipmentList || []).filter((item) =>
-      String(item.type || item.category || "").toLowerCase().includes("filter")
-    );
-  }, [editingTaskTypeValue, taskEquipmentList]);
-
-  const taskTypeSelectOptions = useMemo(() => {
-    const options = (taskTypeList || []).map((option) => ({
-      value: option.value || option.name || option.label || "",
+	  const taskTypeSelectOptions = useMemo(() => {
+	    const options = (taskTypeList || []).map((option) => ({
+	      value: option.value || option.name || option.label || "",
       label: option.label || option.name || option.value || "",
     })).filter((option) => option.value);
 
@@ -2570,10 +2791,27 @@ const JobDetailView = () => {
       return [{ value: editingTaskTypeValue, label: editingTaskTypeValue }, ...options];
     }
 
-    return options;
-  }, [editingTaskTypeValue, taskTypeList]);
+		    return options;
+		  }, [editingTaskTypeValue, taskTypeList]);
 
-  const taskPayTypeOptions = useMemo(() => {
+	  const catalogTaskTypeOptionsFor = (currentValue = "") => {
+	    const normalizedValue = String(currentValue || "").trim();
+	    if (
+	      normalizedValue &&
+	      !taskTypeSelectOptions.some((option) => option.value === normalizedValue)
+	    ) {
+	      return [{ value: normalizedValue, label: normalizedValue }, ...taskTypeSelectOptions];
+	    }
+
+	    return taskTypeSelectOptions;
+	  };
+
+	  const catalogTaskTypeOptionFor = (currentValue = "") => {
+	    const options = catalogTaskTypeOptionsFor(currentValue);
+	    return options.find((option) => option.value === currentValue) || null;
+	  };
+
+		  const taskPayTypeOptions = useMemo(() => {
     const normalize = (value = "") => String(value || "").trim().toLowerCase().replace(/\s+/g, "");
 
     return (companyWorkTypes || [])
@@ -2644,6 +2882,12 @@ const JobDetailView = () => {
     () => new Map((shoppingDbItemList || []).map((item) => [item.id, item])),
     [shoppingDbItemList]
   );
+  const equipmentDbItemList = useMemo(
+    () => (shoppingDbItemList || []).filter(isEquipmentDatabaseItem),
+    [shoppingDbItemList]
+  );
+  const selectedTaskDbItemOptions = taskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
+  const editingTaskDbItemOptions = editingTaskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
 
   const getLinkedShoppingItemsForTask = (task) => {
     const linkedIds = new Set(
@@ -2664,6 +2908,17 @@ const JobDetailView = () => {
 
       return linkedIds.has(itemId) || linkedTaskId === task?.id;
     });
+  };
+
+  const getDatabaseItemForTask = (task) => {
+    const linkedMaterial = getLinkedShoppingItemsForTask(task)[0] || null;
+
+    return (
+      shoppingDbItemById.get(task?.dataBaseItemId || "") ||
+      shoppingDbItemById.get(linkedMaterial?.dbItemId || "") ||
+      shoppingDbItemById.get(linkedMaterial?.itemId || "") ||
+      null
+    );
   };
 
   const taskContextLabel = (task) => {
@@ -2698,6 +2953,10 @@ const JobDetailView = () => {
     serviceStopTypeId: "",
     paySource: "Technician Rate",
     offeredAmount: "",
+    incentiveType: "none",
+    incentiveAmount: "",
+    incentivePercentage: "",
+    incentiveNotes: "",
     includeDate: false,
     proposedStartDate: "",
     allowsTechnicianSelfScheduling: false,
@@ -2797,7 +3056,6 @@ const JobDetailView = () => {
   } = {}) => {
     const normalizedLaborLines = normalizeJobLaborLineItems(laborLines);
     const taskIds = (tasks || []).map((task) => task.id).filter(Boolean);
-    const plannedStopIds = (plannedStops || []).map((stop) => stop.id).filter(Boolean);
     const fallbackLaborPriceCents =
       (tasks || []).reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0) +
       (plannedStops || []).reduce((total, stop) => total + getPlannedStopCostCents(stop), 0);
@@ -2811,17 +3069,20 @@ const JobDetailView = () => {
         const totalAmountCents = cents(line.totalPriceCents);
         const unitAmountCents = cents(line.unitPriceCents || (quantity ? Math.round(totalAmountCents / quantity) : totalAmountCents));
         const lineTaskIds = getLaborLineTaskIds(line);
-        const linePlannedStopIds = getLaborLinePlannedStopIds(line);
+        const catalogItemId = line.salesCatalogItemId || line.catalogItemId || line.sourceCatalogItemId || "";
+        const salesItemType = line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor);
+        const billingBehavior = line.billingBehavior || SalesCatalogBillingBehavior.oneTime;
 
         return {
           id: line.id || `labor_line_${index}`,
           laborLineId: line.id || `labor_line_${index}`,
-          catalogItemId: line.salesCatalogItemId || "",
-          sourceType: SalesCatalogSourceType.manual,
-          sourceId: line.id || `labor_line_${index}`,
-          salesItemType: SalesCatalogItemType.labor,
-          billingBehavior: SalesCatalogBillingBehavior.oneTime,
-          type: "Labor",
+          catalogItemId,
+          salesCatalogItemId: catalogItemId,
+          sourceType: line.sourceType || SalesCatalogSourceType.manual,
+          sourceId: line.sourceId || catalogItemId || line.id || `labor_line_${index}`,
+          salesItemType,
+          billingBehavior,
+          type: line.type || (salesItemType === SalesCatalogItemType.labor ? "Labor" : "Service"),
           name: line.name || `Labor ${index + 1}`,
           description: [line.description, laborLineScopeLabel(line)].filter(Boolean).join(" • "),
           quantity,
@@ -2832,7 +3093,7 @@ const JobDetailView = () => {
           internalLaborCostCents: cents(line.internalCostCents),
           unitCostCents: cents(line.internalCostCents),
           taskIds: lineTaskIds,
-          plannedServiceStopIds: linePlannedStopIds,
+          plannedServiceStopIds: [],
           taxable: false,
           stripeProductId: line.stripeProductId || "",
           stripePriceId: line.stripePriceId || "",
@@ -2842,7 +3103,11 @@ const JobDetailView = () => {
             jobId,
             jobInternalId: job.internalId || "",
             taskIds: lineTaskIds,
-            plannedServiceStopIds: linePlannedStopIds,
+            plannedServiceStopIds: [],
+            catalogItemId,
+            salesCatalogItemId: catalogItemId,
+            catalogItemName: line.catalogItemName || line.sourceCatalogItemName || "",
+            billingBehavior,
           },
         };
       })
@@ -2859,7 +3124,6 @@ const JobDetailView = () => {
           name: "Labor",
           description: [
             taskIds.length ? `${taskIds.length} task${taskIds.length === 1 ? "" : "s"}` : "",
-            plannedStopIds.length ? `${plannedStopIds.length} planned stop${plannedStopIds.length === 1 ? "" : "s"}` : "",
           ].filter(Boolean).join(" • "),
           quantity: 1,
           unitAmountCents: fallbackLaborPriceCents,
@@ -2869,7 +3133,7 @@ const JobDetailView = () => {
           internalLaborCostCents: fallbackLaborCostCents,
           unitCostCents: fallbackLaborCostCents,
           taskIds,
-          plannedServiceStopIds: plannedStopIds,
+          plannedServiceStopIds: [],
           taxable: false,
           stripeProductId: "",
           stripePriceId: "",
@@ -2879,7 +3143,7 @@ const JobDetailView = () => {
             jobId,
             jobInternalId: job.internalId || "",
             taskIds,
-            plannedServiceStopIds: plannedStopIds,
+            plannedServiceStopIds: [],
           },
         }]
         : [];
@@ -3381,7 +3645,7 @@ const JobDetailView = () => {
         id: task.id || "",
         sortOrder: Number(task.sortOrder ?? index),
         name: task.name || task.description || `Task ${index + 1}`,
-        type: task.type || "",
+        type: canonicalJobTaskType(task.type || ""),
         estimatedMinutes: Number(task.estimatedTime || 0),
         plannedLaborCostCents: cents(task.contractedRate),
         billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
@@ -3409,7 +3673,7 @@ const JobDetailView = () => {
         totalPriceCents: cents(line.totalPriceCents),
         internalCostCents: cents(line.internalCostCents),
         taskIds: getLaborLineTaskIds(line),
-        plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+        plannedServiceStopIds: [],
       })),
       materialSummaries: materialSnapshots.map((item, index) => ({
         id: item.id || "",
@@ -3708,7 +3972,6 @@ const JobDetailView = () => {
   const planWorkspaceScope = (solution, { accepted = false } = {}) => {
     const scope = planScopeArrays(solution);
     const taskIdMap = new Map();
-    const stopIdMap = new Map();
     const baseTasksToWrite = scope.tasks.map((task, index) => {
       const sourceTaskId = task.id || "";
       const nextTaskId = sourceTaskId || `comp_job_task_${uuidv4()}`;
@@ -3729,7 +3992,6 @@ const JobDetailView = () => {
     const plannedStopsToWrite = scope.plannedServiceStops.map((stop, index) => {
       const sourceStopId = stop.id || "";
       const nextStopId = sourceStopId || `comp_job_plan_stop_${uuidv4()}`;
-      if (sourceStopId) stopIdMap.set(sourceStopId, nextStopId);
 
       return {
         ...stop,
@@ -3744,7 +4006,6 @@ const JobDetailView = () => {
         sourceSolutionId: solution.id,
       };
     });
-    const plannedStopIds = new Set(plannedStopsToWrite.map((stop) => stop.id));
     const laborLinesToWrite = normalizeJobLaborLineItems(scope.laborLineItems).map((line, index) => ({
       ...line,
       id: line.id || `comp_job_labor_line_${uuidv4()}`,
@@ -3756,12 +4017,8 @@ const JobDetailView = () => {
       laborLineTaskIds: getLaborLineTaskIds(line)
         .map((taskId) => taskIdMap.get(taskId) || taskId)
         .filter((taskId) => taskIds.has(taskId)),
-      plannedServiceStopIds: getLaborLinePlannedStopIds(line)
-        .map((stopId) => stopIdMap.get(stopId) || stopId)
-        .filter((stopId) => plannedStopIds.has(stopId)),
-      laborLinePlannedServiceStopIds: getLaborLinePlannedStopIds(line)
-        .map((stopId) => stopIdMap.get(stopId) || stopId)
-        .filter((stopId) => plannedStopIds.has(stopId)),
+      plannedServiceStopIds: [],
+      laborLinePlannedServiceStopIds: [],
       sortOrder: Number(line.sortOrder ?? index),
       sourcePlanId: solution.id,
       sourceSolutionId: solution.id,
@@ -3784,11 +4041,7 @@ const JobDetailView = () => {
         customerName: job.customerName || getCustomerDisplayName() || item.customerName || "",
         serviceLocationId,
         linkedTaskId,
-        status: accepted
-          ? customerApprovalRequired && !customerApprovalApproved
-            ? "Needs Customer Approval"
-            : "Ready to Purchase"
-          : "Needs Customer Approval",
+        status: SHOPPING_LIST_STATUS.needToPurchase,
         estimateAccepted: accepted,
         estimateAcceptedAt: accepted ? serverTimestamp() : null,
         jobBillingStatus: accepted ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
@@ -4239,6 +4492,9 @@ const JobDetailView = () => {
 
   const jobBillingIsInvoiced = (status = job.billingStatus) =>
     ["invoiced", "paid"].includes(String(status || "").toLowerCase());
+  const jobIsFinished = String(job.operationStatus || "").trim().toLowerCase() ===
+    String(JOB_OPERATION_STATUS.finished || "Finished").trim().toLowerCase();
+  const convertInvoiceActionLabel = jobIsFinished ? "Convert to Invoice" : "Mark As Invoiced";
 
   const purchasedItemInvoiceUpdates = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
     invoiced: true,
@@ -4437,7 +4693,7 @@ const JobDetailView = () => {
     await Promise.all(
       items.map((item) =>
         updateDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", getFirestoreDocId(item)), {
-          status: "Ready to Purchase",
+          status: SHOPPING_LIST_STATUS.needToPurchase,
           estimateAccepted: true,
           estimateAcceptedAt: serverTimestamp(),
           jobBillingStatus: "accepted",
@@ -4450,7 +4706,7 @@ const JobDetailView = () => {
         items.some((readyItem) => readyItem.id === item.id)
           ? {
             ...item,
-            status: "Ready to Purchase",
+            status: SHOPPING_LIST_STATUS.needToPurchase,
             estimateAccepted: true,
             estimateAcceptedAt: new Date(),
             jobBillingStatus: "accepted",
@@ -5162,13 +5418,18 @@ const JobDetailView = () => {
     const email = getCustomerEmail();
     if (requireEmail && !email) throw new Error("Customer email is required before sending an invoice.");
 
-    const lineItems = getSalesLineItemsFromSnapshot();
-    if (!lineItems.length) throw new Error("Add at least one line item or job price before invoicing.");
-
     const existingInvoice = await findLinkedSalesInvoice();
     const sourceAgreement = agreementInput && typeof agreementInput === "object"
       ? agreementInput
       : selectedSalesAgreement;
+    const preferredLineItems = Array.isArray(sourceAgreement?.lineItems) && sourceAgreement.lineItems.length
+      ? sourceAgreement.lineItems
+      : Array.isArray(selectedContract?.lineItems) && selectedContract.lineItems.length
+        ? selectedContract.lineItems
+        : null;
+    const lineItems = getSalesLineItemsFromSnapshot(preferredLineItems);
+    if (!lineItems.length) throw new Error("Add at least one line item or job price before invoicing.");
+
     const agreementId = typeof agreementInput === "string" ? agreementInput : sourceAgreement?.id || "";
     const id = existingInvoice?.id || `si_${uuidv4()}`;
     const subtotalAmountCents = lineItems.reduce((total, item) => total + cents(item.totalAmountCents), 0);
@@ -5297,6 +5558,43 @@ const JobDetailView = () => {
     [selectedWorkOfferTasks]
   );
 
+  const workOfferFormBasePayCents = useMemo(() => {
+    if (workOfferForm.paySource === "Offered Amount") {
+      return Math.round(Number(workOfferForm.offeredAmount || 0) * 100);
+    }
+    if (workOfferForm.paySource === "Unpaid") return 0;
+    return selectedWorkOfferLaborCents;
+  }, [selectedWorkOfferLaborCents, workOfferForm.offeredAmount, workOfferForm.paySource]);
+
+  const workOfferFormIncentive = useMemo(() => (
+    can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID)
+      ? normalizeWorkOfferIncentive({
+        incentive: {
+          type: workOfferForm.incentiveType,
+          amountCents: Math.round(Number(workOfferForm.incentiveAmount || 0) * 100),
+          percentage: Number(workOfferForm.incentivePercentage || 0),
+          notes: workOfferForm.incentiveNotes || "",
+        },
+      })
+      : normalizeWorkOfferIncentive()
+  ), [
+    can,
+    workOfferForm.incentiveAmount,
+    workOfferForm.incentiveNotes,
+    workOfferForm.incentivePercentage,
+    workOfferForm.incentiveType,
+  ]);
+
+  const workOfferFormIncentiveCents = useMemo(() => {
+    if (workOfferFormIncentive.type === "flat") return workOfferFormIncentive.amountCents;
+    if (workOfferFormIncentive.type === "percentage") {
+      return Math.round(workOfferFormBasePayCents * (workOfferFormIncentive.percentage / 100));
+    }
+    return 0;
+  }, [workOfferFormBasePayCents, workOfferFormIncentive]);
+
+  const workOfferFormEstimatedTotalCents = workOfferFormBasePayCents + workOfferFormIncentiveCents;
+
   const toInputDateValue = (value) => {
     if (!value) return "";
     const date = value?.toDate?.() || (value instanceof Date ? value : new Date(value));
@@ -5322,7 +5620,326 @@ const JobDetailView = () => {
     return contractTotalCents - estimateCustomerPriceCents;
   }, [contractTotalCents, estimateCustomerPriceCents]);
 
-  const markJobAsFinished = async () => {
+  const mergeShoppingListItems = (items = []) => {
+    const itemsById = new Map((shoppingList || []).map((item) => [getFirestoreDocId(item), item]));
+    (items || []).forEach((item) => {
+      const itemId = getFirestoreDocId(item);
+      if (itemId) itemsById.set(itemId, item);
+    });
+
+    return Array.from(itemsById.values());
+  };
+
+  const loadConnectedJobShoppingItems = async ({ updateState = false } = {}) => {
+    if (!recentlySelectedCompany || !jobId) return shoppingList || [];
+
+    const addSnapDocs = (snap, itemsById) => {
+      snap.docs.forEach((itemDoc) => {
+        const item = withFirestoreDocId(itemDoc);
+        itemsById.set(getFirestoreDocId(item), item);
+      });
+    };
+
+    const itemsById = new Map((shoppingList || []).map((item) => [getFirestoreDocId(item), item]));
+    const [jobIdSnap, workOrderIdSnap, assignedJobIdSnap] = await Promise.all([
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("workOrderId", "==", jobId))),
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("assignedJobId", "==", jobId))),
+    ]);
+
+    addSnapDocs(jobIdSnap, itemsById);
+    addSnapDocs(workOrderIdSnap, itemsById);
+    addSnapDocs(assignedJobIdSnap, itemsById);
+
+    const items = Array.from(itemsById.values()).filter((item) => getFirestoreDocId(item));
+    if (updateState) setShoppingList(items);
+    return items;
+  };
+
+  const getUnfinishedJobFinishShoppingItems = (items = shoppingList) => (
+    (items || []).filter((item) => {
+      const itemId = getFirestoreDocId(item);
+      if (!itemId) return false;
+      return !isShoppingListStatusClosed(item.status);
+    })
+  );
+
+  const buildDefaultJobFinishShoppingActions = (items = shoppingList) => (
+    getUnfinishedJobFinishShoppingItems(items).reduce((actions, item) => ({
+      ...actions,
+      [getFirestoreDocId(item)]: "installed",
+    }), {})
+  );
+
+  const openJobFinishConfirm = async () => {
+    if (markingJobFinished) return;
+
+    let connectedShoppingItems = shoppingList || [];
+    try {
+      connectedShoppingItems = await loadConnectedJobShoppingItems({ updateState: true });
+    } catch (error) {
+      console.warn("Could not refresh connected shopping list items before finishing job", error);
+    }
+
+    const unfinishedTasks = (taskList || []).filter((task) => !isFinishedTaskStatus(task.status));
+    setJobFinishTaskIds(unfinishedTasks.map((task) => task.id).filter(Boolean));
+    setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(connectedShoppingItems));
+    setShowJobFinishConfirm(true);
+  };
+
+  const closeJobFinishConfirm = () => {
+    if (markingJobFinished) return;
+    setShowJobFinishConfirm(false);
+    setJobFinishTaskIds([]);
+    setJobFinishShoppingItemActions({});
+  };
+
+  const toggleJobFinishTask = (taskId) => {
+    setJobFinishTaskIds((prev) =>
+      prev.includes(taskId)
+        ? prev.filter((id) => id !== taskId)
+        : [...prev, taskId]
+    );
+  };
+
+  const setAllJobFinishTasks = (checked) => {
+    setJobFinishTaskIds(
+      checked
+        ? (taskList || [])
+          .filter((task) => !isFinishedTaskStatus(task.status))
+          .map((task) => task.id)
+          .filter(Boolean)
+        : []
+    );
+  };
+
+  const setJobFinishShoppingItemAction = (itemId, action) => {
+    if (!itemId) return;
+    setJobFinishShoppingItemActions((prev) => ({
+      ...prev,
+      [itemId]: action,
+    }));
+  };
+
+  const setAllJobFinishShoppingItems = (action) => {
+    setJobFinishShoppingItemActions(
+      getUnfinishedJobFinishShoppingItems().reduce((actions, item) => ({
+        ...actions,
+        [getFirestoreDocId(item)]: action,
+      }), {})
+    );
+  };
+
+  const handleJobFinishShoppingItems = async ({ actionMap = {}, completedAt }) => {
+    const connectedShoppingItems = await loadConnectedJobShoppingItems();
+    const unfinishedShoppingItems = getUnfinishedJobFinishShoppingItems(connectedShoppingItems);
+    if (!unfinishedShoppingItems.length) {
+      return { installedCount: 0, deliveredCount: 0, deletedCount: 0, remainingItems: shoppingList || [] };
+    }
+
+    const deliveredAt = completedAt || new Date();
+    const actorUserId = getUserId() || "";
+    const actorUserName = getAuditUserName();
+    const dateFromValue = (value) => {
+      const date = value?.toDate?.() || (value instanceof Date ? value : value ? new Date(value) : null);
+      return date && !Number.isNaN(date.getTime()) ? date : null;
+    };
+    const deliveredItems = [];
+    const deletedItems = [];
+
+    for (const item of unfinishedShoppingItems) {
+      const shoppingListItemId = getFirestoreDocId(item);
+      if (!shoppingListItemId) continue;
+
+      const selectedAction = actionMap[shoppingListItemId] || "installed";
+
+      if (selectedAction === "delete") {
+        const deleteResult = await deleteShoppingListItemWithLinks({
+          db,
+          companyId: recentlySelectedCompany,
+          itemId: shoppingListItemId,
+          item,
+        });
+        deletedItems.push({ item, ...deleteResult });
+        continue;
+      }
+
+      const purchasedAt = dateFromValue(item.datePurchased) || dateFromValue(item.purchasedAt) || deliveredAt;
+      const purchaserId = item.purchaserId || item.purchasedByUserId || actorUserId;
+      const purchaserName = item.purchaserName || item.purchasedByUserName || actorUserName;
+      const firestoreUpdates = {
+        status: SHOPPING_LIST_STATUS.installed,
+        datePurchased: Timestamp.fromDate(purchasedAt),
+        purchasedAt: Timestamp.fromDate(purchasedAt),
+        purchasedByUserId: purchaserId,
+        purchasedByUserName: purchaserName,
+        purchaserId,
+        purchaserName,
+        deliveryStatus: "installed",
+        fulfillmentStatus: "installed",
+        deliveredAt: Timestamp.fromDate(deliveredAt),
+        deliveredByUserId: actorUserId,
+        deliveredByUserName: actorUserName,
+        installedAt: Timestamp.fromDate(deliveredAt),
+        installedByUserId: actorUserId,
+        installedByUserName: actorUserName,
+        needsAction: false,
+        updatedAt: serverTimestamp(),
+      };
+      const stateUpdates = {
+        status: SHOPPING_LIST_STATUS.installed,
+        datePurchased: purchasedAt,
+        purchasedAt,
+        purchasedByUserId: purchaserId,
+        purchasedByUserName: purchaserName,
+        purchaserId,
+        purchaserName,
+        deliveryStatus: "installed",
+        fulfillmentStatus: "installed",
+        deliveredAt,
+        deliveredByUserId: actorUserId,
+        deliveredByUserName: actorUserName,
+        installedAt: deliveredAt,
+        installedByUserId: actorUserId,
+        installedByUserName: actorUserName,
+        needsAction: false,
+        updatedAt: deliveredAt,
+      };
+
+      await updateDoc(
+        doc(db, "companies", recentlySelectedCompany, "shoppingList", shoppingListItemId),
+        firestoreUpdates
+      );
+
+      const purchasedItemId = item.purchasedItem || item.purchasedItemId || "";
+      if (purchasedItemId) {
+        await syncLinkedShoppingPurchase({
+          db,
+          companyId: recentlySelectedCompany,
+          shoppingItemId: shoppingListItemId,
+          purchasedItemId,
+          shoppingItemData: {
+            ...item,
+            ...stateUpdates,
+            id: shoppingListItemId,
+          },
+          invoiced: false,
+        });
+      }
+
+      let automationStateUpdates = {};
+      const shouldAutoInvoiceOnInstall = item.autoInvoiceOnInstall === undefined
+        ? shoppingItemInstallInvoiceAutomationEnabled
+        : item.autoInvoiceOnInstall === true;
+      if (shouldAutoInvoiceOnInstall && !item.invoiced && !item.invoiceId && !item.salesInvoiceId) {
+        const invoiceResult = await createAndSendShoppingItemInstallInvoice({
+          db,
+          functions,
+          companyId: recentlySelectedCompany,
+          shoppingItem: {
+            ...item,
+            ...stateUpdates,
+            id: shoppingListItemId,
+            status: SHOPPING_LIST_STATUS.installed,
+          },
+          user: currentUser,
+          getCallableAuthPayload,
+        });
+        automationStateUpdates = invoiceResult.shoppingPayload || {};
+
+        if (invoiceResult.status === "sent") {
+          toast.success("Invoice created and sent.");
+        } else if (invoiceResult.status === "created_email_failed") {
+          toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
+        } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_billable_amount") {
+          toast.error("Shopping item installed, but no invoice was created because it has no billable amount.");
+        } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_customer_email") {
+          toast.error("Shopping item installed, but no invoice was created because the customer is missing an email.");
+        }
+      }
+
+      deliveredItems.push({
+        item,
+        shoppingListItemId,
+        stateUpdates: {
+          ...stateUpdates,
+          ...automationStateUpdates,
+        },
+      });
+    }
+
+    const deliveredItemIds = new Set(deliveredItems.map(({ shoppingListItemId }) => shoppingListItemId));
+    const deletedItemIds = new Set(deletedItems.map(({ shoppingListItemId }) => shoppingListItemId));
+    const deliveredStateById = new Map(
+      deliveredItems.map(({ shoppingListItemId, stateUpdates }) => [shoppingListItemId, stateUpdates])
+    );
+    const remainingItems = mergeShoppingListItems(connectedShoppingItems)
+      .filter((item) => !deletedItemIds.has(getFirestoreDocId(item)))
+      .map((item) => (
+        deliveredItemIds.has(getFirestoreDocId(item))
+          ? { ...item, ...deliveredStateById.get(getFirestoreDocId(item)) }
+          : item
+      ));
+
+    setShoppingList(remainingItems);
+
+    const deletedTaskItemIds = new Set(deletedItems.map(({ linkedTaskId }) => linkedTaskId).filter(Boolean));
+    if (deletedTaskItemIds.size > 0) {
+      const deletedShoppingItemIds = new Set(deletedItems.map(({ shoppingListItemId }) => shoppingListItemId).filter(Boolean));
+      setTaskList((prev) =>
+        (prev || []).map((task) =>
+          deletedTaskItemIds.has(task.id)
+            ? {
+              ...task,
+              shoppingListItemId: deletedShoppingItemIds.has(task.shoppingListItemId) ? "" : task.shoppingListItemId,
+              shoppingListItemIds: (task.shoppingListItemIds || []).filter((itemId) => !deletedShoppingItemIds.has(itemId)),
+            }
+            : task
+        )
+      );
+    }
+
+    await loadJobWorkflowData({
+      companyId: recentlySelectedCompany,
+      currentJobId: jobId,
+      currentTaskList: taskList,
+      currentShoppingList: remainingItems,
+    });
+
+    return {
+      installedCount: deliveredItems.length,
+      deliveredCount: deliveredItems.length,
+      deletedCount: deletedItems.length,
+      remainingItems,
+    };
+  };
+
+  const buildJobLevelEquipmentCompletionTask = ({ completedAt }) => {
+    const equipmentId = job.equipmentId || (Array.isArray(job.equipmentIds) ? job.equipmentIds[0] : "");
+    const taskType = equipmentCompletionTypeFromJob(job);
+
+    if (!equipmentId || !taskType) return null;
+
+    return {
+      id: `job_equipment_${jobId}_${taskType.toLowerCase()}`,
+      name: `${taskType} ${job.equipmentName || "equipment"}`,
+      description: job.description || "",
+      type: taskType,
+      status: "Finished",
+      equipmentId,
+      bodyOfWaterId: job.bodyOfWaterId || "",
+      serviceLocationId: job.serviceLocationId || "",
+      customerId: job.customerId || "",
+      customerName: job.customerName || "",
+      workerId: job.assignedTechId || job.adminId || "",
+      workerName: job.assignedTechName || job.adminName || "",
+      workerType: job.assignedTechId ? "Employee" : "",
+      equipmentStatusOnCompletion: EQUIPMENT_STATUS.OPERATIONAL,
+      completedAt,
+    };
+  };
+
+  const markJobAsFinished = async (selectedTaskIds = null, selectedShoppingActions = null) => {
     if (markingJobFinished) return;
 
     try {
@@ -5333,10 +5950,29 @@ const JobDetailView = () => {
       const previousBillingStatus = job.billingStatus || "—";
       const nextBillingStatus =
         job.billingStatus === "Draft" || !job.billingStatus ? "In Progress" : job.billingStatus;
+      const unfinishedTasks = (taskList || []).filter((task) => !isFinishedTaskStatus(task.status));
+      const selectedTaskIdSet = new Set(
+        Array.isArray(selectedTaskIds)
+          ? selectedTaskIds
+          : unfinishedTasks.map((task) => task.id)
+      );
+      const tasksToFinish = unfinishedTasks.filter((task) => selectedTaskIdSet.has(task.id));
       const finishedTasks = [];
+      const completedAt = new Date();
 
-      for (const task of taskList || []) {
+      for (const task of tasksToFinish) {
         if (!task?.id) continue;
+        if (isInstallOrReplaceTaskType(task.type)) {
+          const taskDatabaseItem = getDatabaseItemForTask(task);
+          if (!taskDatabaseItem || !isEquipmentDatabaseItem(taskDatabaseItem)) {
+            toast.error(`Select an equipment database item before finishing "${task.name || task.type}".`);
+            return;
+          }
+          if (!hasDatabaseEquipmentMapping(taskDatabaseItem)) {
+            toast.error(`Connect "${taskDatabaseItem.name || "equipment item"}" to universal equipment or custom details before finishing.`);
+            return;
+          }
+        }
 
         const installDetails = await promptForReplacementInstallDetails(task);
         if (installDetails === null) {
@@ -5350,16 +5986,22 @@ const JobDetailView = () => {
           equipmentStatusOnCompletion: task.equipmentId
             ? taskEquipmentStatusDrafts[task.id] || EQUIPMENT_STATUS.OPERATIONAL
             : "",
+          completedAt,
           status: "Finished",
         });
       }
+
+      const shoppingCleanupResult = await handleJobFinishShoppingItems({
+        actionMap: selectedShoppingActions || jobFinishShoppingItemActions,
+        completedAt,
+      });
 
       await updateDoc(jobRef, {
         operationStatus: "Finished",
         billingStatus: nextBillingStatus,
       });
 
-      await Promise.all(
+      const completionResults = await Promise.all(
         finishedTasks.map(async (task) => {
           if (!task?.id) return;
 
@@ -5368,6 +6010,7 @@ const JobDetailView = () => {
             companyId: recentlySelectedCompany,
             task,
             jobId,
+            completedAt,
             currentJobOperationStatus: "Finished",
           });
 
@@ -5375,6 +6018,7 @@ const JobDetailView = () => {
             doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id),
             {
               status: "Finished",
+              completedAt: Timestamp.fromDate(completedAt),
               ...(task.equipmentStatusOnCompletion ? { equipmentStatusOnCompletion: task.equipmentStatusOnCompletion } : {}),
               ...(task.installedEquipmentName ? { installedEquipmentName: task.installedEquipmentName } : {}),
               ...(task.installedEquipmentType ? { installedEquipmentType: task.installedEquipmentType } : {}),
@@ -5384,7 +6028,13 @@ const JobDetailView = () => {
               ...(effects.equipmentHistory?.replacementEquipmentId
                 ? {
                   replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
-                  installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                }
+                : {}),
+              ...(effects.equipmentHistory?.installedEquipmentId || effects.equipmentHistory?.replacementEquipmentId
+                ? {
+                  installedEquipmentId:
+                    effects.equipmentHistory.installedEquipmentId ||
+                    effects.equipmentHistory.replacementEquipmentId,
                 }
                 : {}),
               ...(effects.equipmentHistory?.installedPurchasedItemId
@@ -5395,8 +6045,30 @@ const JobDetailView = () => {
                 : {}),
             }
           );
+
+          return effects;
         })
       );
+
+      const equipmentHistoryIds = new Set(
+        completionResults
+          .map((effects) => effects?.equipmentHistory?.equipmentId)
+          .filter(Boolean)
+      );
+      const jobEquipmentId = job.equipmentId || (Array.isArray(job.equipmentIds) ? job.equipmentIds[0] : "");
+      if (jobEquipmentId && !equipmentHistoryIds.has(jobEquipmentId)) {
+        const jobLevelTask = buildJobLevelEquipmentCompletionTask({ completedAt });
+        if (jobLevelTask) {
+          await runWorkCompletionEffects({
+            db,
+            companyId: recentlySelectedCompany,
+            task: jobLevelTask,
+            jobId,
+            completedAt,
+            currentJobOperationStatus: "Finished",
+          });
+        }
+      }
 
       setJob((prev) => ({
         ...prev,
@@ -5418,10 +6090,12 @@ const JobDetailView = () => {
       await recordJobHistory({
         eventType: "Status Change",
         title: "Job marked as finished",
-        description: `${taskList?.length || 0} task(s) were marked finished.`,
+        description: `${finishedTasks.length} of ${unfinishedTasks.length} unfinished task(s) were marked finished. ${shoppingCleanupResult.installedCount} planned product(s) marked installed and ${shoppingCleanupResult.deletedCount} removed.`,
         changes: [
           buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", "Finished"),
           buildHistoryChange("billingStatus", "Billing Status", previousBillingStatus, nextBillingStatus),
+          buildHistoryChange("shoppingInstalled", "Shopping Installed", "—", String(shoppingCleanupResult.installedCount)),
+          buildHistoryChange("shoppingDeleted", "Shopping Removed", "—", String(shoppingCleanupResult.deletedCount)),
         ],
       });
       await addJobCommentDocument(`Job finished by ${getAuditUserName()}.`, {
@@ -5431,9 +6105,17 @@ const JobDetailView = () => {
           finishedByUserId: getUserId() || "",
           finishedByUserName: getAuditUserName(),
           taskCount: taskList?.length || 0,
+          markedFinishedTaskCount: finishedTasks.length,
+          openTaskCountAtFinish: unfinishedTasks.length,
+          installedShoppingItemCount: shoppingCleanupResult.installedCount,
+          deliveredShoppingItemCount: shoppingCleanupResult.installedCount,
+          deletedShoppingItemCount: shoppingCleanupResult.deletedCount,
         },
       });
 
+      setShowJobFinishConfirm(false);
+      setJobFinishTaskIds([]);
+      setJobFinishShoppingItemActions({});
       toast.success("Job marked as finished");
     } catch (err) {
       console.error(err);
@@ -5624,6 +6306,10 @@ const JobDetailView = () => {
       serviceStopTypeId: companyServiceStopTypes?.[0]?.id || "",
       paySource: "Technician Rate",
       offeredAmount: "",
+      incentiveType: "none",
+      incentiveAmount: "",
+      incentivePercentage: "",
+      incentiveNotes: "",
       includeDate: false,
       proposedStartDate: "",
       allowsTechnicianSelfScheduling: false,
@@ -5693,6 +6379,24 @@ const JobDetailView = () => {
           : workOfferForm.paySource === "Unpaid"
             ? 0
             : selectedWorkOfferLaborCents;
+      const requestedIncentive = can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID)
+        ? normalizeWorkOfferIncentive({
+          incentive: {
+            type: workOfferForm.incentiveType,
+            amountCents: Math.round(Number(workOfferForm.incentiveAmount || 0) * 100),
+            percentage: Number(workOfferForm.incentivePercentage || 0),
+            notes: workOfferForm.incentiveNotes || "",
+          },
+        })
+        : normalizeWorkOfferIncentive();
+      const incentiveEstimatedCents =
+        requestedIncentive.type === "flat"
+          ? requestedIncentive.amountCents
+          : requestedIncentive.type === "percentage"
+            ? Math.round(payTotal * (requestedIncentive.percentage / 100))
+            : 0;
+      const incentive = incentiveEstimatedCents > 0 ? requestedIncentive : normalizeWorkOfferIncentive();
+      const payTotalWithIncentive = payTotal + incentiveEstimatedCents;
       const offerTitle =
         workOfferForm.title?.trim() ||
         `${job.internalId || "Job"} - ${job.customerName || "Work Offer"}`.trim();
@@ -5705,7 +6409,7 @@ const JobDetailView = () => {
         longitude: Number(serviceLocation.longitude || 0),
       };
       const selectedTaskIds = selectedWorkOfferTasks.map((task) => task.id);
-      const estimatedPayLines = selectedWorkOfferTasks
+      const taskEstimatedPayLines = selectedWorkOfferTasks
         .filter((task) => cents(task.contractedRate) > 0)
         .map((task) => ({
           id: `offer_estimate_task_preview_${task.id}`,
@@ -5724,6 +6428,29 @@ const JobDetailView = () => {
           calculationStatus: "Calculated",
           notes: `${task.type || "Task"} • ${Number(task.estimatedTime || 0)} min • Task contracted rate`,
         }));
+      const incentiveEstimatedPayLine = incentiveEstimatedCents > 0
+        ? {
+          id: "offer_estimate_work_offer_incentive",
+          sourceTaskId: null,
+          source: "Work Offer Incentive",
+          payTypeId: "",
+          payTypeName: "",
+          workTypeId: "",
+          workTypeName: "",
+          title: "Work Offer Incentive",
+          rateAmountCents: incentiveEstimatedCents,
+          rateType: "Manual",
+          quantity: 1,
+          quantityUnit: "Each",
+          totalAmountCents: incentiveEstimatedCents,
+          calculationStatus: "Calculated",
+          notes: incentive.notes || "Management incentive added to this work offer.",
+        }
+        : null;
+      const estimatedPayLines = [
+        ...taskEstimatedPayLines,
+        ...(incentiveEstimatedPayLine ? [incentiveEstimatedPayLine] : []),
+      ];
 
       const firestoreOffer = {
         id,
@@ -5762,9 +6489,16 @@ const JobDetailView = () => {
         canTechnicianSchedule: workOfferForm.allowsTechnicianSelfScheduling,
         paySource: workOfferForm.paySource,
         offeredAmountCents,
+        incentive,
+        incentiveType: incentive.type,
+        incentiveAmountCents: incentive.amountCents,
+        incentivePercentage: incentive.percentage,
+        incentiveEstimatedCents,
         estimatedLaborCents: selectedWorkOfferLaborCents,
-        estimatedPayCents: payTotal,
-        estimatedPayTotalCents: payTotal,
+        estimatedBasePayCents: payTotal,
+        estimatedPayCents: payTotalWithIncentive,
+        estimatedPayTotalCents: payTotalWithIncentive,
+        estimatedPayWithIncentiveCents: payTotalWithIncentive,
         manualPayOverrideCents:
           workOfferForm.paySource === "Offered Amount"
             ? offeredAmountCents
@@ -5797,6 +6531,7 @@ const JobDetailView = () => {
                 calculationStatus: offeredAmountCents > 0 ? "Calculated" : "Needs Review",
                 notes: "Fixed amount offered for this work.",
               },
+              ...(incentiveEstimatedPayLine ? [incentiveEstimatedPayLine] : []),
             ]
             : workOfferForm.paySource === "Unpaid"
               ? [
@@ -5817,6 +6552,7 @@ const JobDetailView = () => {
                   calculationStatus: "Calculated",
                   notes: "This offer is marked unpaid.",
                 },
+                ...(incentiveEstimatedPayLine ? [incentiveEstimatedPayLine] : []),
               ]
               : estimatedPayLines,
         estimatedPayNotes: "Estimate only. Final payroll is generated from completed service stop work.",
@@ -5874,9 +6610,12 @@ const JobDetailView = () => {
         changes: [
           buildHistoryChange("status", "Status", "—", firestoreOffer.status),
           buildHistoryChange("offerType", "Offer Type", "—", firestoreOffer.offerType),
-          buildHistoryChange("estimatedPayCents", "Estimated Pay", "—", moneyFromCents(payTotal)),
+          buildHistoryChange("estimatedPayCents", "Estimated Pay", "—", moneyFromCents(payTotalWithIncentive)),
+          incentiveEstimatedCents > 0
+            ? buildHistoryChange("incentiveEstimatedCents", "Incentive", "—", moneyFromCents(incentiveEstimatedCents))
+            : null,
           buildHistoryChange("taskCount", "Tasks", "—", selectedTaskIds.length),
-        ],
+        ].filter(Boolean),
         metadata: {
           workOfferId: id,
           boardPostId,
@@ -7283,7 +8022,7 @@ const JobDetailView = () => {
             companyId: recentlySelectedCompany,
             templateId,
             name: task.name || task.description || "Task",
-            type: task.type || "",
+            type: canonicalJobTaskType(task.type || ""),
             description: task.description || "",
             contractedRate: cents(task.contractedRate),
             billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
@@ -7341,9 +8080,7 @@ const JobDetailView = () => {
       const laborLineWrites = normalizedTemplateLaborLines.map((line, index) => {
         const templateLaborLineId = "comp_job_template_labor_line_" + uuidv4();
         const taskTemplateIds = getLaborLineTaskIds(line).map((taskId) => taskIdMap[taskId]).filter(Boolean);
-        const plannedServiceStopTemplateIds = getLaborLinePlannedStopIds(line)
-          .map((plannedStopId) => plannedStopIdMap[plannedStopId])
-          .filter(Boolean);
+        const catalogItemId = line.salesCatalogItemId || line.catalogItemId || line.sourceCatalogItemId || "";
 
         return setDoc(
           doc(db, "companies", recentlySelectedCompany, "jobTemplates", templateId, "laborLineItems", templateLaborLineId),
@@ -7361,12 +8098,20 @@ const JobDetailView = () => {
             taskTemplateIds,
             taskIds: taskTemplateIds,
             laborLineTaskIds: taskTemplateIds,
-            plannedServiceStopTemplateIds,
-            plannedServiceStopIds: plannedServiceStopTemplateIds,
-            laborLinePlannedServiceStopIds: plannedServiceStopTemplateIds,
-            salesItemType: line.salesItemType || SalesCatalogItemType.labor,
+            plannedServiceStopTemplateIds: [],
+            plannedServiceStopIds: [],
+            laborLinePlannedServiceStopIds: [],
+            salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
             billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
             sourceType: line.sourceType || SalesCatalogSourceType.manual,
+            sourceId: line.sourceId || catalogItemId || "",
+            catalogItemId,
+            salesCatalogItemId: catalogItemId,
+            sourceCatalogItemId: line.sourceCatalogItemId || catalogItemId,
+            catalogItemName: line.catalogItemName || line.sourceCatalogItemName || line.name || "",
+            stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+            stripeProductId: line.stripeProductId || "",
+            stripePriceId: line.stripePriceId || "",
             sortOrder: Number(line.sortOrder ?? index),
             sourceLaborLineId: line.id || "",
           }
@@ -7536,14 +8281,14 @@ const JobDetailView = () => {
           </div>
         </div>
 
-        {line.notes && (
-          <p className="mt-4 text-sm text-gray-700 whitespace-pre-wrap">
-            {line.notes}
-          </p>
-        )}
-      </div>
-    );
-  };
+	        {line.notes && (
+	          <p className="mt-4 text-sm text-gray-700 whitespace-pre-wrap">
+	            {line.notes}
+		      </p>
+		        )}
+		      </div>
+			    );
+			  };
   const clearLaborLineEditor = ({ force = false } = {}) => {
     if (savingLaborLine && !force) return;
     setNewLaborLine(false);
@@ -7551,29 +8296,157 @@ const JobDetailView = () => {
     setLaborLineForm(EMPTY_LABOR_LINE_FORM);
   };
 
+  const closeLaborLineTaskSelector = ({ force = false } = {}) => {
+    if (attachingLaborLineTaskId && !force) return;
+    setTaskSelectorLaborLineId("");
+    setLaborLineTaskSelectorSearch("");
+  };
+
   const showNewLaborLineItem = () => {
     if (!requireUpdateCurrentJob("update jobs")) return;
     setNewTask(false);
     setShowServiceCatalogPicker(false);
+    closeLaborLineTaskSelector({ force: true });
     setEditingTaskId("");
     setEditingLaborLineId("");
     setLaborLineForm(buildSuggestedLaborLineForm());
     setNewLaborLine(true);
   };
 
-  const toggleServiceCatalogPicker = () => {
-    if (!requireUpdateCurrentJob("update jobs")) return;
-    clearLaborLineEditor({ force: true });
-    clearNewTask({ preventDefault: () => { } });
+	  const toggleServiceCatalogPicker = () => {
+	    if (!requireUpdateCurrentJob("update jobs")) return;
+	    clearLaborLineEditor({ force: true });
+	    clearNewTask({ preventDefault: () => { } });
     setEditingTaskId("");
     setNewTaskLaborLineId("");
-    setNewPlannedStopLaborLineId("");
-    setShowServiceCatalogPicker((current) => !current);
-  };
+    closeLaborLineTaskSelector({ force: true });
+	    if (showServiceCatalogPicker) setServiceCatalogSearchTerm("");
+	    setShowServiceCatalogPicker((current) => !current);
+	  };
+
+	  const openServiceCatalogCreator = () => {
+	    if (!requireUpdateCurrentJob("update jobs")) return;
+	    clearLaborLineEditor({ force: true });
+	    clearNewTask({ preventDefault: () => { } });
+	    setEditingTaskId("");
+	    setNewTaskLaborLineId("");
+	    closeLaborLineTaskSelector({ force: true });
+	    setServiceCatalogCreatorForm(emptyJobCatalogServiceForm());
+	    setShowServiceCatalogCreator(true);
+	  };
+
+	  const closeServiceCatalogCreator = () => {
+	    if (savingServiceCatalogCreator) return;
+	    setShowServiceCatalogCreator(false);
+	    setServiceCatalogCreatorForm(emptyJobCatalogServiceForm());
+	  };
+
+	  const updateServiceCatalogCreatorField = (field, value) => {
+	    setServiceCatalogCreatorForm((current) => ({
+	      ...current,
+	      [field]: value,
+	    }));
+	  };
+
+	  const addServiceCatalogCreatorTaskTemplate = () => {
+	    setServiceCatalogCreatorForm((current) => ({
+	      ...current,
+	      taskTemplates: [...(current.taskTemplates || []), emptyJobCatalogTaskTemplate()],
+	    }));
+	  };
+
+	  const updateServiceCatalogCreatorTaskTemplate = (templateId, field, value) => {
+	    setServiceCatalogCreatorForm((current) => ({
+	      ...current,
+	      taskTemplates: (current.taskTemplates || []).map((template) => (
+	        template.id === templateId ? { ...template, [field]: value } : template
+	      )),
+	    }));
+	  };
+
+	  const removeServiceCatalogCreatorTaskTemplate = (templateId) => {
+	    setServiceCatalogCreatorForm((current) => ({
+	      ...current,
+	      taskTemplates: (current.taskTemplates || []).filter((template) => template.id !== templateId),
+	    }));
+	  };
+
+	  const createStripeObjectForServiceCatalogItem = async (catalogItem) => {
+	    const callable = httpsCallable(functions, "createStripeObjectForSalesCatalogItem");
+	    const result = await callable({
+	      companyId: recentlySelectedCompany,
+	      catalogItemId: catalogItem.id,
+	    });
+	    const stripeData = result?.data || {};
+
+	    return {
+	      ...catalogItem,
+	      stripeConnectedAccountId: stripeData.stripeConnectedAccountId || catalogItem.stripeConnectedAccountId || "",
+	      stripeProductId: stripeData.stripeProductId || catalogItem.stripeProductId || "",
+	      stripePriceId: stripeData.stripePriceId || catalogItem.stripePriceId || "",
+	    };
+	  };
+
+	  const createServiceCatalogItemFromJob = async (event) => {
+	    event.preventDefault();
+	    if (!requireUpdateCurrentJob("update jobs")) return;
+	    if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
+
+	    const name = serviceCatalogCreatorForm.name.trim();
+	    if (!name) return toast.error("Add a service name.");
+
+	    setSavingServiceCatalogCreator(true);
+
+	    try {
+	      const catalogItem = new SalesCatalogItem({
+	        companyId: recentlySelectedCompany,
+	        name,
+	        description: serviceCatalogCreatorForm.description.trim(),
+	        type: serviceCatalogCreatorForm.type || SalesCatalogItemType.service,
+	        billingBehavior: serviceCatalogCreatorForm.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+	        sourceType: SalesCatalogSourceType.manual,
+	        sourceId: "",
+	        unitAmountCents: jobCatalogMoneyToCents(serviceCatalogCreatorForm.unitAmount),
+	        unitCostCents: jobCatalogMoneyToCents(serviceCatalogCreatorForm.unitCost),
+	        defaultQuantity: Math.max(Number(serviceCatalogCreatorForm.defaultQuantity || 1) || 1, 1),
+	        taxable: Boolean(serviceCatalogCreatorForm.taxable),
+	        active: true,
+	        currency: "usd",
+	        stripeConnectedAccountId: authCtx?.stripeConnectedAccountId || "",
+	        metadata: {
+	          taskTemplates: normalizeJobCatalogTaskTemplatesForSave(serviceCatalogCreatorForm.taskTemplates),
+	        },
+	      });
+
+	      await saveSalesCatalogItem(db, recentlySelectedCompany, catalogItem);
+
+	      let catalogItemForJob = catalogItem;
+	      try {
+	        catalogItemForJob = await createStripeObjectForServiceCatalogItem(catalogItem);
+	      } catch (stripeError) {
+	        console.error("[JobDetailView] Created catalog service without Stripe object", stripeError);
+	        toast.error(stripeError.message || "Service created, but Stripe object creation failed.");
+	      }
+
+	      setServiceCatalogItems((items) => (
+	        [...items.filter((item) => item.id !== catalogItemForJob.id), catalogItemForJob]
+	          .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")))
+	      ));
+	      setShowServiceCatalogCreator(false);
+	      setServiceCatalogCreatorForm(emptyJobCatalogServiceForm());
+	      await addCatalogServiceToJob(catalogItemForJob);
+	    } catch (error) {
+	      console.error("[JobDetailView] Failed to create service catalog item", error);
+	      toast.error(error.message || "Failed to create catalog service.");
+	    } finally {
+	      setSavingServiceCatalogCreator(false);
+	    }
+	  };
 
   const editGeneratedLaborLine = (line) => {
     if (!requireUpdateCurrentJob("update jobs")) return;
     setNewTask(false);
+    closeLaborLineTaskSelector({ force: true });
     setEditingTaskId("");
     setEditingLaborLineId("");
     setLaborLineForm({
@@ -7584,7 +8457,7 @@ const JobDetailView = () => {
       unitPrice: dollarsFromCents(line.unitPriceCents ?? line.totalPriceCents),
       internalCost: dollarsFromCents(line.internalCostCents),
       taskIds: laborLineArray(line.taskIds),
-      plannedServiceStopIds: laborLineArray(line.plannedServiceStopIds),
+      plannedServiceStopIds: [],
     });
     setNewLaborLine(true);
   };
@@ -7592,6 +8465,7 @@ const JobDetailView = () => {
   const startLaborLineEdit = (line) => {
     if (!requireUpdateCurrentJob("update jobs")) return;
     setNewTask(false);
+    closeLaborLineTaskSelector({ force: true });
     setEditingTaskId("");
     setNewLaborLine(false);
     setEditingLaborLineId(line.id);
@@ -7617,22 +8491,6 @@ const JobDetailView = () => {
       return {
         ...prev,
         taskIds: Array.from(taskIds),
-      };
-    });
-  };
-
-  const toggleLaborLinePlannedStop = (plannedStopId) => {
-    setLaborLineForm((prev) => {
-      const plannedServiceStopIds = new Set(prev.plannedServiceStopIds || []);
-      if (plannedServiceStopIds.has(plannedStopId)) {
-        plannedServiceStopIds.delete(plannedStopId);
-      } else {
-        plannedServiceStopIds.add(plannedStopId);
-      }
-
-      return {
-        ...prev,
-        plannedServiceStopIds: Array.from(plannedServiceStopIds),
       };
     });
   };
@@ -7664,6 +8522,8 @@ const JobDetailView = () => {
     const existingLine = (laborLineItems || []).find((line) => line.id === editingLaborLineId);
     const nowMillis = Date.now();
     const lineId = existingLine?.id || `comp_job_labor_line_${uuidv4()}`;
+    const selectedTaskIds = laborLineArray(laborLineForm.taskIds);
+    const selectedPlannedStopIds = [];
     const payload = {
       ...(existingLine || {}),
       id: lineId,
@@ -7676,10 +8536,10 @@ const JobDetailView = () => {
       unitPriceCents,
       totalPriceCents: Math.round(unitPriceCents * quantity),
       internalCostCents,
-      taskIds: laborLineArray(laborLineForm.taskIds),
-      laborLineTaskIds: laborLineArray(laborLineForm.taskIds),
-      plannedServiceStopIds: laborLineArray(laborLineForm.plannedServiceStopIds),
-      laborLinePlannedServiceStopIds: laborLineArray(laborLineForm.plannedServiceStopIds),
+      taskIds: selectedTaskIds,
+      laborLineTaskIds: selectedTaskIds,
+      plannedServiceStopIds: selectedPlannedStopIds,
+      laborLinePlannedServiceStopIds: selectedPlannedStopIds,
       salesItemType: SalesCatalogItemType.labor,
       billingBehavior: SalesCatalogBillingBehavior.oneTime,
       sourceType: SalesCatalogSourceType.manual,
@@ -7691,9 +8551,23 @@ const JobDetailView = () => {
       updatedByUserId: getUserId() || "",
       updatedByUserName: getAuditUserName(),
     };
+    const selectedTaskIdSet = new Set(payload.taskIds);
+    const cleanedLaborLineItems = (laborLineItems || []).map((line) => {
+      if (line.id === existingLine?.id) return line;
+
+      const taskIds = getLaborLineTaskIds(line).filter((id) => !selectedTaskIdSet.has(id));
+
+      return {
+        ...line,
+        taskIds,
+        laborLineTaskIds: taskIds,
+        plannedServiceStopIds: [],
+        laborLinePlannedServiceStopIds: [],
+      };
+    });
     const nextItems = existingLine
-      ? (laborLineItems || []).map((line) => (line.id === existingLine.id ? payload : line))
-      : [...(laborLineItems || []), payload];
+      ? cleanedLaborLineItems.map((line) => (line.id === existingLine.id ? payload : line))
+      : [...cleanedLaborLineItems, payload];
 
     try {
       setSavingLaborLine(true);
@@ -7707,7 +8581,6 @@ const JobDetailView = () => {
           buildHistoryChange("totalPriceCents", "Customer Price", existingLine ? moneyFromCents(existingLine.totalPriceCents) : "—", moneyFromCents(payload.totalPriceCents)),
           buildHistoryChange("internalCostCents", "Internal Cost", existingLine ? moneyFromCents(existingLine.internalCostCents) : "—", moneyFromCents(payload.internalCostCents)),
           buildHistoryChange("taskIds", "Linked Tasks", existingLine ? String(getLaborLineTaskIds(existingLine).length) : "—", String(payload.taskIds.length)),
-          buildHistoryChange("plannedServiceStopIds", "Linked Planned Stops", existingLine ? String(getLaborLinePlannedStopIds(existingLine).length) : "—", String(payload.plannedServiceStopIds.length)),
         ],
         metadata: {
           laborLineId: lineId,
@@ -7911,6 +8784,7 @@ const JobDetailView = () => {
       });
 
       setShowServiceCatalogPicker(false);
+      setServiceCatalogSearchTerm("");
       toast.success(
         taskIds.length
           ? `Added ${serviceName} with ${taskIds.length} task${taskIds.length === 1 ? "" : "s"}`
@@ -7980,15 +8854,23 @@ const JobDetailView = () => {
 
   const attachTaskToLaborLine = async (laborLineId, taskId) => {
     if (!laborLineId || !taskId) return;
+    if (!(laborLineItems || []).some((line) => line.id === laborLineId)) return;
 
     const nextItems = (laborLineItems || []).map((line) => {
-      if (line.id !== laborLineId) return line;
+      const taskIds = getLaborLineTaskIds(line).filter((id) => id !== taskId);
+      if (line.id !== laborLineId) {
+        return {
+          ...line,
+          taskIds,
+          laborLineTaskIds: taskIds,
+        };
+      }
 
-      const taskIds = Array.from(new Set([...getLaborLineTaskIds(line), taskId]));
+      const nextTaskIds = Array.from(new Set([...taskIds, taskId]));
       return {
         ...line,
-        taskIds,
-        laborLineTaskIds: taskIds,
+        taskIds: nextTaskIds,
+        laborLineTaskIds: nextTaskIds,
       };
     });
 
@@ -7996,29 +8878,45 @@ const JobDetailView = () => {
     if (changed) await persistLaborLineItems(nextItems);
   };
 
-  const attachPlannedStopToLaborLine = async (laborLineId, plannedStopId) => {
-    if (!laborLineId || !plannedStopId) return;
+  const openTaskSelectorForLaborLine = (laborLineId) => {
+    if (!requireUpdateCurrentJob("update jobs")) return;
 
-    const nextItems = (laborLineItems || []).map((line) => {
-      if (line.id !== laborLineId) return line;
+    clearNewTask({ preventDefault: () => { } });
+    clearLaborLineEditor({ force: true });
+    setShowServiceCatalogPicker(false);
+    setEditingTaskId("");
+    setNewTaskLaborLineId("");
+    setLaborLineTaskSelectorSearch("");
+    setTaskSelectorLaborLineId(laborLineId || "");
+  };
 
-      const plannedServiceStopIds = Array.from(new Set([...getLaborLinePlannedStopIds(line), plannedStopId]));
-      return {
-        ...line,
-        plannedServiceStopIds,
-        laborLinePlannedServiceStopIds: plannedServiceStopIds,
-      };
-    });
+  const moveTaskToLaborLine = async (laborLineId, taskId) => {
+    if (!laborLineId || !taskId) return;
 
-    const changed = JSON.stringify(nextItems) !== JSON.stringify(laborLineItems || []);
-    if (changed) await persistLaborLineItems(nextItems);
+    const targetLine = (laborLineItems || []).find((line) => line.id === laborLineId);
+    const sourceLine = (laborLineItems || []).find((line) => (
+      line.id !== laborLineId && getLaborLineTaskIds(line).includes(taskId)
+    ));
+
+    try {
+      setAttachingLaborLineTaskId(taskId);
+      await attachTaskToLaborLine(laborLineId, taskId);
+      toast.success(sourceLine
+        ? `Moved task to ${getLaborLineDisplayName(targetLine)}`
+        : `Added task to ${getLaborLineDisplayName(targetLine)}`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update service line task");
+    } finally {
+      setAttachingLaborLineTaskId("");
+    }
   };
 
   const showNewTaskItem = () => {
     clearLaborLineEditor({ force: true });
     setShowServiceCatalogPicker(false);
+    closeLaborLineTaskSelector({ force: true });
     setNewTaskLaborLineId("");
-    setNewPlannedStopLaborLineId("");
     setNewTask(true);
   };
 
@@ -8028,6 +8926,7 @@ const JobDetailView = () => {
     clearNewTask({ preventDefault: () => { } });
     clearLaborLineEditor({ force: true });
     setShowServiceCatalogPicker(false);
+    closeLaborLineTaskSelector({ force: true });
     setEditingTaskId("");
     setNewTaskLaborLineId(laborLineId || "");
     setNewTask(true);
@@ -8041,7 +8940,7 @@ const JobDetailView = () => {
   };
 
   const clearNewTask = (e) => {
-    e.preventDefault();
+    e?.preventDefault?.();
     setSelectedTaskType(null);
     setSelectedTaskPayType(taskPayTypeOptions[0] || null);
     setTaskDescription("");
@@ -8051,9 +8950,164 @@ const JobDetailView = () => {
     setSelectedTaskBodyOfWater(null);
     setSelectedTaskEquipment(null);
     setSelectedTaskDbItem(null);
+    setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
     setTaskQuantity("1");
+    setSelectedTaskGroup(null);
     setNewTaskLaborLineId("");
     setNewTask(false);
+  };
+
+  const refreshJobTaskAndShoppingState = async () => {
+    const tasksSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks"));
+    const tasks = tasksSnap.docs.map((d) => ({ ...d.data(), id: d.id }));
+    const shoppingSnap = await getDocs(
+      query(
+        collection(db, "companies", recentlySelectedCompany, "shoppingList"),
+        where("jobId", "==", jobId)
+      )
+    );
+    const updatedShoppingList = shoppingSnap.docs.map(withFirestoreDocId);
+
+    setTaskList(tasks);
+    setShoppingList(updatedShoppingList);
+
+    await loadJobWorkflowData({
+      companyId: recentlySelectedCompany,
+      currentJobId: jobId,
+      currentTaskList: tasks,
+      currentShoppingList: updatedShoppingList,
+    });
+
+    return { tasks, updatedShoppingList };
+  };
+
+  const getTaskGroupTasks = async (taskGroup) => {
+    if (!taskGroup?.id || !recentlySelectedCompany) return [];
+
+    const taskCollections = taskGroup.sourcePath === "legacy"
+      ? [
+        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
+        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
+      ]
+      : [
+        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
+        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
+      ];
+
+    for (const taskCollection of taskCollections) {
+      const snapshot = await getDocs(taskCollection);
+      if (snapshot.docs.length) {
+        return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      }
+    }
+
+    return [];
+  };
+
+  const buildTaskFromGroupTask = (task) => {
+    const id = "comp_wo_tas_" + uuidv4();
+    const type = canonicalJobTaskType(task.type || task.taskType || task.taskTypeName || "");
+    const defaultPayType = selectedTaskPayType || taskPayTypeOptions[0] || null;
+
+    return {
+      ...task,
+      id,
+      name: task.name || task.description || "Task",
+      description: task.description || "",
+      type,
+      contractedRate: Number(task.contractedRate || task.laborCostCents || task.costCents || 0),
+      billingLaborPriceCents: Number(task.billingLaborPriceCents || task.billingLaborCents || 0),
+      estimatedTime: Number(task.estimatedTime || task.estimatedMinutes || task.minutes || 0),
+      payTypeId: task.payTypeId || defaultPayType?.id || "",
+      payTypeName: task.payTypeName || defaultPayType?.name || defaultPayType?.label || "",
+      status: "Unassigned",
+      customerApproval: Boolean(task.customerApproval),
+      actualTime: 0,
+      workerId: "",
+      workerType: "Not Assigned",
+      workerName: "",
+      laborContractId: "",
+      serviceStopId: {
+        id: "",
+        internalId: "",
+      },
+      equipmentId: task.equipmentId || "",
+      serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
+      bodyOfWaterId: task.bodyOfWaterId || "",
+      dataBaseItemId: task.dataBaseItemId || task.dbItemId || "",
+      shoppingListItemId: "",
+      shoppingListItemIds: [],
+      customerApprovalRequired: Boolean(task.customerApprovalRequired),
+      customerApprovalStatus: task.customerApprovalStatus || "notRequired",
+      customerApprovalRequestId: task.customerApprovalRequestId || "",
+    };
+  };
+
+  const attachTasksToLaborLine = async (laborLineId, taskIds) => {
+    if (!laborLineId || !taskIds.length) return;
+    const nextItems = (laborLineItems || []).map((line) => {
+      if (line.id !== laborLineId) return line;
+
+      const nextTaskIds = Array.from(new Set([...getLaborLineTaskIds(line), ...taskIds]));
+      return {
+        ...line,
+        taskIds: nextTaskIds,
+        laborLineTaskIds: nextTaskIds,
+      };
+    });
+
+    await persistLaborLineItems(nextItems);
+  };
+
+  const applySelectedTaskGroupToJob = async (e) => {
+    e?.preventDefault?.();
+    if (!requireUpdateCurrentJob("update jobs")) return;
+    if (!selectedTaskGroup) return toast.error("Select a task group.");
+    if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
+
+    setApplyingTaskGroup(true);
+
+    try {
+      const groupTasks = await getTaskGroupTasks(selectedTaskGroup);
+      if (!groupTasks.length) {
+        toast.error("This task group does not have any tasks.");
+        return;
+      }
+
+      const tasksToSave = groupTasks.map(buildTaskFromGroupTask);
+      await Promise.all(
+        tasksToSave.map((task) => (
+          setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task)
+        ))
+      );
+
+      if (newTaskLaborLineId) {
+        await attachTasksToLaborLine(newTaskLaborLineId, tasksToSave.map((task) => task.id));
+      }
+
+      await recordJobHistory({
+        eventType: "Task",
+        title: `Task group added: ${selectedTaskGroup.label || selectedTaskGroup.name || "Task Group"}`,
+        changes: [
+          buildHistoryChange("taskGroup", "Task Group", "—", selectedTaskGroup.label || selectedTaskGroup.name || "Task Group"),
+          buildHistoryChange("tasks", "Tasks Added", "—", String(tasksToSave.length)),
+        ],
+        metadata: {
+          taskGroupId: selectedTaskGroup.id,
+          taskIds: tasksToSave.map((task) => task.id),
+          laborLineId: newTaskLaborLineId || "",
+        },
+      });
+
+      await refreshJobTaskAndShoppingState();
+      toast.success(`${tasksToSave.length} task${tasksToSave.length === 1 ? "" : "s"} added from task group.`);
+      clearNewTask({ preventDefault: () => { } });
+    } catch (error) {
+      console.error("[JobDetailView] Failed to apply task group", error);
+      toast.error("Failed to add task group.");
+    } finally {
+      setApplyingTaskGroup(false);
+    }
   };
 
   const buildTaskEditForm = (task) => {
@@ -8062,7 +9116,7 @@ const JobDetailView = () => {
     return {
       ...EMPTY_TASK_EDIT_FORM,
       name: task?.name || task?.description || "",
-      type: task?.type || "",
+      type: canonicalJobTaskType(task?.type || ""),
       status: task?.status || "Unassigned",
       laborCost: dollarsFromCents(task?.contractedRate),
       billingLaborPrice: dollarsFromCents(getTaskBillingLaborPriceCents(task)),
@@ -8079,6 +9133,7 @@ const JobDetailView = () => {
   const cancelTaskEdit = () => {
     setEditingTaskId("");
     setTaskEditForm(EMPTY_TASK_EDIT_FORM);
+    setTaskEditDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
   };
 
   const startTaskEdit = (e, task) => {
@@ -8089,6 +9144,9 @@ const JobDetailView = () => {
     clearLaborLineEditor({ force: true });
     setEditingTaskId(task.id);
     setTaskEditForm(buildTaskEditForm(task));
+    const linkedMaterial = getLinkedShoppingItemsForTask(task)[0] || null;
+    const linkedItem = shoppingDbItemById.get(task?.dataBaseItemId || linkedMaterial?.dbItemId || linkedMaterial?.itemId || "");
+    setTaskEditDbItemEquipmentMapping(databaseEquipmentMappingFromItem(linkedItem || {}));
   };
 
   const updateTaskEditForm = (field, value) => {
@@ -8099,13 +9157,14 @@ const JobDetailView = () => {
   };
 
   const updateTaskEditType = (type) => {
+    const canonicalType = canonicalJobTaskType(type);
     setTaskEditForm((prev) => ({
       ...prev,
-      type,
-      bodyOfWaterId: BODY_OF_WATER_JOB_TASK_TYPES.has(type) ? prev.bodyOfWaterId : "",
-      equipmentId: EQUIPMENT_JOB_TASK_TYPES.has(type) ? prev.equipmentId : "",
-      dataBaseItemId: INSTALL_ITEM_JOB_TASK_TYPES.has(type) ? prev.dataBaseItemId : "",
-      quantity: INSTALL_ITEM_JOB_TASK_TYPES.has(type) ? prev.quantity || "1" : "1",
+      type: canonicalType,
+      bodyOfWaterId: taskTypeRequiresBodyOfWater(canonicalType) ? prev.bodyOfWaterId : "",
+      equipmentId: taskTypeRequiresEquipment(canonicalType) ? prev.equipmentId : "",
+      dataBaseItemId: taskTypeRequiresInstallItem(canonicalType) ? prev.dataBaseItemId : "",
+      quantity: taskTypeRequiresInstallItem(canonicalType) ? prev.quantity || "1" : "1",
     }));
   };
 
@@ -8273,6 +9332,36 @@ const JobDetailView = () => {
     return updatedMaterialIds;
   };
 
+  const saveEquipmentMappingForDatabaseItem = async (dbItem, mapping) => {
+    if (!dbItem?.id) return null;
+    if (!isEquipmentDatabaseItem(dbItem)) {
+      toast.error("Select a database item in the Equipment category.");
+      return null;
+    }
+
+    const patch = databaseEquipmentMappingPatch(mapping);
+    const hasMapping = Boolean(patch.type && patch.make && patch.model);
+    if (!hasMapping) {
+      toast.error("Connect the equipment item to universal equipment or enter custom type, make, and model.");
+      return null;
+    }
+
+    const updatedItem = { ...dbItem, ...patch, category: EQUIPMENT_DATABASE_CATEGORY };
+    await updateDoc(
+      doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", dbItem.id),
+      {
+        ...patch,
+        category: EQUIPMENT_DATABASE_CATEGORY,
+        dateUpdated: serverTimestamp(),
+      }
+    );
+    setShoppingDbItemList((prev) =>
+      prev.map((item) => (item.id === dbItem.id ? buildShoppingDbItemOption(updatedItem, dbItem.id) : item))
+    );
+
+    return updatedItem;
+  };
+
   const saveTaskEdit = async (e) => {
     e.preventDefault();
     if (!requireUpdateCurrentJob("update jobs")) return;
@@ -8281,14 +9370,20 @@ const JobDetailView = () => {
     if (!originalTask) return toast.error("Task no longer exists.");
 
     const nextName = taskEditForm.name.trim();
-    const nextType = taskEditForm.type.trim();
+    const nextType = canonicalJobTaskType(taskEditForm.type.trim());
     const nextStatus = taskEditForm.status.trim() || "Unassigned";
     const nextLaborCents = centsFromCurrencyInput(taskEditForm.laborCost);
     const nextBillingLaborPriceCents = centsFromCurrencyInput(taskEditForm.billingLaborPrice);
     const nextEstimatedMinutes = Number(taskEditForm.estimatedTime || 0);
     const nextQuantity = Number(taskEditForm.quantity || 0);
-    const selectedDbItem = shoppingDbItemById.get(taskEditForm.dataBaseItemId);
+    let selectedDbItem = shoppingDbItemById.get(taskEditForm.dataBaseItemId);
     const selectedPayType = taskPayTypeById.get(taskEditForm.payTypeId) || null;
+    const selectedEditEquipment = equipmentById.get(taskEditForm.equipmentId);
+    const resolvedEditBodyOfWaterId =
+      taskEditForm.bodyOfWaterId ||
+      selectedEditEquipment?.bodyOfWaterId ||
+      job.bodyOfWaterId ||
+      "";
 
     if (!nextName) return toast.error("Add a task description.");
     if (!nextType) return toast.error("Pick a task type.");
@@ -8301,7 +9396,7 @@ const JobDetailView = () => {
     if (!Number.isFinite(nextEstimatedMinutes) || nextEstimatedMinutes < 0) {
       return toast.error("Estimated time cannot be negative.");
     }
-    if (editingTaskNeedsBodyOfWater && !taskEditForm.bodyOfWaterId) {
+    if (editingTaskNeedsBodyOfWater && !resolvedEditBodyOfWaterId) {
       return toast.error("Select a body of water.");
     }
     if (editingTaskNeedsEquipment && !taskEditForm.equipmentId) {
@@ -8309,6 +9404,16 @@ const JobDetailView = () => {
     }
     if (editingTaskNeedsInstallItem && !selectedDbItem) {
       return toast.error("Select an item.");
+    }
+    if (editingTaskNeedsEquipmentDatabaseItem && selectedDbItem && !isEquipmentDatabaseItem(selectedDbItem)) {
+      return toast.error("Select an equipment database item.");
+    }
+    if (
+      editingTaskNeedsEquipmentDatabaseItem &&
+      selectedDbItem &&
+      !hasDatabaseEquipmentMapping({ ...selectedDbItem, ...databaseEquipmentMappingPatch(taskEditDbItemEquipmentMapping) })
+    ) {
+      return toast.error("Connect the equipment item to universal equipment or enter custom type, make, and model.");
     }
     if (editingTaskNeedsInstallItem && (!Number.isFinite(nextQuantity) || nextQuantity <= 0)) {
       return toast.error("Quantity must be greater than 0.");
@@ -8325,16 +9430,62 @@ const JobDetailView = () => {
       payTypeId: selectedPayType?.id || "",
       payTypeName: selectedPayType?.name || selectedPayType?.label || "",
       customerApproval: Boolean(taskEditForm.customerApproval),
-      bodyOfWaterId: editingTaskNeedsBodyOfWater ? taskEditForm.bodyOfWaterId : "",
+      bodyOfWaterId: editingTaskNeedsBodyOfWater ? resolvedEditBodyOfWaterId : "",
       equipmentId: editingTaskNeedsEquipment ? taskEditForm.equipmentId : "",
       dataBaseItemId: editingTaskNeedsInstallItem ? taskEditForm.dataBaseItemId : "",
       updatedAt: serverTimestamp(),
       updatedByUserId: getUserId(),
       updatedByUserName: getUserName(),
     };
+    const originalTaskWasFinished = isFinishedTaskStatus(originalTask.status);
+    const nextTaskIsFinished = isFinishedTaskStatus(nextStatus);
 
     try {
       setSavingTaskEdit(true);
+      let completionTask = null;
+      let completionEffectTaskUpdates = {};
+      let completedAt = null;
+
+      if (editingTaskNeedsEquipmentDatabaseItem) {
+        selectedDbItem = await saveEquipmentMappingForDatabaseItem(
+          selectedDbItem,
+          taskEditDbItemEquipmentMapping
+        );
+        if (!selectedDbItem) return;
+      }
+
+      if (nextTaskIsFinished && !originalTaskWasFinished) {
+        const taskForInstallPrompt = {
+          ...originalTask,
+          ...taskUpdates,
+          status: "Finished",
+        };
+        const installDetails = await promptForReplacementInstallDetails(taskForInstallPrompt);
+        if (installDetails === null) {
+          toast.error("Replacement install details are required before finishing this task");
+          return;
+        }
+
+        completedAt = new Date();
+        Object.assign(taskUpdates, {
+          ...installDetails,
+          status: "Finished",
+          completedAt: Timestamp.fromDate(completedAt),
+          ...(taskUpdates.equipmentId
+            ? {
+              equipmentStatusOnCompletion:
+                taskEquipmentStatusDrafts[editingTaskId] || EQUIPMENT_STATUS.OPERATIONAL,
+            }
+            : {}),
+        });
+
+        completionTask = {
+          ...taskForInstallPrompt,
+          ...installDetails,
+          ...taskUpdates,
+          completedAt,
+        };
+      }
 
       await updateDoc(
         doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", editingTaskId),
@@ -8353,6 +9504,65 @@ const JobDetailView = () => {
         selectedDbItem,
         nextQuantity
       );
+
+      if (completionTask) {
+        const effects = await runWorkCompletionEffects({
+          db,
+          companyId: recentlySelectedCompany,
+          task: completionTask,
+          jobId,
+          completedAt,
+          currentJobOperationStatus: job.operationStatus || "",
+          syncJobStatus: true,
+        });
+
+        completionEffectTaskUpdates = {
+          ...(effects.equipmentHistory?.replacementEquipmentId
+            ? {
+              replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+            }
+            : {}),
+          ...(effects.equipmentHistory?.installedEquipmentId || effects.equipmentHistory?.replacementEquipmentId
+            ? {
+              installedEquipmentId:
+                effects.equipmentHistory.installedEquipmentId ||
+                effects.equipmentHistory.replacementEquipmentId,
+            }
+            : {}),
+          ...(effects.equipmentHistory?.installedPurchasedItemId
+            ? {
+              purchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+              installedPurchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+            }
+            : {}),
+        };
+
+        if (Object.keys(completionEffectTaskUpdates).length) {
+          await updateDoc(
+            doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", editingTaskId),
+            completionEffectTaskUpdates
+          );
+          await syncEditedTaskToScheduledStop(
+            editingTaskId,
+            scheduledServiceStopId,
+            {
+              ...taskUpdates,
+              ...completionEffectTaskUpdates,
+            }
+          );
+        }
+
+        if (effects.jobStatus?.status) {
+          setJob((prev) => ({
+            ...prev,
+            operationStatus: effects.jobStatus.status,
+          }));
+          setSelectedOperationStatus({
+            value: effects.jobStatus.status,
+            label: effects.jobStatus.status,
+          });
+        }
+      }
 
       await recordJobHistory({
         eventType: "Task",
@@ -8373,6 +9583,7 @@ const JobDetailView = () => {
           taskId: editingTaskId,
           serviceStopId: scheduledServiceStopId,
           linkedShoppingItemIds,
+          completedFromTaskEdit: Boolean(completionTask),
         },
       });
 
@@ -8413,9 +9624,35 @@ const JobDetailView = () => {
     if (!taskNeedsEquipment) setSelectedTaskEquipment(null);
     if (!taskNeedsInstallItem) {
       setSelectedTaskDbItem(null);
+      setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
       setTaskQuantity("1");
+    } else if (taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && !isEquipmentDatabaseItem(selectedTaskDbItem)) {
+      setSelectedTaskDbItem(null);
+      setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
     }
-  }, [taskNeedsBodyOfWater, taskNeedsEquipment, taskNeedsInstallItem]);
+  }, [selectedTaskDbItem, taskNeedsBodyOfWater, taskNeedsEquipment, taskNeedsEquipmentDatabaseItem, taskNeedsInstallItem]);
+
+  useEffect(() => {
+    setSelectedTaskDbItemEquipmentMapping(databaseEquipmentMappingFromItem(selectedTaskDbItem || {}));
+  }, [selectedTaskDbItem]);
+
+  useEffect(() => {
+    if (!taskNeedsBodyOfWater || selectedTaskBodyOfWater?.id || !selectedTaskEquipment?.bodyOfWaterId) return;
+
+    const body = taskBodyOfWaterList.find((item) => item.id === selectedTaskEquipment.bodyOfWaterId);
+    if (body) setSelectedTaskBodyOfWater(body);
+  }, [selectedTaskBodyOfWater?.id, selectedTaskEquipment, taskBodyOfWaterList, taskNeedsBodyOfWater]);
+
+  useEffect(() => {
+    if (!editingTaskNeedsInstallItem || !taskEditForm.dataBaseItemId) {
+      setTaskEditDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
+      return;
+    }
+
+    setTaskEditDbItemEquipmentMapping(
+      databaseEquipmentMappingFromItem(shoppingDbItemById.get(taskEditForm.dataBaseItemId) || {})
+    );
+  }, [editingTaskNeedsInstallItem, shoppingDbItemById, taskEditForm.dataBaseItemId]);
 
   const handleAddTask = async (e) => {
     e.preventDefault();
@@ -8435,7 +9672,12 @@ const JobDetailView = () => {
       if (!Number.isFinite(estimatedTimeNumber) || estimatedTimeNumber < 0) {
         return toast.error("Estimated time cannot be negative.");
       }
-      if (taskNeedsBodyOfWater && !selectedTaskBodyOfWater?.id) {
+      const resolvedTaskBodyOfWaterId =
+        selectedTaskBodyOfWater?.id ||
+        selectedTaskEquipment?.bodyOfWaterId ||
+        job.bodyOfWaterId ||
+        "";
+      if (taskNeedsBodyOfWater && !resolvedTaskBodyOfWaterId) {
         return toast.error("Select a body of water");
       }
       if (taskNeedsEquipment && !selectedTaskEquipment?.id) {
@@ -8443,6 +9685,16 @@ const JobDetailView = () => {
       }
       if (taskNeedsInstallItem && !selectedTaskDbItem?.id) {
         return toast.error("Select an item");
+      }
+      if (taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && !isEquipmentDatabaseItem(selectedTaskDbItem)) {
+        return toast.error("Select an equipment database item");
+      }
+      if (
+        taskNeedsEquipmentDatabaseItem &&
+        selectedTaskDbItem &&
+        !hasDatabaseEquipmentMapping({ ...selectedTaskDbItem, ...databaseEquipmentMappingPatch(selectedTaskDbItemEquipmentMapping) })
+      ) {
+        return toast.error("Connect the equipment item to universal equipment or enter custom type, make, and model.");
       }
       if (taskNeedsInstallItem) {
         const qty = parseFloat(taskQuantity);
@@ -8456,11 +9708,20 @@ const JobDetailView = () => {
       const taskPayType = selectedTaskPayType || taskPayTypeOptions[0] || null;
       const linkedShoppingListItemId = taskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
       const quantity = taskNeedsInstallItem ? parseFloat(taskQuantity) : 0;
+      const newTaskType = canonicalJobTaskType(selectedTaskType.value);
+      let taskDbItem = selectedTaskDbItem;
+      if (taskNeedsEquipmentDatabaseItem) {
+        taskDbItem = await saveEquipmentMappingForDatabaseItem(
+          selectedTaskDbItem,
+          selectedTaskDbItemEquipmentMapping
+        );
+        if (!taskDbItem) return;
+      }
 
       await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), {
         id,
         name: taskDescription,
-        type: selectedTaskType.value,
+        type: newTaskType,
         contractedRate: costCents,
         billingLaborPriceCents,
         estimatedTime: estMin,
@@ -8485,8 +9746,8 @@ const JobDetailView = () => {
 
         equipmentId: taskNeedsEquipment ? selectedTaskEquipment?.id || "" : "",
         serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
-        bodyOfWaterId: taskNeedsBodyOfWater ? selectedTaskBodyOfWater?.id || "" : "",
-        dataBaseItemId: taskNeedsInstallItem ? selectedTaskDbItem?.id || "" : "",
+        bodyOfWaterId: taskNeedsBodyOfWater ? resolvedTaskBodyOfWaterId : "",
+        dataBaseItemId: taskNeedsInstallItem ? taskDbItem?.id || "" : "",
         shoppingListItemId: linkedShoppingListItemId,
         shoppingListItemIds: linkedShoppingListItemId ? [linkedShoppingListItemId] : [],
         customerApprovalRequired: false,
@@ -8495,19 +9756,19 @@ const JobDetailView = () => {
       });
 
       if (taskNeedsInstallItem) {
-        const plannedUnitCostCents = Number(selectedTaskDbItem?.rate || selectedTaskDbItem?.cost || 0);
+        const plannedUnitCostCents = Number(taskDbItem?.rate || taskDbItem?.cost || 0);
         const plannedUnitPriceCents = Number(
-          selectedTaskDbItem?.sellPrice ||
-          selectedTaskDbItem?.rate ||
-          selectedTaskDbItem?.cost ||
+          taskDbItem?.sellPrice ||
+          taskDbItem?.rate ||
+          taskDbItem?.cost ||
           0
         );
         const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
         const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
 
-        const materialName = selectedTaskDbItem?.name || "";
-        const materialDescription = selectedTaskDbItem?.description || "";
-        const materialPhotoFields = itemPhotoFieldsFromSource(selectedTaskDbItem, materialName || "Shopping item photo");
+        const materialName = taskDbItem?.name || "";
+        const materialDescription = taskDbItem?.description || "";
+        const materialPhotoFields = itemPhotoFieldsFromSource(taskDbItem, materialName || "Shopping item photo");
         const materialStatus = initialJobMaterialStatus();
 
         await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), {
@@ -8517,7 +9778,7 @@ const JobDetailView = () => {
           status: materialStatus,
           purchaserId: "",
           purchaserName: "",
-          genericItemId: selectedTaskDbItem?.genericItemId || "",
+          genericItemId: taskDbItem?.genericItemId || "",
           name: materialName,
           description: materialDescription,
           datePurchased: null,
@@ -8526,7 +9787,7 @@ const JobDetailView = () => {
           jobName: job.internalId || "Job",
           linkedTaskId: id,
           linkedTaskName: taskDescription,
-          linkedTaskType: selectedTaskType.value,
+          linkedTaskType: newTaskType,
           customerId: job.customerId || "",
           customerName:
             job.customerName ||
@@ -8548,8 +9809,8 @@ const JobDetailView = () => {
           needsAction: true,
           actionDate: Timestamp.fromDate(new Date()),
           assignedTechIds: [],
-          dbItemId: selectedTaskDbItem?.id || "",
-          dbItemName: selectedTaskDbItem?.name || "",
+          dbItemId: taskDbItem?.id || "",
+          dbItemName: taskDbItem?.name || "",
           ...materialPhotoFields,
           purchasedItem: "",
           invoiced: false,
@@ -8560,7 +9821,7 @@ const JobDetailView = () => {
           partApprovalRequestId: "",
           estimateAccepted: isJobAcceptedForMaterials(),
           jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
-          itemId: selectedTaskDbItem?.id || "",
+          itemId: taskDbItem?.id || "",
           itemType: "Data Base",
           cost: plannedUnitCostCents,
           price: plannedUnitPriceCents,
@@ -8580,12 +9841,12 @@ const JobDetailView = () => {
         eventType: "Task",
         title: targetLaborLineId ? `Task added to service line: ${taskDescription}` : `Task added: ${taskDescription}`,
         changes: [
-          buildHistoryChange("type", "Task Type", "—", selectedTaskType.value),
+          buildHistoryChange("type", "Task Type", "—", newTaskType),
           buildHistoryChange("contractedRate", "Tech Labor Cost", "—", moneyFromCents(costCents)),
           buildHistoryChange("billingLaborPriceCents", "Billing Labor Price", "—", moneyFromCents(billingLaborPriceCents)),
           buildHistoryChange("estimatedTime", "Estimated Time", "—", `${estMin} minutes`),
           ...(taskNeedsBodyOfWater
-            ? [buildHistoryChange("bodyOfWaterId", "Body Of Water", "—", selectedTaskBodyOfWater?.label || selectedTaskBodyOfWater?.name || "—")]
+            ? [buildHistoryChange("bodyOfWaterId", "Body Of Water", "—", bodyOfWaterById.get(resolvedTaskBodyOfWaterId)?.label || bodyOfWaterById.get(resolvedTaskBodyOfWaterId)?.name || selectedTaskBodyOfWater?.label || selectedTaskBodyOfWater?.name || "—")]
             : []),
           ...(taskNeedsEquipment
             ? [buildHistoryChange("equipmentId", "Equipment", "—", selectedTaskEquipment?.label || selectedTaskEquipment?.name || "—")]
@@ -8625,14 +9886,28 @@ const JobDetailView = () => {
     }
   };
 
-  const openNewPlannedStopModal = (laborLineId = "") => {
+  const openNewPlannedStopModal = () => {
     if (!requireUpdateCurrentJob("update jobs")) return;
 
-    const targetLaborLineId = typeof laborLineId === "string" ? laborLineId : "";
-    setNewPlannedStopLaborLineId(targetLaborLineId);
+    setEditingPlannedStopId("");
     setPlannedStopForm({
       ...EMPTY_PLANNED_STOP_FORM,
       serviceStopTypeId: companyServiceStopTypes?.[0]?.id || "",
+    });
+    setNewPlannedStop(true);
+  };
+
+  const openPlannedStopEditor = (plannedStop) => {
+    if (!requireUpdateCurrentJob("update jobs")) return;
+
+    setEditingPlannedStopId(plannedStop?.id || "");
+    setPlannedStopForm({
+      ...EMPTY_PLANNED_STOP_FORM,
+      serviceStopTypeId: plannedStop?.serviceStopTypeId || plannedStop?.payTypeId || "",
+      name: plannedStop?.name || "",
+      description: plannedStop?.description || "",
+      estimatedMinutes: String(plannedStop?.estimatedMinutes || 0),
+      taskIds: Array.isArray(plannedStop?.taskIds) ? plannedStop.taskIds : [],
     });
     setNewPlannedStop(true);
   };
@@ -8641,7 +9916,7 @@ const JobDetailView = () => {
     e?.preventDefault?.();
     if (savingPlannedStop && !force) return;
     setNewPlannedStop(false);
-    setNewPlannedStopLaborLineId("");
+    setEditingPlannedStopId("");
     setPlannedStopForm(EMPTY_PLANNED_STOP_FORM);
   };
 
@@ -8673,7 +9948,7 @@ const JobDetailView = () => {
     if (!requireUpdateCurrentJob("update jobs")) return;
     if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
     if (!selectedPlannedStopType) return toast.error("Select a pay type.");
-    const targetLaborLineId = newPlannedStopLaborLineId;
+    const existingStop = (plannedServiceStops || []).find((stop) => stop.id === editingPlannedStopId) || null;
 
     const estimatedMinutesNumber = Number(plannedStopForm.estimatedMinutes || 0);
     if (!Number.isFinite(estimatedMinutesNumber) || estimatedMinutesNumber < 0) {
@@ -8683,8 +9958,8 @@ const JobDetailView = () => {
     try {
       setSavingPlannedStop(true);
 
-      const id = "comp_job_plan_stop_" + uuidv4();
-      const selectedTaskIds = Array.isArray(plannedStopForm.taskIds) ? plannedStopForm.taskIds : [];
+      const id = existingStop?.id || "comp_job_plan_stop_" + uuidv4();
+      const selectedTaskIds = Array.from(new Set(Array.isArray(plannedStopForm.taskIds) ? plannedStopForm.taskIds : []));
       const typeName =
         selectedPlannedStopType.name ||
         selectedPlannedStopType.label ||
@@ -8698,6 +9973,7 @@ const JobDetailView = () => {
       const nowMillis = Date.now();
 
       const payload = {
+        ...(existingStop || {}),
         id,
         companyId: recentlySelectedCompany,
         jobId,
@@ -8722,39 +9998,55 @@ const JobDetailView = () => {
         payrollEstimateHighestWorkerName: plannedStopFormPayRange.highestWorkerName || "",
         plannedLaborNotes,
         taskIds: selectedTaskIds,
+        taskAssignmentMode: "selected",
         status: "Planned",
-        sortOrder: plannedServiceStops.length,
-        createdAt: serverTimestamp(),
-        createdAtMillis: nowMillis,
-        createdByUserId: getUserId() || "",
-        createdByUserName: getAuditUserName(),
+        sortOrder: existingStop ? Number(existingStop.sortOrder || 0) : plannedServiceStops.length,
+        createdAt: existingStop?.createdAt || serverTimestamp(),
+        createdAtMillis: existingStop?.createdAtMillis || nowMillis,
+        createdByUserId: existingStop?.createdByUserId || getUserId() || "",
+        createdByUserName: existingStop?.createdByUserName || getAuditUserName(),
         updatedAt: serverTimestamp(),
         updatedAtMillis: nowMillis,
       };
 
-      await setDoc(doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), id), payload);
+      const selectedTaskIdSet = new Set(selectedTaskIds);
+      const cleanedPlannedStops = (plannedServiceStops || []).map((stop) => {
+        if (stop.id === existingStop?.id) return stop;
+        const taskIds = (Array.isArray(stop.taskIds) ? stop.taskIds : [])
+          .filter((taskId) => !selectedTaskIdSet.has(taskId));
+        return {
+          ...stop,
+          taskIds,
+          taskAssignmentMode: stop.taskAssignmentMode || "selected",
+          updatedAt: serverTimestamp(),
+          updatedAtMillis: nowMillis,
+        };
+      });
 
-      if (targetLaborLineId) {
-        await attachPlannedStopToLaborLine(targetLaborLineId, id);
-      }
+      await Promise.all([
+        setDoc(doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), id), payload, { merge: true }),
+        ...cleanedPlannedStops
+          .filter((stop) => stop.id !== existingStop?.id)
+          .map((stop) => setDoc(doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), stop.id), stop, { merge: true })),
+      ]);
 
       await recordJobHistory({
         eventType: "Planned Service Stop",
-        title: targetLaborLineId ? `Planned stop added to service line: ${stopName}` : `Planned stop added: ${stopName}`,
+        title: existingStop ? `Planned stop updated: ${stopName}` : `Planned stop added: ${stopName}`,
         description: payload.description,
         changes: [
           buildHistoryChange("serviceStopTypeId", "Pay Type", "—", typeName),
           buildHistoryChange("estimatedMinutes", "Estimated Time", "—", `${estimatedMinutesNumber} minutes`),
           buildHistoryChange("plannedLaborCostCents", "Planning Labor Cost", "—", moneyFromCents(plannedLaborCostCents)),
-          buildHistoryChange("taskIds", "Linked Tasks", "—", selectedTaskIds.length ? String(selectedTaskIds.length) : "All current tasks"),
+          buildHistoryChange("taskIds", "Linked Tasks", existingStop ? String(getPlannedStopTasks(existingStop).length) : "—", String(selectedTaskIds.length)),
         ],
         metadata: {
           plannedStopId: id,
           serviceStopTypeId: selectedPlannedStopType.id || "",
           highestWorkerName: plannedStopFormPayRange.highestWorkerName || "",
-          laborLineId: targetLaborLineId || "",
+          taskIds: selectedTaskIds,
         },
-        severity: "success",
+        severity: existingStop ? "info" : "success",
       });
 
       await loadJobWorkflowData({
@@ -8764,7 +10056,7 @@ const JobDetailView = () => {
         currentShoppingList: shoppingList,
       });
 
-      toast.success(targetLaborLineId ? "Added planned stop to service line" : "Added planned stop");
+      toast.success(existingStop ? "Updated planned stop" : "Added planned stop");
       clearNewPlannedStop({ preventDefault: () => { } }, { force: true });
     } catch (err) {
       console.error(err);
@@ -8965,6 +10257,15 @@ const JobDetailView = () => {
     const sellPriceValue = Number(shoppingDbItemForm.sellPrice || 0);
     if (!Number.isFinite(rateValue) || rateValue < 0) return toast.error("Unit cost cannot be negative");
     if (!Number.isFinite(sellPriceValue) || sellPriceValue < 0) return toast.error("Sell price cannot be negative");
+    const isEquipmentItem = isEquipmentDatabaseCategory(shoppingDbItemForm.category?.label || shoppingDbItemForm.category);
+    if (
+      isEquipmentItem &&
+      (!shoppingDbItemForm.equipmentMapping?.type ||
+        !shoppingDbItemForm.equipmentMapping?.make ||
+        !shoppingDbItemForm.equipmentMapping?.model)
+    ) {
+      return toast.error("Connect this equipment item to universal equipment or enter custom type, make, and model.");
+    }
 
     try {
       setSavingShoppingDbItem(true);
@@ -8997,6 +10298,7 @@ const JobDetailView = () => {
         sellPrice: sellPriceCents,
         billingRate: sellPriceCents,
         tracking: shoppingDbItemForm.tracking,
+        ...(isEquipmentItem ? databaseEquipmentMappingPatch(shoppingDbItemForm.equipmentMapping) : {}),
       };
 
       await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), item);
@@ -9734,6 +11036,37 @@ const JobDetailView = () => {
     ""
   );
 
+  const getPurchasedItemTechnicianIds = (item = {}) => (
+    [
+      item.techId,
+      item.technicianId,
+      item.purchaserId,
+      item.purchasedByUserId,
+      item.userId,
+      item.createdByUserId,
+      item.assignedTechId,
+      item.assignedToUserId,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+
+  const getPurchasedItemTechnicianNames = (item = {}) => (
+    [
+      item.techName,
+      item.tech,
+      item.technicianName,
+      item.purchaserName,
+      item.purchasedByUserName,
+      item.purchasedByName,
+      item.userName,
+      item.createdByUserName,
+      item.buyerName,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+
   const isPurchasedItemBillable = (item) => {
     return item.billable === true;
   };
@@ -9875,8 +11208,47 @@ const JobDetailView = () => {
     return ["All", ...Array.from(categories).sort((a, b) => a.localeCompare(b))];
   }, [availablePurchasedItems]);
 
+  const purchasedItemTechnicianOptions = useMemo(() => {
+    const optionMap = new Map();
+    const addOption = (value, label) => {
+      const cleanValue = String(value || "").trim();
+      const cleanLabel = String(label || "").trim();
+      if (!cleanValue || !cleanLabel) return;
+      optionMap.set(cleanValue, cleanLabel);
+    };
+
+    (companyUserList || []).forEach((user) => {
+      const userId = user.userId || user.id || user.value || "";
+      const userName = user.label || user.userName || user.name || user.email || userId;
+      addOption(userId, userName);
+    });
+
+    (availablePurchasedItems || []).forEach((item) => {
+      const names = getPurchasedItemTechnicianNames(item);
+      const label = names[0] || "Unknown technician";
+      const ids = getPurchasedItemTechnicianIds(item);
+
+      if (ids.length) {
+        ids.forEach((id) => addOption(id, label));
+      } else if (names.length) {
+        addOption(`name:${names[0].toLowerCase()}`, names[0]);
+      }
+    });
+
+    return [
+      { value: "All", label: "All Technicians" },
+      ...Array.from(optionMap.entries())
+        .map(([value, label]) => ({ value, label }))
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    ];
+  }, [availablePurchasedItems, companyUserList]);
+
   const filteredAvailablePurchasedItems = useMemo(() => {
     const normalizedSearchTerm = purchasedItemSearchTerm.trim().toLowerCase();
+    const selectedTechnicianOption = purchasedItemTechnicianOptions.find(
+      (option) => option.value === purchasedItemTechnicianFilter
+    );
+    const selectedTechnicianLabel = String(selectedTechnicianOption?.label || "").trim().toLowerCase();
     const getSortTotalCents = (item) => {
       const price = Number(item.price || 0);
       const qty = Number(item.quantityString ?? item.quantity ?? 0);
@@ -9911,8 +11283,17 @@ const JobDetailView = () => {
         purchasedItemInvoicedFilter === "All" ||
         (purchasedItemInvoicedFilter === "Invoiced" && isPurchasedItemInvoiced(item)) ||
         (purchasedItemInvoicedFilter === "Not Invoiced" && !isPurchasedItemInvoiced(item));
+      const technicianMatches =
+        purchasedItemTechnicianFilter === "All" ||
+        getPurchasedItemTechnicianIds(item).includes(purchasedItemTechnicianFilter) ||
+        getPurchasedItemTechnicianNames(item)
+          .map((name) => name.toLowerCase())
+          .some((name) => (
+            name === selectedTechnicianLabel ||
+            `name:${name}` === purchasedItemTechnicianFilter
+          ));
 
-      return searchMatches && categoryMatches && billableMatches && invoicedMatches;
+      return searchMatches && categoryMatches && technicianMatches && billableMatches && invoicedMatches;
     });
 
     return [...filteredItems].sort((a, b) => {
@@ -9939,6 +11320,8 @@ const JobDetailView = () => {
   }, [
     availablePurchasedItems,
     purchasedItemCategoryFilter,
+    purchasedItemTechnicianFilter,
+    purchasedItemTechnicianOptions,
     purchasedItemBillableFilter,
     purchasedItemInvoicedFilter,
     purchasedItemSearchTerm,
@@ -11291,6 +12674,23 @@ const JobDetailView = () => {
             placeholder="Short description"
           />
         </label>
+
+        {isEquipmentDatabaseCategory(shoppingDbItemForm.category?.label || shoppingDbItemForm.category) && (
+          <div className="md:col-span-2 rounded-md border border-slate-200 bg-white p-3">
+            <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
+              Equipment Mapping
+            </div>
+            <EquipmentCatalogPicker
+              value={shoppingDbItemForm.equipmentMapping || emptyDatabaseEquipmentMapping()}
+              onChange={(nextMapping) => handleShoppingDbItemFormChange("equipmentMapping", nextMapping)}
+              preferCustom
+              inputClassName={fieldInputClass}
+              labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+              gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+              labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+            />
+          </div>
+        )}
       </div>
 
       <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
@@ -11390,6 +12790,8 @@ const JobDetailView = () => {
   const renderWorkOfferCard = (offer) => {
     const taskCount = getOfferTaskCount(offer);
     const estimatedPayCents = getOfferEstimatedPayCents(offer);
+    const basePayCents = getWorkOfferBasePayCents(offer);
+    const incentiveCents = getWorkOfferIncentiveCents(offer);
     const targetText = getOfferTargetText(offer);
     const status = offer.status || "Pending";
 
@@ -11446,6 +12848,11 @@ const JobDetailView = () => {
             <p className="mt-1 font-semibold text-gray-800">
               {moneyFromCents(estimatedPayCents)}
             </p>
+            {incentiveCents > 0 && (
+              <p className="mt-1 text-xs font-semibold text-emerald-700">
+                {moneyFromCents(basePayCents)} base
+              </p>
+            )}
           </div>
 
           <div className="rounded-lg bg-white border border-gray-200 p-3">
@@ -11474,6 +12881,12 @@ const JobDetailView = () => {
           {(offer.scheduledServiceStopId || offer.serviceStopId) && (
             <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
               Scheduled
+            </span>
+          )}
+
+          {incentiveCents > 0 && (
+            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              {getWorkOfferIncentiveText(offer)}
             </span>
           )}
 
@@ -11847,10 +13260,12 @@ const JobDetailView = () => {
       if (!recentlySelectedCompany || !jobId) return;
 
       setMarkingJobInvoiced(true);
-      const salesAgreement = salesWorkflowEnabled ? await ensureJobSalesAgreement() : null;
+      const salesAgreement = salesWorkflowEnabled
+        ? selectedSalesAgreement || await findLinkedSalesAgreement()
+        : null;
       const existingSalesInvoice = salesWorkflowEnabled ? await findLinkedSalesInvoice() : null;
       const salesInvoice = salesWorkflowEnabled
-        ? existingSalesInvoice || await ensureJobSalesInvoice(salesAgreement, { requireEmail: false })
+        ? existingSalesInvoice || await ensureJobSalesInvoice(salesAgreement || "", { requireEmail: false })
         : null;
       const invoiceId =
         salesInvoice?.id ||
@@ -11873,15 +13288,21 @@ const JobDetailView = () => {
         salesInvoice,
         invoiceId,
         invoiceType,
-        historyTitle: "Job marked as invoiced",
+        historyTitle: jobIsFinished ? "Job converted to invoice" : "Job marked as invoiced",
         historyMetadata: {
           manual: true,
           createdSalesInvoice: Boolean(salesWorkflowEnabled && salesInvoice?.id && !existingSalesInvoice?.id),
+          sourceEstimateId: salesAgreement?.id || selectedContract?.id || "",
+          sourceEstimateType: salesAgreement?.id
+            ? "salesAgreement"
+            : selectedContract?.id
+              ? "legacyContract"
+              : "job",
         },
       });
 
       toast.success(
-        `Job marked as invoiced. ${result.invoicedPurchasedItemCount} purchased item(s) and ${result.invoicedShoppingItemCount} shopping item(s) updated.`
+        `${jobIsFinished ? "Job converted to invoice" : "Job marked as invoiced"}. ${result.invoicedPurchasedItemCount} purchased item(s) and ${result.invoicedShoppingItemCount} shopping item(s) updated.`
       );
     } catch (err) {
       console.error(err);
@@ -11891,7 +13312,19 @@ const JobDetailView = () => {
     }
   };
   const renderPlannedServiceStopCard = (stop) => {
-    const linkedTaskCount = Array.isArray(stop.taskIds) ? stop.taskIds.length : 0;
+    const linkedTasks = getPlannedStopTasks(stop);
+    const linkedTaskCount = linkedTasks.length;
+    const billingServiceNames = Array.from(new Set(
+      linkedTasks
+        .map((task) => laborLineByTaskId.get(task.id))
+        .filter(Boolean)
+        .map(getLaborLineDisplayName)
+    ));
+    const linkedEquipmentNames = Array.from(new Set(
+      linkedTasks
+        .map((task) => task.equipmentId ? equipmentById.get(task.equipmentId)?.name || task.equipmentName || "Linked equipment" : "")
+        .filter(Boolean)
+    ));
     const payRange = getPlannedStopPayRange(stop);
     const rangeLabel =
       payRange.minAmountCents === payRange.maxAmountCents
@@ -11904,25 +13337,44 @@ const JobDetailView = () => {
     return (
       <div
         key={stop.id}
-        className="rounded-xl border border-gray-200 bg-gray-50 p-4"
+        className="rounded-md border border-slate-200 bg-white px-3 py-2.5"
       >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Planned Stop
-            </p>
-            <p className="mt-1 text-base font-bold text-gray-800">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="truncate text-sm font-bold text-slate-900">
               {stop.name || stop.serviceStopTypeName || "Planned Visit"}
-            </p>
-            <p className="mt-1 text-sm text-gray-600">
-              {stop.serviceStopTypeName || "Company Pay Type"}
-            </p>
+              </p>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                Planned Stop
+              </span>
+              {stop.serviceStopTypeName && (
+                <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                  {stop.serviceStopTypeName}
+                </span>
+              )}
+            </div>
+            {stop.description && (
+              <p className="mt-1 line-clamp-2 text-xs text-slate-600">
+                {stop.description}
+              </p>
+            )}
           </div>
 
-          <div className="flex flex-wrap justify-end gap-2">
+          <div className="flex shrink-0 flex-wrap gap-1.5 lg:justify-end">
+            {canUpdateCurrentJob && (
+              <button
+                type="button"
+                onClick={() => openPlannedStopEditor(stop)}
+                disabled={savingPlannedStop}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Edit
+              </button>
+            )}
             <Link
               to={`/company/serviceStops/createNew/${jobId}?plannedStopId=${stop.id}&category=jobVisit`}
-              className="px-3 py-1 text-xs font-bold rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
+              className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700 transition hover:bg-blue-100"
             >
               Schedule
             </Link>
@@ -11930,83 +13382,169 @@ const JobDetailView = () => {
             <button
               type="button"
               onClick={() => deletePlannedServiceStop(stop.id)}
-              className="px-3 py-1 text-xs font-bold rounded-full bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition"
+              className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-bold text-red-700 transition hover:bg-red-100"
             >
               Delete
             </button>
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Estimated Time
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {formatDurationMinutes(stop.estimatedMinutes)}
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Pay Range
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {rangeLabel}
-            </p>
-            <p className="mt-1 text-xs text-gray-500">
-              Highest used for planning
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Planning Cost
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {moneyFromCents(getPlannedStopCostCents(stop))}
-            </p>
-            <p className="mt-1 text-xs text-gray-500">
-              {payRange.highestWorkerName || "No rate match"}
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Linked Tasks
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {linkedTaskCount}
-            </p>
-          </div>
+        <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+          <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
+            Time {formatDurationMinutes(stop.estimatedMinutes)}
+          </span>
+          <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
+            Pay {rangeLabel}
+          </span>
+          <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
+            Cost {moneyFromCents(getPlannedStopCostCents(stop))}
+          </span>
+          <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
+            {linkedTaskCount} task{linkedTaskCount === 1 ? "" : "s"}
+          </span>
+          {payRange.highestWorkerName && (
+            <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-600">
+              {payRange.highestWorkerName}
+            </span>
+          )}
         </div>
 
-        {stop.description && (
-          <p className="mt-4 text-sm text-gray-700 whitespace-pre-wrap">
-            {stop.description}
-          </p>
-        )}
-
         {stop.plannedLaborNotes && (
-          <p className="mt-3 text-xs text-gray-500">
+          <p className="mt-2 line-clamp-2 text-xs text-slate-500">
             Labor notes: {stop.plannedLaborNotes}
           </p>
         )}
 
+        <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+            <span className="font-bold uppercase tracking-wide text-slate-600">Assigned Tasks</span>
+            <span>
+              {billingServiceNames.length
+                ? `Billing: ${billingServiceNames.join(", ")}`
+                : "No billing service line linked yet"}
+            </span>
+            {linkedEquipmentNames.length ? (
+              <span>Equipment: {linkedEquipmentNames.join(", ")}</span>
+            ) : null}
+          </div>
+
+          <div className="mt-2 grid gap-1.5 md:grid-cols-2">
+            {!linkedTasks.length ? (
+              <p className="rounded-md border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-500 md:col-span-2">
+                No tasks assigned to this planned stop yet.
+              </p>
+            ) : (
+              linkedTasks.map((task) => {
+                const billingLine = laborLineByTaskId.get(task.id);
+                return (
+                  <div key={`planned-stop-task-${stop.id}-${task.id}`} className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                    <p className="truncate text-xs font-bold text-slate-900">{task.name || task.description || task.type || "Task"}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      {[task.type || "", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : "", taskContextLabel(task)].filter(Boolean).join(" • ") || "Task"}
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-600">
+                      Billing: {billingLine ? getLaborLineDisplayName(billingLine) : "No service line"}
+                    </p>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
         {topPayLine && (
-          <p className="mt-3 text-xs text-gray-500">
+          <p className="mt-2 text-xs text-slate-500">
             Pay source: {topPayLine.workTypeName || topPayLine.title} • {formatPayRate(topPayLine)}
           </p>
         )}
 
         {payRange.needsReview && (
-          <p className="mt-3 text-xs font-semibold text-amber-700">
+          <p className="mt-2 text-xs font-semibold text-amber-700">
             Some technician rates need review before this range is complete.
           </p>
         )}
       </div>
     );
   };
+
+  const renderOperationsPlanSection = () => (
+    <section className="overflow-hidden rounded-md border border-slate-200">
+      <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h4 className="text-sm font-bold text-slate-950">Operations Plan</h4>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Group billable tasks into planned service stops for scheduling. One stop can include tasks from multiple service lines and equipment.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
+            {plannedServiceStops.length} stop{plannedServiceStops.length === 1 ? "" : "s"}
+          </span>
+          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
+            {unassignedOperationsTasks.length} unassigned task{unassignedOperationsTasks.length === 1 ? "" : "s"}
+          </span>
+          {canUpdateCurrentJob && (
+            <button
+              type="button"
+              onClick={openNewPlannedStopModal}
+              disabled={savingPlannedStop}
+              className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <PlusIcon className="h-4 w-4" aria-hidden="true" />
+              Planned Stop
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-3 bg-white p-4">
+        {!plannedServiceStops.length ? (
+          <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
+            <p className="text-sm font-medium text-slate-700">No operations stops planned yet.</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Add a planned stop, then select the tasks that will be completed on that visit.
+            </p>
+            {canUpdateCurrentJob && (
+              <button
+                type="button"
+                onClick={openNewPlannedStopModal}
+                disabled={savingPlannedStop}
+                className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                Add first planned stop
+              </button>
+            )}
+          </div>
+        ) : (
+          plannedServiceStops.map((stop) => renderPlannedServiceStopCard(stop))
+        )}
+
+        {unassignedOperationsTasks.length ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+            <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Tasks Not Assigned To A Planned Stop</p>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              {unassignedOperationsTasks.map((task) => {
+                const billingLine = laborLineByTaskId.get(task.id);
+                return (
+                  <div key={`operations-unassigned-task-${task.id}`} className="rounded-md border border-amber-200 bg-white p-2">
+                    <p className="text-xs font-bold text-slate-900">{task.name || task.description || task.type || "Task"}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      {[task.type || "", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : "", taskContextLabel(task)].filter(Boolean).join(" • ") || "Task"}
+                    </p>
+                    <p className="mt-1 text-[11px] font-semibold text-amber-700">
+                      Billing: {billingLine ? getLaborLineDisplayName(billingLine) : "No service line"}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+
   const renderServiceStopCard = (stop) => {
     const scheduledLaborCents = getScheduledStopEstimatedLaborCents(stop);
     const timeRange = [formatTimeValue(stop.startTime), formatTimeValue(stop.endTime)]
@@ -12475,7 +14013,6 @@ const JobDetailView = () => {
   const isInitialShellLoading = loading && sectionLoading.shell;
   const visiblePlannedMaterials = showAllPlannedMaterials ? shoppingList : shoppingList.slice(0, 5);
   const hiddenPlannedMaterialCount = Math.max(shoppingList.length - 5, 0);
-  const newPlannedStopTargetLaborLine = (laborLineItems || []).find((line) => line.id === newPlannedStopLaborLineId) || null;
   const shoppingPreviewQuantity = quantityNumber(shoppingFormData.quantity);
   const shoppingPreviewUnitCostCents = requiresShoppingDbItem
     ? shoppingFormData.plannedUnitCost !== ""
@@ -12498,6 +14035,18 @@ const JobDetailView = () => {
   const hiddenWorkOfferCount = Math.max(workOffers.length - 5, 0);
   const visibleActualServiceStops = showAllActualServiceStops ? serviceStops : serviceStops.slice(0, 5);
   const hiddenActualServiceStopCount = Math.max(serviceStops.length - 5, 0);
+  const unfinishedJobFinishTasks = (taskList || []).filter((task) => !isFinishedTaskStatus(task.status));
+  const selectedJobFinishTaskCount = jobFinishTaskIds.filter((taskId) =>
+    unfinishedJobFinishTasks.some((task) => task.id === taskId)
+  ).length;
+  const unfinishedJobFinishShoppingItems = getUnfinishedJobFinishShoppingItems();
+  const jobFinishShoppingDeleteCount = unfinishedJobFinishShoppingItems.filter((item) =>
+    jobFinishShoppingItemActions[getFirestoreDocId(item)] === "delete"
+  ).length;
+  const jobFinishShoppingInstalledCount = Math.max(
+    unfinishedJobFinishShoppingItems.length - jobFinishShoppingDeleteCount,
+    0
+  );
   const currentPlanInvoiceLineItems = (() => {
     const explicitLaborLines = normalizeJobLaborLineItems(laborLineItems);
     const laborLines = explicitLaborLines.length
@@ -12514,7 +14063,7 @@ const JobDetailView = () => {
         internalCostCents: cents(line.internalCostCents),
         profitCents: cents(line.totalPriceCents) - cents(line.internalCostCents),
         taskIds: getLaborLineTaskIds(line),
-        plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+        plannedServiceStopIds: [],
       }))
       : (() => {
         const taskIds = (taskList || []).map((task) => task.id).filter(Boolean);
@@ -12532,7 +14081,6 @@ const JobDetailView = () => {
           name: "Labor",
           description: [
             taskIds.length ? `${taskIds.length} task${taskIds.length === 1 ? "" : "s"}` : "",
-            plannedServiceStopIds.length ? `${plannedServiceStopIds.length} planned stop${plannedServiceStopIds.length === 1 ? "" : "s"}` : "",
           ].filter(Boolean).join(" • "),
           quantity: 1,
           unitPriceCents: totalPriceCents,
@@ -12540,7 +14088,7 @@ const JobDetailView = () => {
           internalCostCents,
           profitCents: totalPriceCents - internalCostCents,
           taskIds,
-          plannedServiceStopIds,
+          plannedServiceStopIds: [],
         }];
       })();
 
@@ -12577,13 +14125,22 @@ const JobDetailView = () => {
   const currentPlanLaborLineItems = currentPlanInvoiceLineItems.filter((line) => line.group === "Labor");
   const currentPlanMaterialLineItems = currentPlanInvoiceLineItems.filter((line) => line.group === "Material");
   const assignedLaborTaskIds = new Set((laborLineItems || []).flatMap((line) => getLaborLineTaskIds(line)));
-  const assignedLaborPlannedStopIds = new Set((laborLineItems || []).flatMap((line) => getLaborLinePlannedStopIds(line)));
+  const laborLineByTaskId = new Map();
+  (laborLineItems || []).forEach((line) => {
+    getLaborLineTaskIds(line).forEach((taskId) => {
+      if (taskId) laborLineByTaskId.set(taskId, line);
+    });
+  });
+  const plannedStopByTaskId = new Map();
+  (plannedServiceStops || []).forEach((stop) => {
+    (Array.isArray(stop.taskIds) ? stop.taskIds : []).forEach((taskId) => {
+      if (taskId) plannedStopByTaskId.set(taskId, stop);
+    });
+  });
   const unassignedLaborTasks = (laborLineItems || []).length
     ? (taskList || []).filter((task) => task.id && !assignedLaborTaskIds.has(task.id))
     : [];
-  const unassignedLaborPlannedStops = (laborLineItems || []).length
-    ? (plannedServiceStops || []).filter((stop) => stop.id && !assignedLaborPlannedStopIds.has(stop.id))
-    : [];
+  const unassignedOperationsTasks = (taskList || []).filter((task) => task.id && !plannedStopByTaskId.has(task.id));
   const currentPlanLaborPriceCents = currentPlanLaborLineItems.reduce(
     (total, item) => total + cents(item.totalPriceCents),
     0
@@ -12621,6 +14178,91 @@ const JobDetailView = () => {
   );
   const plannedMaterialsToPurchase = (shoppingList || []).filter((item) => !isShoppingListItemPurchased(item));
   const acceptedWorkflowIsReady = Boolean(acceptedPlan) || isJobAcceptedForMaterials();
+  const timelineStatusKey = (value = "") => String(value || "").trim().toLowerCase();
+  const billingStatusKey = timelineStatusKey(job.billingStatus || "Draft");
+  const operationStatusKey = timelineStatusKey(job.operationStatus || "Estimate Pending");
+  const billingRecordStatusKey = timelineStatusKey(selectedBillingRecord?.status || "");
+  const customerResolvedKey = timelineStatusKey(JOB_BILLING_STATUS.customerResolved);
+  const estimatedBillingKeys = new Set(["estimate", "sent", "viewed", "accepted", "in progress", "invoiced", "paid", "comped", customerResolvedKey]);
+  const acceptedBillingKeys = new Set(["accepted", "in progress", "invoiced", "paid", "comped", customerResolvedKey]);
+  const billedBillingKeys = new Set(["invoiced", "paid", "comped", customerResolvedKey]);
+  const scheduledOperationKeys = new Set(["scheduled", "in progress", "waiting for parts", "finished"]);
+  const finishedServiceStops = (serviceStops || []).filter((stop) => (
+    timelineStatusKey(stop.operationStatus || stop.status) === "finished"
+  ));
+  const finishedTasks = (taskList || []).filter((task) => isFinishedTaskStatus(task.status));
+  const hasSavedScope = Boolean(
+    (jobPlans || []).length ||
+    (laborLineItems || []).length ||
+    (taskList || []).length ||
+    (plannedServiceStops || []).length ||
+    (shoppingList || []).length ||
+    Number(job.rate || 0)
+  );
+  const hasEstimateProgress = estimatedBillingKeys.has(billingStatusKey) ||
+    estimatedBillingKeys.has(billingRecordStatusKey) ||
+    Boolean(selectedBillingRecord?.sentAt || selectedBillingRecord?.dateSent);
+  const hasAcceptedProgress = acceptedBillingKeys.has(billingStatusKey) ||
+    acceptedBillingKeys.has(billingRecordStatusKey) ||
+    acceptedWorkflowIsReady ||
+    Boolean(selectedBillingRecord?.acceptedAt || selectedBillingRecord?.dateAccepted);
+  const hasScheduledProgress = scheduledOperationKeys.has(operationStatusKey) ||
+    (serviceStops || []).length > 0 ||
+    (taskList || []).some((task) => scheduledOperationKeys.has(timelineStatusKey(task.status)));
+  const hasFinishedProgress = operationStatusKey === "finished" ||
+    (taskList.length > 0 && finishedTasks.length === taskList.length) ||
+    (serviceStops.length > 0 && finishedServiceStops.length === serviceStops.length);
+  const hasBilledProgress = billedBillingKeys.has(billingStatusKey) ||
+    billedBillingKeys.has(billingRecordStatusKey);
+  const finishedProgressDetail = taskList.length
+    ? `${finishedTasks.length}/${taskList.length} tasks finished`
+    : serviceStops.length
+      ? `${finishedServiceStops.length}/${serviceStops.length} service stops finished`
+      : formatStatusLabel(job.operationStatus || "Estimate Pending");
+  const jobProgressSteps = [
+    {
+      id: "created",
+      label: "Created",
+      detail: job.dateCreated ? `Created ${formattedDateCreated}` : "Job record exists",
+      done: Boolean(jobId),
+    },
+    {
+      id: "scope",
+      label: "Scope",
+      detail: `${taskList.length} task${taskList.length === 1 ? "" : "s"}, ${plannedServiceStops.length} planned stop${plannedServiceStops.length === 1 ? "" : "s"}`,
+      done: hasSavedScope,
+    },
+    {
+      id: "estimate",
+      label: "Estimate",
+      detail: formatStatusLabel(job.billingStatus || "Draft"),
+      done: hasEstimateProgress,
+    },
+    {
+      id: "accepted",
+      label: "Accepted",
+      detail: acceptedPlan ? getJobPlanDisplayName(acceptedPlan, "Accepted plan") : formatStatusLabel(job.billingStatus || "Draft"),
+      done: hasAcceptedProgress,
+    },
+    {
+      id: "scheduled",
+      label: "Scheduled",
+      detail: `${serviceStops.length} service stop${serviceStops.length === 1 ? "" : "s"}`,
+      done: hasScheduledProgress,
+    },
+    {
+      id: "work",
+      label: "Finished",
+      detail: finishedProgressDetail,
+      done: hasFinishedProgress,
+    },
+    {
+      id: "billing",
+      label: "Billing",
+      detail: formatStatusLabel(job.billingStatus || "Draft"),
+      done: hasBilledProgress,
+    },
+  ];
   const canUpdateJobs = canUpdateCurrentJob;
   const headerActionItems = [
     {
@@ -12642,7 +14284,7 @@ const JobDetailView = () => {
       label: markingJobFinished ? "Marking Finished..." : "Mark As Finished",
       icon: CheckCircleIcon,
       tone: "emerald",
-      onClick: markJobAsFinished,
+      onClick: openJobFinishConfirm,
       disabled: markingJobFinished,
     },
     ...(salesWorkflowEnabled
@@ -12655,7 +14297,9 @@ const JobDetailView = () => {
       }]
       : []),
     {
-      label: markingJobInvoiced ? "Marking Invoiced..." : "Mark As Invoiced",
+      label: markingJobInvoiced
+        ? (jobIsFinished ? "Converting..." : "Marking Invoiced...")
+        : convertInvoiceActionLabel,
       icon: CurrencyDollarIcon,
       onClick: handleMarkAsInvoiced,
       disabled: markingJobInvoiced || sendingInvoiceEmail,
@@ -12684,7 +14328,7 @@ const JobDetailView = () => {
   ];
 
   const renderLaborLineScopePicker = () => (
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-3">
       <div className="rounded-md border border-slate-200 bg-white p-3">
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
@@ -12698,12 +14342,30 @@ const JobDetailView = () => {
           ) : (
             taskList.map((task) => {
               const checked = (laborLineForm.taskIds || []).includes(task.id);
+              const assignedLine = laborLineByTaskId.get(task.id);
+              const assignedToEditingLine = Boolean(
+                assignedLine && editingLaborLineId && assignedLine.id === editingLaborLineId
+              );
+              const assignedElsewhere = Boolean(assignedLine && assignedLine.id !== editingLaborLineId);
+              const assignmentMessage = assignedToEditingLine
+                ? checked ? "Already on this service line" : "Will be removed from this service line"
+                : assignedElsewhere
+                  ? checked
+                    ? `Will move from ${getLaborLineDisplayName(assignedLine)}`
+                    : `On ${getLaborLineDisplayName(assignedLine)}; selecting moves it here`
+                  : checked
+                    ? "Selected for this service line"
+                    : "Unassigned";
               return (
                 <label
                   key={task.id}
                   className={[
                     "flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs transition",
-                    checked ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-slate-50 hover:bg-white",
+                    checked
+                      ? "border-blue-200 bg-blue-50"
+                      : assignedElsewhere
+                        ? "border-amber-200 bg-amber-50 hover:bg-amber-100"
+                        : "border-slate-200 bg-slate-50 hover:bg-white",
                   ].join(" ")}
                 >
                   <input
@@ -12720,6 +14382,9 @@ const JobDetailView = () => {
                     <span className="mt-1 block font-semibold text-slate-700">
                       Cost {moneyFromCents(task.contractedRate)} • Task billing {moneyFromCents(getTaskBillingLaborPriceCents(task))}
                     </span>
+                    <span className={assignedElsewhere ? "mt-1 block font-semibold text-amber-700" : "mt-1 block font-semibold text-slate-500"}>
+                      {assignmentMessage}
+                    </span>
                   </span>
                 </label>
               );
@@ -12728,61 +14393,40 @@ const JobDetailView = () => {
         </div>
       </div>
 
-      <div className="rounded-md border border-slate-200 bg-white p-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Planned Stops</p>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
-            {(laborLineForm.plannedServiceStopIds || []).length}
-          </span>
-        </div>
-        <div className="mt-2 max-h-56 space-y-2 overflow-y-auto pr-1">
-          {!plannedServiceStops.length ? (
-            <p className="rounded-md border border-dashed border-slate-300 p-3 text-xs text-slate-500">No planned stops yet.</p>
-          ) : (
-            plannedServiceStops.map((stop) => {
-              const checked = (laborLineForm.plannedServiceStopIds || []).includes(stop.id);
-              return (
-                <label
-                  key={stop.id}
-                  className={[
-                    "flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs transition",
-                    checked ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-slate-50 hover:bg-white",
-                  ].join(" ")}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleLaborLinePlannedStop(stop.id)}
-                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-bold text-slate-900">{stop.name || stop.serviceStopTypeName || "Planned Stop"}</span>
-                    <span className="mt-0.5 block text-slate-500">
-                      {[stop.serviceStopTypeName || stop.type || "", stop.estimatedMinutes ? formatDurationMinutes(stop.estimatedMinutes) : ""].filter(Boolean).join(" • ") || "Planned stop"}
-                    </span>
-                    <span className="mt-1 block font-semibold text-slate-700">
-                      Planned cost {moneyFromCents(getPlannedStopCostCents(stop))}
-                    </span>
-                  </span>
-                </label>
-              );
-            })
-          )}
-        </div>
-      </div>
     </div>
   );
 
   const renderPlanInvoiceLaborLineForm = () => {
+    if (!newLaborLine && !editingLaborLineId) return null;
+
     const quantity = Math.max(Number(laborLineForm.quantity || 1), 1);
     const unitPriceCents = centsFromCurrencyInput(laborLineForm.unitPrice);
     const totalPriceCents = Math.round(unitPriceCents * quantity);
     const internalCostCents = centsFromCurrencyInput(laborLineForm.internalCost);
     const formProfitCents = totalPriceCents - internalCostCents;
     const scopeTotals = laborLineScopeTotals(laborLineForm);
+    const modalTitle = editingLaborLineId ? "Edit Service Line" : "New Service Line";
 
     return (
-      <form onSubmit={saveLaborLineItem} className="rounded-md border border-blue-200 bg-blue-50/60 p-3">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+        <form onSubmit={saveLaborLineItem} className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Service Line</p>
+              <h3 className="mt-1 text-lg font-bold text-slate-950">{modalTitle}</h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => clearLaborLineEditor()}
+              disabled={savingLaborLine}
+              className="rounded-md border border-slate-300 bg-white p-2 text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Close service line editor"
+            >
+              <XMarkIcon className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
           <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 md:col-span-2">
             Service Line
@@ -12855,7 +14499,9 @@ const JobDetailView = () => {
           <div className="mt-3">{renderLaborLineScopePicker()}</div>
         </div>
 
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-2 text-xs">
             <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-bold text-slate-700">
               Total {moneyFromCents(totalPriceCents)}
@@ -12886,105 +14532,570 @@ const JobDetailView = () => {
           </div>
         </div>
       </form>
+      </div>
     );
   };
 
-  const renderServiceCatalogPicker = () => (
-    <div className="border-b border-slate-200 bg-white p-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Prebuilt Service Lines</p>
-          <p className="mt-1 text-sm text-slate-600">
-            Add reusable service building blocks with their task checklist, estimated time, and billing price.
-          </p>
-        </div>
-        <Link
-          to="/company/sales/catalog-items"
-          className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-white"
-        >
-          Manage Service Catalog
-        </Link>
-      </div>
+  const renderLaborLineTaskSelectorModal = () => {
+    if (!taskSelectorLaborLineId) return null;
 
-      {loadingServiceCatalogItems ? (
-        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-          Loading service catalog...
-        </div>
-      ) : !serviceCatalogItems.length ? (
-        <div className="mt-3 rounded-md border border-dashed border-slate-300 p-4 text-center">
-          <p className="text-sm font-semibold text-slate-800">No prebuilt services yet.</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Create services in the catalog, then add them here as job building blocks.
-          </p>
-          <Link
-            to="/company/sales/catalog-items"
-            className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
-          >
-            <PlusIcon className="h-4 w-4" aria-hidden="true" />
-            Add first service
-          </Link>
-        </div>
-      ) : (
-        <div className="mt-3 grid gap-2 lg:grid-cols-2">
-          {serviceCatalogItems.map((item) => {
-            const taskTemplates = getCatalogServiceTaskTemplates(item);
-            const isAdding = addingCatalogServiceId === item.id;
-            return (
-              <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-slate-900">{item.name || "Service"}</p>
-                    <p className="mt-1 line-clamp-2 text-xs text-slate-500">
-                      {item.description || "No service description"}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
-                      <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">
-                        Price {moneyFromCents(item.unitAmountCents)}
-                      </span>
-                      <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">
-                        Cost {moneyFromCents(item.unitCostCents)}
-                      </span>
-                      <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">
-                        {taskTemplates.length} task{taskTemplates.length === 1 ? "" : "s"}
-                      </span>
+    const targetLine = (laborLineItems || []).find((line) => line.id === taskSelectorLaborLineId) || null;
+    const targetLineName = getLaborLineDisplayName(targetLine);
+    const normalizedSearch = laborLineTaskSelectorSearch.trim().toLowerCase();
+    const filteredTasks = (taskList || []).filter((task) => {
+      if (!normalizedSearch) return true;
+
+      return [
+        task.name,
+        task.description,
+        task.type,
+        taskContextLabel(task),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedSearch);
+    });
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+        <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Select Tasks</p>
+              <h3 className="mt-1 text-lg font-bold text-slate-950">{targetLineName}</h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => closeLaborLineTaskSelector()}
+              disabled={Boolean(attachingLaborLineTaskId)}
+              className="rounded-md border border-slate-300 bg-white p-2 text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Close task selector"
+            >
+              <XMarkIcon className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="border-b border-slate-200 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <input
+                type="search"
+                value={laborLineTaskSelectorSearch}
+                onChange={(event) => setLaborLineTaskSelectorSearch(event.target.value)}
+                placeholder="Search tasks"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:max-w-md"
+              />
+              <button
+                type="button"
+                onClick={() => showNewTaskForLaborLine(targetLine?.id || taskSelectorLaborLineId)}
+                disabled={!targetLine || Boolean(attachingLaborLineTaskId)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                Create New Task
+              </button>
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {!taskList.length ? (
+              <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                No tasks have been created for this job yet.
+              </p>
+            ) : !filteredTasks.length ? (
+              <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                No tasks match that search.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {filteredTasks.map((task) => {
+                  const assignedLine = laborLineByTaskId.get(task.id);
+                  const assignedToCurrentLine = Boolean(assignedLine && targetLine && assignedLine.id === targetLine.id);
+                  const assignedElsewhere = Boolean(assignedLine && targetLine && assignedLine.id !== targetLine.id);
+                  const assignmentLabel = assignedToCurrentLine
+                    ? "Already added"
+                    : assignedElsewhere
+                      ? `Assigned to ${getLaborLineDisplayName(assignedLine)}`
+                      : "Unassigned";
+                  const actionLabel = attachingLaborLineTaskId === task.id
+                    ? assignedElsewhere ? "Moving..." : "Adding..."
+                    : assignedToCurrentLine
+                      ? "Already added"
+                      : assignedElsewhere
+                        ? "Move Here"
+                        : "Add";
+
+                  return (
+                    <div
+                      key={`labor-line-task-selector-${task.id}`}
+                      className={[
+                        "flex flex-col gap-3 rounded-md border p-3 text-sm sm:flex-row sm:items-center sm:justify-between",
+                        assignedToCurrentLine
+                          ? "border-blue-200 bg-blue-50"
+                          : assignedElsewhere
+                            ? "border-amber-200 bg-amber-50"
+                            : "border-slate-200 bg-white",
+                      ].join(" ")}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-bold text-slate-950">{task.name || task.description || task.type || "Task"}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {[task.type || "", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : "", taskContextLabel(task)].filter(Boolean).join(" • ") || "Task"}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-slate-700">
+                          Cost {moneyFromCents(task.contractedRate)} • Task billing {moneyFromCents(getTaskBillingLaborPriceCents(task))}
+                        </p>
+                        <p className={assignedElsewhere ? "mt-1 text-xs font-semibold text-amber-700" : "mt-1 text-xs font-semibold text-slate-500"}>
+                          {assignmentLabel}
+                          {assignedElsewhere ? "; selecting moves it here" : ""}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => moveTaskToLaborLine(targetLine.id, task.id)}
+                        disabled={!targetLine || assignedToCurrentLine || Boolean(attachingLaborLineTaskId)}
+                        className={[
+                          "shrink-0 rounded-md px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60",
+                          assignedElsewhere
+                            ? "border border-amber-300 bg-white text-amber-800 hover:bg-amber-100"
+                            : "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+                        ].join(" ")}
+                      >
+                        {actionLabel}
+                      </button>
                     </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => addCatalogServiceToJob(item)}
-                    disabled={Boolean(addingCatalogServiceId)}
-                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <PlusIcon className="h-4 w-4" aria-hidden="true" />
-                    {isAdding ? "Adding..." : "Add"}
-                  </button>
-                </div>
-                {taskTemplates.length > 0 && (
-                  <div className="mt-3 space-y-1 border-t border-slate-200 pt-2">
-                    {taskTemplates.slice(0, 3).map((template, index) => (
-                      <p key={`${item.id}-task-${template.id || index}`} className="text-[11px] text-slate-500">
-                        <span className="font-semibold text-slate-700">
-                          {template.name || template.title || template.description || `Task ${index + 1}`}
-                        </span>
-                        {catalogTemplateMinutes(template) ? ` • ${formatDurationMinutes(catalogTemplateMinutes(template))}` : ""}
-                      </p>
-                    ))}
-                    {taskTemplates.length > 3 && (
-                      <p className="text-[11px] font-semibold text-slate-500">
-                        +{taskTemplates.length - 3} more task{taskTemplates.length - 3 === 1 ? "" : "s"}
-                      </p>
-                    )}
-                  </div>
-                )}
+                  );
+                })}
               </div>
-            );
-          })}
+            )}
+          </div>
         </div>
-      )}
-    </div>
-  );
+      </div>
+    );
+  };
 
-  const renderPlanInvoiceTaskEditForm = () => (
+	  const renderServiceCatalogPicker = () => {
+    const hasSearch = Boolean(serviceCatalogSearchTerm.trim());
+    const resultCountLabel = hasSearch
+      ? `${filteredServiceCatalogItems.length} of ${serviceCatalogItems.length}`
+      : `${serviceCatalogItems.length}`;
+
+	    return (
+	      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+	        <div className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+	        <div className="flex flex-col gap-3 border-b border-slate-200 p-4 lg:flex-row lg:items-start lg:justify-between">
+	          <div>
+	            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Service Catalog</p>
+	            <p className="mt-1 text-sm text-slate-600">
+	              Search and add reusable services with their task checklist, estimated time, and billing price.
+	            </p>
+	          </div>
+	          <div className="flex flex-wrap items-center gap-2">
+	            <button
+	              type="button"
+	              onClick={openServiceCatalogCreator}
+	              disabled={Boolean(addingCatalogServiceId)}
+	              className="inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+	            >
+	              <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	              Create Service
+	            </button>
+	            <button
+	              type="button"
+	              onClick={toggleServiceCatalogPicker}
+	              disabled={Boolean(addingCatalogServiceId)}
+	              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+	            >
+	              Close
+	            </button>
+	          </div>
+	        </div>
+
+		        <div className="flex flex-col gap-2 border-b border-slate-200 p-4 sm:flex-row sm:items-center">
+	          <input
+	            type="search"
+            value={serviceCatalogSearchTerm}
+            onChange={(event) => setServiceCatalogSearchTerm(event.target.value)}
+            placeholder="Search service catalog..."
+            className="min-h-10 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            autoFocus
+          />
+          <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+            {resultCountLabel} service{serviceCatalogItems.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+	        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+	        {loadingServiceCatalogItems ? (
+	          <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+	            Loading service catalog...
+	          </div>
+	        ) : !serviceCatalogItems.length ? (
+	          <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
+	            <p className="text-sm font-semibold text-slate-800">No prebuilt services yet.</p>
+	            <p className="mt-1 text-xs text-slate-500">
+	              Create services in the catalog, then add them here as job building blocks.
+	            </p>
+	            <button
+	              type="button"
+	              onClick={openServiceCatalogCreator}
+	              className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+	            >
+	              <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	              Create first service
+	            </button>
+	          </div>
+	        ) : !filteredServiceCatalogItems.length ? (
+	          <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
+	            <p className="text-sm font-semibold text-slate-800">No matching services.</p>
+	            <p className="mt-1 text-xs text-slate-500">Try a different name, description, task, or source.</p>
+	          </div>
+	        ) : (
+	          <div className="overflow-hidden rounded-md border border-slate-200">
+	            <div className="max-h-[60vh] overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-50">
+                  <tr className="border-b border-slate-200">
+                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide text-slate-500">Service</th>
+                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide text-slate-500">Type</th>
+                    <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Tasks</th>
+                    <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Price</th>
+                    <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Cost</th>
+                    <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wide text-slate-500">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {filteredServiceCatalogItems.map((item) => {
+                    const taskTemplates = getCatalogServiceTaskTemplates(item);
+                    const isAdding = addingCatalogServiceId === item.id;
+                    return (
+                      <tr key={item.id} className="align-top hover:bg-blue-50/40">
+                        <td className="min-w-[18rem] px-3 py-2">
+                          <p className="font-bold text-slate-900">{item.name || "Service"}</p>
+                          <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
+                            {item.description || "No service description"}
+                          </p>
+                          {taskTemplates.length > 0 && (
+                            <p className="mt-1 text-[11px] text-slate-500">
+                              {taskTemplates.slice(0, 3).map((template, index) => (
+                                template.name || template.title || template.description || `Task ${index + 1}`
+                              )).join(" - ")}
+                              {taskTemplates.length > 3 ? ` - +${taskTemplates.length - 3} more` : ""}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-xs font-semibold text-slate-600">
+                          {[item.type || "service", item.billingBehavior || ""].filter(Boolean).join(" / ")}
+                        </td>
+                        <td className="px-3 py-2 text-right text-slate-700">{taskTemplates.length}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-slate-900">{moneyFromCents(item.unitAmountCents)}</td>
+                        <td className="px-3 py-2 text-right text-slate-700">{moneyFromCents(item.unitCostCents)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => addCatalogServiceToJob(item)}
+                            disabled={Boolean(addingCatalogServiceId)}
+                            className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                            {isAdding ? "Adding..." : "Add"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+	        )}
+	      </div>
+	      </div>
+	      </div>
+		    );
+		  };
+
+		  const renderServiceCatalogCreatorModal = () => {
+	    if (!showServiceCatalogCreator) return null;
+
+	    const taskTemplates = serviceCatalogCreatorForm.taskTemplates || [];
+
+	    return (
+	      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+	        <form
+	          onSubmit={createServiceCatalogItemFromJob}
+	          className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+	        >
+	          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+	            <div>
+	              <h3 className="text-lg font-bold text-slate-950">Create Service</h3>
+	              <p className="mt-1 text-sm text-slate-500">
+	                Save a reusable service, create its Stripe object, and add it to this plan.
+	              </p>
+	            </div>
+	            <button
+	              type="button"
+	              onClick={closeServiceCatalogCreator}
+	              disabled={savingServiceCatalogCreator}
+	              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+	            >
+	              Close
+	            </button>
+	          </div>
+
+	          <div className="min-h-0 flex-1 overflow-y-auto p-5">
+	            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+	              <div className="space-y-4">
+	                <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_minmax(0,1.6fr)]">
+	                  <label className="block text-sm font-semibold text-slate-700">
+	                    Service Name
+	                    <input
+	                      type="text"
+	                      value={serviceCatalogCreatorForm.name}
+	                      onChange={(event) => updateServiceCatalogCreatorField("name", event.target.value)}
+	                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                      placeholder="Filter clean"
+	                      autoFocus
+	                      required
+	                    />
+	                  </label>
+	                  <label className="block text-sm font-semibold text-slate-700">
+	                    Description
+	                    <textarea
+	                      value={serviceCatalogCreatorForm.description}
+	                      onChange={(event) => updateServiceCatalogCreatorField("description", event.target.value)}
+	                      rows={2}
+	                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                      placeholder="Customer-facing service description"
+	                    />
+	                  </label>
+	                </div>
+
+	                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+	                  <label className="block text-sm font-semibold text-slate-700">
+	                    Type
+	                    <select
+	                      value={serviceCatalogCreatorForm.type}
+	                      onChange={(event) => updateServiceCatalogCreatorField("type", event.target.value)}
+	                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                    >
+	                      <option value={SalesCatalogItemType.service}>Service</option>
+	                      <option value={SalesCatalogItemType.recurringService}>Recurring Service</option>
+	                      <option value={SalesCatalogItemType.labor}>Service Labor</option>
+	                      <option value={SalesCatalogItemType.manual}>Custom Service</option>
+	                    </select>
+	                  </label>
+	                  <label className="block text-sm font-semibold text-slate-700">
+	                    Billing
+	                    <select
+	                      value={serviceCatalogCreatorForm.billingBehavior}
+	                      onChange={(event) => updateServiceCatalogCreatorField("billingBehavior", event.target.value)}
+	                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                    >
+	                      <option value={SalesCatalogBillingBehavior.oneTime}>One Time</option>
+	                      <option value={SalesCatalogBillingBehavior.recurring}>Recurring</option>
+	                      <option value={SalesCatalogBillingBehavior.manualOnly}>Manual Only</option>
+	                    </select>
+	                  </label>
+	                  <label className="block text-sm font-semibold text-slate-700">
+	                    Customer Price
+	                    <input
+	                      type="number"
+	                      min="0"
+	                      step="0.01"
+	                      value={serviceCatalogCreatorForm.unitAmount}
+	                      onChange={(event) => updateServiceCatalogCreatorField("unitAmount", event.target.value)}
+	                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                    />
+	                  </label>
+	                  <label className="block text-sm font-semibold text-slate-700">
+	                    Internal Cost
+	                    <input
+	                      type="number"
+	                      min="0"
+	                      step="0.01"
+	                      value={serviceCatalogCreatorForm.unitCost}
+	                      onChange={(event) => updateServiceCatalogCreatorField("unitCost", event.target.value)}
+	                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                    />
+	                  </label>
+	                  <label className="block text-sm font-semibold text-slate-700">
+	                    Default Qty
+	                    <input
+	                      type="number"
+	                      min="1"
+	                      step="1"
+	                      value={serviceCatalogCreatorForm.defaultQuantity}
+	                      onChange={(event) => updateServiceCatalogCreatorField("defaultQuantity", event.target.value)}
+	                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                    />
+	                  </label>
+	                </div>
+	              </div>
+
+	              <div className="space-y-3">
+	                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+	                  <input
+	                    type="checkbox"
+	                    checked={Boolean(serviceCatalogCreatorForm.taxable)}
+	                    onChange={(event) => updateServiceCatalogCreatorField("taxable", event.target.checked)}
+	                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+	                  />
+	                  Taxable
+	                </label>
+	                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+	                  <p className="text-sm font-semibold text-slate-800">Stripe Object</p>
+	                  <p className="mt-1 text-xs text-slate-500">
+	                    DripDrop creates the Stripe Product and Price after this service is saved.
+	                  </p>
+	                </div>
+	              </div>
+	            </div>
+
+	            <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3">
+	              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+	                <div>
+	                  <p className="text-sm font-semibold text-slate-800">Task Building Blocks</p>
+	                  <p className="mt-1 text-xs text-slate-500">
+	                    These tasks are seeded when this service is added to a job plan.
+	                  </p>
+	                </div>
+	                <button
+	                  type="button"
+	                  onClick={addServiceCatalogCreatorTaskTemplate}
+	                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+	                >
+	                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                  Add Task
+	                </button>
+	              </div>
+
+	              {!taskTemplates.length ? (
+	                <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-center text-sm text-slate-500">
+	                  No task building blocks yet.
+	                </div>
+	              ) : (
+	                <div className="mt-3 space-y-3">
+	                  {taskTemplates.map((template, index) => (
+	                    <div key={template.id} className="rounded-md border border-slate-200 bg-white p-3">
+	                      <div className="grid gap-3 xl:grid-cols-[minmax(180px,1.1fr)_minmax(170px,0.9fr)_minmax(240px,1.4fr)_110px_120px_120px_minmax(140px,auto)_auto] xl:items-end">
+	                        <label className="block text-sm font-semibold text-slate-700">
+	                          <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</span>
+	                          <input
+	                            type="text"
+	                            value={template.name}
+	                            onChange={(event) => updateServiceCatalogCreatorTaskTemplate(template.id, "name", event.target.value)}
+	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                            placeholder="Clean filter"
+	                          />
+	                        </label>
+	                        <div className="block text-sm font-semibold text-slate-700">
+	                          Task Type
+	                          <div className="mt-1 font-normal">
+	                            <Select
+	                              value={catalogTaskTypeOptionFor(template.type)}
+	                              options={catalogTaskTypeOptionsFor(template.type)}
+	                              onChange={(option) => updateServiceCatalogCreatorTaskTemplate(template.id, "type", option?.value || "")}
+	                              isSearchable
+	                              placeholder="Select type"
+	                              theme={selectTheme}
+	                              styles={selectStyles}
+	                              menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+	                            />
+	                          </div>
+	                        </div>
+	                        <label className="block text-sm font-semibold text-slate-700">
+	                          Notes
+	                          <textarea
+	                            value={template.description}
+	                            onChange={(event) => updateServiceCatalogCreatorTaskTemplate(template.id, "description", event.target.value)}
+	                            rows={1}
+	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                            placeholder="Spray grids, check grids, reassemble filter"
+	                          />
+	                        </label>
+	                        <label className="block text-sm font-semibold text-slate-700">
+	                          Minutes
+	                          <input
+	                            type="number"
+	                            min="0"
+	                            step="1"
+	                            value={template.estimatedMinutes}
+	                            onChange={(event) => updateServiceCatalogCreatorTaskTemplate(template.id, "estimatedMinutes", event.target.value)}
+	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                          />
+	                        </label>
+	                        <label className="block text-sm font-semibold text-slate-700">
+	                          Tech Cost
+	                          <input
+	                            type="number"
+	                            min="0"
+	                            step="0.01"
+	                            value={template.laborCost}
+	                            onChange={(event) => updateServiceCatalogCreatorTaskTemplate(template.id, "laborCost", event.target.value)}
+	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                          />
+	                        </label>
+	                        <label className="block text-sm font-semibold text-slate-700">
+	                          Billing
+	                          <input
+	                            type="number"
+	                            min="0"
+	                            step="0.01"
+	                            value={template.billingLaborPrice}
+	                            onChange={(event) => updateServiceCatalogCreatorTaskTemplate(template.id, "billingLaborPrice", event.target.value)}
+	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                          />
+	                        </label>
+	                        <label className="flex min-h-[38px] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+	                          <input
+	                            type="checkbox"
+	                            checked={Boolean(template.customerApprovalRequired)}
+	                            onChange={(event) => updateServiceCatalogCreatorTaskTemplate(template.id, "customerApprovalRequired", event.target.checked)}
+	                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+	                          />
+	                          Customer approval
+	                        </label>
+	                        <button
+	                          type="button"
+	                          onClick={() => removeServiceCatalogCreatorTaskTemplate(template.id)}
+	                          className="min-h-[38px] rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+	                        >
+	                          Remove
+	                        </button>
+	                      </div>
+	                    </div>
+	                  ))}
+	                </div>
+	              )}
+	            </div>
+	          </div>
+
+	          <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
+	            <button
+	              type="button"
+	              onClick={closeServiceCatalogCreator}
+	              disabled={savingServiceCatalogCreator}
+	              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+	            >
+	              Cancel
+	            </button>
+	            <button
+	              type="submit"
+	              disabled={savingServiceCatalogCreator}
+	              className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+	            >
+	              <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	              {savingServiceCatalogCreator ? "Creating..." : "Create & Add"}
+	            </button>
+	          </div>
+	        </form>
+	      </div>
+	    );
+	  };
+
+	  const renderPlanInvoiceTaskEditForm = () => (
     <form onSubmit={saveTaskEdit} className="rounded-md border border-blue-200 bg-white p-3 shadow-sm">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
@@ -13100,14 +15211,16 @@ const JobDetailView = () => {
         {editingTaskNeedsInstallItem && (
           <>
             <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-              Item
+              {editingTaskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
               <select
                 value={taskEditForm.dataBaseItemId}
                 onChange={(event) => updateTaskEditForm("dataBaseItemId", event.target.value)}
                 className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
               >
-                <option value="">Select item</option>
-                {shoppingDbItemList.map((item) => (
+                <option value="">
+                  {editingTaskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
+                </option>
+                {editingTaskDbItemOptions.map((item) => (
                   <option key={item.id} value={item.id}>{item.label || item.name || "Item"}</option>
                 ))}
               </select>
@@ -13124,6 +15237,22 @@ const JobDetailView = () => {
               />
             </label>
           </>
+        )}
+        {editingTaskNeedsEquipmentDatabaseItem && taskEditForm.dataBaseItemId && (
+          <div className="md:col-span-2 xl:col-span-4 rounded-md border border-slate-200 bg-white p-3">
+            <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
+              Equipment Mapping
+            </div>
+            <EquipmentCatalogPicker
+              value={taskEditDbItemEquipmentMapping}
+              onChange={setTaskEditDbItemEquipmentMapping}
+              preferCustom
+              inputClassName="w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+              labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+              gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+              labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+            />
+          </div>
         )}
         <label className="flex items-center gap-2 self-end rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
           <input
@@ -13156,7 +15285,39 @@ const JobDetailView = () => {
   );
 
   const renderPlanInvoiceNewTaskForm = () => (
-    <form onSubmit={handleAddTask} className="rounded-md border border-blue-200 bg-blue-50/60 p-3">
+    <form onSubmit={handleAddTask} className="space-y-4">
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+            Task Group
+            <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+              <Select
+                value={selectedTaskGroup}
+                options={taskGroupList}
+                onChange={setSelectedTaskGroup}
+                isSearchable
+                isClearable
+                isLoading={loadingTaskGroups}
+                placeholder={loadingTaskGroups ? "Loading task groups..." : "Select a task group"}
+                theme={selectTheme}
+                styles={selectStyles}
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={applySelectedTaskGroupToJob}
+            disabled={!selectedTaskGroup || applyingTaskGroup}
+            className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <PlusIcon className="h-4 w-4" aria-hidden="true" />
+            {applyingTaskGroup ? "Adding..." : "Add Task Group"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Add a saved group of tasks, or create one manual task below.
+        </p>
+      </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
           Description
@@ -13231,14 +15392,14 @@ const JobDetailView = () => {
         {taskNeedsInstallItem && (
           <>
             <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-              Item
+              {taskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
               <div className="mt-1 text-sm font-medium normal-case tracking-normal">
                 <Select
                   value={selectedTaskDbItem}
-                  options={shoppingDbItemList}
+                  options={selectedTaskDbItemOptions}
                   onChange={setSelectedTaskDbItem}
                   isSearchable
-                  placeholder="Select item"
+                  placeholder={taskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
                   theme={selectTheme}
                   styles={selectStyles}
                 />
@@ -13256,6 +15417,22 @@ const JobDetailView = () => {
               />
             </label>
           </>
+        )}
+        {taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && (
+          <div className="md:col-span-2 xl:col-span-4 rounded-md border border-slate-200 bg-white p-3">
+            <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
+              Equipment Mapping
+            </div>
+            <EquipmentCatalogPicker
+              value={selectedTaskDbItemEquipmentMapping}
+              onChange={setSelectedTaskDbItemEquipmentMapping}
+              preferCustom
+              inputClassName="w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+              labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+              gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+              labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+            />
+          </div>
         )}
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
           Tech Labor Cost
@@ -13308,6 +15485,45 @@ const JobDetailView = () => {
       </div>
     </form>
   );
+
+  const renderNewTaskModal = () => {
+    if (!newTask) return null;
+
+    const targetLaborLine = newTaskLaborLineId
+      ? (laborLineItems || []).find((line) => line.id === newTaskLaborLineId)
+      : null;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+        <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Job Task</p>
+              <h3 className="mt-1 text-lg font-bold text-slate-950">Create New Task</h3>
+              {targetLaborLine && (
+                <p className="mt-1 text-sm text-slate-500">
+                  Adding to {getLaborLineDisplayName(targetLaborLine)}.
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={clearNewTask}
+              disabled={applyingTaskGroup}
+              className="rounded-md border border-slate-300 bg-white p-2 text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Close task creator"
+            >
+              <XMarkIcon className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-5">
+            {renderPlanInvoiceNewTaskForm()}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderPlanInvoiceNewMaterialForm = () => (
     <form onSubmit={handleAddShoppingListItem} className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3">
@@ -13437,7 +15653,7 @@ const JobDetailView = () => {
             />
             <span>
               <span className="block font-bold text-amber-900">Require customer approval</span>
-              <span className="mt-1 block text-amber-800">Keeps this product out of Ready to Purchase until approved.</span>
+              <span className="mt-1 block text-amber-800">Keeps this product out of the shopping list until approved.</span>
             </span>
           </label>
         </div>
@@ -13478,7 +15694,7 @@ const JobDetailView = () => {
   );
 
   const renderUnassignedLaborScopeRow = () => {
-    if (!unassignedLaborTasks.length && !unassignedLaborPlannedStops.length) return null;
+    if (!unassignedLaborTasks.length) return null;
     const editingUnassignedTask = unassignedLaborTasks.find((task) => editingTaskId === task.id) || null;
 
     return (
@@ -13489,7 +15705,7 @@ const JobDetailView = () => {
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Unassigned Work</p>
                 <p className="mt-0.5 text-xs text-amber-700">
-                  Attach these tasks or planned stops to a service line so they are included in the customer-facing service scope.
+                  Attach these tasks to a service line so they are included in the customer-facing billing scope.
                 </p>
               </div>
               {canUpdateCurrentJob && (
@@ -13503,7 +15719,7 @@ const JobDetailView = () => {
                 </button>
               )}
             </div>
-            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div className="mt-3 grid gap-3">
               <div className="space-y-2">
                 {unassignedLaborTasks.map((task) => (
                   <div key={`unassigned-task-${task.id}`} className="flex flex-col gap-2 rounded-md border border-amber-200 bg-white p-2 sm:flex-row sm:items-center sm:justify-between">
@@ -13536,35 +15752,6 @@ const JobDetailView = () => {
                   </div>
                 ))}
               </div>
-              <div className="space-y-2">
-                {unassignedLaborPlannedStops.map((stop) => (
-                  <div key={`unassigned-stop-${stop.id}`} className="flex flex-col gap-2 rounded-md border border-amber-200 bg-white p-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-bold text-slate-900">{stop.name || stop.serviceStopTypeName || "Planned Stop"}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-500">
-                        {[stop.serviceStopTypeName || stop.type || "", stop.estimatedMinutes ? formatDurationMinutes(stop.estimatedMinutes) : "", moneyFromCents(getPlannedStopCostCents(stop))].filter(Boolean).join(" • ")}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      <Link
-                        to={`/company/serviceStops/createNew/${jobId}?plannedStopId=${stop.id}&category=jobVisit`}
-                        className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100"
-                      >
-                        Schedule
-                      </Link>
-                      {canUpdateCurrentJob && (
-                        <button
-                          type="button"
-                          onClick={() => deletePlannedServiceStop(stop.id)}
-                          className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-100"
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
           </td>
         </tr>
@@ -13583,10 +15770,9 @@ const JobDetailView = () => {
     const laborLine = (laborLineItems || []).find((item) => item.id === line.sourceId) || null;
     const isEditingLaborLine = Boolean(laborLine?.id && editingLaborLineId === laborLine.id);
     const linkedTasks = (taskList || []).filter((task) => (line.taskIds || []).includes(task.id));
-    const linkedStops = (plannedServiceStops || []).filter((stop) => (line.plannedServiceStopIds || []).includes(stop.id));
     const editingLinkedTask = linkedTasks.find((task) => editingTaskId === task.id) || null;
     const showLaborLineWorkDetails = Boolean(
-      laborLine && !isEditingLaborLine && (linkedTasks.length || linkedStops.length || canUpdateCurrentJob)
+      laborLine && !isEditingLaborLine && (linkedTasks.length || canUpdateCurrentJob)
     );
 
     return (
@@ -13600,7 +15786,7 @@ const JobDetailView = () => {
               <span className="font-semibold text-slate-950">{line.name}</span>
             </div>
             {line.description && <p className="mt-1 max-w-xl text-xs text-slate-500">{line.description}</p>}
-            {(linkedTasks.length > 0 || linkedStops.length > 0) && (
+            {linkedTasks.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {linkedTasks.slice(0, 4).map((task) => (
                   <span
@@ -13610,17 +15796,9 @@ const JobDetailView = () => {
                     {task.name || task.type || "Task"}
                   </span>
                 ))}
-                {linkedStops.slice(0, 4).map((stop) => (
-                  <span
-                    key={`labor-stop-${line.id}-${stop.id}`}
-                    className="rounded-full border border-violet-100 bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700"
-                  >
-                    {stop.name || stop.serviceStopTypeName || "Planned Stop"}
-                  </span>
-                ))}
-                {linkedTasks.length + linkedStops.length > 8 && (
+                {linkedTasks.length > 4 && (
                   <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                    +{linkedTasks.length + linkedStops.length - 8} more
+                    +{linkedTasks.length - 4} more
                   </span>
                 )}
               </div>
@@ -13668,13 +15846,6 @@ const JobDetailView = () => {
             </div>
           </td>
         </tr>
-        {isEditingLaborLine && (
-          <tr>
-            <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
-              {renderPlanInvoiceLaborLineForm()}
-            </td>
-          </tr>
-        )}
         {newTask && laborLine?.id && newTaskLaborLineId === laborLine.id && (
           <tr>
             <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
@@ -13685,15 +15856,15 @@ const JobDetailView = () => {
         {showLaborLineWorkDetails && (
           <tr className="bg-slate-50">
             <td colSpan={7} className="px-4 py-3">
-              <div className="grid gap-3 lg:grid-cols-2">
+              <div className="grid gap-3">
                 <div>
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Tasks</p>
                     {canUpdateCurrentJob && (
                       <button
                         type="button"
-                        onClick={() => showNewTaskForLaborLine(laborLine.id)}
-                        disabled={Boolean(editingTaskId) || newTask || newLaborLine || Boolean(editingLaborLineId)}
+                        onClick={() => openTaskSelectorForLaborLine(laborLine.id)}
+                        disabled={Boolean(editingTaskId) || newTask || newLaborLine || Boolean(editingLaborLineId) || Boolean(taskSelectorLaborLineId)}
                         className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         Add Task
@@ -13738,54 +15909,6 @@ const JobDetailView = () => {
                   </div>
                 </div>
 
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Planned Stops</p>
-                    {canUpdateCurrentJob && (
-                      <button
-                        type="button"
-                        onClick={() => openNewPlannedStopModal(laborLine.id)}
-                        disabled={savingPlannedStop}
-                        className="rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Add Planned Stop
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    {!linkedStops.length ? (
-                      <p className="rounded-md border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-500">No planned stops attached.</p>
-                    ) : (
-                      linkedStops.map((stop) => (
-                        <div key={`labor-detail-stop-${line.id}-${stop.id}`} className="flex flex-col gap-2 rounded-md border border-slate-200 bg-white p-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-bold text-slate-900">{stop.name || stop.serviceStopTypeName || "Planned Stop"}</p>
-                            <p className="mt-0.5 text-[11px] text-slate-500">
-                              {[stop.serviceStopTypeName || stop.type || "", stop.estimatedMinutes ? formatDurationMinutes(stop.estimatedMinutes) : "", moneyFromCents(getPlannedStopCostCents(stop))].filter(Boolean).join(" • ")}
-                            </p>
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            <Link
-                              to={`/company/serviceStops/createNew/${jobId}?plannedStopId=${stop.id}&category=jobVisit`}
-                              className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100"
-                            >
-                              Schedule
-                            </Link>
-                            {canUpdateCurrentJob && (
-                              <button
-                                type="button"
-                                onClick={() => deletePlannedServiceStop(stop.id)}
-                                className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-100"
-                              >
-                                Delete
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
               </div>
             </td>
           </tr>
@@ -13971,6 +16094,8 @@ const JobDetailView = () => {
             </div>
           </div>
         </section>
+
+        {!isInitialShellLoading && <JobProgressTimeline steps={jobProgressSteps} />}
 
         <section className="grid gap-6 lg:grid-cols-[450px_minmax(0,1fr)]">
           <aside className="space-y-4">
@@ -14490,7 +16615,7 @@ const JobDetailView = () => {
 	                          <div>
 	                            <h4 className="text-sm font-bold text-slate-950">Services</h4>
 	                            <p className="mt-0.5 text-xs text-slate-500">
-	                              Billable service price with tasks and planned stops underneath.
+	                              Billable service lines from the catalog with customer-facing tasks underneath.
 	                            </p>
 	                          </div>
 	                          <div className="flex flex-wrap items-center gap-2">
@@ -14500,46 +16625,37 @@ const JobDetailView = () => {
 	                            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
 	                              Cost {moneyFromCents(currentPlanLaborCostCents)}
 	                            </span>
-	                            {canUpdateCurrentJob && (
-	                              <>
+                            {canUpdateCurrentJob && (
+                              <>
 	                                <button
 	                                  type="button"
 	                                  onClick={toggleServiceCatalogPicker}
 	                                  disabled={Boolean(addingCatalogServiceId) || newLaborLine || Boolean(editingLaborLineId)}
-	                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-	                                >
+                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
 	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
 	                                  From Catalog
 	                                </button>
 	                                <button
 	                                  type="button"
-	                                  onClick={showNewLaborLineItem}
-	                                  disabled={savingLaborLine || Boolean(editingLaborLineId) || newLaborLine}
-	                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-	                                >
-	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                  Service Line
-	                                </button>
-	                                <button
-	                                  type="button"
-	                                  onClick={showNewTaskItem}
-	                                  disabled={Boolean(editingTaskId) || newTask || newLaborLine || Boolean(editingLaborLineId)}
+	                                  onClick={openServiceCatalogCreator}
+	                                  disabled={savingServiceCatalogCreator || newLaborLine || Boolean(editingLaborLineId)}
 	                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
 	                                >
 	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                  Task
+	                                  Create Service
 	                                </button>
 	                                <button
-	                                  type="button"
-	                                  onClick={openNewPlannedStopModal}
-	                                  disabled={savingPlannedStop}
-	                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-	                                >
-	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                  Planned Stop
-	                                </button>
-	                              </>
-	                            )}
+                                  type="button"
+                                  onClick={showNewTaskItem}
+                                  disabled={Boolean(editingTaskId) || newTask || newLaborLine || Boolean(editingLaborLineId)}
+                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                                  Task
+                                </button>
+                              </>
+                            )}
 	                          </div>
 	                        </div>
 
@@ -14566,39 +16682,36 @@ const JobDetailView = () => {
 	                                      <div>
 	                                        <p className="font-semibold text-slate-700">No services added yet.</p>
 	                                        <p className="mt-1 text-xs text-slate-500">
-	                                          Add a service line to price the work, then attach tasks and planned stops underneath it.
+	                                          Add a service line to price the work, then attach billable tasks underneath it.
 	                                        </p>
 	                                      </div>
-	                                      {canUpdateCurrentJob && (
-	                                        <button
-	                                          type="button"
-	                                          onClick={showNewLaborLineItem}
-	                                          disabled={savingLaborLine || Boolean(editingLaborLineId) || newLaborLine}
-	                                          className="inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-	                                        >
-	                                          <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                          Add first service
-	                                        </button>
+	                                      {canUpdateCurrentJob && !showServiceCatalogPicker && (
+	                                        <div className="flex flex-wrap justify-center gap-2">
+	                                          <button
+	                                            type="button"
+	                                            onClick={toggleServiceCatalogPicker}
+	                                            disabled={Boolean(addingCatalogServiceId)}
+	                                            className="inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+	                                          >
+	                                            <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                                            From Catalog
+	                                          </button>
+	                                          <button
+	                                            type="button"
+	                                            onClick={openServiceCatalogCreator}
+	                                            disabled={savingServiceCatalogCreator}
+	                                            className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+	                                          >
+	                                            <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                                            Create Service
+	                                          </button>
+	                                        </div>
 	                                      )}
 	                                    </div>
 	                                  </td>
 	                                </tr>
 	                              ) : (
 	                                currentPlanLaborLineItems.map((line) => renderPlanInvoiceLaborLine(line))
-	                              )}
-	                              {newLaborLine && (
-	                                <tr>
-	                                  <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
-	                                    {renderPlanInvoiceLaborLineForm()}
-	                                  </td>
-	                                </tr>
-	                              )}
-	                              {newTask && !newTaskLaborLineId && (
-	                                <tr>
-	                                  <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
-	                                    {renderPlanInvoiceNewTaskForm()}
-	                                  </td>
-	                                </tr>
 	                              )}
 	                              {renderUnassignedLaborScopeRow()}
 	                            </tbody>
@@ -14675,6 +16788,7 @@ const JobDetailView = () => {
 	                          {newShoppingList && renderPlanInvoiceNewMaterialForm()}
 	                        </div>
 	                      </section>
+
 	                    </div>
 	
 	                    <div className="grid gap-3 border-t border-slate-300 bg-slate-950 px-4 py-4 text-white md:grid-cols-3">
@@ -14690,6 +16804,10 @@ const JobDetailView = () => {
 	                        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-300">Projected Profit</p>
 	                        <p className="mt-1 text-xl font-bold">{moneyFromCents(currentPlanInvoiceProfitCents)}</p>
 	                      </div>
+	                    </div>
+
+	                    <div className="bg-white p-4">
+	                      {renderOperationsPlanSection()}
 	                    </div>
 	                  </div>
 
@@ -15027,14 +17145,16 @@ const JobDetailView = () => {
                                           {editingTaskNeedsInstallItem && (
                                             <>
                                               <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                                Item
+                                                {editingTaskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
                                                 <select
                                                   className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
                                                   value={taskEditForm.dataBaseItemId}
                                                   onChange={(e) => updateTaskEditForm("dataBaseItemId", e.target.value)}
                                                 >
-                                                  <option value="">Select item</option>
-                                                  {shoppingDbItemList.map((item) => (
+                                                  <option value="">
+                                                    {editingTaskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
+                                                  </option>
+                                                  {editingTaskDbItemOptions.map((item) => (
                                                     <option key={item.id} value={item.id}>
                                                       {item.label || item.name || "Item"}
                                                     </option>
@@ -15054,6 +17174,23 @@ const JobDetailView = () => {
                                                 />
                                               </label>
                                             </>
+                                          )}
+
+                                          {editingTaskNeedsEquipmentDatabaseItem && taskEditForm.dataBaseItemId && (
+                                            <div className="md:col-span-2 xl:col-span-4 rounded-md border border-slate-200 bg-white p-3">
+                                              <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
+                                                Equipment Mapping
+                                              </div>
+                                              <EquipmentCatalogPicker
+                                                value={taskEditDbItemEquipmentMapping}
+                                                onChange={setTaskEditDbItemEquipmentMapping}
+                                                preferCustom
+                                                inputClassName="w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                                                labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+                                                gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+                                                labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+                                              />
+                                            </div>
                                           )}
 
                                           <label className="flex items-center gap-2 self-end rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -15180,10 +17317,10 @@ const JobDetailView = () => {
                               <div className="w-full">
                                 <Select
                                   value={selectedTaskDbItem}
-                                  options={shoppingDbItemList}
+                                  options={selectedTaskDbItemOptions}
                                   onChange={setSelectedTaskDbItem}
                                   isSearchable
-                                  placeholder="Select Item"
+                                  placeholder={taskNeedsEquipmentDatabaseItem ? "Select Equipment Item" : "Select Item"}
                                   theme={selectTheme}
                                   styles={selectStyles}
                                 />
@@ -15244,6 +17381,22 @@ const JobDetailView = () => {
                             </button>
                           </div>
                         </div>
+                        {taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && (
+                          <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+                            <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
+                              Equipment Mapping
+                            </div>
+                            <EquipmentCatalogPicker
+                              value={selectedTaskDbItemEquipmentMapping}
+                              onChange={setSelectedTaskDbItemEquipmentMapping}
+                              preferCustom
+                              inputClassName="w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                              labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+                              gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+                              labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -15565,7 +17718,7 @@ const JobDetailView = () => {
                                 <span>
                                   <span className="block font-bold text-amber-900">Require customer approval</span>
                                   <span className="mt-1 block text-amber-800">
-                                    Creates a client-visible approval request and keeps this product out of Ready to Purchase until approved.
+                                    Creates a client-visible approval request and keeps this product out of the shopping list until approved.
                                   </span>
                                 </span>
                               </label>
@@ -15769,13 +17922,23 @@ const JobDetailView = () => {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <button
-                          type="button"
-                          onClick={markJobAsFinished}
-                          disabled={markingJobFinished}
+	                          type="button"
+	                          onClick={openJobFinishConfirm}
+	                          disabled={markingJobFinished}
                           className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {markingJobFinished ? "Marking..." : "Mark Job as Finished"}
                         </button>
+                        {jobIsFinished && !jobBillingIsInvoiced() && (
+                          <button
+                            type="button"
+                            onClick={handleMarkAsInvoiced}
+                            disabled={markingJobInvoiced || sendingInvoiceEmail}
+                            className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {markingJobInvoiced ? "Converting..." : "Convert to Invoice"}
+                          </button>
+                        )}
                         <Link
                           to={`/company/serviceStops/createNew/${jobId}?category=jobEstimate`}
                           className="inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100"
@@ -15985,7 +18148,7 @@ const JobDetailView = () => {
                             </div>
 
                             <div className="space-y-4 overflow-y-auto p-5">
-                              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+                              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-8">
                                 <div className="xl:col-span-2">
                                   <label className="block text-xs font-bold text-gray-600 mb-1">Search</label>
                                   <input
@@ -16044,6 +18207,21 @@ const JobDetailView = () => {
                                     {purchasedItemCategoryOptions.map((category) => (
                                       <option key={category} value={category}>
                                         {category}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-bold text-gray-600 mb-1">Technician</label>
+                                  <select
+                                    value={purchasedItemTechnicianFilter}
+                                    onChange={(e) => setPurchasedItemTechnicianFilter(e.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 p-2 bg-white"
+                                  >
+                                    {purchasedItemTechnicianOptions.map((technician) => (
+                                      <option key={technician.value} value={technician.value}>
+                                        {technician.label}
                                       </option>
                                     ))}
                                   </select>
@@ -16371,7 +18549,9 @@ const JobDetailView = () => {
                           disabled={markingJobInvoiced || sendingInvoiceEmail}
                           className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition disabled:opacity-50"
                         >
-                          {markingJobInvoiced ? "Marking..." : "Mark As Invoiced"}
+                          {markingJobInvoiced
+                            ? (jobIsFinished ? "Converting..." : "Marking...")
+                            : convertInvoiceActionLabel}
                         </button>
                       </div>
 
@@ -16441,7 +18621,9 @@ const JobDetailView = () => {
                           disabled={markingJobInvoiced || sendingInvoiceEmail}
                           className="px-4 py-3 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition disabled:opacity-50"
                         >
-                          {markingJobInvoiced ? "Marking..." : "Mark As Invoiced"}
+                          {markingJobInvoiced
+                            ? (jobIsFinished ? "Converting..." : "Marking...")
+                            : convertInvoiceActionLabel}
                         </button>
                       </div>
                     </div>
@@ -16848,9 +19030,13 @@ const JobDetailView = () => {
               {deletingJob ? "Deleting..." : "Delete Job"}
             </button>
           )}
-        </div>
-      )}
-      {showCreateTemplateModal && (
+	        </div>
+	      )}
+	      {renderPlanInvoiceLaborLineForm()}
+	      {renderLaborLineTaskSelectorModal()}
+	      {renderServiceCatalogCreatorModal()}
+	      {renderNewTaskModal()}
+	      {showCreateTemplateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <form onSubmit={saveJobAsTemplate}>
@@ -17125,15 +19311,12 @@ const JobDetailView = () => {
           <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
               <div>
-                <h3 className="text-xl font-bold text-slate-950">Add Planned Service Stop</h3>
+                <h3 className="text-xl font-bold text-slate-950">
+                  {editingPlannedStopId ? "Edit Operations Stop" : "Add Operations Stop"}
+                </h3>
                 <p className="mt-1 text-sm text-slate-600">
-                  Plan an expected visit before it becomes a scheduled service stop.
+                  Select the tasks this planned visit will complete before it becomes a scheduled service stop.
                 </p>
-                {newPlannedStopTargetLaborLine && (
-                  <p className="mt-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-800">
-                    Attaches to {newPlannedStopTargetLaborLine.name || "this service line"}.
-                  </p>
-                )}
               </div>
               <button
                 type="button"
@@ -17202,13 +19385,13 @@ const JobDetailView = () => {
                 <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm font-bold text-slate-900">Linked Tasks</p>
+                      <p className="text-sm font-bold text-slate-900">Task Assignment</p>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        Leave all unchecked to estimate this stop against all current tasks.
+                        Select the tasks this stop will complete. Tasks already on another stop will move here when saved.
                       </p>
                     </div>
                     <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
-                      {plannedStopForm.taskIds.length || "All"}
+                      {plannedStopForm.taskIds.length}
                     </span>
                   </div>
 
@@ -17218,22 +19401,55 @@ const JobDetailView = () => {
                         No tasks are available yet.
                       </div>
                     ) : (
-                      taskList.map((task) => (
-                        <label key={task.id} className="flex items-start gap-2 rounded-md border border-slate-200 bg-white p-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={plannedStopForm.taskIds.includes(task.id)}
-                            onChange={() => togglePlannedStopTask(task.id)}
-                            className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                          />
-                          <span>
-                            <span className="block font-semibold text-slate-900">{task.name || task.description || "Task"}</span>
-                            <span className="mt-0.5 block text-xs text-slate-500">
-                              {[task.type || "Task", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : ""].filter(Boolean).join(" • ")}
+                      taskList.map((task) => {
+                        const checked = plannedStopForm.taskIds.includes(task.id);
+                        const assignedStop = plannedStopByTaskId.get(task.id);
+                        const assignedToEditingStop = Boolean(assignedStop && editingPlannedStopId && assignedStop.id === editingPlannedStopId);
+                        const assignedElsewhere = Boolean(assignedStop && assignedStop.id !== editingPlannedStopId);
+                        const billingLine = laborLineByTaskId.get(task.id);
+                        const assignmentMessage = assignedToEditingStop
+                          ? checked ? "Already on this planned stop" : "Will be removed from this planned stop"
+                          : assignedElsewhere
+                            ? checked
+                              ? `Will move from ${assignedStop.name || assignedStop.serviceStopTypeName || "another planned stop"}`
+                              : `On ${assignedStop.name || assignedStop.serviceStopTypeName || "another planned stop"}; selecting moves it here`
+                            : checked
+                              ? "Selected for this planned stop"
+                              : "Not assigned to a planned stop";
+
+                        return (
+                          <label
+                            key={task.id}
+                            className={[
+                              "flex items-start gap-2 rounded-md border p-2 text-sm",
+                              checked
+                                ? "border-blue-200 bg-blue-50"
+                                : assignedElsewhere
+                                  ? "border-amber-200 bg-amber-50"
+                                  : "border-slate-200 bg-white",
+                            ].join(" ")}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => togglePlannedStopTask(task.id)}
+                              className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block font-semibold text-slate-900">{task.name || task.description || "Task"}</span>
+                              <span className="mt-0.5 block text-xs text-slate-500">
+                                {[task.type || "Task", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : "", taskContextLabel(task)].filter(Boolean).join(" • ")}
+                              </span>
+                              <span className="mt-1 block text-xs font-semibold text-slate-600">
+                                Billing: {billingLine ? getLaborLineDisplayName(billingLine) : "No service line"}
+                              </span>
+                              <span className={assignedElsewhere ? "mt-1 block text-xs font-semibold text-amber-700" : "mt-1 block text-xs font-semibold text-slate-500"}>
+                                {assignmentMessage}
+                              </span>
                             </span>
-                          </span>
-                        </label>
-                      ))
+                          </label>
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -17281,7 +19497,7 @@ const JobDetailView = () => {
                     disabled={savingPlannedStop}
                     className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {savingPlannedStop ? "Saving..." : "Add Planned Stop"}
+                    {savingPlannedStop ? "Saving..." : editingPlannedStopId ? "Save Operations Stop" : "Add Operations Stop"}
                   </button>
                   <button
                     type="button"
@@ -17424,9 +19640,203 @@ const JobDetailView = () => {
             </div>
           </div>
         </div>
-      )}
-      {showBillingLifecycleHelp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+	      )}
+	      {showJobFinishConfirm && (
+	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+	          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-2xl">
+	            <h2 className="text-xl font-bold text-slate-950">Finish Job</h2>
+	            <p className="mt-2 text-sm text-slate-600">
+	              Choose which unfinished tasks should also be marked finished, and clear any open planned products by marking them installed or deleting the unused ones.
+	            </p>
+
+	            {unfinishedJobFinishTasks.length > 0 ? (
+	              <div className="mt-4 rounded-lg border border-slate-200">
+	                <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+	                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+	                    <input
+	                      type="checkbox"
+	                      checked={selectedJobFinishTaskCount === unfinishedJobFinishTasks.length}
+	                      onChange={(event) => setAllJobFinishTasks(event.target.checked)}
+	                      disabled={markingJobFinished}
+	                      className="h-4 w-4 rounded border-slate-300"
+	                    />
+	                    Mark all unfinished tasks finished
+	                  </label>
+	                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+	                    {selectedJobFinishTaskCount}/{unfinishedJobFinishTasks.length} selected
+	                  </span>
+	                </div>
+
+	                <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+	                  {unfinishedJobFinishTasks.map((task) => {
+	                    const checked = jobFinishTaskIds.includes(task.id);
+	                    const equipmentLabel = task.equipmentId
+	                      ? equipmentById.get(task.equipmentId)?.name || task.equipmentName || "Linked equipment"
+	                      : "";
+
+	                    return (
+	                      <label
+	                        key={task.id}
+	                        className="flex cursor-pointer items-start gap-3 px-4 py-3 transition hover:bg-slate-50"
+	                      >
+	                        <input
+	                          type="checkbox"
+	                          checked={checked}
+	                          onChange={() => toggleJobFinishTask(task.id)}
+	                          disabled={markingJobFinished}
+	                          className="mt-1 h-4 w-4 rounded border-slate-300"
+	                        />
+	                        <span className="min-w-0 flex-1">
+	                          <span className="block font-semibold text-slate-900">
+	                            {task.name || "Unnamed Task"}
+	                          </span>
+	                          <span className="mt-1 block text-sm text-slate-500">
+	                            {[task.type, task.status, equipmentLabel].filter(Boolean).join(" - ") || "Task"}
+	                          </span>
+	                        </span>
+	                      </label>
+	                    );
+	                  })}
+	                </div>
+	              </div>
+	            ) : (
+	              <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+	                All tasks are already finished. This will only finish the job.
+	              </div>
+	            )}
+
+	            {unfinishedJobFinishTasks.length > selectedJobFinishTaskCount && (
+	              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+	                {unfinishedJobFinishTasks.length - selectedJobFinishTaskCount} task(s) will remain unfinished.
+	              </div>
+	            )}
+
+	            {unfinishedJobFinishShoppingItems.length > 0 ? (
+	              <div className="mt-4 rounded-lg border border-slate-200">
+	                <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+	                  <div>
+	                    <p className="text-sm font-semibold text-slate-800">Clear connected shopping items</p>
+	                    <p className="mt-1 text-xs text-slate-500">
+	                      {jobFinishShoppingInstalledCount} installed, {jobFinishShoppingDeleteCount} deleted
+	                    </p>
+	                  </div>
+	                  <div className="flex flex-wrap gap-2">
+	                    <button
+	                      type="button"
+	                      onClick={() => setAllJobFinishShoppingItems("installed")}
+	                      disabled={markingJobFinished}
+	                      className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-50"
+	                    >
+	                      Mark all installed
+	                    </button>
+	                    <button
+	                      type="button"
+	                      onClick={() => setAllJobFinishShoppingItems("delete")}
+	                      disabled={markingJobFinished}
+	                      className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+	                    >
+	                      Delete all
+	                    </button>
+	                  </div>
+	                </div>
+
+	                <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+	                  {unfinishedJobFinishShoppingItems.map((item) => {
+	                    const itemId = getFirestoreDocId(item);
+	                    const selectedAction = jobFinishShoppingItemActions[itemId] || "installed";
+	                    const linkedTaskName = item.linkedTaskName ||
+	                      taskList.find((task) => task.id === (item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.sourceTaskId))?.name ||
+	                      "";
+
+	                    return (
+	                      <div key={itemId} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+	                        <div className="min-w-0 flex-1">
+	                          <p className="font-semibold text-slate-900">{getMaterialName(item)}</p>
+	                          <p className="mt-1 text-sm text-slate-500">
+	                            {[
+	                              canonicalShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase),
+	                              item.quantity ? `Qty ${item.quantity}` : "",
+	                              linkedTaskName ? `Task: ${linkedTaskName}` : "",
+	                            ].filter(Boolean).join(" - ")}
+	                          </p>
+	                          {item.description ? (
+	                            <p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.description}</p>
+	                          ) : null}
+	                        </div>
+	                        <div className="grid grid-cols-2 gap-2 sm:w-[220px]">
+	                          <button
+	                            type="button"
+	                            onClick={() => setJobFinishShoppingItemAction(itemId, "installed")}
+	                            disabled={markingJobFinished}
+	                            className={[
+	                              "rounded-md border px-3 py-2 text-xs font-semibold transition disabled:opacity-50",
+	                              selectedAction === "installed"
+	                                ? "border-emerald-600 bg-emerald-600 text-white"
+	                                : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50",
+	                            ].join(" ")}
+	                          >
+	                            Installed
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => setJobFinishShoppingItemAction(itemId, "delete")}
+	                            disabled={markingJobFinished}
+	                            className={[
+	                              "rounded-md border px-3 py-2 text-xs font-semibold transition disabled:opacity-50",
+	                              selectedAction === "delete"
+	                                ? "border-red-600 bg-red-600 text-white"
+	                                : "border-red-200 bg-white text-red-700 hover:bg-red-50",
+	                            ].join(" ")}
+	                          >
+	                            Delete
+	                          </button>
+	                        </div>
+	                      </div>
+	                    );
+	                  })}
+	                </div>
+	              </div>
+	            ) : (
+	              <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+	                No open shopping list items are connected to this job.
+	              </div>
+	            )}
+
+	            {jobFinishShoppingDeleteCount > 0 && (
+	              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+	                {jobFinishShoppingDeleteCount} planned product(s) will be deleted as unused when the job is finished.
+	              </div>
+	            )}
+
+	            {job.equipmentId && equipmentCompletionTypeFromJob(job) && (
+	              <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+	                If no selected task updates {job.equipmentName || "the linked equipment"}, the job completion will record a {equipmentCompletionTypeFromJob(job).toLowerCase()} event from the job itself.
+	              </div>
+	            )}
+
+	            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+	              <button
+	                type="button"
+	                onClick={closeJobFinishConfirm}
+	                disabled={markingJobFinished}
+	                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+	              >
+	                Cancel
+	              </button>
+	              <button
+	                type="button"
+	                onClick={() => markJobAsFinished(jobFinishTaskIds, jobFinishShoppingItemActions)}
+	                disabled={markingJobFinished}
+	                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+	              >
+	                {markingJobFinished ? "Finishing..." : "Finish Job"}
+	              </button>
+	            </div>
+	          </div>
+	        </div>
+	      )}
+	      {showBillingLifecycleHelp && (
+	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-5xl rounded-2xl bg-white shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-200 flex items-start justify-between gap-3">
               <div>
@@ -17836,7 +20246,84 @@ const JobDetailView = () => {
                     />
                   </div>
                 )}
+
+                {can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID) && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-500 mb-2">
+                        Incentive
+                      </label>
+                      <select
+                        value={workOfferForm.incentiveType}
+                        onChange={(e) => handleWorkOfferFormChange("incentiveType", e.target.value)}
+                        className="w-full p-3 border border-gray-300 rounded-lg bg-white"
+                      >
+                        <option value="none">No incentive</option>
+                        <option value="flat">Flat rate</option>
+                        <option value="percentage">Percentage bump</option>
+                      </select>
+                    </div>
+
+                    {workOfferForm.incentiveType === "flat" && (
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-500 mb-2">
+                          Incentive Amount
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={workOfferForm.incentiveAmount}
+                          onChange={(e) => handleWorkOfferFormChange("incentiveAmount", e.target.value)}
+                          className="w-full p-3 border border-gray-300 rounded-lg"
+                        />
+                      </div>
+                    )}
+
+                    {workOfferForm.incentiveType === "percentage" && (
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-500 mb-2">
+                          Incentive Percent
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={workOfferForm.incentivePercentage}
+                          onChange={(e) => handleWorkOfferFormChange("incentivePercentage", e.target.value)}
+                          className="w-full p-3 border border-gray-300 rounded-lg"
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
+
+              {can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID) && workOfferForm.incentiveType !== "none" && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Base Pay</p>
+                      <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(workOfferFormBasePayCents)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Incentive</p>
+                      <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(workOfferFormIncentiveCents)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Offer Total</p>
+                      <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(workOfferFormEstimatedTotalCents)}</p>
+                    </div>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={workOfferForm.incentiveNotes}
+                    onChange={(e) => handleWorkOfferFormChange("incentiveNotes", e.target.value)}
+                    className="mt-3 w-full rounded-lg border border-emerald-200 bg-white p-3 text-sm text-emerald-950"
+                    placeholder="Incentive notes"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-semibold text-gray-500 mb-2">
@@ -17856,11 +20343,7 @@ const JobDetailView = () => {
                     <h4 className="font-bold text-gray-800">Work Scope</h4>
                     <p className="text-sm text-gray-600 mt-1">
                       {selectedWorkOfferTasks.length} selected • {formatDurationMinutes(selectedWorkOfferMinutes)} • {moneyFromCents(
-                        workOfferForm.paySource === "Offered Amount"
-                          ? Math.round(Number(workOfferForm.offeredAmount || 0) * 100)
-                          : workOfferForm.paySource === "Unpaid"
-                            ? 0
-                            : selectedWorkOfferLaborCents
+                        workOfferFormEstimatedTotalCents
                       )}
                     </p>
                   </div>

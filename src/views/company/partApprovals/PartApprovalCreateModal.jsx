@@ -5,7 +5,7 @@ import {
   collection,
   doc,
   getDocs,
-  limit,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -17,6 +17,11 @@ import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
 import { itemPhotoFieldsFromSource } from '../../../utils/itemPhotos';
 import { buildPartApprovalShoppingItemPayload } from '../../../utils/partApprovalShopping';
+import {
+  getProductDisplayName,
+  getProductSellPriceCents,
+  productCatalogCollectionRef,
+} from '../../../utils/productCatalog';
 
 const selectStyles = {
   control: (provided) => ({
@@ -41,6 +46,8 @@ const formatCurrency = (amountCents = 0) => new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
 }).format((Number(amountCents) || 0) / 100);
+
+const resolveCompanyId = (company) => String(company?.companyId || company?.id || company || '').trim();
 
 const getCustomerName = (customer = {}) => {
   if (customer.displayAsCompany) {
@@ -167,9 +174,9 @@ const normalizeServiceLocationOption = (docId, data = {}) => {
 
 const normalizeDbItemOption = (docId, data = {}) => {
   const id = data.id || docId;
-  const name = data.name || 'Unnamed Item';
+  const name = getProductDisplayName({ ...data, id });
   const unitCostCents = Number(data.rate || data.cost || 0);
-  const unitPriceCents = Number(data.sellPrice || data.rate || data.cost || 0);
+  const unitPriceCents = getProductSellPriceCents(data) || Number(data.rate || data.cost || 0);
   const photoFields = itemPhotoFieldsFromSource(data, name);
 
   return {
@@ -177,8 +184,10 @@ const normalizeDbItemOption = (docId, data = {}) => {
     id,
     name,
     description: data.description || '',
-    genericItemId: data.genericItemId || '',
-    dbItemId: id,
+    genericItemId: id,
+    productId: id,
+    productName: name,
+    dbItemId: '',
     unitCostCents,
     unitPriceCents,
     ...photoFields,
@@ -210,12 +219,20 @@ const PartApprovalCreateModal = ({
   onClose,
   fixedCustomer = null,
   fixedServiceLocation = null,
+  defaultForm = null,
   workflowContext = {},
   hideCost = false,
   allowInPersonApproval = false,
   onCreated,
 }) => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName, user, dataBaseUser } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    recentlySelectedCompanyName,
+    shoppingItemInstallInvoiceAutomationEnabled,
+    user,
+    dataBaseUser,
+  } = useContext(Context);
+  const companyId = useMemo(() => resolveCompanyId(recentlySelectedCompany), [recentlySelectedCompany]);
   const [customers, setCustomers] = useState([]);
   const [dbItems, setDbItems] = useState([]);
   const [serviceLocations, setServiceLocations] = useState([]);
@@ -232,18 +249,24 @@ const PartApprovalCreateModal = ({
   const fixedServiceLocationOption = useMemo(() => (
     fixedServiceLocation ? normalizeServiceLocationOption(fixedServiceLocation.id, fixedServiceLocation) : null
   ), [fixedServiceLocation]);
+  const defaultFormValues = useMemo(() => ({
+    ...initialForm,
+    ...(defaultForm || {}),
+    mode: defaultForm?.mode || initialForm.mode,
+    quantity: defaultForm?.quantity || initialForm.quantity,
+  }), [defaultForm]);
 
   useEffect(() => {
     if (!open) return;
 
-    setForm(initialForm);
+    setForm(defaultFormValues);
     setSelectedDbItem(null);
     setSelectedServiceLocation(fixedServiceLocationOption);
     setSelectedCustomer(fixedCustomerOption);
-  }, [fixedCustomerOption, fixedServiceLocationOption, open]);
+  }, [defaultFormValues, fixedCustomerOption, fixedServiceLocationOption, open]);
 
   useEffect(() => {
-    if (!open || !recentlySelectedCompany) return undefined;
+    if (!open || !companyId) return undefined;
 
     let active = true;
 
@@ -251,10 +274,10 @@ const PartApprovalCreateModal = ({
       setLoading(true);
 
       try {
-        const itemsPromise = getDocs(collection(db, 'companies', recentlySelectedCompany, 'settings', 'dataBase', 'dataBase'));
+        const itemsPromise = getDocs(query(productCatalogCollectionRef(db, companyId), orderBy('commonName')));
         const customersPromise = fixedCustomerOption
           ? Promise.resolve(null)
-          : getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers'));
+          : getDocs(collection(db, 'companies', companyId, 'customers'));
 
         const [itemsSnap, customersSnap] = await Promise.all([itemsPromise, customersPromise]);
         if (!active) return;
@@ -288,10 +311,10 @@ const PartApprovalCreateModal = ({
     return () => {
       active = false;
     };
-  }, [fixedCustomerOption, open, recentlySelectedCompany]);
+  }, [companyId, fixedCustomerOption, open]);
 
   useEffect(() => {
-    if (!open || !recentlySelectedCompany || !selectedCustomer?.id) {
+    if (!open || !companyId || !selectedCustomer?.id) {
       setServiceLocations([]);
       setSelectedServiceLocation(null);
       return undefined;
@@ -309,7 +332,7 @@ const PartApprovalCreateModal = ({
       try {
         const locationSnap = await getDocs(
           query(
-            collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'),
+            collection(db, 'companies', companyId, 'serviceLocations'),
             where('customerId', '==', selectedCustomer.id)
           )
         );
@@ -332,7 +355,7 @@ const PartApprovalCreateModal = ({
     return () => {
       active = false;
     };
-  }, [fixedServiceLocationOption, open, recentlySelectedCompany, selectedCustomer?.id]);
+  }, [companyId, fixedServiceLocationOption, open, selectedCustomer?.id]);
 
   const quantity = Number.parseFloat(form.quantity || '0') || 0;
   const unitCostCents = form.mode === 'database'
@@ -352,29 +375,14 @@ const PartApprovalCreateModal = ({
     : form.description.trim();
 
   const canSave = Boolean(
-    recentlySelectedCompany &&
+    companyId &&
     selectedCustomer?.id &&
     itemName &&
     quantity > 0 &&
     unitPriceCents > 0
   );
 
-  const findLinkedCustomerUserId = async (customer) => {
-    const directUserId = getCustomerUserId(customer);
-    if (directUserId) return directUserId;
-
-    const email = getCustomerEmail(customer).trim();
-    if (!email) return '';
-
-    const userSnap = await getDocs(query(collection(db, 'users'), where('email', '==', email), limit(1)));
-    if (!userSnap.empty) return userSnap.docs[0].id;
-
-    const normalizedEmail = email.toLowerCase();
-    if (normalizedEmail === email) return '';
-
-    const normalizedSnap = await getDocs(query(collection(db, 'users'), where('email', '==', normalizedEmail), limit(1)));
-    return normalizedSnap.empty ? '' : normalizedSnap.docs[0].id;
-  };
+  const findLinkedCustomerUserId = async (customer) => getCustomerUserId(customer);
 
   const handleDbItemChange = (option) => {
     setSelectedDbItem(option);
@@ -410,6 +418,7 @@ const PartApprovalCreateModal = ({
         }
         : {};
       const scheduledDate = timestampFromValue(workflowContext?.scheduledDate || workflowContext?.serviceDate);
+      const repairRequestId = workflowContext?.repairRequestId || '';
       const techId =
         workflowContext?.techId ||
         workflowContext?.assignedTechId ||
@@ -437,7 +446,7 @@ const PartApprovalCreateModal = ({
 
       const payload = {
         id: approvalId,
-        companyId: recentlySelectedCompany,
+        companyId,
         companyName: recentlySelectedCompanyName || '',
         customerApprovalUrl: `${window.location.origin}/customer/part-approvals/${approvalId}`,
         customerId: selectedCustomer.id,
@@ -452,16 +461,20 @@ const PartApprovalCreateModal = ({
         serviceLocationSnapshot,
         shoppingListItemId,
         shoppingListPath: shoppingListItemId
-          ? `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}`
+          ? `companies/${companyId}/shoppingList/${shoppingListItemId}`
           : '',
         itemName,
         name: itemName,
         description: itemDescription,
         quantity: String(quantity),
-        dbItemId: form.mode === 'database' ? selectedDbItem?.id || '' : '',
-        dbItemName: form.mode === 'database' ? selectedDbItem?.name || '' : '',
-        genericItemId: form.mode === 'database' ? selectedDbItem?.genericItemId || '' : '',
-        subCategory: form.mode === 'database' ? 'Data Base' : 'Part',
+        dbItemId: '',
+        dbItemName: '',
+        genericItemId: form.mode === 'database' ? selectedDbItem?.productId || selectedDbItem?.genericItemId || selectedDbItem?.id || '' : '',
+        productId: form.mode === 'database' ? selectedDbItem?.productId || selectedDbItem?.id || '' : '',
+        productName: form.mode === 'database' ? selectedDbItem?.name || '' : '',
+        itemId: form.mode === 'database' ? selectedDbItem?.productId || selectedDbItem?.id || '' : '',
+        itemType: form.mode === 'database' ? 'Product' : 'Part',
+        subCategory: form.mode === 'database' ? 'Product' : 'Part',
         plannedUnitCostCents: unitCostCents,
         plannedUnitPriceCents: unitPriceCents,
         plannedTotalCostCents: totalCostCents,
@@ -469,12 +482,25 @@ const PartApprovalCreateModal = ({
         status: approvedInPerson ? 'approved' : 'pending',
         approvalStatus: approvedInPerson ? 'approved' : 'pending',
         fulfillmentStatus: approvedInPerson ? 'approvedAwaitingPurchase' : 'awaitingCustomerApproval',
-        sourceType: 'partApprovalRequest',
+        sourceType: workflowContext?.sourceType || 'partApprovalRequest',
+        sourceId: workflowContext?.sourceId || '',
+        sourcePath: workflowContext?.sourcePath || '',
+        sourceRecordType: workflowContext?.sourceRecordType || workflowContext?.originType || '',
+        sourceRecordId: workflowContext?.sourceRecordId || workflowContext?.originId || repairRequestId || '',
+        sourceRecordPath: workflowContext?.sourceRecordPath || workflowContext?.originPath || '',
+        repairRequestId,
+        repairRequestSourcePath: workflowContext?.repairRequestSourcePath || '',
+        repairRequestPath: workflowContext?.repairRequestPath || '',
+        repairRequestDescription: workflowContext?.repairRequestDescription || '',
+        requestStatus: workflowContext?.requestStatus || '',
         requestedAt: now,
         createdAt: now,
         updatedAt: now,
         requestedByUserId: user?.uid || dataBaseUser?.id || '',
         requestedByUserName: requestedByName,
+        createdByUserId: user?.uid || dataBaseUser?.id || '',
+        createdByUserName: requestedByName,
+        createdByEmail: user?.email || '',
         jobId: workflowContext?.jobId || '',
         jobName: workflowContext?.jobName || workflowContext?.jobInternalId || '',
         jobInternalId: workflowContext?.jobInternalId || '',
@@ -496,6 +522,9 @@ const PartApprovalCreateModal = ({
         assignedTechNames: techName ? [techName] : [],
         purchaserId: techId,
         purchaserName: techName,
+        autoInvoiceOnInstall: shoppingItemInstallInvoiceAutomationEnabled === true,
+        paymentPreference: 'sendInvoice',
+        paymentCollectionPreference: 'sendInvoice',
         history: [
           {
             id: `cpa_hist_${uuidv4()}`,
@@ -534,6 +563,7 @@ const PartApprovalCreateModal = ({
           selectedServiceLocation?.id ? `serviceLocation:${selectedServiceLocation.id}` : '',
           workflowContext?.serviceStopId ? `serviceStop:${workflowContext.serviceStopId}` : '',
           workflowContext?.linkedTaskId ? `jobTask:${workflowContext.linkedTaskId}` : '',
+          repairRequestId ? `repairRequest:${repairRequestId}` : '',
           techId ? `user:${techId}` : '',
         ].filter(Boolean),
         ...photoFields,
@@ -561,7 +591,7 @@ const PartApprovalCreateModal = ({
         const batch = writeBatch(db);
         batch.set(doc(db, 'customerPartApprovals', approvalId), payload);
         batch.set(
-          doc(db, 'companies', recentlySelectedCompany, 'shoppingList', shoppingListItemId),
+          doc(db, 'companies', companyId, 'shoppingList', shoppingListItemId),
           buildPartApprovalShoppingItemPayload({
             approval: payload,
             shoppingListItemId,
@@ -658,21 +688,21 @@ const PartApprovalCreateModal = ({
                 }}
                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
               >
-                <option value="database">Database Item</option>
+                <option value="database">Product</option>
                 <option value="manual">Manual Part</option>
               </select>
             </div>
 
             {form.mode === 'database' ? (
               <div className="md:col-span-2">
-                <label className="mb-2 block text-sm font-semibold text-slate-700">Database Item</label>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">Product</label>
                 <Select
                   value={selectedDbItem}
                   options={dbItems}
                   onChange={handleDbItemChange}
                   isLoading={loading}
                   isSearchable
-                  placeholder="Select an item"
+                  placeholder="Select a Product"
                   styles={selectStyles}
                 />
               </div>

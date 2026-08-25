@@ -173,11 +173,50 @@ export const agreementAmountCents = (agreement = {}) => {
 };
 
 export const agreementServiceLocationIds = (agreement = {}) => {
-  const ids = normalizeIdList(agreement.serviceLocationIds);
-  if (ids.length) return ids;
-
   const snapshots = Array.isArray(agreement.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : [];
-  return normalizeIdList(...snapshots.map((snapshot) => snapshot.id || snapshot.serviceLocationId));
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  const nestedLocations = [
+    ...(Array.isArray(agreement.serviceLocations) ? agreement.serviceLocations : []),
+    ...(Array.isArray(agreement.locations) ? agreement.locations : []),
+  ];
+
+  return normalizeIdList(
+    agreement.serviceLocationId,
+    agreement.serviceLocationID,
+    agreement.companyServiceLocationId,
+    agreement.locationId,
+    agreement.locationID,
+    agreement.serviceLocationIds,
+    agreement.serviceLocation?.id,
+    agreement.serviceLocation?.serviceLocationId,
+    agreement.location?.id,
+    agreement.location?.serviceLocationId,
+    ...snapshots.map((snapshot) => firstPresent(
+      snapshot.id,
+      snapshot.serviceLocationId,
+      snapshot.companyServiceLocationId,
+      snapshot.locationId
+    )),
+    ...nestedLocations.map((location) => firstPresent(
+      location.id,
+      location.serviceLocationId,
+      location.companyServiceLocationId,
+      location.locationId
+    )),
+    ...lineItems.flatMap((item) => [
+      item.serviceLocationId,
+      item.serviceLocationIds,
+      item.companyServiceLocationId,
+      item.locationId,
+      item.metadata?.serviceLocationId,
+      item.metadata?.companyServiceLocationId,
+      item.metadata?.locationId,
+      item.serviceLocation?.id,
+      item.serviceLocation?.serviceLocationId,
+      item.location?.id,
+      item.location?.serviceLocationId,
+    ])
+  );
 };
 
 const activeRangeOverlapDays = (recordStart, recordEnd, rangeStart, rangeEnd) => {

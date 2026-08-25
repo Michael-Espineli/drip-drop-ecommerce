@@ -943,7 +943,15 @@ const linkedInspectionServiceStopIdForAgreement = (agreement = {}) => {
 const SalesAgreementDetail = () => {
   const { agreementId } = useParams();
   const navigate = useNavigate();
-  const { dataBaseUser, recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
+  const {
+    customerBillingEnabled,
+    dataBaseUser,
+    recentlySelectedCompany,
+    recentlySelectedCompanyName,
+    salesBillingAutomationEnabled,
+    stripeConnectedAccountId,
+    user,
+  } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
   const [agreement, setAgreement] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
@@ -961,6 +969,7 @@ const SalesAgreementDetail = () => {
   const [confirmingAcceptance, setConfirmingAcceptance] = useState(false);
   const [acceptanceSource, setAcceptanceSource] = useState('customerOffline');
   const [acceptanceNote, setAcceptanceNote] = useState('');
+  const [createBillingSubscriptionOnAcceptance, setCreateBillingSubscriptionOnAcceptance] = useState(false);
   const [markingAccepted, setMarkingAccepted] = useState(false);
   const [creatingBilling, setCreatingBilling] = useState(false);
   const [creatingRenewal, setCreatingRenewal] = useState(false);
@@ -1022,7 +1031,14 @@ const SalesAgreementDetail = () => {
     }
 
     const historyGroupId = agreementHistoryGroupId(agreement);
+    const agreementCompanyId = agreement.companyId || recentlySelectedCompany || '';
     if (!historyGroupId) {
+      setAgreementHistoryRecords([agreement]);
+      setAgreementHistoryLoading(false);
+      return undefined;
+    }
+
+    if (!agreementCompanyId) {
       setAgreementHistoryRecords([agreement]);
       setAgreementHistoryLoading(false);
       return undefined;
@@ -1047,7 +1063,6 @@ const SalesAgreementDetail = () => {
       }
 
       if (!isActive) return;
-      const agreementCompanyId = agreement.companyId || recentlySelectedCompany || '';
       setAgreementHistoryRecords(
         [...rowsById.values()].filter((record) => (
           !agreementCompanyId || !record.companyId || record.companyId === agreementCompanyId
@@ -1059,6 +1074,7 @@ const SalesAgreementDetail = () => {
     const unsubscribe = onSnapshot(
       query(
         collection(db, salesCollectionNames.agreements),
+        where('companyId', '==', agreementCompanyId),
         where('agreementHistoryGroupId', '==', historyGroupId)
       ),
       (snapshot) => {
@@ -1459,18 +1475,42 @@ const SalesAgreementDetail = () => {
     user &&
     !companyMismatch &&
     !creatingBilling &&
-    isAccepted
+    isAccepted &&
+    isRecurringAgreement &&
+    customerBillingEnabled
   );
   const canStartStripeCheckout = Boolean(
     agreement &&
     user &&
     !companyMismatch &&
+    customerBillingEnabled &&
     isAccepted &&
+    isRecurringAgreement &&
     !startingStripeCheckout &&
     !hasActiveStripeSubscription &&
     Number(totalAmountCents || 0) > 0 &&
     stripeConnectedAccountId
   );
+  const canOfferBillingSubscriptionAcceptanceOption = Boolean(
+    customerBillingEnabled &&
+    isRecurringAgreement
+  );
+  const defaultCreateBillingSubscriptionOnAcceptance = Boolean(
+    canOfferBillingSubscriptionAcceptanceOption &&
+    salesBillingAutomationEnabled
+  );
+
+  const openAcceptanceModal = () => {
+    setCreateBillingSubscriptionOnAcceptance(defaultCreateBillingSubscriptionOnAcceptance);
+    setConfirmingAcceptance(true);
+  };
+
+  const closeAcceptanceModal = () => {
+    setConfirmingAcceptance(false);
+    setAcceptanceNote('');
+    setAcceptanceSource('customerOffline');
+    setCreateBillingSubscriptionOnAcceptance(defaultCreateBillingSubscriptionOnAcceptance);
+  };
 
   const linkedJobIdForAgreement = (targetAgreement = agreement) => {
     if (!targetAgreement) return '';
@@ -1551,10 +1591,14 @@ const SalesAgreementDetail = () => {
 
     try {
       const historyGroupId = agreementHistoryGroupId(agreement);
-      const siblingSnap = await getDocs(query(
-        collection(db, salesCollectionNames.agreements),
-        where('agreementHistoryGroupId', '==', historyGroupId)
-      ));
+      const agreementCompanyId = agreement.companyId || recentlySelectedCompany || '';
+      const siblingSnap = agreementCompanyId
+        ? await getDocs(query(
+          collection(db, salesCollectionNames.agreements),
+          where('companyId', '==', agreementCompanyId),
+          where('agreementHistoryGroupId', '==', historyGroupId)
+        ))
+        : { docs: [] };
       const maxSiblingVersion = siblingSnap.docs.reduce((maxVersion, siblingDoc) => {
         const sibling = siblingDoc.data() || {};
         return Math.max(maxVersion, Number(sibling.agreementVersion || 1));
@@ -2254,7 +2298,14 @@ const SalesAgreementDetail = () => {
     setMarkingAccepted(true);
 
     try {
+      const shouldCreateBillingSubscription = Boolean(
+        customerBillingEnabled &&
+        isRecurringAgreement &&
+        createBillingSubscriptionOnAcceptance
+      );
       const billingSubscriptionDraft = await ensureBillingSubscriptionForAgreement(db, agreement, {
+        customerBillingEnabled,
+        billingAutomationEnabled: shouldCreateBillingSubscription,
         stripeConnectedAccountId,
         agreementUpdates: {
           status: SalesAgreementStatus.accepted,
@@ -2264,6 +2315,7 @@ const SalesAgreementDetail = () => {
           acceptedByEmail: user?.email || dataBaseUser?.email || '',
           acceptedSource: acceptanceSource,
           acceptedNote: acceptanceNote.trim(),
+          createBillingSubscriptionOnAcceptance: shouldCreateBillingSubscription,
           acceptedSnapshot: {
             agreementId: agreement.id,
             title: agreement.title || 'Service Agreement',
@@ -2297,12 +2349,16 @@ const SalesAgreementDetail = () => {
       await syncLinkedJobForAcceptedAgreement();
       await syncLinkedLeadForAcceptedAgreement();
 
-      toast.success(billingSubscriptionDraft.customerCanPayImmediately
-        ? 'Agreement accepted and billing subscription is ready for payment setup.'
-        : 'Agreement accepted and billing subscription was created.');
-      setConfirmingAcceptance(false);
-      setAcceptanceNote('');
-      setAcceptanceSource('customerOffline');
+      toast.success(billingSubscriptionDraft.billingSkipped
+        ? billingSubscriptionDraft.billingSkippedReason === 'oneTimeAgreement'
+          ? 'Agreement accepted. One-time job estimates convert to invoices instead of billing subscriptions.'
+          : customerBillingEnabled
+            ? 'Agreement accepted without creating a billing subscription.'
+            : 'Agreement accepted. Customer billing is off, so no billing subscription was created.'
+        : billingSubscriptionDraft.customerCanPayImmediately
+          ? 'Agreement accepted and billing subscription is ready for payment setup.'
+          : 'Agreement accepted and billing subscription was created.');
+      closeAcceptanceModal();
     } catch (acceptError) {
       console.error('Unable to mark service agreement accepted', acceptError);
       toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
@@ -2318,6 +2374,9 @@ const SalesAgreementDetail = () => {
 
     try {
       const billingSubscriptionDraft = await ensureBillingSubscriptionForAgreement(db, agreement, {
+        customerBillingEnabled,
+        billingAutomationEnabled: customerBillingEnabled,
+        requireBillingAutomationEnabled: true,
         stripeConnectedAccountId,
       });
 
@@ -2339,6 +2398,9 @@ const SalesAgreementDetail = () => {
 
     try {
       const targetBillingSubscription = await ensureBillingSubscriptionForAgreement(db, agreement, {
+        customerBillingEnabled,
+        billingAutomationEnabled: customerBillingEnabled,
+        requireBillingAutomationEnabled: true,
         stripeConnectedAccountId,
       });
 
@@ -2488,7 +2550,7 @@ const SalesAgreementDetail = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setConfirmingAcceptance(true)}
+                  onClick={openAcceptanceModal}
                   disabled={!canMarkAccepted}
                   className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -3046,8 +3108,32 @@ const SalesAgreementDetail = () => {
 
                 {!isAccepted && (
                   <p className="mt-4 text-sm text-slate-500">
-                    A billing subscription is created automatically when this agreement is accepted.
+                    {!isRecurringAgreement
+                      ? 'One-time job estimates convert to invoices instead of billing subscriptions.'
+                      : !customerBillingEnabled
+                        ? 'Customer billing is off. This agreement can still be accepted without creating a billing subscription.'
+                        : salesBillingAutomationEnabled
+                          ? 'Creating a billing subscription is selected by default when this agreement is accepted.'
+                          : 'This agreement can be accepted without billing, or you can select billing during acceptance.'}
                   </p>
+                )}
+
+                {isAccepted && !isRecurringAgreement && !hasBillingSubscription && (
+                  <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                    One-time job estimates do not create billing subscriptions. Convert the finished job to an invoice when ready.
+                  </div>
+                )}
+
+                {isAccepted && isRecurringAgreement && !customerBillingEnabled && !hasBillingSubscription && (
+                  <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    Customer billing is off for this company, so this accepted agreement has no billing subscription.
+                  </div>
+                )}
+
+                {isAccepted && isRecurringAgreement && customerBillingEnabled && !hasBillingSubscription && (
+                  <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                    No billing subscription was created when this agreement was accepted. Create one when the customer is ready for recurring billing.
+                  </div>
                 )}
 
                 {canCreateBillingSubscription && (
@@ -3066,7 +3152,7 @@ const SalesAgreementDetail = () => {
                   </button>
                 )}
 
-                {isAccepted && (
+                {isAccepted && isRecurringAgreement && (
                   <button
                     type="button"
                     onClick={startStripeCheckout}
@@ -3145,7 +3231,7 @@ const SalesAgreementDetail = () => {
 
                 <button
                   type="button"
-                  onClick={() => setConfirmingAcceptance(true)}
+                  onClick={openAcceptanceModal}
                   disabled={!canMarkAccepted}
                   className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -3238,6 +3324,36 @@ const SalesAgreementDetail = () => {
               )}
 
               <section className="grid gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTemplateSelector">
+                    Service Agreement Template
+                  </label>
+                  <select
+                    id="agreementTemplateSelector"
+                    value={editDraft.termsTemplateId || ''}
+                    onChange={(event) => applyTermsTemplate(event.target.value)}
+                    disabled={loadingTermsTemplates || applyingTermsTemplate}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                  >
+                    <option value="">
+                      {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
+                    </option>
+                    {editDraft.termsTemplateId && !selectedEditTermsTemplate && (
+                      <option value={editDraft.termsTemplateId}>
+                        {editDraft.termsTemplateName || 'Current template'}
+                      </option>
+                    )}
+                    {termsTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                  {applyingTermsTemplate && (
+                    <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
+                  )}
+                </div>
+
                 <div className="sm:col-span-2">
                   <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTitle">
                     Title
@@ -3343,6 +3459,173 @@ const SalesAgreementDetail = () => {
                       onChange={(event) => updateEditField('serviceCadenceCount', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     />
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-950">Services & Products</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Customer-facing pricing rows for this service agreement.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-3">
+                  {editDraft.lineItems.map((item) => {
+                    const quantity = Number(item.quantity) || 0;
+                    const itemTotal = moneyInputToCents(item.unitAmount) * quantity;
+
+                    return (
+                      <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_130px_130px_auto]">
+                          <input
+                            value={item.name}
+                            onChange={(event) => updateEditLineItem(item.id, 'name', event.target.value)}
+                            placeholder="Item name"
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={item.quantity}
+                            onChange={(event) => updateEditLineItem(item.id, 'quantity', event.target.value)}
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.unitAmount}
+                            onChange={(event) => updateEditLineItem(item.id, 'unitAmount', event.target.value)}
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                          <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
+                            {formatCurrency(itemTotal)}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeEditLineItem(item.id)}
+                            className="rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <textarea
+                          value={item.description}
+                          onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
+                          placeholder="Description"
+                          rows={2}
+                          className="mt-3 min-h-[72px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        />
+                      </div>
+                    );
+                  })}
+
+                  {editDraft.lineItems.length === 0 && (
+                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                      Add at least one line item before saving.
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-950">Add Line Item</h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Add pricing from the Service Catalog or create a one-off manual row.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => setShowCatalogItemSelector((current) => !current)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Catalog Item
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addEditLineItem();
+                          setShowCatalogItemSelector(false);
+                        }}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Manual Item
+                      </button>
+                    </div>
+                  </div>
+
+                  {showCatalogItemSelector && (
+                    <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_120px_auto_auto]">
+                      <select
+                        value={selectedCatalogItemId}
+                        onChange={(event) => {
+                          const nextItemId = event.target.value;
+                          const nextItem = catalogItems.find((item) => item.id === nextItemId);
+                          setSelectedCatalogItemId(nextItemId);
+                          setSelectedCatalogQuantity(String(nextItem?.defaultQuantity || 1));
+                        }}
+                        disabled={loadingCatalogItems}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        aria-label="Select sales catalog item"
+                      >
+                        <option value="">
+                          {loadingCatalogItems ? 'Loading catalog...' : catalogItems.length ? 'Select catalog item' : 'No catalog items yet'}
+                        </option>
+                        {catalogItems.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name} - {formatCurrency(item.unitAmountCents)} - {labelize(item.billingBehavior)}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={selectedCatalogQuantity}
+                        onChange={(event) => setSelectedCatalogQuantity(event.target.value)}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        aria-label="Catalog item quantity"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addCatalogLineItem()}
+                        disabled={!selectedEditCatalogItem}
+                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Selected
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCreateCatalogItem(true)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Create Catalog Item
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <div className="w-full max-w-xs rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Subtotal</span>
+                      <span className="font-semibold text-slate-900">{formatCurrency(editTotals.subtotalAmountCents)}</span>
+                    </div>
+                    <div className="mt-2 flex justify-between gap-3 border-t border-slate-200 pt-2">
+                      <span className="text-slate-500">Total</span>
+                      <span className="text-lg font-bold text-slate-950">{formatCurrency(editTotals.totalAmountCents)}</span>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -3571,173 +3854,6 @@ const SalesAgreementDetail = () => {
               <section>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h3 className="text-base font-bold text-slate-950">Services & Products</h3>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Customer-facing pricing rows for this service agreement.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-3 space-y-3">
-                  {editDraft.lineItems.map((item) => {
-                    const quantity = Number(item.quantity) || 0;
-                    const itemTotal = moneyInputToCents(item.unitAmount) * quantity;
-
-                    return (
-                      <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_130px_130px_auto]">
-                          <input
-                            value={item.name}
-                            onChange={(event) => updateEditLineItem(item.id, 'name', event.target.value)}
-                            placeholder="Item name"
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={item.quantity}
-                            onChange={(event) => updateEditLineItem(item.id, 'quantity', event.target.value)}
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={item.unitAmount}
-                            onChange={(event) => updateEditLineItem(item.id, 'unitAmount', event.target.value)}
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
-                            {formatCurrency(itemTotal)}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeEditLineItem(item.id)}
-                            className="rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        <textarea
-                          value={item.description}
-                          onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
-                          placeholder="Description"
-                          rows={2}
-                          className="mt-3 min-h-[72px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        />
-                      </div>
-                    );
-                  })}
-
-                  {editDraft.lineItems.length === 0 && (
-                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                      Add at least one line item before saving.
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <h4 className="text-sm font-bold text-slate-950">Add Line Item</h4>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Add pricing from the Service Catalog or create a one-off manual row.
-                      </p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <button
-                        type="button"
-                        onClick={() => setShowCatalogItemSelector((current) => !current)}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
-                      >
-                        <FaPlus className="text-xs" />
-                        Add Catalog Item
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          addEditLineItem();
-                          setShowCatalogItemSelector(false);
-                        }}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        <FaPlus className="text-xs" />
-                        Add Manual Item
-                      </button>
-                    </div>
-                  </div>
-
-                  {showCatalogItemSelector && (
-                    <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_120px_auto_auto]">
-                      <select
-                        value={selectedCatalogItemId}
-                        onChange={(event) => {
-                          const nextItemId = event.target.value;
-                          const nextItem = catalogItems.find((item) => item.id === nextItemId);
-                          setSelectedCatalogItemId(nextItemId);
-                          setSelectedCatalogQuantity(String(nextItem?.defaultQuantity || 1));
-                        }}
-                        disabled={loadingCatalogItems}
-                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                        aria-label="Select sales catalog item"
-                      >
-                        <option value="">
-                          {loadingCatalogItems ? 'Loading catalog...' : catalogItems.length ? 'Select catalog item' : 'No catalog items yet'}
-                        </option>
-                        {catalogItems.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name} - {formatCurrency(item.unitAmountCents)} - {labelize(item.billingBehavior)}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={selectedCatalogQuantity}
-                        onChange={(event) => setSelectedCatalogQuantity(event.target.value)}
-                        className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        aria-label="Catalog item quantity"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => addCatalogLineItem()}
-                        disabled={!selectedEditCatalogItem}
-                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <FaPlus className="text-xs" />
-                        Add Selected
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowCreateCatalogItem(true)}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
-                      >
-                        <FaPlus className="text-xs" />
-                        Create Catalog Item
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-4 flex justify-end">
-                  <div className="w-full max-w-xs rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">Subtotal</span>
-                      <span className="font-semibold text-slate-900">{formatCurrency(editTotals.subtotalAmountCents)}</span>
-                    </div>
-                    <div className="mt-2 flex justify-between gap-3 border-t border-slate-200 pt-2">
-                      <span className="text-slate-500">Total</span>
-                      <span className="text-lg font-bold text-slate-950">{formatCurrency(editTotals.totalAmountCents)}</span>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
                     <h3 className="text-base font-bold text-slate-950">Terms</h3>
                     <p className="mt-1 text-sm text-slate-500">
                       Select a saved template, then add or adjust lines for this agreement only.
@@ -3751,36 +3867,6 @@ const SalesAgreementDetail = () => {
                       Manage Templates
                     </Link>
                   </div>
-                </div>
-
-                <div className="mt-3">
-                  <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTermsTemplate">
-                    Service Agreement Template
-                  </label>
-                  <select
-                    id="agreementTermsTemplate"
-                    value={editDraft.termsTemplateId || ''}
-                    onChange={(event) => applyTermsTemplate(event.target.value)}
-                    disabled={loadingTermsTemplates || applyingTermsTemplate}
-                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                  >
-                    <option value="">
-                      {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
-                    </option>
-                    {editDraft.termsTemplateId && !selectedEditTermsTemplate && (
-                      <option value={editDraft.termsTemplateId}>
-                        {editDraft.termsTemplateName || 'Current template'}
-                      </option>
-                    )}
-                    {termsTemplates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name}
-                      </option>
-                    ))}
-                  </select>
-                  {applyingTermsTemplate && (
-                    <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
-                  )}
                 </div>
 
                 <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -4129,14 +4215,36 @@ const SalesAgreementDetail = () => {
               {supersedesAgreementId ? ' It will also end the previous agreement and mark it superseded.' : ''}
             </div>
 
+            {isRecurringAgreement && customerBillingEnabled ? (
+              <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={createBillingSubscriptionOnAcceptance}
+                  onChange={(event) => setCreateBillingSubscriptionOnAcceptance(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                  <span className="flex items-center gap-2 font-semibold text-blue-950">
+                    <FaCreditCard className="text-xs" />
+                    Create Billing Subscription
+                  </span>
+                  <span className="mt-1 block text-blue-800">
+                    The default for this checkbox comes from Company Settings.
+                  </span>
+                </span>
+              </label>
+            ) : (
+              <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                {!isRecurringAgreement
+                  ? 'One-time agreements do not create billing subscriptions.'
+                  : 'Customer billing is off in Company Settings, so this acceptance will not create a billing subscription.'}
+              </div>
+            )}
+
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => {
-                  setConfirmingAcceptance(false);
-                  setAcceptanceNote('');
-                  setAcceptanceSource('customerOffline');
-                }}
+                onClick={closeAcceptanceModal}
                 disabled={markingAccepted}
                 className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
               >

@@ -7,6 +7,8 @@ import {
   FaCheckCircle,
   FaClock,
   FaCreditCard,
+  FaEllipsisV,
+  FaEnvelope,
   FaExclamationTriangle,
   FaExternalLinkAlt,
   FaFileInvoiceDollar,
@@ -97,6 +99,68 @@ const daysUntil = (value) => {
   return Math.ceil((target.getTime() - today.getTime()) / 86400000);
 };
 
+const invoiceHasOpenBalance = (invoice = {}) => {
+  const status = normalizeStatus(invoice.status);
+  return invoiceBalanceCents(invoice) > 0 && !['draft', 'paid', 'void', 'uncollectible'].includes(status);
+};
+
+const invoiceIsOverdue = (invoice = {}) => {
+  if (!invoiceHasOpenBalance(invoice)) return false;
+
+  const status = normalizeStatus(invoice.status);
+  if (['overdue', 'pastdue'].includes(status)) return true;
+
+  const dueDelta = daysUntil(invoice.dueDate);
+  return dueDelta !== null && dueDelta < 0;
+};
+
+const invoiceIsOpenAr = (invoice = {}) => invoiceHasOpenBalance(invoice) && !invoiceIsOverdue(invoice);
+
+const pluralizeDays = (days) => `${days} day${days === 1 ? '' : 's'}`;
+
+const invoiceAgingInfo = (invoice = {}) => {
+  const status = normalizeStatus(invoice.status);
+
+  if (invoiceBalanceCents(invoice) <= 0 || status === 'paid') {
+    return { label: 'Settled', helper: 'No open balance', tone: 'emerald' };
+  }
+
+  if (status === 'void') return { label: 'Void', helper: 'No receivable', tone: 'slate' };
+  if (status === 'uncollectible') return { label: 'Uncollectible', helper: 'Written off', tone: 'rose' };
+  if (status === 'draft') return { label: 'Draft', helper: 'Not sent yet', tone: 'slate' };
+
+  const dueDelta = daysUntil(invoice.dueDate);
+  if (dueDelta === null) {
+    return ['overdue', 'pastdue'].includes(status)
+      ? { label: 'Overdue', helper: 'Due date not set', tone: 'rose' }
+      : { label: 'Open', helper: 'No due date', tone: 'slate' };
+  }
+
+  if (dueDelta < 0) {
+    const daysLate = Math.abs(dueDelta);
+    return { label: 'Overdue', helper: `${pluralizeDays(daysLate)} overdue`, tone: daysLate > 30 ? 'rose' : 'amber' };
+  }
+
+  if (dueDelta === 0) return { label: 'Due today', helper: 'Payment due today', tone: 'amber' };
+
+  return { label: 'Open', helper: `Due in ${pluralizeDays(dueDelta)}`, tone: 'slate' };
+};
+
+const invoiceCanSendReminder = (invoice = {}) => Boolean(
+  invoice?.id &&
+  invoice.email &&
+  Array.isArray(invoice.lineItems) &&
+  invoice.lineItems.length > 0 &&
+  !['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice.status))
+);
+
+const invoiceSendDisabledReason = (invoice = {}) => {
+  if (!invoice?.email) return 'Add a customer email before sending a reminder.';
+  if (!Array.isArray(invoice.lineItems) || invoice.lineItems.length === 0) return 'Add at least one line item before sending.';
+  if (['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice.status))) return 'This invoice cannot be sent in its current status.';
+  return '';
+};
+
 const sortByFreshest = (records) =>
   [...records].sort((left, right) => {
     const rightMillis = toMillis(right.updatedAt || right.receivedAt || right.paidAt || right.sentAt || right.createdAt || right.dueDate);
@@ -132,20 +196,72 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const StatTile = ({ icon: Icon, label, value, helper }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-    <div className="flex items-start justify-between gap-3">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+const StatTile = ({ icon: Icon, label, value, helper, onClick, selected = false, title = '' }) => {
+  const Component = onClick ? 'button' : 'div';
+  const interactiveClasses = onClick
+    ? 'w-full text-left transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-200'
+    : '';
+  const selectedClasses = selected
+    ? 'border-blue-300 bg-blue-50 shadow-md ring-1 ring-blue-200'
+    : 'border-slate-200 bg-white';
+  const iconClasses = selected ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600';
+
+  return (
+    <Component
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      title={title}
+      aria-pressed={onClick ? selected : undefined}
+      className={`rounded-lg border p-4 shadow-sm ${selectedClasses} ${interactiveClasses}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${selected ? 'text-blue-700' : 'text-slate-500'}`}>{label}</p>
+          <p className={`mt-2 text-2xl font-bold ${selected ? 'text-blue-950' : 'text-slate-950'}`}>{value}</p>
+        </div>
+        <span className={`rounded-md p-2 ${iconClasses}`}>
+          <Icon />
+        </span>
       </div>
-      <span className="rounded-md bg-slate-100 p-2 text-slate-600">
-        <Icon />
-      </span>
-    </div>
-    {helper && <p className="mt-3 text-sm text-slate-500">{helper}</p>}
-  </div>
-);
+      {helper && <p className={`mt-3 text-sm ${selected ? 'text-blue-700' : 'text-slate-500'}`}>{helper}</p>}
+    </Component>
+  );
+};
+
+const statusOptionLabel = (status) => {
+  if (status === 'openAr') return 'Open AR';
+  return labelize(status);
+};
+
+const InvoiceActionMenuItem = ({
+  label,
+  icon: Icon,
+  tone = 'slate',
+  loading = false,
+  disabled = false,
+  title = '',
+  onClick,
+}) => {
+  const toneClasses = {
+    blue: 'text-blue-700 hover:bg-blue-50',
+    emerald: 'text-emerald-700 hover:bg-emerald-50',
+    slate: 'text-slate-800 hover:bg-slate-50',
+  };
+
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled || loading}
+      title={title}
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400 ${toneClasses[tone] || toneClasses.slate}`}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span>{loading ? `${label}...` : label}</span>
+    </button>
+  );
+};
 
 const EmptyState = ({ title, body }) => (
   <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
@@ -170,25 +286,55 @@ const InsightRow = ({ label, value, tone = 'slate' }) => {
   );
 };
 
-const InvoiceSourceLinks = ({ invoice }) => (
-  <div className="flex flex-wrap gap-2">
-    {invoice.agreementId && (
-      <Link to={`/company/sales/agreements/${invoice.agreementId}`} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
-        Agreement
-      </Link>
-    )}
-    {invoice.jobId && (
-      <Link to={`/company/jobs/detail/${invoice.jobId}`} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
-        Job
-      </Link>
-    )}
-    {invoice.stripeHostedInvoiceUrl && (
-      <a href={invoice.stripeHostedInvoiceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-900">
-        Stripe <FaExternalLinkAlt />
-      </a>
-    )}
-  </div>
-);
+const invoicePartApprovalId = (invoice = {}) => {
+  if (invoice.partApprovalRequestId || invoice.partApprovalId) return invoice.partApprovalRequestId || invoice.partApprovalId;
+  if (['partapproval', 'partapprovalrequest', 'customerpartapproval'].includes(normalizeStatus(invoice.sourceType))) return invoice.sourceId || '';
+
+  const lineItems = Array.isArray(invoice.lineItems) ? invoice.lineItems : [];
+  const linkedLineItem = lineItems.find((item) => (
+    item.partApprovalRequestId ||
+    item.partApprovalId ||
+    item.metadata?.partApprovalRequestId ||
+    item.metadata?.partApprovalId ||
+    ['partapproval', 'partapprovalrequest', 'customerpartapproval'].includes(normalizeStatus(item.sourceType))
+  ));
+
+  return linkedLineItem?.partApprovalRequestId ||
+    linkedLineItem?.partApprovalId ||
+    linkedLineItem?.metadata?.partApprovalRequestId ||
+    linkedLineItem?.metadata?.partApprovalId ||
+    linkedLineItem?.sourceId ||
+    '';
+};
+
+const InvoiceSourceLinks = ({ invoice }) => {
+  const partApprovalId = invoicePartApprovalId(invoice);
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {invoice.agreementId && (
+        <Link to={`/company/sales/agreements/${invoice.agreementId}`} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
+          Agreement
+        </Link>
+      )}
+      {invoice.jobId && (
+        <Link to={`/company/jobs/detail/${invoice.jobId}`} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
+          Job
+        </Link>
+      )}
+      {partApprovalId && (
+        <Link to={`/company/part-approvals?approvalId=${encodeURIComponent(partApprovalId)}`} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
+          Part Approval
+        </Link>
+      )}
+      {invoice.stripeHostedInvoiceUrl && (
+        <a href={invoice.stripeHostedInvoiceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-900">
+          Stripe <FaExternalLinkAlt />
+        </a>
+      )}
+    </div>
+  );
+};
 
 const customerLink = (customerId) => (customerId ? `/company/customers/details/${customerId}` : '');
 
@@ -211,6 +357,9 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   const [savingPayment, setSavingPayment] = useState(false);
   const [startingCheckoutId, setStartingCheckoutId] = useState('');
   const [creatingInvoiceId, setCreatingInvoiceId] = useState('');
+  const [sendingInvoiceId, setSendingInvoiceId] = useState('');
+  const [openActionInvoiceId, setOpenActionInvoiceId] = useState('');
+  const [actionMenuPosition, setActionMenuPosition] = useState(null);
 
   const activeView = ['invoices', 'payments', 'subscriptions'].includes(defaultView) ? defaultView : 'invoices';
   const pageMeta = {
@@ -270,8 +419,9 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
     const invoicedCents = invoices
       .filter((invoice) => !['draft', 'void'].includes(normalizeStatus(invoice.status)))
       .reduce((total, invoice) => total + Number(invoice.totalAmountCents || 0), 0);
+    const openArInvoices = invoices.filter(invoiceIsOpenAr);
     const openArCents = invoices
-      .filter((invoice) => ['open', 'partiallypaid', 'overdue'].includes(normalizeStatus(invoice.status)))
+      .filter(invoiceIsOpenAr)
       .reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0);
     const receivedCents = postedPayments.reduce((total, payment) => total + Number(payment.amountCents || 0), 0);
     const paidThroughAppCents = postedPayments
@@ -283,11 +433,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
     const recurringCents = subscriptions
       .filter((subscription) => ['active', 'trialing'].includes(normalizeStatus(subscription.stripeStatus || subscription.status)))
       .reduce((total, subscription) => total + Number(subscription.amountCents || 0), 0);
-    const overdueInvoices = invoices.filter((invoice) => {
-      const balanceCents = invoiceBalanceCents(invoice);
-      const dueDelta = daysUntil(invoice.dueDate);
-      return balanceCents > 0 && dueDelta !== null && dueDelta < 0 && !['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice.status));
-    });
+    const overdueInvoices = invoices.filter(invoiceIsOverdue);
     const pendingCheckoutSubscriptions = subscriptions.filter((subscription) => (
       ['pendingpaymentmethod', 'pendingstripe', 'notstarted'].includes(normalizeStatus(subscription.status || subscription.stripeStatus)) &&
       Number(subscription.amountCents || 0) > 0
@@ -301,6 +447,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
       paidThroughAppCents,
       manualPaymentCents,
       recurringCents,
+      openArInvoiceCount: openArInvoices.length,
       overdueInvoiceCount: overdueInvoices.length,
       overdueInvoiceCents: overdueInvoices.reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0),
       pendingCheckoutCount: pendingCheckoutSubscriptions.length,
@@ -359,17 +506,27 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
 
     return sortByFreshest(source).filter((record) => {
       const status = normalizeStatus(record.status || record.stripeStatus);
-      const matchesStatus = statusFilter === 'all' || status === normalizeStatus(statusFilter);
+      const matchesStatus = (() => {
+        if (statusFilter === 'all') return true;
+        if (activeView === 'invoices' && statusFilter === 'openAr') return invoiceIsOpenAr(record);
+        if (activeView === 'invoices' && statusFilter === 'overdue') return invoiceIsOverdue(record);
+        return status === normalizeStatus(statusFilter);
+      })();
       const matchesSearch = !queryText || [
         record.customerName,
         record.email,
-        record.invoiceNumber,
-        record.id,
-        record.jobId,
-        record.agreementId,
-        record.stripeInvoiceId,
-        record.stripeSubscriptionId,
-        record.referenceNumber,
+	        record.invoiceNumber,
+	        record.id,
+	        record.jobId,
+	        record.agreementId,
+	        record.sourceType,
+	        record.sourceId,
+	        record.partApprovalRequestId,
+	        record.partApprovalId,
+	        invoicePartApprovalId(record),
+	        record.stripeInvoiceId,
+	        record.stripeSubscriptionId,
+	        record.referenceNumber,
       ].some((value) => String(value || '').toLowerCase().includes(queryText));
 
       return matchesStatus && matchesSearch;
@@ -380,6 +537,40 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
     () => sortByFreshest(payments.filter((payment) => normalizeStatus(payment.status) === normalizeStatus(SalesPaymentStatus.posted))).slice(0, 6),
     [payments]
   );
+  const openActionInvoice = useMemo(
+    () => recordsForView.find((invoice) => invoice.id === openActionInvoiceId) || null,
+    [openActionInvoiceId, recordsForView]
+  );
+
+  const setInvoiceCardFilter = (filter) => {
+    if (activeView !== 'invoices') {
+      navigate('/company/sales/invoices');
+      return;
+    }
+
+    setStatusFilter((current) => (current === filter ? 'all' : filter));
+  };
+
+  const closeInvoiceActions = () => {
+    setOpenActionInvoiceId('');
+    setActionMenuPosition(null);
+  };
+
+  const toggleInvoiceActions = (invoiceId, event) => {
+    if (openActionInvoiceId === invoiceId) {
+      closeInvoiceActions();
+      return;
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 224;
+    const menuHeight = 132;
+    const top = Math.min(rect.bottom + 8, window.innerHeight - menuHeight - 8);
+    const left = Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8));
+
+    setOpenActionInvoiceId(invoiceId);
+    setActionMenuPosition({ top, left });
+  };
 
   const openRecordPaymentModal = (invoice) => {
     const balanceCents = invoiceBalanceCents(invoice);
@@ -427,6 +618,38 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
       console.error('Failed to record payment', error);
       toast.error(error.message || 'Failed to record payment.');
       setSavingPayment(false);
+    }
+  };
+
+  const sendInvoiceReminder = async (invoice) => {
+    if (!invoice?.id || sendingInvoiceId || !invoiceCanSendReminder(invoice)) {
+      const reason = invoiceSendDisabledReason(invoice);
+      if (reason) toast.error(reason);
+      return;
+    }
+
+    setSendingInvoiceId(invoice.id);
+
+    try {
+      const sendCallable = httpsCallable(functions, 'sendSalesInvoiceEmail');
+      const authPayload = await getCallableAuthPayload();
+      const result = await sendCallable({
+        companyId: invoice.companyId || recentlySelectedCompany,
+        invoiceId: invoice.id,
+        invoiceBaseUrl: window.location.origin,
+        ...authPayload,
+      });
+
+      if (result.data?.testMode) {
+        toast.success(`Test invoice reminder sent to ${result.data.to}. Customer email saved as ${result.data.intendedTo}.`);
+      } else {
+        toast.success(result.data?.message || 'Invoice reminder sent.');
+      }
+    } catch (error) {
+      console.error('Unable to send invoice reminder', error);
+      toast.error(error.message || 'Failed to send invoice reminder.');
+    } finally {
+      setSendingInvoiceId('');
     }
   };
 
@@ -518,11 +741,27 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
           <StatTile icon={FaFileInvoiceDollar} label="Invoiced" value={formatCurrency(summary.invoicedCents)} helper="Non-draft invoice total" />
-          <StatTile icon={FaReceipt} label="Open AR" value={formatCurrency(summary.openArCents)} helper="Outstanding invoice balance" />
+          <StatTile
+            icon={FaReceipt}
+            label="Open AR"
+            value={formatCurrency(summary.openArCents)}
+            helper={`${summary.openArInvoiceCount} outstanding, not late`}
+            onClick={() => setInvoiceCardFilter('openAr')}
+            selected={activeView === 'invoices' && statusFilter === 'openAr'}
+            title="Show open invoices that are not overdue"
+          />
+          <StatTile
+            icon={FaExclamationTriangle}
+            label="Overdue"
+            value={formatCurrency(summary.overdueInvoiceCents)}
+            helper={`${summary.overdueInvoiceCount} invoice${summary.overdueInvoiceCount === 1 ? '' : 's'}`}
+            onClick={() => setInvoiceCardFilter('overdue')}
+            selected={activeView === 'invoices' && statusFilter === 'overdue'}
+            title="Show overdue invoices"
+          />
           <StatTile icon={FaCheckCircle} label="Received" value={formatCurrency(summary.receivedCents)} helper="Posted payments" />
           <StatTile icon={FaCreditCard} label="Paid In App" value={formatCurrency(summary.paidThroughAppCents)} helper="Stripe card or ACH" />
           <StatTile icon={FaMoneyBillWave} label="Manual Paid" value={formatCurrency(summary.manualPaymentCents)} helper="Cash, check, external" />
-          <StatTile icon={FaExclamationTriangle} label="Overdue" value={formatCurrency(summary.overdueInvoiceCents)} helper={`${summary.overdueInvoiceCount} invoice${summary.overdueInvoiceCount === 1 ? '' : 's'}`} />
           <StatTile icon={FaClock} label="Needs Checkout" value={summary.pendingCheckoutCount} helper="Pending subscriptions" />
         </section>
 
@@ -563,9 +802,9 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
                       ? ['posted', 'pending', 'failed', 'refunded', 'void']
                       : activeView === 'subscriptions'
                         ? ['active', 'notStarted', 'pendingPaymentMethod', 'pendingStripe', 'pastDue', 'paused', 'canceled']
-                        : ['draft', 'open', 'partiallyPaid', 'paid', 'overdue', 'void', 'uncollectible']
+                        : ['openAr', 'overdue', 'draft', 'open', 'partiallyPaid', 'paid', 'void', 'uncollectible']
                     ).map((status) => (
-                      <option key={status} value={status}>{labelize(status)}</option>
+                      <option key={status} value={status}>{statusOptionLabel(status)}</option>
                     ))}
                   </select>
                 </div>
@@ -589,7 +828,12 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
                 creatingInvoiceId={creatingInvoiceId}
               />
             ) : (
-              <InvoicesTable invoices={recordsForView} onRecordPayment={openRecordPaymentModal} />
+              <InvoicesTable
+                invoices={recordsForView}
+                openActionInvoiceId={openActionInvoiceId}
+                onToggleActions={toggleInvoiceActions}
+                sendingInvoiceId={sendingInvoiceId}
+              />
             )}
           </div>
 
@@ -721,36 +965,94 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
           </form>
         </div>
       )}
+
+      {openActionInvoice && actionMenuPosition && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 cursor-default"
+            aria-label="Close invoice actions"
+            onClick={closeInvoiceActions}
+          />
+          <div
+            role="menu"
+            style={{
+              top: actionMenuPosition.top,
+              left: actionMenuPosition.left,
+            }}
+            className="fixed z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+          >
+            <Link
+              to={`/company/sales/invoices/${openActionInvoice.id}`}
+              role="menuitem"
+              onClick={closeInvoiceActions}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+            >
+              <FaFileInvoiceDollar className="h-4 w-4 shrink-0" />
+              <span>View Details</span>
+            </Link>
+            <InvoiceActionMenuItem
+              label="Send Reminder"
+              icon={FaEnvelope}
+              tone="blue"
+              loading={sendingInvoiceId === openActionInvoice.id}
+              disabled={Boolean(invoiceSendDisabledReason(openActionInvoice)) || Boolean(sendingInvoiceId)}
+              title={invoiceSendDisabledReason(openActionInvoice)}
+              onClick={() => {
+                sendInvoiceReminder(openActionInvoice);
+                closeInvoiceActions();
+              }}
+            />
+            <InvoiceActionMenuItem
+              label="Record Payment"
+              icon={FaReceipt}
+              tone="emerald"
+              disabled={invoiceBalanceCents(openActionInvoice) <= 0 || ['void', 'uncollectible'].includes(normalizeStatus(openActionInvoice.status))}
+              title={invoiceBalanceCents(openActionInvoice) <= 0 ? 'This invoice has no open balance.' : ''}
+              onClick={() => {
+                openRecordPaymentModal(openActionInvoice);
+                closeInvoiceActions();
+              }}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 };
 
-const InvoicesTable = ({ invoices, onRecordPayment }) => (
+const InvoicesTable = ({
+  invoices,
+  openActionInvoiceId,
+  onToggleActions,
+  sendingInvoiceId,
+}) => (
   <div className="overflow-x-auto">
     <table className="min-w-full divide-y divide-slate-200 text-sm">
       <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
         <tr>
-          <th className="px-5 py-3">Invoice</th>
           <th className="px-5 py-3">Customer</th>
           <th className="px-5 py-3">Source</th>
           <th className="px-5 py-3">Total</th>
           <th className="px-5 py-3">Due</th>
+          <th className="px-5 py-3">Aging</th>
           <th className="px-5 py-3">Status</th>
-          <th className="px-5 py-3"></th>
+          <th className="px-5 py-3 text-right">Actions</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-slate-100 bg-white">
         {invoices.map((invoice) => {
           const balanceCents = invoiceBalanceCents(invoice);
+          const aging = invoiceAgingInfo(invoice);
+          const agingTone = {
+            emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+            amber: 'border-amber-200 bg-amber-50 text-amber-700',
+            rose: 'border-rose-200 bg-rose-50 text-rose-700',
+            slate: 'border-slate-200 bg-slate-50 text-slate-700',
+          }[aging.tone] || 'border-slate-200 bg-slate-50 text-slate-700';
 
           return (
             <tr key={invoice.id} className="transition hover:bg-slate-50">
-              <td className="px-5 py-4">
-                <Link to={`/company/sales/invoices/${invoice.id}`} className="font-semibold text-slate-900 hover:text-blue-700">
-                  {invoice.invoiceNumber || 'Invoice'}
-                </Link>
-                <p className="mt-1 text-xs text-slate-500">{labelize(invoice.type)} · {labelize(invoice.deliveryMethod)}</p>
-              </td>
               <td className="px-5 py-4 text-slate-700">
                 {customerLink(invoice.customerId) ? (
                   <Link to={customerLink(invoice.customerId)} className="font-semibold text-slate-900 hover:text-blue-700">
@@ -759,6 +1061,9 @@ const InvoicesTable = ({ invoices, onRecordPayment }) => (
                 ) : (
                   invoice.customerName || invoice.email || 'Customer'
                 )}
+                <p className="mt-1 text-xs text-slate-500">
+                  {invoice.invoiceNumber || 'Invoice'} - {labelize(invoice.type)} - {labelize(invoice.deliveryMethod)}
+                </p>
               </td>
               <td className="px-5 py-4"><InvoiceSourceLinks invoice={invoice} /></td>
               <td className="px-5 py-4 font-semibold text-slate-900">{formatCurrency(invoice.totalAmountCents)}</td>
@@ -766,25 +1071,26 @@ const InvoicesTable = ({ invoices, onRecordPayment }) => (
                 <p className="font-semibold text-slate-900">{formatCurrency(balanceCents)}</p>
                 <p className="mt-1 text-xs text-slate-500">{formatDate(invoice.dueDate || invoice.createdAt)}</p>
               </td>
+              <td className="px-5 py-4">
+                <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${agingTone}`}>
+                  {aging.label}
+                </span>
+                <p className="mt-1 text-xs text-slate-500">{aging.helper}</p>
+              </td>
               <td className="px-5 py-4"><StatusBadge status={invoice.status || SalesInvoiceStatus.draft} /></td>
               <td className="px-5 py-4 text-right">
-                <div className="flex justify-end gap-2">
-                  <Link
-                    to={`/company/sales/invoices/${invoice.id}`}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Details
-                  </Link>
-                  {balanceCents > 0 && normalizeStatus(invoice.status) !== 'void' && (
-                    <button
-                      type="button"
-                      onClick={() => onRecordPayment(invoice)}
-                      className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
-                    >
-                      Record Payment
-                    </button>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  onClick={(event) => onToggleActions(invoice.id, event)}
+                  disabled={sendingInvoiceId === invoice.id}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  aria-haspopup="menu"
+                  aria-expanded={openActionInvoiceId === invoice.id}
+                  aria-label={`Actions for ${invoice.invoiceNumber || invoice.customerName || 'invoice'}`}
+                  title="Actions"
+                >
+                  <FaEllipsisV className="text-sm" />
+                </button>
               </td>
             </tr>
           );

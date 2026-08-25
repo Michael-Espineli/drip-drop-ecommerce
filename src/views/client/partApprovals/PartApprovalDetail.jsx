@@ -5,6 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
   ArrowLeftIcon,
+  ChatBubbleLeftRightIcon,
   CheckCircleIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline';
@@ -57,6 +58,12 @@ const statusTone = {
   resolved: 'border-blue-200 bg-blue-50 text-blue-700',
 };
 
+const paymentPreferenceOptions = [
+  { value: 'payNow', label: 'Pay right away' },
+  { value: 'payOnceDelivered', label: 'Charge on delivery' },
+  { value: 'sendInvoice', label: 'Request invoice' },
+];
+
 const StatusBadge = ({ status }) => {
   const key = normalizeStatus(status || 'pending');
   const tone = statusTone[key] || statusTone.pending;
@@ -77,11 +84,12 @@ const Field = ({ label, value }) => (
 
 const PartApprovalDetail = () => {
   const { approvalId } = useParams();
-  const { user } = useContext(Context);
+  const { user, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
   const [approval, setApproval] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [responseNote, setResponseNote] = useState('');
+  const [paymentPreference, setPaymentPreference] = useState('sendInvoice');
   const [responding, setResponding] = useState('');
 
   useEffect(() => {
@@ -118,6 +126,7 @@ const PartApprovalDetail = () => {
         }
 
         setApproval(data);
+        setPaymentPreference(data.paymentPreference || data.paymentCollectionPreference || 'sendInvoice');
         setLoading(false);
       },
       (snapshotError) => {
@@ -137,6 +146,25 @@ const PartApprovalDetail = () => {
     () => approval?.itemName || approval?.name || approval?.dbItemName || 'Pool Part',
     [approval]
   );
+  const messageCompanyPath = useMemo(() => {
+    if (!approval?.companyId) return '';
+
+    const params = new URLSearchParams();
+    params.set('message', `I have a question about this part approval for ${partName}.`);
+    params.set('linkType', 'partApproval');
+    params.set('recordId', approval.id);
+    params.set('title', partName);
+    params.set('subtitle', `${approval.companyName || 'Pool company'} - ${formatCurrency(totalPriceCents)}`);
+    params.set('companyId', approval.companyId);
+    params.set('customerId', approval.customerId || '');
+    params.set('customerUserId', approval.customerUserId || user?.uid || '');
+    params.set('collectionPath', `customerPartApprovals/${approval.id}`);
+    params.set('clientWebPath', `/client/part-approvals/${approval.id}`);
+    params.set('companyWebPath', `/company/part-approvals`);
+
+    return `/messages/newCompany/${approval.companyId}?${params.toString()}`;
+  }, [approval, partName, totalPriceCents, user?.uid]);
+  const messagesEnabled = featureFlagsLoaded && isFeatureEnabled('feature_flag_001');
 
   const respond = async (action) => {
     if (!approval || !isPending || responding) return;
@@ -150,6 +178,7 @@ const PartApprovalDetail = () => {
         approvalId: approval.id,
         action,
         responseNote,
+        paymentPreference: action === 'approved' ? paymentPreference : 'sendInvoice',
       });
       toast.success(action === 'approved' ? 'Part approved.' : 'Part rejected.');
     } catch (responseError) {
@@ -193,7 +222,18 @@ const PartApprovalDetail = () => {
                 {approval.companyName || 'Pool company'} requested approval before purchasing or installing this part.
               </p>
             </div>
-            <StatusBadge status={approval.status || approval.approvalStatus} />
+            <div className="flex flex-wrap items-center gap-2">
+              {messagesEnabled && messageCompanyPath && (
+                <Link
+                  to={messageCompanyPath}
+                  className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+                >
+                  <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                  Message Company
+                </Link>
+              )}
+              <StatusBadge status={approval.status || approval.approvalStatus} />
+            </div>
           </div>
         </section>
 
@@ -226,6 +266,30 @@ const PartApprovalDetail = () => {
                     className="mt-4 min-h-[120px] w-full rounded-md border border-slate-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     placeholder="Optional note"
                   />
+                  <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Prepare Payment</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      {paymentPreferenceOptions.map((option) => {
+                        const selected = paymentPreference === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setPaymentPreference(option.value)}
+                            disabled={Boolean(responding)}
+                            className={[
+                              'rounded-md border px-3 py-2 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60',
+                              selected
+                                ? 'border-blue-600 bg-blue-600 text-white'
+                                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100',
+                            ].join(' ')}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <button
                       type="button"
@@ -251,6 +315,11 @@ const PartApprovalDetail = () => {
                 <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                   Response recorded {formatDate(approval.respondedAt || approval.updatedAt)}.
                   {approval.responseNote && <p className="mt-2 whitespace-pre-wrap">{approval.responseNote}</p>}
+                  {approval.paymentPreference || approval.paymentCollectionPreference ? (
+                    <p className="mt-2 font-semibold">
+                      Payment preference: {paymentPreferenceOptions.find((option) => option.value === (approval.paymentPreference || approval.paymentCollectionPreference))?.label || labelize(approval.paymentPreference || approval.paymentCollectionPreference)}
+                    </p>
+                  ) : null}
                 </div>
               )}
             </div>

@@ -770,6 +770,14 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
       outcome = await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 7);
       break;
 
+    case "Twice Weekly":
+      outcome = await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 7);
+      break;
+
+    case "Three Times Weekly":
+      outcome = await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 7);
+      break;
+
     case "Bi-Weekly":
       outcome = await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 14);
       break;
@@ -957,6 +965,9 @@ function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, inter
     typeId: serviceStopTypeFields.typeId,
     type: serviceStopTypeFields.type,
     typeImage: serviceStopTypeFields.typeImage,
+    payTypeId: rssData.payTypeId || serviceStopTypeFields.typeId,
+    payTypeName: rssData.payTypeName || serviceStopTypeFields.type,
+    defaultWorkTypeIds: Array.isArray(rssData.defaultWorkTypeIds) ? rssData.defaultWorkTypeIds : [],
     category: serviceStopTypeFields.category,
 
     jobId: "",

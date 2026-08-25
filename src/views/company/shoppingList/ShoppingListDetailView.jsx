@@ -2,11 +2,13 @@ import React, { useCallback, useContext, useEffect, useMemo, useState } from "re
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { collection, doc, getDoc, getDocs, updateDoc, Timestamp } from "firebase/firestore";
 import Select from "react-select";
-import { db, storage } from "../../../utils/config";
+import toast from "react-hot-toast";
+import { db, functions, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import { linkedReferenceText } from "../../../utils/displayReferences";
 import { appConfirm } from "../../../utils/appDialog";
+import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import {
     getItemPhotoUrl,
     itemPhotoFieldsFromSource,
@@ -20,16 +22,29 @@ import {
     syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
 import {
+    SHOPPING_LIST_STATUS,
+    SHOPPING_LIST_STATUS_OPTIONS,
+    canonicalShoppingListStatus,
+} from "../../../utils/shoppingListStatus";
+import {
+    createAndSendShoppingItemInstallInvoice,
+    updateLinkedPartApprovalForManualShoppingInvoice,
+} from "../../../utils/sales/shoppingItemInvoiceAutomation";
+import {
     deleteShoppingListItemWithLinks,
     getShoppingItemPartApprovalId,
     isShoppingItemFromPartApproval,
 } from "../../../utils/shoppingListDelete";
+import {
+    getProductDisplayName,
+    productCatalogDocRef,
+} from "../../../utils/productCatalog";
 import { compareCompanyUsersByName } from "../../../utils/companyUsers";
 import ShareItemButton from "../../components/share/ShareItemButton";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
-const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
-const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed", SHOPPING_LIST_INVOICED_STATUS];
+const subCategoryOptions = ["Product", "Chemical", "Part", "Custom"];
+const statusOptions = SHOPPING_LIST_STATUS_OPTIONS;
 const shoppingListCollectionNames = ["shoppingList", "shoppingListItems"];
 
 const selectStyles = {
@@ -79,7 +94,11 @@ const timestampToDate = (value) => {
 };
 
 const ShoppingListDetailView = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        shoppingItemInstallInvoiceAutomationEnabled,
+        user,
+    } = useContext(Context);
     const { shoppingItemId } = useParams();
     const navigate = useNavigate();
 
@@ -108,6 +127,8 @@ const ShoppingListDetailView = () => {
         purchaserId: "",
         purchaserName: "",
         genericItemId: "",
+        productId: "",
+        productName: "",
         name: "",
         description: "",
         datePurchased: "",
@@ -126,6 +147,9 @@ const ShoppingListDetailView = () => {
         photoUrls: [],
         purchasedItem: "",
         invoiced: false,
+        invoiceStatus: "",
+        manualInvoiceNote: "",
+        autoInvoiceOnInstall: false,
         serviceLocationId: "",
         serviceLocationName: "",
         serviceLocationAddress: "",
@@ -145,6 +169,8 @@ const ShoppingListDetailView = () => {
         purchaserId: "",
         purchaserName: "",
         genericItemId: "",
+        productId: "",
+        productName: "",
         name: "",
         description: "",
         datePurchased: "",
@@ -163,6 +189,9 @@ const ShoppingListDetailView = () => {
         photoUrls: [],
         purchasedItem: "",
         invoiced: false,
+        invoiceStatus: "",
+        manualInvoiceNote: "",
+        autoInvoiceOnInstall: false,
         serviceLocationId: "",
         serviceLocationName: "",
         serviceLocationAddress: "",
@@ -303,11 +332,13 @@ const ShoppingListDetailView = () => {
                     id: docSnap.id,
                     category: data.category || "",
                     subCategory: data.subCategory || "",
-                    status: data.status || "",
+                    status: canonicalShoppingListStatus(data.status || SHOPPING_LIST_STATUS.needToPurchase),
                     purchaserId: data.purchaserId || "",
                     purchaserName: data.purchaserName || "",
-                    genericItemId: data.genericItemId || "",
-                    name: data.name || "",
+                    genericItemId: data.productId || data.genericItemId || "",
+                    productId: data.productId || data.genericItemId || (data.subCategory === "Product" ? data.itemId || "" : ""),
+                    productName: data.productName || data.genericItemName || "",
+                    name: data.name || data.productName || "",
                     description: data.description || "",
                     datePurchased: formattedDate,
                     quantity: data.quantity || "",
@@ -317,14 +348,19 @@ const ShoppingListDetailView = () => {
                     customerName: data.customerName || "",
                     userId: data.userId || "",
                     userName: data.userName || "",
-                    dbItemId: data.dbItemId || data.itemId || "",
-                    dbItemName: data.dbItemName || data.itemName || "",
+                    dbItemId: data.dbItemId || data.dataBaseItemId || (data.subCategory === "Data Base" ? data.itemId || "" : ""),
+                    dbItemName: data.dbItemName || (data.subCategory === "Data Base" ? data.itemName || "" : ""),
                     photoUrl: getItemPhotoUrl(data),
                     imageUrl: data.imageUrl || data.imageURL || "",
                     primaryPhotoUrl: data.primaryPhotoUrl || "",
                     photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
                     purchasedItem: data.purchasedItem || "",
                     invoiced: !!data.invoiced,
+                    invoiceStatus: data.invoiceStatus || "",
+                    manualInvoiceNote: data.manualInvoiceNote || data.invoiceNote || "",
+                    autoInvoiceOnInstall: data.autoInvoiceOnInstall === undefined
+                        ? shoppingItemInstallInvoiceAutomationEnabled === true
+                        : data.autoInvoiceOnInstall === true,
                     serviceLocationId: data.serviceLocationId || "",
                     serviceLocationName: data.serviceLocationName || "",
                     serviceLocationAddress: data.serviceLocationAddress || "",
@@ -338,7 +374,25 @@ const ShoppingListDetailView = () => {
                 };
 
                 let databasePhotoFields = {};
-                if (!loadedItem.photoUrl && loadedItem.dbItemId) {
+                if (!loadedItem.photoUrl && loadedItem.productId) {
+                    const productSnap = await getDoc(productCatalogDocRef(
+                        db,
+                        recentlySelectedCompany,
+                        loadedItem.productId
+                    ));
+
+                    if (productSnap.exists()) {
+                        const productData = { id: productSnap.id, ...productSnap.data() };
+                        const productName = getProductDisplayName(productData);
+                        databasePhotoFields = itemPhotoFieldsFromSource(
+                            productData,
+                            loadedItem.name || productName || "Shopping item photo"
+                        );
+                        loadedItem.productName = loadedItem.productName || productName;
+                    }
+                }
+
+                if (!loadedItem.photoUrl && !databasePhotoFields.photoUrl && loadedItem.dbItemId) {
                     const dbItemSnap = await getDoc(doc(
                         db,
                         "companies",
@@ -376,7 +430,7 @@ const ShoppingListDetailView = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [recentlySelectedCompany, shoppingItemId]);
+    }, [recentlySelectedCompany, shoppingItemId, shoppingItemInstallInvoiceAutomationEnabled]);
 
     useEffect(() => {
         fetchItem();
@@ -455,17 +509,19 @@ const ShoppingListDetailView = () => {
                     status: value
                         ? SHOPPING_LIST_INVOICED_STATUS
                         : prev.status === SHOPPING_LIST_INVOICED_STATUS
-                            ? "Purchased"
+                            ? SHOPPING_LIST_STATUS.purchased
                             : prev.status,
                 }
                 : {}),
             ...(field === "status"
                 ? {
+                    status: canonicalShoppingListStatus(value),
                     invoiced: value === SHOPPING_LIST_INVOICED_STATUS
                         ? true
                         : prev.status === SHOPPING_LIST_INVOICED_STATUS
                             ? false
                             : prev.invoiced,
+                    manualInvoiceNote: value === SHOPPING_LIST_INVOICED_STATUS ? prev.manualInvoiceNote || "" : "",
                 }
                 : {}),
         }));
@@ -635,6 +691,8 @@ const ShoppingListDetailView = () => {
 
             const isJobItem = editForm.category === "Job";
             const isPersonalItem = editForm.category === "Personal";
+            const isProductItem = editForm.subCategory === "Product";
+            const nextProductId = isProductItem ? editForm.productId || editForm.genericItemId || "" : "";
             let uploadedPhoto = {
                 photoUrl: editForm.photoUrl || "",
                 storagePath: "",
@@ -654,14 +712,16 @@ const ShoppingListDetailView = () => {
                 ? itemPhotoFieldsFromUrl(uploadedPhoto.photoUrl, editForm.name || item.name || "Shopping item photo", uploadedPhoto.storagePath)
                 : itemPhotoFieldsFromUrl(editForm.photoUrl, editForm.name || item.name || "Shopping item photo");
             const nextInvoiced = editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editForm.invoiced;
-            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : editForm.status || "";
+            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : canonicalShoppingListStatus(editForm.status);
             const payload = {
                 category: editForm.category || "",
                 subCategory: editForm.subCategory || "",
                 status: nextStatus,
                 purchaserId: editForm.purchaserId || "",
                 purchaserName: editForm.purchaserName || "",
-                genericItemId: editForm.genericItemId || "",
+                genericItemId: nextProductId,
+                productId: nextProductId,
+                productName: isProductItem ? editForm.productName || editForm.name || "" : "",
                 name: editForm.name || "",
                 description: editForm.description || "",
                 datePurchased: editForm.datePurchased
@@ -675,12 +735,16 @@ const ShoppingListDetailView = () => {
                 userId: isPersonalItem ? editForm.userId || "" : "",
                 userName:
                     isPersonalItem ? editForm.userName || "" : "",
-                dbItemId: editForm.dbItemId || "",
-                dbItemName: editForm.dbItemName || "",
+                dbItemId: editForm.subCategory === "Data Base" ? editForm.dbItemId || "" : "",
+                dbItemName: editForm.subCategory === "Data Base" ? editForm.dbItemName || "" : "",
+                itemId: nextProductId || (editForm.subCategory === "Data Base" ? editForm.dbItemId || "" : ""),
+                itemType: editForm.subCategory || "",
                 ...photoFields,
                 purchasedItem: editForm.purchasedItem || "",
                 invoiced: nextInvoiced,
                 invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                manualInvoiceNote: nextInvoiced ? editForm.manualInvoiceNote || "" : "",
+                autoInvoiceOnInstall: nextInvoiced ? false : editForm.autoInvoiceOnInstall === true,
                 serviceLocationId: isJobItem ? item.serviceLocationId || "" : editForm.serviceLocationId || "",
                 serviceLocationName: isJobItem ? item.serviceLocationName || "" : editForm.serviceLocationName || "",
                 plannedUnitCostCents: editForm.plannedUnitCostCents ?? null,
@@ -703,10 +767,50 @@ const ShoppingListDetailView = () => {
                 ...payload,
                 ...shoppingPayload,
             };
+            let automationPayload = {};
+
+            if (nextInvoiced) {
+                await updateLinkedPartApprovalForManualShoppingInvoice({
+                    db,
+                    shoppingItem: {
+                        ...item,
+                        ...syncedPayload,
+                        id: shoppingItemId,
+                    },
+                    note: editForm.manualInvoiceNote,
+                    user,
+                });
+            } else if (nextStatus === SHOPPING_LIST_STATUS.installed && editForm.autoInvoiceOnInstall) {
+                const invoiceResult = await createAndSendShoppingItemInstallInvoice({
+                    db,
+                    functions,
+                    companyId: recentlySelectedCompany,
+                    shoppingCollectionName: sourceCollection,
+                    shoppingItem: {
+                        ...item,
+                        ...syncedPayload,
+                        id: shoppingItemId,
+                    },
+                    user,
+                    getCallableAuthPayload,
+                });
+                automationPayload = invoiceResult.shoppingPayload || {};
+
+                if (invoiceResult.status === "sent") {
+                    toast.success("Invoice created and sent.");
+                } else if (invoiceResult.status === "created_email_failed") {
+                    toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_billable_amount") {
+                    toast.error("Installed item saved, but no invoice was created because it has no billable amount.");
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_customer_email") {
+                    toast.error("Installed item saved, but no invoice was created because the customer is missing an email.");
+                }
+            }
 
             setItem({
                 ...editForm,
                 ...syncedPayload,
+                ...automationPayload,
                 jobId: syncedPayload.jobId,
                 jobName: syncedPayload.jobName,
                 customerId: syncedPayload.customerId,
@@ -716,9 +820,9 @@ const ShoppingListDetailView = () => {
                 serviceLocationId: syncedPayload.serviceLocationId,
                 serviceLocationName: syncedPayload.serviceLocationName,
                 ...photoFields,
-                status: syncedPayload.status,
-                invoiced: !!syncedPayload.invoiced,
-                invoiceStatus: syncedPayload.invoiceStatus,
+                status: automationPayload.status || syncedPayload.status,
+                invoiced: !!(automationPayload.invoiced ?? syncedPayload.invoiced),
+                invoiceStatus: automationPayload.invoiceStatus || syncedPayload.invoiceStatus,
             });
             setPhotoFile(null);
             setPhotoPreviewUrl("");
@@ -845,7 +949,7 @@ const ShoppingListDetailView = () => {
     const displayDate = item.datePurchased
         ? format(new Date(item.datePurchased), "MM / d / yyyy")
         : "—";
-    const displayName = item.name || item.dbItemName || "—";
+    const displayName = item.name || item.productName || item.dbItemName || "—";
     const partApprovalRequestId = getShoppingItemPartApprovalId(item);
     const displayPhotoUrl = edit ? photoPreviewUrl || editForm.photoUrl : item.photoUrl;
     const connectedPurchasedItemOption = purchasedItemOptions.find((option) => option.id === item.purchasedItem);
@@ -856,7 +960,8 @@ const ShoppingListDetailView = () => {
     const jobServiceLocationName = item.serviceLocationName || jobDetails?.serviceLocationName || serviceLocationDetails?.nickName || serviceLocationDetails?.name || "";
     const jobServiceLocationAddress = formatAddress(serviceLocationDetails) || formatAddress(item.serviceLocationAddress) || formatAddress(jobDetails?.serviceLocationAddress) || formatAddress(jobDetails) || "—";
     const jobDetailLink = item.jobId ? `/company/jobs/detail/${item.jobId}` : "";
-    const dbItemDetailLink = item.dbItemId ? `/company/items/detail/${item.dbItemId}` : "";
+    const productDetailLink = item.productId ? "/company/product-catalog" : "";
+    const dbItemDetailLink = !productDetailLink && item.dbItemId ? `/company/items/detail/${item.dbItemId}` : "";
     const moneyFromCents = (value) => {
         if (value === null || value === undefined || value === "") return "—";
         const amount = Number(value);
@@ -1083,6 +1188,26 @@ const ShoppingListDetailView = () => {
                                     )}
                                 </div>
 
+                                {edit && editForm.status !== SHOPPING_LIST_INVOICED_STATUS ? (
+                                    <label className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-1"
+                                            checked={!!editForm.autoInvoiceOnInstall}
+                                            onChange={(e) => handleEditFieldChange("autoInvoiceOnInstall", e.target.checked)}
+                                        />
+                                        <span>
+                                            <span className="block font-semibold">Auto invoice when installed</span>
+                                            <span className="block text-xs text-blue-700">Creates and sends a sales invoice when this item is marked installed.</span>
+                                        </span>
+                                    </label>
+                                ) : !edit ? (
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Auto Invoice</p>
+                                        <p>{item.autoInvoiceOnInstall ? "When installed" : "Off"}</p>
+                                    </div>
+                                ) : null}
+
                                 <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Customer Approval</p>
                                     {edit ? (
@@ -1117,6 +1242,22 @@ const ShoppingListDetailView = () => {
                                     )}
                                 </div>
 
+                                {(edit ? editForm.status === SHOPPING_LIST_INVOICED_STATUS : item.invoiced || item.manualInvoiceNote) ? (
+                                    <div className="md:col-span-2">
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Invoice Note</p>
+                                        {edit ? (
+                                            <textarea
+                                                value={editForm.manualInvoiceNote || ""}
+                                                onChange={(e) => handleEditFieldChange("manualInvoiceNote", e.target.value)}
+                                                className="min-h-[96px] w-full rounded-md border border-slate-300 p-3"
+                                                placeholder="Optional note for manually marked invoices"
+                                            />
+                                        ) : (
+                                            <p className="whitespace-pre-wrap">{item.manualInvoiceNote || "—"}</p>
+                                        )}
+                                    </div>
+                                ) : null}
+
                                 <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Date Purchased</p>
                                     {edit ? (
@@ -1134,36 +1275,45 @@ const ShoppingListDetailView = () => {
                                 </div>
 
                                 <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Generic Item ID</p>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Product ID</p>
                                     {edit ? (
                                         <input
                                             type="text"
-                                            value={editForm.genericItemId}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("genericItemId", e.target.value)
-                                            }
+                                            value={editForm.productId || editForm.genericItemId}
+                                            onChange={(e) => {
+                                                const value = e.target.value;
+                                                setEditForm((prev) => ({
+                                                    ...prev,
+                                                    productId: value,
+                                                    genericItemId: value,
+                                                }));
+                                            }}
                                             className="w-full rounded-md border border-slate-300 p-3"
                                         />
                                     ) : (
-                                        <p>{item.genericItemId || "—"}</p>
+                                        <p>{item.productId || item.genericItemId || "—"}</p>
                                     )}
                                 </div>
 
                                 <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">DB Item Name</p>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Product</p>
                                     {edit ? (
                                         <input
                                             type="text"
-                                            value={editForm.dbItemName}
-                                            onChange={(e) => handleEditFieldChange("dbItemName", e.target.value)}
+                                            value={editForm.productName || editForm.dbItemName}
+                                            onChange={(e) => handleEditFieldChange("productName", e.target.value)}
                                             className="w-full rounded-md border border-slate-300 p-3"
                                         />
+                                    ) : productDetailLink ? (
+                                        <Link to={productDetailLink} className="font-semibold text-blue-600 hover:underline">
+                                            {item.productName || item.name || "Open product catalog"}
+                                        </Link>
                                     ) : dbItemDetailLink ? (
                                         <Link to={dbItemDetailLink} className="font-semibold text-blue-600 hover:underline">
-                                            {item.dbItemName || "Open database item"}
+                                            {item.dbItemName || "Open vendor item"}
                                         </Link>
                                     ) : (
-                                        <p>{item.dbItemName || "—"}</p>
+                                        <p>{item.productName || item.dbItemName || "—"}</p>
                                     )}
                                 </div>
                             </div>

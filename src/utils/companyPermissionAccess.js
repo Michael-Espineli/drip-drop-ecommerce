@@ -1,4 +1,7 @@
-import { SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID } from "./companyPermissions";
+import {
+  OFFERED_WORK_PERMISSION_ID,
+  SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
+} from "./companyPermissions";
 
 const routePermissionRules = [
   [/^\/company\/customers\/createnew/i, "12"],
@@ -9,6 +12,7 @@ const routePermissionRules = [
   [/^\/company\/jobs\/basic-create/i, SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID],
   [/^\/company\/jobs\/createnew/i, "22"],
   [/^\/company\/jobs/i, "20"],
+  [/^\/company\/offered-work/i, OFFERED_WORK_PERMISSION_ID],
 
   [/^\/company\/repair-requests\/create/i, "32"],
   [/^\/company\/repair-requests/i, "30"],
@@ -71,15 +75,21 @@ const routePermissionRules = [
   [/^\/company\/taskgroups\/createnew/i, "822"],
   [/^\/company\/taskgroups/i, "820"],
   [/^\/company\/readingsanddosages/i, "840"],
+  [/^\/company\/product-catalog/i, "850"],
   [/^\/company\/items\/createnew/i, "852"],
   [/^\/company\/items\/bulk-upload/i, "910"],
   [/^\/company\/items/i, "850"],
   [/^\/company\/reports/i, "870"],
   [/^\/company\/migration/i, "910"],
   [/^\/company\/settings\/payroll-setup/i, "420"],
+  [/^\/company\/settings\/company-wide/i, "900"],
   [/^\/company\/settings\/tester-strips/i, "900"],
   [/^\/company\/settings\/onboarding-checklist/i, "900"],
   [/^\/company\/settings\/text-templates/i, "900"],
+  [/^\/company\/settings\/product-catalog/i, "850"],
+  [/^\/company\/settings\/vendor-items\/createnew/i, "852"],
+  [/^\/company\/settings\/vendor-items\/bulk-upload/i, "910"],
+  [/^\/company\/settings\/vendor-items/i, "850"],
   [/^\/company\/settings\/stop-data/i, "840"],
   [/^\/company\/settings\/terms-templates/i, "880"],
   [/^\/company\/settings\/job-templates/i, "820"],

@@ -1,16 +1,18 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, increment, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import {
   FaArrowLeft,
   FaCheckCircle,
+  FaCreditCard,
   FaEdit,
   FaEllipsisV,
   FaEnvelope,
   FaFileSignature,
   FaPlus,
   FaRoute,
+  FaSave,
   FaSearch,
   FaSort,
   FaSortAmountDown,
@@ -33,6 +35,9 @@ import {
   getAgreementBillingType,
 } from '../../../utils/sales/agreementRouting';
 import { generateServiceAgreementsFromRoutes } from '../../../utils/sales/routeAgreementGeneration';
+import { getTermDescription } from '../../../utils/models/TermsTemplate';
+import { applyTermsTemplateAgreementDefaults } from '../../../utils/terms/termsTemplateAgreementDefaults';
+import { getTerms, listenTermsTemplates } from '../../../utils/terms/termsTemplateFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import SalesAgreementEditorModal from './SalesAgreementEditorModal';
 import ServiceAgreementSendDialog from './components/ServiceAgreementSendDialog';
@@ -84,6 +89,7 @@ const sortDirectionLabels = {
 const agreementSortOptions = [
   { value: 'updated', label: 'Updated' },
   { value: 'customer', label: 'Customer' },
+  { value: 'template', label: 'Template' },
   { value: 'amount', label: 'Amount' },
   { value: 'agreement', label: 'Agreement' },
   { value: 'sent', label: 'Sent Date' },
@@ -91,7 +97,7 @@ const agreementSortOptions = [
 ];
 
 const defaultSortDirectionForKey = (sortKey) => (
-  ['agreement', 'customer', 'status'].includes(sortKey) ? 'asc' : 'desc'
+  ['agreement', 'customer', 'status', 'template'].includes(sortKey) ? 'asc' : 'desc'
 );
 
 const defaultAgreementFilters = {
@@ -131,6 +137,32 @@ const agreementSubtotalAmountCents = (agreement = {}) => {
 
 const sortText = (value) => String(value || '').trim().toLowerCase();
 
+const agreementTemplateName = (agreement = {}) => {
+  const templateName = String(agreement.termsTemplateName || '').trim();
+  return templateName || '-';
+};
+
+const centsToMoneyInput = (amountCents = 0) => ((Number(amountCents) || 0) / 100).toFixed(2);
+
+const moneyInputToCents = (value) => {
+  const normalized = String(value ?? '').replace(/[^0-9.-]/g, '');
+  const parsed = Math.max(Number(normalized) || 0, 0);
+  return Math.round(parsed * 100);
+};
+
+const termDescription = (term) => {
+  if (typeof term === 'string') return term;
+  return getTermDescription(term);
+};
+
+const normalizeAgreementTermDescriptions = (terms = []) => {
+  if (!Array.isArray(terms)) return [];
+
+  return terms
+    .map((term) => String(termDescription(term) || '').trim())
+    .filter(Boolean);
+};
+
 const finalAgreementStatusKeys = new Set(['accepted', 'canceled', 'cancelled', 'rejected', 'expired', 'superseded']);
 
 const terminalAgreementStatusKeys = new Set(['canceled', 'cancelled', 'rejected', 'expired', 'superseded']);
@@ -148,6 +180,69 @@ const agreementHistoryGroupId = (agreement = {}) => (
   agreement.id ||
   ''
 );
+
+const isDraftAgreement = (agreement = {}) => (
+  normalizeStatus(agreement.status) === normalizeStatus(SalesAgreementStatus.draft)
+);
+
+const agreementLineItems = (agreement = {}) => (
+  Array.isArray(agreement.lineItems) ? agreement.lineItems : []
+);
+
+const quickEditableLineItemIndex = (agreement = {}) => {
+  const lineItems = agreementLineItems(agreement);
+  if (!lineItems.length) return -1;
+
+  const preferredIndex = lineItems.findIndex((item = {}) => {
+    const type = normalizeStatus(item.type || item.sourceType);
+    const label = normalizeStatus(`${item.name || ''} ${item.description || ''}`);
+    return type.includes('service') || label.includes('service');
+  });
+
+  return preferredIndex >= 0 ? preferredIndex : 0;
+};
+
+const agreementCanQuickEditAmount = (agreement = {}) => quickEditableLineItemIndex(agreement) >= 0;
+
+const quickEditDraftFromAgreement = (agreement = {}) => ({
+  amountInput: centsToMoneyInput(agreementAmountCents(agreement)),
+  termsTemplateId: agreement.termsTemplateId || '',
+});
+
+const lineItemTotalAmountCents = (item = {}) => {
+  const directTotal = Number(item.totalAmountCents);
+  if (Number.isFinite(directTotal)) return Math.max(Math.round(directTotal), 0);
+
+  const quantity = Math.max(Number(item.quantity || 1) || 1, 0);
+  return Math.max(Math.round((Number(item.unitAmountCents) || 0) * quantity), 0);
+};
+
+const lineItemsSubtotalAmountCents = (lineItems = []) => (
+  lineItems.reduce((total, item) => total + lineItemTotalAmountCents(item), 0)
+);
+
+const omitUndefinedFields = (payload = {}) => (
+  Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined))
+);
+
+const lineItemsWithQuickEditAmount = (agreement = {}, nextAmountCents = 0) => {
+  const lineItems = agreementLineItems(agreement).map((item) => ({ ...item }));
+  const lineItemIndex = quickEditableLineItemIndex({ lineItems });
+  if (lineItemIndex < 0) return null;
+
+  const currentLineItem = lineItems[lineItemIndex] || {};
+  const quantity = Math.max(Number(currentLineItem.quantity || 1) || 1, 1);
+  const unitAmountCents = Math.round(nextAmountCents / quantity);
+
+  lineItems[lineItemIndex] = {
+    ...currentLineItem,
+    quantity,
+    unitAmountCents,
+    totalAmountCents: Math.max(Math.round(nextAmountCents), 0),
+  };
+
+  return lineItems;
+};
 
 const linkedJobIdForAgreement = (agreement = {}) => {
   if (agreement.jobId) return agreement.jobId;
@@ -237,6 +332,10 @@ const compareAgreementValues = (left = {}, right = {}, sortKey = 'updated') => {
 
   if (sortKey === 'agreement') {
     return sortText(left.title || 'Service Agreement').localeCompare(sortText(right.title || 'Service Agreement'));
+  }
+
+  if (sortKey === 'template') {
+    return sortText(agreementTemplateName(left)).localeCompare(sortText(agreementTemplateName(right)));
   }
 
   return sortText(left.customerName || 'Customer').localeCompare(sortText(right.customerName || 'Customer'));
@@ -533,12 +632,14 @@ const SalesAgreements = ({
   defaultAgreementType = AgreementBillingType.recurring,
 }) => {
   const {
+    customerBillingEnabled,
     recentlySelectedCompany,
     recentlySelectedCompanyName,
     currentUser,
     user,
     currentuser,
     dataBaseUser,
+    salesBillingAutomationEnabled,
     stripeConnectedAccountId,
   } = useContext(Context);
   const activeUser = currentUser || user || currentuser || {};
@@ -550,6 +651,18 @@ const SalesAgreements = ({
   const [generatingFromRoutes, setGeneratingFromRoutes] = useState(false);
   const [editingAgreementId, setEditingAgreementId] = useState('');
   const [sendDialogAgreementId, setSendDialogAgreementId] = useState('');
+  const [acceptDialogAgreementId, setAcceptDialogAgreementId] = useState('');
+  const [acceptDialogAcceptanceSource, setAcceptDialogAcceptanceSource] = useState('customerOffline');
+  const [acceptDialogAcceptanceNote, setAcceptDialogAcceptanceNote] = useState('');
+  const [acceptDialogCreateBillingSubscription, setAcceptDialogCreateBillingSubscription] = useState(false);
+  const [quickEditMode, setQuickEditMode] = useState(false);
+  const [quickEditSelectedIds, setQuickEditSelectedIds] = useState([]);
+  const [quickEditDrafts, setQuickEditDrafts] = useState({});
+  const [bulkQuickEditAmountInput, setBulkQuickEditAmountInput] = useState('');
+  const [bulkQuickEditTemplateId, setBulkQuickEditTemplateId] = useState('');
+  const [savingQuickEdit, setSavingQuickEdit] = useState(false);
+  const [termsTemplates, setTermsTemplates] = useState([]);
+  const [loadingTermsTemplates, setLoadingTermsTemplates] = useState(false);
   const [openActionAgreementId, setOpenActionAgreementId] = useState('');
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [actionLoadingKey, setActionLoadingKey] = useState('');
@@ -640,10 +753,19 @@ const SalesAgreements = ({
     () => agreements.find((agreement) => agreement.id === openActionAgreementId) || null,
     [agreements, openActionAgreementId]
   );
+  const acceptDialogAgreement = useMemo(
+    () => agreements.find((agreement) => agreement.id === acceptDialogAgreementId) || null,
+    [agreements, acceptDialogAgreementId]
+  );
   const sendDialogAgreement = useMemo(
     () => agreements.find((agreement) => agreement.id === sendDialogAgreementId) || null,
     [agreements, sendDialogAgreementId]
   );
+  const agreementsById = useMemo(() => {
+    const nextMap = new Map();
+    agreements.forEach((agreement) => nextMap.set(agreement.id, agreement));
+    return nextMap;
+  }, [agreements]);
   const actorName = [
     dataBaseUser?.firstName,
     dataBaseUser?.lastName,
@@ -702,6 +824,40 @@ const SalesAgreements = ({
       unsubscribeRecurringStops();
     };
   }, [recentlySelectedCompany, routingQueueOnly]);
+
+  useEffect(() => {
+    if (!quickEditMode || !recentlySelectedCompany || routingQueueOnly) {
+      setTermsTemplates([]);
+      setLoadingTermsTemplates(false);
+      return undefined;
+    }
+
+    setLoadingTermsTemplates(true);
+    return listenTermsTemplates(
+      recentlySelectedCompany,
+      (templates) => {
+        setTermsTemplates(templates);
+        setLoadingTermsTemplates(false);
+      },
+      (templatesError) => {
+        console.error('Unable to load terms templates for quick edit', templatesError);
+        toast.error('Unable to load service agreement templates.');
+        setTermsTemplates([]);
+        setLoadingTermsTemplates(false);
+      }
+    );
+  }, [quickEditMode, recentlySelectedCompany, routingQueueOnly]);
+
+  useEffect(() => {
+    if (!quickEditMode) return;
+
+    setQuickEditSelectedIds((currentIds) => (
+      currentIds.filter((agreementId) => {
+        const agreement = agreementsById.get(agreementId);
+        return agreement && isDraftAgreement(agreement);
+      })
+    ));
+  }, [agreementsById, quickEditMode]);
 
   const recurringRoutingIndex = useMemo(
     () => buildRecurringRoutingIndex(recurringStops),
@@ -807,6 +963,259 @@ const SalesAgreements = ({
     setAgreementFilters({
       statusFilter: statusTileSelected(nextStatus) ? 'all' : nextStatus,
     });
+  };
+
+  const quickEditableAgreements = filteredAgreements.filter(isDraftAgreement);
+  const quickEditableAgreementIds = quickEditableAgreements.map((agreement) => agreement.id);
+  const selectedQuickEditIdSet = new Set(quickEditSelectedIds);
+  const selectedQuickEditAgreements = quickEditSelectedIds
+    .map((agreementId) => agreementsById.get(agreementId))
+    .filter((agreement) => agreement && isDraftAgreement(agreement));
+  const allVisibleQuickEditSelected = quickEditableAgreementIds.length > 0 &&
+    quickEditableAgreementIds.every((agreementId) => selectedQuickEditIdSet.has(agreementId));
+  const someVisibleQuickEditSelected = quickEditableAgreementIds.some((agreementId) => selectedQuickEditIdSet.has(agreementId));
+
+  const quickEditDraftForAgreement = (agreement) => (
+    quickEditDrafts[agreement.id] || quickEditDraftFromAgreement(agreement)
+  );
+
+  const quickEditDraftIsDirty = (agreement) => {
+    const draft = quickEditDraftForAgreement(agreement);
+    const templateDirty = (draft.termsTemplateId || '') !== (agreement.termsTemplateId || '');
+    const amountDirty = agreementCanQuickEditAmount(agreement) &&
+      moneyInputToCents(draft.amountInput) !== agreementAmountCents(agreement);
+
+    return templateDirty || amountDirty;
+  };
+
+  const quickEditDirtyAgreements = quickEditableAgreements.filter(quickEditDraftIsDirty);
+  const quickEditDirtyCount = quickEditDirtyAgreements.length;
+  const selectedQuickEditDirtyCount = selectedQuickEditAgreements.filter(quickEditDraftIsDirty).length;
+
+  const enterQuickEditMode = () => {
+    closeAgreementActions();
+    setQuickEditMode(true);
+    setQuickEditSelectedIds([]);
+    setQuickEditDrafts({});
+    setBulkQuickEditAmountInput('');
+    setBulkQuickEditTemplateId('');
+  };
+
+  const closeQuickEditMode = () => {
+    if (savingQuickEdit) return;
+
+    setQuickEditMode(false);
+    setQuickEditSelectedIds([]);
+    setQuickEditDrafts({});
+    setBulkQuickEditAmountInput('');
+    setBulkQuickEditTemplateId('');
+  };
+
+  const toggleQuickEditSelection = (agreement, selected) => {
+    if (!isDraftAgreement(agreement)) return;
+
+    setQuickEditDrafts((currentDrafts) => (
+      currentDrafts[agreement.id]
+        ? currentDrafts
+        : { ...currentDrafts, [agreement.id]: quickEditDraftFromAgreement(agreement) }
+    ));
+    setQuickEditSelectedIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (selected) {
+        nextIds.add(agreement.id);
+      } else {
+        nextIds.delete(agreement.id);
+      }
+      return Array.from(nextIds);
+    });
+  };
+
+  const toggleAllVisibleQuickEditSelections = () => {
+    if (!quickEditableAgreements.length) return;
+
+    setQuickEditDrafts((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      quickEditableAgreements.forEach((agreement) => {
+        if (!nextDrafts[agreement.id]) {
+          nextDrafts[agreement.id] = quickEditDraftFromAgreement(agreement);
+        }
+      });
+      return nextDrafts;
+    });
+    setQuickEditSelectedIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (allVisibleQuickEditSelected) {
+        quickEditableAgreementIds.forEach((agreementId) => nextIds.delete(agreementId));
+      } else {
+        quickEditableAgreementIds.forEach((agreementId) => nextIds.add(agreementId));
+      }
+      return Array.from(nextIds);
+    });
+  };
+
+  const updateQuickEditDraft = (agreement, updater) => {
+    if (!isDraftAgreement(agreement)) return;
+
+    setQuickEditDrafts((currentDrafts) => {
+      const currentDraft = currentDrafts[agreement.id] || quickEditDraftFromAgreement(agreement);
+      const nextDraft = typeof updater === 'function'
+        ? updater(currentDraft)
+        : { ...currentDraft, ...updater };
+
+      return {
+        ...currentDrafts,
+        [agreement.id]: nextDraft,
+      };
+    });
+  };
+
+  const applyBulkQuickEditAmount = () => {
+    if (!selectedQuickEditAgreements.length) {
+      toast.error('Select at least one draft agreement for bulk editing.');
+      return;
+    }
+
+    if (!String(bulkQuickEditAmountInput).trim()) {
+      toast.error('Enter a rate to apply.');
+      return;
+    }
+
+    const amountEditableAgreements = selectedQuickEditAgreements.filter(agreementCanQuickEditAmount);
+    if (!amountEditableAgreements.length) {
+      toast.error('Selected draft agreements do not have line items to update.');
+      return;
+    }
+
+    const nextAmountInput = centsToMoneyInput(moneyInputToCents(bulkQuickEditAmountInput));
+    setQuickEditDrafts((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      amountEditableAgreements.forEach((agreement) => {
+        nextDrafts[agreement.id] = {
+          ...quickEditDraftFromAgreement(agreement),
+          ...nextDrafts[agreement.id],
+          amountInput: nextAmountInput,
+        };
+      });
+      return nextDrafts;
+    });
+    setBulkQuickEditAmountInput(nextAmountInput);
+    toast.success(`Applied rate to ${amountEditableAgreements.length} selected draft agreement${amountEditableAgreements.length === 1 ? '' : 's'}.`);
+  };
+
+  const applyBulkQuickEditTemplate = () => {
+    if (!selectedQuickEditAgreements.length) {
+      toast.error('Select at least one draft agreement for bulk editing.');
+      return;
+    }
+
+    setQuickEditDrafts((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      selectedQuickEditAgreements.forEach((agreement) => {
+        nextDrafts[agreement.id] = {
+          ...quickEditDraftFromAgreement(agreement),
+          ...nextDrafts[agreement.id],
+          termsTemplateId: bulkQuickEditTemplateId || '',
+        };
+      });
+      return nextDrafts;
+    });
+
+    const template = termsTemplates.find((item) => item.id === bulkQuickEditTemplateId) || null;
+    toast.success(`Applied ${template?.name || 'no template'} to ${selectedQuickEditAgreements.length} selected draft agreement${selectedQuickEditAgreements.length === 1 ? '' : 's'}.`);
+  };
+
+  const buildQuickEditTemplatePatch = async (templateId) => {
+    if (!templateId) {
+      return {
+        terms: '',
+        termsTemplateId: '',
+        termsTemplateName: '',
+        termsTemplateDescription: '',
+        termsList: [],
+      };
+    }
+
+    if (!recentlySelectedCompany) {
+      throw new Error('Select a company before applying a service agreement template.');
+    }
+
+    const template = termsTemplates.find((item) => item.id === templateId) || null;
+    if (!template) {
+      throw new Error('Select a saved service agreement template.');
+    }
+
+    const templateTerms = await getTerms(recentlySelectedCompany, template.id);
+    const templatePatch = applyTermsTemplateAgreementDefaults({
+      terms: template.content || '',
+      termsTemplateId: template.id,
+      termsTemplateName: template.name || '',
+      termsTemplateDescription: template.description || '',
+      termsList: normalizeAgreementTermDescriptions(templateTerms),
+    }, template);
+
+    return omitUndefinedFields({
+      ...templatePatch,
+      billingFrequencyCount: templatePatch.billingFrequencyCount
+        ? Math.max(Number(templatePatch.billingFrequencyCount) || 1, 1)
+        : undefined,
+    });
+  };
+
+  const saveQuickEditedAgreements = async () => {
+    if (savingQuickEdit) return;
+
+    const dirtyAgreements = quickEditDirtyAgreements;
+
+    if (!dirtyAgreements.length) {
+      toast('No quick edit changes to save.');
+      return;
+    }
+
+    setSavingQuickEdit(true);
+
+    try {
+      await Promise.all(dirtyAgreements.map(async (agreement) => {
+        const draft = quickEditDraftForAgreement(agreement);
+        const updatePayload = {
+          updatedAt: serverTimestamp(),
+          lastEditedAt: serverTimestamp(),
+          lastEditedByUserId: activeUserId,
+          lastEditedByUserName: actorName,
+          revisionNumber: increment(1),
+          statusChangeReason: 'Draft agreement quick edited from the service agreement list.',
+        };
+
+        if (agreementCanQuickEditAmount(agreement) && moneyInputToCents(draft.amountInput) !== agreementAmountCents(agreement)) {
+          const nextLineItems = lineItemsWithQuickEditAmount(agreement, moneyInputToCents(draft.amountInput));
+          if (!nextLineItems) {
+            throw new Error(`"${agreement.title || 'Service Agreement'}" does not have a service line to update.`);
+          }
+
+          const nextSubtotalAmountCents = lineItemsSubtotalAmountCents(nextLineItems);
+          Object.assign(updatePayload, {
+            lineItems: nextLineItems,
+            rateAmountCents: nextSubtotalAmountCents,
+            subtotalAmountCents: nextSubtotalAmountCents,
+            taxAmountCents: 0,
+            totalAmountCents: nextSubtotalAmountCents,
+          });
+        }
+
+        if ((draft.termsTemplateId || '') !== (agreement.termsTemplateId || '')) {
+          Object.assign(updatePayload, await buildQuickEditTemplatePatch(draft.termsTemplateId || ''));
+        }
+
+        await updateDoc(doc(db, salesCollectionNames.agreements, agreement.id), omitUndefinedFields(updatePayload));
+      }));
+
+      toast.success(`Saved ${dirtyAgreements.length} draft agreement${dirtyAgreements.length === 1 ? '' : 's'}.`);
+      setQuickEditDrafts({});
+    } catch (quickEditError) {
+      console.error('Unable to save quick edited service agreements', quickEditError);
+      toast.error(quickEditError.message || 'Failed to save quick edits.');
+    } finally {
+      setSavingQuickEdit(false);
+    }
   };
 
   const closeAgreementActions = () => {
@@ -967,7 +1376,7 @@ const SalesAgreements = ({
     }
   };
 
-  const markAgreementAcceptedFromList = async (agreement) => {
+  const openAcceptAgreementDialog = (agreement) => {
     const disabledReason = agreementAcceptanceDisabledReason({
       agreement,
       activeUser,
@@ -979,18 +1388,61 @@ const SalesAgreements = ({
     }
 
     closeAgreementActions();
-    const confirmed = await appConfirm({
-      title: 'Mark Agreement Accepted',
-      message: `Mark "${agreement.title || 'Service Agreement'}" accepted and create the billing setup record?`,
-      confirmLabel: 'Mark Accepted',
+    const isRecurringAgreement = getAgreementBillingType(agreement) === AgreementBillingType.recurring;
+    setAcceptDialogCreateBillingSubscription(Boolean(
+      customerBillingEnabled &&
+      salesBillingAutomationEnabled &&
+      isRecurringAgreement
+    ));
+    setAcceptDialogAcceptanceSource('customerOffline');
+    setAcceptDialogAcceptanceNote('');
+    setAcceptDialogAgreementId(agreement.id);
+  };
+
+  const closeAcceptAgreementDialog = () => {
+    if (actionLoadingKey) return;
+    setAcceptDialogAgreementId('');
+    setAcceptDialogAcceptanceSource('customerOffline');
+    setAcceptDialogAcceptanceNote('');
+    setAcceptDialogCreateBillingSubscription(false);
+  };
+
+  const markAgreementAcceptedFromList = async (
+    agreement,
+    {
+      acceptanceSource = 'customerOffline',
+      acceptanceNote = '',
+      createBillingSubscription = false,
+      silent = false,
+    } = {}
+  ) => {
+    const disabledReason = agreementAcceptanceDisabledReason({
+      agreement,
+      activeUser,
+      selectedCompanyId: recentlySelectedCompany,
     });
-    if (!confirmed) return;
+    if (disabledReason) {
+      if (silent) {
+        throw new Error(disabledReason);
+      }
+      toast.error(disabledReason);
+      return;
+    }
+
+    const isRecurringAgreement = getAgreementBillingType(agreement) === AgreementBillingType.recurring;
+    const shouldCreateBillingSubscription = Boolean(
+      customerBillingEnabled &&
+      isRecurringAgreement &&
+      createBillingSubscription
+    );
 
     setActionLoadingKey(`${agreement.id}:accept`);
 
     try {
       const totalAmountCents = agreementAmountCents(agreement) || agreementSubtotalAmountCents(agreement);
       const billingSubscriptionDraft = await ensureBillingSubscriptionForAgreement(db, agreement, {
+        customerBillingEnabled,
+        billingAutomationEnabled: shouldCreateBillingSubscription,
         stripeConnectedAccountId,
         agreementUpdates: {
           status: SalesAgreementStatus.accepted,
@@ -998,8 +1450,9 @@ const SalesAgreements = ({
           acceptedByUserId: activeUserId,
           acceptedByUserName: actorName,
           acceptedByEmail: activeUser?.email || dataBaseUser?.email || '',
-          acceptedSource: 'internalManual',
-          acceptedNote: '',
+          acceptedSource: acceptanceSource,
+          acceptedNote: acceptanceNote.trim(),
+          createBillingSubscriptionOnAcceptance: shouldCreateBillingSubscription,
           acceptedSnapshot: {
             agreementId: agreement.id,
             title: agreement.title || 'Service Agreement',
@@ -1024,21 +1477,77 @@ const SalesAgreements = ({
           statusChangedAt: serverTimestamp(),
           statusChangedByUserId: activeUserId,
           statusChangedByUserName: actorName,
-          statusChangeReason: 'Agreement manually accepted from the service agreement list.',
+          statusChangeReason: acceptanceSource === 'customerOffline'
+            ? 'Customer accepted outside the portal.'
+            : 'Agreement manually accepted internally.',
         },
       });
 
       await syncLinkedJobForAgreementStatus(agreement, SalesAgreementStatus.accepted);
       await syncLinkedLeadForAgreementStatus(agreement, SalesAgreementStatus.accepted);
 
-      toast.success(billingSubscriptionDraft.customerCanPayImmediately
-        ? 'Agreement accepted and billing subscription is ready for payment setup.'
-        : 'Agreement accepted and billing subscription was created.');
+      if (!silent) {
+        toast.success(billingSubscriptionDraft.billingSkipped
+          ? billingSubscriptionDraft.billingSkippedReason === 'oneTimeAgreement'
+            ? 'Agreement accepted. One-time job estimates convert to invoices instead of billing subscriptions.'
+            : customerBillingEnabled
+              ? 'Agreement accepted without creating a billing subscription.'
+              : 'Agreement accepted. Customer billing is off, so no billing subscription was created.'
+          : billingSubscriptionDraft.customerCanPayImmediately
+            ? 'Agreement accepted and billing subscription is ready for payment setup.'
+            : 'Agreement accepted and billing subscription was created.');
+        closeAcceptAgreementDialog();
+      }
     } catch (acceptError) {
       console.error('Unable to mark service agreement accepted from list', acceptError);
+      if (silent) {
+        throw acceptError;
+      }
       toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
     } finally {
       setActionLoadingKey('');
+    }
+  };
+
+  const markSelectedQuickEditAgreementsAccepted = async () => {
+    if (savingQuickEdit) return;
+
+    if (!selectedQuickEditAgreements.length) {
+      toast.error('Select at least one draft agreement to mark accepted.');
+      return;
+    }
+
+    if (selectedQuickEditDirtyCount > 0) {
+      toast.error('Save selected row edits before marking agreements accepted.');
+      return;
+    }
+
+    const confirmed = await appConfirm({
+      title: 'Mark Selected Agreements Accepted',
+      message: `Mark ${selectedQuickEditAgreements.length} selected draft agreement${selectedQuickEditAgreements.length === 1 ? '' : 's'} accepted?`,
+      confirmLabel: 'Mark Accepted',
+    });
+    if (!confirmed) return;
+
+    setSavingQuickEdit(true);
+
+    try {
+      for (const agreement of selectedQuickEditAgreements) {
+        await markAgreementAcceptedFromList(agreement, {
+          acceptanceSource: 'internalManual',
+          acceptanceNote: 'Bulk marked accepted from the service agreement list.',
+          createBillingSubscription: Boolean(salesBillingAutomationEnabled),
+          silent: true,
+        });
+      }
+
+      toast.success(`Marked ${selectedQuickEditAgreements.length} agreement${selectedQuickEditAgreements.length === 1 ? '' : 's'} accepted.`);
+      setQuickEditSelectedIds([]);
+    } catch (bulkAcceptError) {
+      console.error('Unable to bulk mark service agreements accepted', bulkAcceptError);
+      toast.error(bulkAcceptError.message || 'Failed to mark selected agreements accepted.');
+    } finally {
+      setSavingQuickEdit(false);
     }
   };
 
@@ -1147,6 +1656,23 @@ const SalesAgreements = ({
       setGeneratingFromRoutes(false);
     }
   };
+
+  const acceptDialogIsRecurring = getAgreementBillingType(acceptDialogAgreement || {}) === AgreementBillingType.recurring;
+  const acceptDialogCanCreateBilling = Boolean(customerBillingEnabled && acceptDialogIsRecurring);
+  const acceptDialogLoading = Boolean(
+    acceptDialogAgreement &&
+    actionLoadingKey === `${acceptDialogAgreement.id}:accept`
+  );
+  const acceptDialogCanMarkAccepted = Boolean(
+    acceptDialogAgreement &&
+    !acceptDialogLoading &&
+    !agreementAcceptanceDisabledReason({
+      agreement: acceptDialogAgreement,
+      activeUser,
+      selectedCompanyId: recentlySelectedCompany,
+    })
+  );
+  const acceptDialogSupersedesAgreementId = renewalPreviousAgreementId(acceptDialogAgreement || {});
 
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
@@ -1341,6 +1867,110 @@ const SalesAgreements = ({
             </button>
           </div>
 
+          {!routingQueueOnly && (
+            <div className="border-b border-slate-200 px-5 py-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <span className="text-sm font-semibold text-slate-700">
+                  {quickEditMode
+                    ? `${quickEditSelectedIds.length} bulk selected${quickEditDirtyCount ? `, ${quickEditDirtyCount} row change${quickEditDirtyCount === 1 ? '' : 's'}` : ''}`
+                    : `${summary.draftCount} draft${summary.draftCount === 1 ? '' : 's'}`}
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {quickEditMode ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={saveQuickEditedAgreements}
+                        disabled={savingQuickEdit || quickEditDirtyCount === 0}
+                        className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                      >
+                        <FaSave className="text-xs" />
+                        {savingQuickEdit ? 'Saving...' : 'Save Row Edits'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeQuickEditMode}
+                        disabled={savingQuickEdit}
+                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        <FaTimesCircle className="text-xs" />
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={enterQuickEditMode}
+                      disabled={loading || summary.draftCount === 0}
+                      className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <FaEdit className="text-xs" />
+                      Quick Edit
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {quickEditMode && (
+                <div className="mt-3 grid gap-2 rounded-md border border-blue-100 bg-blue-50/60 p-3 lg:grid-cols-[140px_auto_220px_auto_auto]">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={bulkQuickEditAmountInput}
+                    onChange={(event) => setBulkQuickEditAmountInput(event.target.value)}
+                    disabled={savingQuickEdit || selectedQuickEditAgreements.length === 0}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                    placeholder="Bulk rate"
+                    aria-label="Bulk rate"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyBulkQuickEditAmount}
+                    disabled={savingQuickEdit || selectedQuickEditAgreements.length === 0}
+                    className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    Apply Rate
+                  </button>
+                  <select
+                    value={bulkQuickEditTemplateId}
+                    onChange={(event) => setBulkQuickEditTemplateId(event.target.value)}
+                    disabled={savingQuickEdit || loadingTermsTemplates || selectedQuickEditAgreements.length === 0}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                    aria-label="Bulk template"
+                  >
+                    <option value="">
+                      {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
+                    </option>
+                    {termsTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name || 'Untitled Template'}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={applyBulkQuickEditTemplate}
+                    disabled={savingQuickEdit || loadingTermsTemplates || selectedQuickEditAgreements.length === 0}
+                    className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    Apply Template
+                  </button>
+                  <button
+                    type="button"
+                    onClick={markSelectedQuickEditAgreementsAccepted}
+                    disabled={savingQuickEdit || selectedQuickEditAgreements.length === 0 || selectedQuickEditDirtyCount > 0}
+                    title={selectedQuickEditDirtyCount > 0 ? 'Save selected row edits before marking agreements accepted.' : undefined}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                  >
+                    <FaUserCheck className="text-xs" />
+                    Mark Accepted
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             {loading ? (
               <div className="p-5 text-sm text-slate-500">Loading service agreements...</div>
@@ -1357,6 +1987,21 @@ const SalesAgreements = ({
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
+                    {quickEditMode && (
+                      <th className="w-12 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleQuickEditSelected}
+                          ref={(input) => {
+                            if (input) input.indeterminate = !allVisibleQuickEditSelected && someVisibleQuickEditSelected;
+                          }}
+                          onChange={toggleAllVisibleQuickEditSelections}
+                          disabled={savingQuickEdit || quickEditableAgreementIds.length === 0}
+                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label="Select all visible draft agreements for bulk edit"
+                        />
+                      </th>
+                    )}
                     <th className="px-5 py-3">
                       <SortHeaderButton sortKey="agreement" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
                         Agreement
@@ -1365,6 +2010,11 @@ const SalesAgreements = ({
                     <th className="px-5 py-3">
                       <SortHeaderButton sortKey="customer" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
                         Customer
+                      </SortHeaderButton>
+                    </th>
+                    <th className="px-5 py-3">
+                      <SortHeaderButton sortKey="template" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
+                        Template
                       </SortHeaderButton>
                     </th>
                     <th className="px-5 py-3">
@@ -1392,44 +2042,124 @@ const SalesAgreements = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredAgreements.map((agreement) => (
-                    <tr key={agreement.id} className="transition hover:bg-slate-50"
-                      onClick={() => navigate(`/company/sales/agreements/${agreement.id}`)}>
-                      <td className="px-5 py-4">
-                        {agreement.title || 'Service Agreement'}
-                        <p className="mt-1 text-xs text-slate-500">{agreement.termsTemplateName || "Service agreement"}</p>
-                      </td>
-                      <td className="px-5 py-4">
-                        <p className="font-medium text-slate-900">{agreement.customerName || 'Customer'}</p>
-                        <p className="mt-1 text-xs text-slate-500">{agreement.email || 'No email'}</p>
-                      </td>
-                      <td className="px-5 py-4 font-semibold text-slate-900">
-                        {formatCurrency(agreementAmountCents(agreement))}
-                      </td>
-                      <td className="px-5 py-4">
-                        <BillingTypeBadge agreement={agreement} />
-                      </td>
-                      <td className="px-5 py-4">
-                        <StatusBadge status={agreement.status} />
-                      </td>
-                      <td className="px-5 py-4 text-slate-500">{formatDate(agreement.sentAt)}</td>
-                      <td className="px-5 py-4 text-slate-500">{formatDate(agreement.updatedAt || agreement.createdAt)}</td>
-                      <td className="px-5 py-4 text-right">
-                        <button
-                          type="button"
-                          onClick={(event) => toggleAgreementActions(agreement.id, event)}
-                          disabled={Boolean(actionLoadingKey && actionLoadingKey.startsWith(`${agreement.id}:`))}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                          aria-haspopup="menu"
-                          aria-expanded={openActionAgreementId === agreement.id}
-                          aria-label={`Actions for ${agreement.title || 'service agreement'}`}
-                          title="Actions"
-                        >
-                          <FaEllipsisV className="text-sm" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredAgreements.map((agreement) => {
+                    const draftEditable = isDraftAgreement(agreement);
+                    const quickEditSelected = selectedQuickEditIdSet.has(agreement.id);
+                    const quickEditDraft = quickEditDraftForAgreement(agreement);
+                    const amountEditable = draftEditable && agreementCanQuickEditAmount(agreement);
+                    const currentTemplateMissing = Boolean(
+                      agreement.termsTemplateId &&
+                      !termsTemplates.some((template) => template.id === agreement.termsTemplateId)
+                    );
+
+                    return (
+                      <tr
+                        key={agreement.id}
+                        className={`transition hover:bg-slate-50 ${quickEditMode ? '' : 'cursor-pointer'}`}
+                        onClick={() => {
+                          if (!quickEditMode) {
+                            navigate(`/company/sales/agreements/${agreement.id}`);
+                          }
+                        }}
+                      >
+                        {quickEditMode && (
+                          <td className="px-4 py-4 align-top">
+                            <input
+                              type="checkbox"
+                              checked={quickEditSelected}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => toggleQuickEditSelection(agreement, event.target.checked)}
+                              disabled={!draftEditable || savingQuickEdit}
+                              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Select ${agreement.title || 'service agreement'} for bulk edit`}
+                            />
+                          </td>
+                        )}
+                        <td className="px-5 py-4">
+                          <span className="font-medium text-slate-900">{agreement.title || 'Service Agreement'}</span>
+                        </td>
+                        <td className="px-5 py-4">
+                          <p className="font-medium text-slate-900">{agreement.customerName || 'Customer'}</p>
+                          <p className="mt-1 text-xs text-slate-500">{agreement.email || 'No email'}</p>
+                        </td>
+                        <td className="px-5 py-4 text-slate-700">
+                          {quickEditMode && draftEditable ? (
+                            <select
+                              value={quickEditDraft.termsTemplateId || ''}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => updateQuickEditDraft(agreement, { termsTemplateId: event.target.value })}
+                              disabled={loadingTermsTemplates || savingQuickEdit}
+                              className="w-56 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                              aria-label={`Template for ${agreement.title || 'service agreement'}`}
+                            >
+                              <option value="">
+                                {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
+                              </option>
+                              {currentTemplateMissing && (
+                                <option value={agreement.termsTemplateId}>
+                                  {agreement.termsTemplateName || 'Current template'}
+                                </option>
+                              )}
+                              {termsTemplates.map((template) => (
+                                <option key={template.id} value={template.id}>
+                                  {template.name || 'Untitled Template'}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="block max-w-[14rem] truncate" title={agreementTemplateName(agreement)}>
+                              {agreementTemplateName(agreement)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4 font-semibold text-slate-900">
+                          {quickEditMode && draftEditable ? (
+                            amountEditable ? (
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={quickEditDraft.amountInput}
+                                onClick={(event) => event.stopPropagation()}
+                                onChange={(event) => updateQuickEditDraft(agreement, { amountInput: event.target.value })}
+                                disabled={savingQuickEdit}
+                                className="w-32 rounded-md border border-slate-300 bg-white px-3 py-2 text-right text-sm font-semibold shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                                aria-label={`Amount for ${agreement.title || 'service agreement'}`}
+                              />
+                            ) : (
+                              <span title="Add a line item in the full editor before quick editing the amount.">
+                                {formatCurrency(agreementAmountCents(agreement))}
+                              </span>
+                            )
+                          ) : (
+                            formatCurrency(agreementAmountCents(agreement))
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          <BillingTypeBadge agreement={agreement} />
+                        </td>
+                        <td className="px-5 py-4">
+                          <StatusBadge status={agreement.status} />
+                        </td>
+                        <td className="px-5 py-4 text-slate-500">{formatDate(agreement.sentAt)}</td>
+                        <td className="px-5 py-4 text-slate-500">{formatDate(agreement.updatedAt || agreement.createdAt)}</td>
+                        <td className="px-5 py-4 text-right">
+                          <button
+                            type="button"
+                            onClick={(event) => toggleAgreementActions(agreement.id, event)}
+                            disabled={quickEditMode || Boolean(actionLoadingKey && actionLoadingKey.startsWith(`${agreement.id}:`))}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                            aria-haspopup="menu"
+                            aria-expanded={openActionAgreementId === agreement.id}
+                            aria-label={`Actions for ${agreement.title || 'service agreement'}`}
+                            title="Actions"
+                          >
+                            <FaEllipsisV className="text-sm" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -1477,7 +2207,7 @@ const SalesAgreements = ({
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
               })}
-              onClick={() => markAgreementAcceptedFromList(openActionAgreement)}
+              onClick={() => openAcceptAgreementDialog(openActionAgreement)}
             />
             <AgreementActionMenuItem
               label="Send email"
@@ -1518,6 +2248,126 @@ const SalesAgreements = ({
             />
           </div>
         </>
+      )}
+
+      {acceptDialogAgreement && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span className="rounded-md bg-emerald-50 p-2 text-emerald-700">
+                <FaUserCheck />
+              </span>
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">Mark Agreement Accepted</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Use this when the homeowner has accepted outside the portal, or when your team is recording an internal approval.
+                </p>
+              </div>
+            </div>
+
+            <fieldset className="mt-5 space-y-3">
+              <legend className="text-sm font-semibold text-slate-700">Acceptance source</legend>
+              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition hover:bg-slate-50">
+                <input
+                  type="radio"
+                  name="acceptanceSource"
+                  value="customerOffline"
+                  checked={acceptDialogAcceptanceSource === 'customerOffline'}
+                  onChange={(event) => setAcceptDialogAcceptanceSource(event.target.value)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block font-semibold text-slate-900">Customer told us offline</span>
+                  <span className="mt-1 block text-sm text-slate-500">
+                    Phone call, text, email reply, or in-person approval.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition hover:bg-slate-50">
+                <input
+                  type="radio"
+                  name="acceptanceSource"
+                  value="internalManual"
+                  checked={acceptDialogAcceptanceSource === 'internalManual'}
+                  onChange={(event) => setAcceptDialogAcceptanceSource(event.target.value)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block font-semibold text-slate-900">Internal manual acceptance</span>
+                  <span className="mt-1 block text-sm text-slate-500">
+                    Your company is marking the agreement accepted for operations or billing.
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+
+            <label className="mt-4 block text-sm font-semibold text-slate-700" htmlFor="acceptanceNote">
+              Note
+            </label>
+            <textarea
+              id="acceptanceNote"
+              value={acceptDialogAcceptanceNote}
+              onChange={(event) => setAcceptDialogAcceptanceNote(event.target.value)}
+              placeholder="Example: Customer replied yes by email on June 3."
+              className="mt-1 min-h-[90px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+            />
+
+            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              This will set the agreement status to accepted and record {actorName} as the person who marked it.
+              {acceptDialogSupersedesAgreementId ? ' It will also end the previous agreement and mark it superseded.' : ''}
+            </div>
+
+            {acceptDialogCanCreateBilling ? (
+              <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={acceptDialogCreateBillingSubscription}
+                  onChange={(event) => setAcceptDialogCreateBillingSubscription(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                  <span className="flex items-center gap-2 font-semibold text-blue-950">
+                    <FaCreditCard className="text-xs" />
+                    Create Billing Subscription
+                  </span>
+                  <span className="mt-1 block text-blue-800">
+                    The default for this checkbox comes from Company Settings.
+                  </span>
+                </span>
+              </label>
+            ) : (
+              <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                {!acceptDialogIsRecurring
+                  ? 'One-time agreements do not create billing subscriptions.'
+                  : 'Customer billing is off in Company Settings, so this acceptance will not create a billing subscription.'}
+              </div>
+            )}
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={closeAcceptAgreementDialog}
+                disabled={acceptDialogLoading}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => markAgreementAcceptedFromList(acceptDialogAgreement, {
+                  acceptanceSource: acceptDialogAcceptanceSource,
+                  acceptanceNote: acceptDialogAcceptanceNote,
+                  createBillingSubscription: acceptDialogCreateBillingSubscription,
+                })}
+                disabled={!acceptDialogCanMarkAccepted}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FaUserCheck className="text-xs" />
+                {acceptDialogLoading ? 'Marking...' : 'Mark Accepted'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <SalesAgreementEditorModal

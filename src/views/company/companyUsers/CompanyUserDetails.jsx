@@ -644,18 +644,18 @@ const buildDashboardScopeAccessDraft = (source = {}) => ({
 });
 
 const getWorkOrderAdminId = (source = {}) => (
-    source.workOrderAdminId ||
-    source.assignedWorkOrderAdminId ||
-    source.defaultWorkOrderAdminId ||
-    source.jobAdminId ||
+    source?.workOrderAdminId ||
+    source?.assignedWorkOrderAdminId ||
+    source?.defaultWorkOrderAdminId ||
+    source?.jobAdminId ||
     ""
 );
 
 const getWorkOrderAdminName = (source = {}) => (
-    source.workOrderAdminName ||
-    source.assignedWorkOrderAdminName ||
-    source.defaultWorkOrderAdminName ||
-    source.jobAdminName ||
+    source?.workOrderAdminName ||
+    source?.assignedWorkOrderAdminName ||
+    source?.defaultWorkOrderAdminName ||
+    source?.jobAdminName ||
     ""
 );
 

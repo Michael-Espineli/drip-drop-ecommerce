@@ -8,7 +8,7 @@ import Select from "react-select";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../../hooks/useCompanyPermissions";
-import { jobTaskTypeOptionsFromDocs } from "../../../../utils/jobTaskTypes";
+import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs } from "../../../../utils/jobTaskTypes";
 
 const CreateNewTaskGroup = () => {
   const navigate = useNavigate();
@@ -117,7 +117,7 @@ const CreateNewTaskGroup = () => {
       name: taskName,
       description: description,
       typeId: selectedTaskType.id,
-      type: selectedTaskType.name,
+      type: canonicalJobTaskType(selectedTaskType.name),
       contractedRate: labor,
       estimatedTime: time,
     };

@@ -1,7 +1,20 @@
 import { arrayUnion, doc, getDoc, Timestamp, updateDoc } from "firebase/firestore";
+import {
+  SHOPPING_LIST_INVOICED_STATUS,
+  SHOPPING_LIST_STATUS,
+  canonicalShoppingListStatus,
+  isShoppingListStatusClosed,
+  normalizeShoppingListStatus,
+  shoppingItemNeedsAction,
+} from "./shoppingListStatus";
 
-export const SHOPPING_LIST_INVOICED_STATUS = "Invoiced";
-export const shoppingListClosedStatuses = ["Delivered", "Installed", SHOPPING_LIST_INVOICED_STATUS];
+export {
+  SHOPPING_LIST_INVOICED_STATUS,
+  isShoppingListStatusClosed,
+  shoppingItemNeedsAction,
+};
+
+export const shoppingListClosedStatuses = [SHOPPING_LIST_STATUS.installed, SHOPPING_LIST_INVOICED_STATUS];
 
 const cleanString = (value) => {
   if (value === null || value === undefined) return "";
@@ -20,18 +33,10 @@ const firstString = (...values) => {
   return "";
 };
 
-const normalizeStatus = (value) =>
-  cleanString(value).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-
 const isInvoicedValue = (value) => {
-  const normalizedValue = normalizeStatus(value);
+  const normalizedValue = normalizeShoppingListStatus(value);
   return normalizedValue === "invoiced" || normalizedValue === "paid";
 };
-
-export const isShoppingListStatusClosed = (status) =>
-  shoppingListClosedStatuses.some((closedStatus) => normalizeStatus(closedStatus) === normalizeStatus(status));
-
-export const shoppingItemNeedsAction = (status) => !isShoppingListStatusClosed(status);
 
 const truthyBoolean = (...values) => values.some((value) => Boolean(value));
 
@@ -138,9 +143,23 @@ export const buildShoppingPurchaseSyncPayloads = ({
   const serviceLocationAddress = preferPurchasedContext
     ? firstString(purchasedItem.serviceLocationAddress, shoppingItem.serviceLocationAddress, jobData.serviceLocationAddress)
     : firstString(shoppingItem.serviceLocationAddress, purchasedItem.serviceLocationAddress, jobData.serviceLocationAddress);
+  const productId = firstString(
+    shoppingItem.productId,
+    shoppingItem.genericItemId,
+    shoppingItem.subCategory === "Product" || shoppingItem.itemType === "Product" ? shoppingItem.itemId : "",
+    purchasedItem.productId,
+    purchasedItem.genericItemId
+  );
+  const productName = firstString(
+    shoppingItem.productName,
+    shoppingItem.genericItemName,
+    productId ? shoppingItem.name : "",
+    purchasedItem.productName,
+    purchasedItem.genericItemName
+  );
   const databaseItemId = preferPurchasedContext
-    ? firstString(purchasedItem.itemId, purchasedItem.dbItemId, shoppingItem.dbItemId, shoppingItem.itemId, shoppingItem.genericItemId)
-    : firstString(shoppingItem.dbItemId, shoppingItem.itemId, shoppingItem.genericItemId, purchasedItem.itemId, purchasedItem.dbItemId);
+    ? firstString(purchasedItem.dbItemId, purchasedItem.dataBaseItemId, purchasedItem.vendorItemId, purchasedItem.itemId, shoppingItem.dbItemId)
+    : firstString(shoppingItem.dbItemId, purchasedItem.dbItemId, purchasedItem.dataBaseItemId, purchasedItem.vendorItemId, purchasedItem.itemId);
   const databaseItemName = preferPurchasedContext
     ? firstString(purchasedItem.dbItemName, shoppingItem.dbItemName, shoppingItem.itemName)
     : firstString(shoppingItem.dbItemName, shoppingItem.itemName, purchasedItem.dbItemName);
@@ -172,10 +191,10 @@ export const buildShoppingPurchaseSyncPayloads = ({
       : existingShoppingStatusIsInvoiced
         ? purchasedItemId ? "Purchased" : ""
         : isShoppingListStatusClosed(existingShoppingStatus)
-        ? existingShoppingStatus
+        ? canonicalShoppingListStatus(existingShoppingStatus)
         : purchasedItemId
           ? "Purchased"
-          : existingShoppingStatus;
+          : canonicalShoppingListStatus(existingShoppingStatus);
 
   const purchasePayload = {
     shoppingListItemId: shoppingItemId,
@@ -211,6 +230,9 @@ export const buildShoppingPurchaseSyncPayloads = ({
   if (serviceLocationId) purchasePayload.serviceLocationId = serviceLocationId;
   if (serviceLocationName) purchasePayload.serviceLocationName = serviceLocationName;
   if (serviceLocationAddress) purchasePayload.serviceLocationAddress = serviceLocationAddress;
+  if (productId && !purchasedItem.productId) purchasePayload.productId = productId;
+  if (productId && !purchasedItem.genericItemId) purchasePayload.genericItemId = productId;
+  if (productName && !purchasedItem.productName) purchasePayload.productName = productName;
   if (databaseItemId && !purchasedItem.itemId) purchasePayload.itemId = databaseItemId;
 
   if (nextInvoiced) {
@@ -243,10 +265,15 @@ export const buildShoppingPurchaseSyncPayloads = ({
   if (serviceLocationId) shoppingPayload.serviceLocationId = serviceLocationId;
   if (serviceLocationName) shoppingPayload.serviceLocationName = serviceLocationName;
   if (serviceLocationAddress) shoppingPayload.serviceLocationAddress = serviceLocationAddress;
-  if (databaseItemId && !shoppingItem.dbItemId) shoppingPayload.dbItemId = databaseItemId;
-  if (databaseItemId && !shoppingItem.itemId) shoppingPayload.itemId = databaseItemId;
-  if (databaseItemName && !shoppingItem.dbItemName) shoppingPayload.dbItemName = databaseItemName;
-  if (!shoppingItem.name && purchasedItem.name) shoppingPayload.name = purchasedItem.name;
+  if (productId && !shoppingItem.productId) shoppingPayload.productId = productId;
+  if (productId && !shoppingItem.genericItemId) shoppingPayload.genericItemId = productId;
+  if (productId && !shoppingItem.itemId) shoppingPayload.itemId = productId;
+  if (productId && !shoppingItem.subCategory) shoppingPayload.subCategory = "Product";
+  if (productName && !shoppingItem.productName) shoppingPayload.productName = productName;
+  if (!productId && databaseItemId && !shoppingItem.dbItemId) shoppingPayload.dbItemId = databaseItemId;
+  if (!productId && databaseItemId && !shoppingItem.itemId) shoppingPayload.itemId = databaseItemId;
+  if (!productId && databaseItemName && !shoppingItem.dbItemName) shoppingPayload.dbItemName = databaseItemName;
+  if (!shoppingItem.name && (productName || purchasedItem.name)) shoppingPayload.name = productName || purchasedItem.name;
 
   if (nextInvoiced) {
     shoppingPayload.invoiceId = invoiceId;
@@ -394,9 +421,9 @@ export const syncLinkedShoppingPurchase = async ({
     const nextInvoiced = Boolean(effectiveInvoiced);
     const nextStatus = nextInvoiced
       ? SHOPPING_LIST_INVOICED_STATUS
-      : normalizeStatus(shoppingItem.status) === "invoiced"
+      : normalizeShoppingListStatus(shoppingItem.status) === "invoiced"
         ? "Purchased"
-        : shoppingItem.status || "";
+        : canonicalShoppingListStatus(shoppingItem.status);
 
     await updateDoc(shoppingDocRef(db, companyId, resolvedShoppingItemId, shoppingCollectionName), {
       invoiced: nextInvoiced,

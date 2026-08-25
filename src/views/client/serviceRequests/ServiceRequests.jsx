@@ -116,15 +116,15 @@ const ServiceRequests = () => {
     }
 
     return (
-        <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
+        <div className="px-4 py-6 bg-gray-50 min-h-screen md:px-8">
             <div className="max-w-7xl mx-auto">
                 <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">My Service Requests</h1>
-                    <p className="mt-1 text-lg text-gray-600">Track the status of all your service requests.</p>
+                    <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">My Service Requests</h1>
+                    <p className="mt-1 text-base text-gray-600 sm:text-lg">Track the status of all your service requests.</p>
                 </div>
 
                 {requests.length === 0 ? (
-                    <div className="text-center bg-white p-12 rounded-lg shadow-md">
+                    <div className="text-center bg-white p-6 rounded-lg shadow-md sm:p-12">
                         <h3 className="text-xl font-medium text-gray-900">No requests found</h3>
                         <p className="mt-1 text-sm text-gray-500">You haven't made any service requests yet.</p>
                         <button
@@ -135,42 +135,75 @@ const ServiceRequests = () => {
                         </button>
                     </div>
                 ) : (
-                    <div className="bg-white rounded-lg shadow-md overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    <th scope="col" className="relative px-6 py-3">
-                                        <span className="sr-only">View</span>
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {requests.map(request => (
-                                    <tr key={request.id} className="hover:bg-gray-50 transition-colors">
-                                        <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                                            <CompanySummaryCard
-                                                company={request.company}
-                                                companyId={request.companyId}
-                                                compact
-                                            />
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatRequestDate(request)}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClassFor(request.status)}`}>
+                    <>
+                        <div className="space-y-3 md:hidden">
+                            {requests.map(request => {
+                                const company = getCompanySummary({
+                                    ...request.company,
+                                    id: request.company?.id || request.companyId || request.company?.companyId || '',
+                                });
+
+                                return (
+                                    <button
+                                        key={request.id}
+                                        type="button"
+                                        onClick={() => handleRequestClick(request.id)}
+                                        className="w-full rounded-lg border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:bg-gray-50"
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="break-words font-semibold text-gray-900">{company.name}</p>
+                                                <p className="mt-1 text-sm text-gray-500">Requested {formatRequestDate(request)}</p>
+                                            </div>
+                                            <span className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${statusClassFor(request.status)}`}>
                                                 {request.status || 'Pending'}
                                             </span>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <button onClick={() => handleRequestClick(request.id)} className="text-blue-600 hover:text-blue-900">View</button>
-                                        </td>
+                                        </div>
+                                        <span className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white">
+                                            View Request
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="hidden overflow-x-auto rounded-lg bg-white shadow-md md:block">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                        <th scope="col" className="relative px-6 py-3">
+                                            <span className="sr-only">View</span>
+                                        </th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {requests.map(request => (
+                                        <tr key={request.id} className="hover:bg-gray-50 transition-colors">
+                                            <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                                                <CompanySummaryCard
+                                                    company={request.company}
+                                                    companyId={request.companyId}
+                                                    compact
+                                                />
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatRequestDate(request)}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClassFor(request.status)}`}>
+                                                    {request.status || 'Pending'}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                <button onClick={() => handleRequestClick(request.id)} className="text-blue-600 hover:text-blue-900">View</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </>
                 )}
             </div>
         </div>

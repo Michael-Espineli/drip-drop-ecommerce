@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
     arrayUnion,
     collection,
@@ -33,13 +33,25 @@ import {
 } from "../../../utils/customerTags";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 import {
+    DEFAULT_ISSUE_PRIORITY,
     DEFAULT_JOB_PLAN_TIER,
     JOB_PLAN_STATUS,
     getIssuePriorityLabel,
     getJobPlanRecommendationLabel,
+    normalizeIssuePriority,
 } from "../../../utils/models/JobPlan";
+import {
+    SalesCatalogBillingBehavior,
+    SalesCatalogItemType,
+    SalesCatalogSourceType,
+} from "../../../utils/models/Sales";
 import { appAlert } from "../../../utils/appDialog";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+    canonicalJobTaskType,
+    taskTypeRequiresBodyOfWater,
+    taskTypeRequiresEquipment,
+} from "../../../utils/jobTaskTypes";
 
 const selectStyles = {
     control: (base, state) => ({
@@ -102,6 +114,47 @@ const getServiceLocationLabel = (location = {}) => (
     location.name ||
     [location.address?.streetAddress, location.address?.city].filter(Boolean).join(", ") ||
     "Service Location"
+);
+
+const getBodyOfWaterLabel = (body = {}) => (
+    body.name ||
+    body.nickName ||
+    body.type ||
+    "Body Of Water"
+);
+
+const getEquipmentLabel = (equipment = {}) => (
+    equipment.name
+        ? `${equipment.name}${equipment.model ? ` - ${equipment.model}` : ""}`
+        : [equipment.type, equipment.make, equipment.model].filter(Boolean).join(" ") ||
+          equipment.model ||
+          "Equipment"
+);
+
+const templateContextValues = (item = {}) => [
+    item.name,
+    item.title,
+    item.type,
+    item.jobType,
+    item.taskType,
+    item.taskTypeName,
+    item.catalogItemName,
+].filter(Boolean);
+
+const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriority(
+    template.defaultIssuePriorityLevel ??
+    template.issuePriorityLevel ??
+    template.priorityLevel ??
+    template.solutionTier ??
+    DEFAULT_ISSUE_PRIORITY
+);
+
+const itemRequiresEquipmentContext = (item = {}) => (
+    templateContextValues(item).some((value) => taskTypeRequiresEquipment(value))
+);
+
+const itemRequiresBodyOfWaterContext = (item = {}) => (
+    templateContextValues(item).some((value) => taskTypeRequiresBodyOfWater(value))
 );
 
 const getTaskBillingLaborPriceCents = (task = {}) => {
@@ -171,14 +224,6 @@ const getLaborLineTaskIds = (line = {}) => laborLineIdArray(
             : line.laborLineTaskIds
 );
 
-const getLaborLinePlannedStopIds = (line = {}) => laborLineIdArray(
-    line.plannedServiceStopTemplateIds?.length
-        ? line.plannedServiceStopTemplateIds
-        : line.plannedServiceStopIds?.length
-            ? line.plannedServiceStopIds
-            : line.laborLinePlannedServiceStopIds
-);
-
 const laborLineTotalPriceCents = (line = {}) => {
     const quantity = Math.max(Number(line.quantity || line.defaultQuantity || 1) || 1, 1);
     const explicitTotal = line.totalPriceCents ?? line.totalAmountCents ?? line.amount ?? line.price;
@@ -200,6 +245,13 @@ const laborLineInternalCostCents = (line = {}) => Number(
     line.unitCostCents ??
     line.cost ??
     0
+);
+
+const laborLineCatalogItemId = (line = {}) => (
+    line.salesCatalogItemId ||
+    line.catalogItemId ||
+    line.sourceCatalogItemId ||
+    ""
 );
 
 const getCompanyUserId = (companyUser = {}) => (
@@ -245,7 +297,9 @@ const buildCompanyUserOption = (docSnap) => {
 
 const BasicWorkOrderCreate = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const [searchParams] = useSearchParams();
+    const equipmentContext = location.state?.equipmentContext || null;
     const {
         recentlySelectedCompany,
         recentlySelectedCompanyName,
@@ -266,14 +320,20 @@ const BasicWorkOrderCreate = () => {
     const [companyUsers, setCompanyUsers] = useState([]);
     const [customers, setCustomers] = useState([]);
     const [serviceLocations, setServiceLocations] = useState([]);
+    const [bodyOfWaterList, setBodyOfWaterList] = useState([]);
+    const [equipmentList, setEquipmentList] = useState([]);
     const [templates, setTemplates] = useState([]);
     const [templateDetails, setTemplateDetails] = useState(emptyTemplateDetails);
     const [loadingTemplateDetails, setLoadingTemplateDetails] = useState(false);
+    const [loadedTemplateDetailsId, setLoadedTemplateDetailsId] = useState("");
+    const [loadingLocationAssets, setLoadingLocationAssets] = useState(false);
 
     const [mode, setMode] = useState("template");
     const [selectedTemplate, setSelectedTemplate] = useState(null);
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [selectedServiceLocation, setSelectedServiceLocation] = useState(null);
+    const [selectedBodyOfWater, setSelectedBodyOfWater] = useState(null);
+    const [selectedEquipment, setSelectedEquipment] = useState(null);
     const [selectedAssignee, setSelectedAssignee] = useState(null);
     const [description, setDescription] = useState("");
     const [scheduledAt, setScheduledAt] = useState(defaultScheduledAt);
@@ -338,6 +398,22 @@ const BasicWorkOrderCreate = () => {
         }))
     ), [serviceLocations]);
 
+    const bodyOfWaterOptions = useMemo(() => (
+        bodyOfWaterList.map((body) => ({
+            ...body,
+            value: body.id,
+            label: getBodyOfWaterLabel(body),
+        }))
+    ), [bodyOfWaterList]);
+
+    const equipmentOptions = useMemo(() => (
+        equipmentList.map((equipment) => ({
+            ...equipment,
+            value: equipment.id,
+            label: getEquipmentLabel(equipment),
+        }))
+    ), [equipmentList]);
+
     const templateOptions = useMemo(() => (
         templates
             .filter((template) => template.isActive !== false && template.active !== false && template.technicianCanAdd === true)
@@ -361,6 +437,49 @@ const BasicWorkOrderCreate = () => {
     const selectedAssigneeRegionalTags = useMemo(
         () => normalizeCustomerTags(getCustomerTagAccessList(selectedAssignee || {})),
         [selectedAssignee]
+    );
+
+    const templateDetailsReady = mode !== "template" || Boolean(
+        selectedTemplate?.id &&
+        loadedTemplateDetailsId === selectedTemplate.id &&
+        !loadingTemplateDetails
+    );
+
+    const selectedTemplateRequiresEquipment = useMemo(() => {
+        if (mode !== "template" || !selectedTemplate) return false;
+        return (
+            itemRequiresEquipmentContext(selectedTemplate) ||
+            templateDetails.tasks.some(itemRequiresEquipmentContext) ||
+            templateDetails.laborLineItems.some(itemRequiresEquipmentContext)
+        );
+    }, [mode, selectedTemplate, templateDetails.laborLineItems, templateDetails.tasks]);
+
+    const selectedTemplateRequiresBodyOfWater = useMemo(() => {
+        if (mode !== "template" || !selectedTemplate) return false;
+        return (
+            itemRequiresBodyOfWaterContext(selectedTemplate) ||
+            templateDetails.tasks.some(itemRequiresBodyOfWaterContext) ||
+            templateDetails.laborLineItems.some(itemRequiresBodyOfWaterContext)
+        );
+    }, [mode, selectedTemplate, templateDetails.laborLineItems, templateDetails.tasks]);
+
+    const resolvedBodyOfWaterId = selectedBodyOfWater?.id || selectedEquipment?.bodyOfWaterId || "";
+    const resolvedBodyOfWaterName = selectedBodyOfWater?.label || selectedBodyOfWater?.name || selectedEquipment?.bodyOfWaterName || "";
+    const selectedEquipmentId = selectedEquipment?.id || "";
+    const selectedEquipmentName = selectedEquipment
+        ? selectedEquipment.label || getEquipmentLabel(selectedEquipment)
+        : "";
+    const expectedTemplateLaborLineCount = Number(
+        selectedTemplate?.laborLineCount ||
+        selectedTemplate?.laborLineItemsCount ||
+        selectedTemplate?.serviceLineCount ||
+        0
+    );
+    const selectedTemplateLaborLinesMissing = Boolean(
+        mode === "template" &&
+        templateDetailsReady &&
+        expectedTemplateLaborLineCount > 0 &&
+        templateDetails.laborLineItems.length === 0
     );
 
     const resolvedAdmin = useMemo(() => {
@@ -456,7 +575,11 @@ const BasicWorkOrderCreate = () => {
         selectedAssignee?.userId &&
         scheduledAt &&
         resolvedAdmin?.id &&
-        (mode === "custom" || selectedTemplate?.id)
+        (mode === "custom" || selectedTemplate?.id) &&
+        templateDetailsReady &&
+        !selectedTemplateLaborLinesMissing &&
+        (!selectedTemplateRequiresEquipment || selectedEquipment?.id) &&
+        (!selectedTemplateRequiresBodyOfWater || resolvedBodyOfWaterId)
     );
 
     useEffect(() => {
@@ -529,16 +652,20 @@ const BasicWorkOrderCreate = () => {
     }, [searchParams, selectedTemplate, templateOptions]);
 
     useEffect(() => {
-        const customerId = searchParams.get("customerId");
+        const customerId = searchParams.get("customerId") || equipmentContext?.customerId || "";
         if (!customerId || !customerOptions.length || selectedCustomer) return;
         const matchedCustomer = customerOptions.find((customer) => customer.id === customerId);
         if (matchedCustomer) setSelectedCustomer(matchedCustomer);
-    }, [customerOptions, searchParams, selectedCustomer]);
+    }, [customerOptions, equipmentContext, searchParams, selectedCustomer]);
 
     useEffect(() => {
         if (!selectedCustomer?.id || !recentlySelectedCompany) {
             setServiceLocations([]);
             setSelectedServiceLocation(null);
+            setBodyOfWaterList([]);
+            setEquipmentList([]);
+            setSelectedBodyOfWater(null);
+            setSelectedEquipment(null);
             return;
         }
 
@@ -559,7 +686,7 @@ const BasicWorkOrderCreate = () => {
                 }));
                 setServiceLocations(locations);
 
-                const queryLocationId = searchParams.get("locationId");
+                const queryLocationId = searchParams.get("locationId") || equipmentContext?.serviceLocationId || "";
                 const preferredLocation = locations.find((location) => location.id === queryLocationId) || locations[0] || null;
                 setSelectedServiceLocation(preferredLocation ? {
                     ...preferredLocation,
@@ -577,24 +704,128 @@ const BasicWorkOrderCreate = () => {
         return () => {
             cancelled = true;
         };
-    }, [recentlySelectedCompany, searchParams, selectedCustomer]);
+    }, [equipmentContext, recentlySelectedCompany, searchParams, selectedCustomer]);
 
     useEffect(() => {
-        if (!selectedTemplate?.id || !recentlySelectedCompany) {
-            setTemplateDetails(emptyTemplateDetails());
+        if (!selectedServiceLocation?.id || !recentlySelectedCompany) {
+            setBodyOfWaterList([]);
+            setEquipmentList([]);
+            setSelectedBodyOfWater(null);
+            setSelectedEquipment(null);
+            setLoadingLocationAssets(false);
             return;
         }
 
         let cancelled = false;
 
+        const loadLocationAssets = async () => {
+            setLoadingLocationAssets(true);
+            try {
+                const [bodySnap, equipmentSnap] = await Promise.all([
+                    getDocs(query(
+                        collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"),
+                        where("serviceLocationId", "==", selectedServiceLocation.id)
+                    )),
+                    getDocs(query(
+                        collection(db, "companies", recentlySelectedCompany, "equipment"),
+                        where("serviceLocationId", "==", selectedServiceLocation.id)
+                    )),
+                ]);
+
+                if (cancelled) return;
+
+                const bodies = bodySnap.docs
+                    .map((bodyDoc) => ({
+                        id: bodyDoc.data().id || bodyDoc.id,
+                        ...bodyDoc.data(),
+                    }))
+                    .sort((left, right) => getBodyOfWaterLabel(left).localeCompare(getBodyOfWaterLabel(right)));
+                const equipment = equipmentSnap.docs
+                    .map((equipmentDoc) => ({
+                        id: equipmentDoc.data().id || equipmentDoc.id,
+                        ...equipmentDoc.data(),
+                    }))
+                    .sort((left, right) => getEquipmentLabel(left).localeCompare(getEquipmentLabel(right)));
+
+                setBodyOfWaterList(bodies);
+                setEquipmentList(equipment);
+
+                const initialBodyOfWaterId = searchParams.get("bodyOfWaterId") || equipmentContext?.bodyOfWaterId || "";
+                const initialEquipmentId = searchParams.get("equipmentId") || equipmentContext?.equipmentId || "";
+
+                setSelectedBodyOfWater((current) => {
+                    const matchedInitial = initialBodyOfWaterId
+                        ? bodies.find((body) => body.id === initialBodyOfWaterId)
+                        : null;
+                    if (matchedInitial) {
+                        return {
+                            ...matchedInitial,
+                            value: matchedInitial.id,
+                            label: getBodyOfWaterLabel(matchedInitial),
+                        };
+                    }
+                    if (current?.id && bodies.some((body) => body.id === current.id)) return current;
+                    return null;
+                });
+
+                setSelectedEquipment((current) => {
+                    const matchedInitial = initialEquipmentId
+                        ? equipment.find((item) => item.id === initialEquipmentId)
+                        : null;
+                    if (matchedInitial) {
+                        return {
+                            ...matchedInitial,
+                            value: matchedInitial.id,
+                            label: getEquipmentLabel(matchedInitial),
+                        };
+                    }
+                    if (current?.id && equipment.some((item) => item.id === current.id)) return current;
+                    return null;
+                });
+            } catch (error) {
+                console.error("Error loading location assets:", error);
+                toast.error("Could not load equipment for this service location.");
+            } finally {
+                if (!cancelled) setLoadingLocationAssets(false);
+            }
+        };
+
+        loadLocationAssets();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [equipmentContext, recentlySelectedCompany, searchParams, selectedServiceLocation]);
+
+    useEffect(() => {
+        if (!selectedEquipment?.bodyOfWaterId || !bodyOfWaterOptions.length) return;
+        const matchedBody = bodyOfWaterOptions.find((body) => body.id === selectedEquipment.bodyOfWaterId);
+        if (matchedBody && selectedBodyOfWater?.id !== matchedBody.id) {
+            setSelectedBodyOfWater(matchedBody);
+        }
+    }, [bodyOfWaterOptions, selectedBodyOfWater?.id, selectedEquipment]);
+
+    useEffect(() => {
+        if (!selectedTemplate?.id || !recentlySelectedCompany) {
+            setTemplateDetails(emptyTemplateDetails());
+            setLoadedTemplateDetailsId("");
+            setLoadingTemplateDetails(false);
+            return;
+        }
+
+        let cancelled = false;
+        const templateId = selectedTemplate.id;
+
         const loadTemplateDetails = async () => {
             setLoadingTemplateDetails(true);
+            setLoadedTemplateDetailsId("");
+            setTemplateDetails(emptyTemplateDetails());
             try {
                 const [tasksSnap, stopsSnap, shoppingSnap, laborLinesSnap] = await Promise.all([
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", selectedTemplate.id, "tasks")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", selectedTemplate.id, "plannedServiceStops")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", selectedTemplate.id, "shoppingItems")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", selectedTemplate.id, "laborLineItems")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", templateId, "tasks")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", templateId, "plannedServiceStops")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", templateId, "shoppingItems")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "jobTemplates", templateId, "laborLineItems")),
                 ]);
 
                 if (cancelled) return;
@@ -613,6 +844,7 @@ const BasicWorkOrderCreate = () => {
                         .map((lineDoc) => ({ id: lineDoc.data().id || lineDoc.id, ...lineDoc.data() }))
                         .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
                 });
+                setLoadedTemplateDetailsId(templateId);
 
                 setDescription((current) => current || selectedTemplate.description || "");
             } catch (error) {
@@ -639,7 +871,7 @@ const BasicWorkOrderCreate = () => {
         sourceTemplateId: selectedTemplate?.id || "",
         sourceTemplateTaskId: task.id || "",
         name: task.name || task.description || "Task",
-        type: task.type || "General",
+        type: canonicalJobTaskType(task.type || "General"),
         description: task.description || "",
         contractedRate: Number(task.contractedRate || 0),
         billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
@@ -652,9 +884,9 @@ const BasicWorkOrderCreate = () => {
         workerName: "",
         laborContractId: "",
         serviceStopId: { id: "", internalId: "" },
-        equipmentId: "",
+        equipmentId: task.equipmentId || selectedEquipmentId,
         serviceLocationId: selectedServiceLocation?.id || "",
-        bodyOfWaterId: "",
+        bodyOfWaterId: task.bodyOfWaterId || resolvedBodyOfWaterId,
         dataBaseItemId: task.dataBaseItemId || "",
         shoppingListItemId: task.shoppingListItemId || "",
         shoppingListItemIds: Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds : [],
@@ -681,9 +913,9 @@ const BasicWorkOrderCreate = () => {
         workerName: "",
         laborContractId: "",
         serviceStopId: { id: "", internalId: "" },
-        equipmentId: "",
+        equipmentId: selectedEquipmentId,
         serviceLocationId: selectedServiceLocation?.id || "",
-        bodyOfWaterId: "",
+        bodyOfWaterId: resolvedBodyOfWaterId,
         dataBaseItemId: "",
         shoppingListItemId: "",
         shoppingListItemIds: [],
@@ -720,6 +952,9 @@ const BasicWorkOrderCreate = () => {
                         ? Number(stop.plannedLaborCostCents)
                         : null,
                     plannedLaborNotes: stop.plannedLaborNotes || "",
+                    equipmentId: stop.equipmentId || selectedEquipmentId,
+                    serviceLocationId: selectedServiceLocation?.id || "",
+                    bodyOfWaterId: stop.bodyOfWaterId || resolvedBodyOfWaterId,
                     createdAt: Timestamp.now(),
                     createdByUserId: createdByUserId || "",
                 };
@@ -746,19 +981,21 @@ const BasicWorkOrderCreate = () => {
             taskIds: normalizedTasks.map((task) => task.id),
             plannedLaborCostCents: 0,
             plannedLaborNotes: "",
+            equipmentId: selectedEquipmentId,
+            serviceLocationId: selectedServiceLocation?.id || "",
+            bodyOfWaterId: resolvedBodyOfWaterId,
             createdAt: Timestamp.now(),
             createdByUserId: createdByUserId || "",
         }];
     };
 
-    const normalizeTemplateLaborLineForJob = (line, jobId, planId, taskIdMap, plannedStopIdMap, index) => {
+    const normalizeTemplateLaborLineForJob = (line, jobId, planId, taskIdMap, index) => {
         const quantity = Math.max(Number(line.quantity || line.defaultQuantity || 1) || 1, 1);
         const totalPriceCents = laborLineTotalPriceCents(line);
         const unitPriceCents = laborLineUnitPriceCents(line);
         const sourceTaskIds = getLaborLineTaskIds(line);
-        const sourcePlannedStopIds = getLaborLinePlannedStopIds(line);
         const taskIds = sourceTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean);
-        const plannedServiceStopIds = sourcePlannedStopIds.map((stopId) => plannedStopIdMap[stopId]).filter(Boolean);
+        const catalogItemId = laborLineCatalogItemId(line);
         const id = `comp_job_labor_line_${uuidv4()}`;
 
         return {
@@ -778,13 +1015,24 @@ const BasicWorkOrderCreate = () => {
             internalCostCents: laborLineInternalCostCents(line),
             taskIds,
             laborLineTaskIds: taskIds,
-            plannedServiceStopIds,
-            laborLinePlannedServiceStopIds: plannedServiceStopIds,
+            plannedServiceStopIds: [],
+            laborLinePlannedServiceStopIds: [],
             sourceTemplateTaskIds: sourceTaskIds,
-            sourceTemplatePlannedServiceStopIds: sourcePlannedStopIds,
-            salesItemType: line.salesItemType || "labor",
-            billingBehavior: line.billingBehavior || "oneTime",
-            sourceType: line.sourceType || "manual",
+            sourceTemplatePlannedServiceStopIds: [],
+            equipmentId: line.equipmentId || selectedEquipmentId,
+            serviceLocationId: selectedServiceLocation?.id || "",
+            bodyOfWaterId: line.bodyOfWaterId || resolvedBodyOfWaterId,
+            salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
+            billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+            sourceType: line.sourceType || SalesCatalogSourceType.manual,
+            sourceId: line.sourceId || catalogItemId || "",
+            catalogItemId,
+            salesCatalogItemId: catalogItemId,
+            sourceCatalogItemId: line.sourceCatalogItemId || catalogItemId,
+            catalogItemName: line.catalogItemName || line.sourceCatalogItemName || line.name || "",
+            stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+            stripeProductId: line.stripeProductId || "",
+            stripePriceId: line.stripePriceId || "",
             sortOrder: Number(line.sortOrder ?? index),
             createdAt: Timestamp.now(),
             createdByUserId: createdByUserId || "",
@@ -808,7 +1056,7 @@ const BasicWorkOrderCreate = () => {
             sourceTemplateShoppingItemId: item.id || "",
             category: "Job",
             subCategory: item.subCategory || "Custom",
-            status: "Needs Customer Approval",
+            status: "Need to Purchase",
             purchaserId: createdByUserId || "",
             purchaserName: createdByUserName || "",
             genericItemId: item.genericItemId || "",
@@ -838,18 +1086,22 @@ const BasicWorkOrderCreate = () => {
             ? normalizedLaborLineItems.map((line, index) => {
                 const amount = Number(line.totalPriceCents || 0);
                 const quantity = Number(line.quantity || 1) || 1;
+                const catalogItemId = laborLineCatalogItemId(line);
+                const salesItemType = line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor);
+                const lineType = salesItemType === SalesCatalogItemType.labor ? "Labor" : "Service";
                 return {
                     id: `${planId}_${line.id}`,
-                    sourceType: line.sourceType || "manual",
-                    sourceId: line.id,
-                    salesItemType: "labor",
-                    billingBehavior: line.billingBehavior || "oneTime",
-                    type: "Labor",
+                    catalogItemId,
+                    salesCatalogItemId: catalogItemId,
+                    sourceType: line.sourceType || SalesCatalogSourceType.manual,
+                    sourceId: line.sourceId || catalogItemId || line.id,
+                    salesItemType,
+                    billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+                    type: line.type || lineType,
                     name: line.name || `Service ${index + 1}`,
                     description: [
                         line.description || "",
                         line.taskIds?.length ? `${line.taskIds.length} task${line.taskIds.length === 1 ? "" : "s"}` : "",
-                        line.plannedServiceStopIds?.length ? `${line.plannedServiceStopIds.length} planned stop${line.plannedServiceStopIds.length === 1 ? "" : "s"}` : "",
                     ].filter(Boolean).join(" • "),
                     quantity,
                     unitAmountCents: Number(line.unitPriceCents || 0),
@@ -858,8 +1110,14 @@ const BasicWorkOrderCreate = () => {
                     billingLaborPriceCents: amount,
                     internalLaborCostCents: Number(line.internalCostCents || 0),
                     taskIds: line.taskIds || [],
-                    plannedServiceStopIds: line.plannedServiceStopIds || [],
+                    plannedServiceStopIds: [],
+                    equipmentId: line.equipmentId || "",
+                    serviceLocationId: line.serviceLocationId || "",
+                    bodyOfWaterId: line.bodyOfWaterId || "",
                     taxable: false,
+                    stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+                    stripeProductId: line.stripeProductId || "",
+                    stripePriceId: line.stripePriceId || "",
                     displayAmount: moneyFromCents(amount),
                 };
             })
@@ -879,6 +1137,9 @@ const BasicWorkOrderCreate = () => {
                         unitAmountCents: amount,
                         totalAmountCents: amount,
                         amount,
+                        equipmentId: stop.equipmentId || "",
+                        serviceLocationId: stop.serviceLocationId || "",
+                        bodyOfWaterId: stop.bodyOfWaterId || "",
                         taxable: false,
                         displayAmount: moneyFromCents(amount),
                     };
@@ -900,6 +1161,9 @@ const BasicWorkOrderCreate = () => {
                         amount,
                         billingLaborPriceCents: amount,
                         internalLaborCostCents: Number(task.contractedRate || 0),
+                        equipmentId: task.equipmentId || "",
+                        serviceLocationId: task.serviceLocationId || "",
+                        bodyOfWaterId: task.bodyOfWaterId || "",
                         taxable: false,
                         displayAmount: moneyFromCents(amount),
                     };
@@ -966,7 +1230,8 @@ const BasicWorkOrderCreate = () => {
             : 0;
         const planTier = DEFAULT_JOB_PLAN_TIER;
         const planTierLabel = getJobPlanRecommendationLabel(planTier);
-        const issuePriorityLabel = getIssuePriorityLabel(planTier);
+        const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedTemplate);
+        const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
         const planName = selectedTemplate?.name ? `${selectedTemplate.name} Plan` : "Basic Work Order Plan";
 
         return {
@@ -980,6 +1245,11 @@ const BasicWorkOrderCreate = () => {
             customerName,
             serviceLocationId: selectedServiceLocation.id,
             serviceLocationName: selectedServiceLocation.label || "",
+            bodyOfWaterId: resolvedBodyOfWaterId,
+            bodyOfWaterName: resolvedBodyOfWaterName,
+            equipmentId: selectedEquipmentId,
+            equipmentName: selectedEquipmentName,
+            equipmentIds: selectedEquipmentId ? [selectedEquipmentId] : [],
             sourceType: selectedTemplate?.id ? "template" : "basicCustomWorkOrder",
             sourceTemplateId: selectedTemplate?.id || "",
             sourceTemplateName: selectedTemplate?.name || "",
@@ -994,7 +1264,7 @@ const BasicWorkOrderCreate = () => {
             solutionTierLabel: planTierLabel,
             recommendationRank: planTier,
             recommendationRankLabel: planTierLabel,
-            issuePriorityLevel: planTier,
+            issuePriorityLevel,
             issuePriorityLabel,
             isActivePlan: true,
             isAccepted: false,
@@ -1035,6 +1305,9 @@ const BasicWorkOrderCreate = () => {
                     estimatedMinutes: Number(task.estimatedTime || 0),
                     plannedLaborCostCents: Number(task.contractedRate || 0),
                     billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
+                    equipmentId: task.equipmentId || "",
+                    serviceLocationId: task.serviceLocationId || "",
+                    bodyOfWaterId: task.bodyOfWaterId || "",
                 })),
                 plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
                     id: stop.id,
@@ -1045,6 +1318,9 @@ const BasicWorkOrderCreate = () => {
                     estimatedMinutes: Number(stop.estimatedMinutes || 0),
                     plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
                     taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
+                    equipmentId: stop.equipmentId || "",
+                    serviceLocationId: stop.serviceLocationId || "",
+                    bodyOfWaterId: stop.bodyOfWaterId || "",
                 })),
                 laborLineSummaries: normalizedLaborLineItems.map((line, index) => ({
                     id: line.id,
@@ -1056,7 +1332,10 @@ const BasicWorkOrderCreate = () => {
                     totalPriceCents: Number(line.totalPriceCents || 0),
                     internalCostCents: Number(line.internalCostCents || 0),
                     taskIds: Array.isArray(line.taskIds) ? line.taskIds : [],
-                    plannedServiceStopIds: Array.isArray(line.plannedServiceStopIds) ? line.plannedServiceStopIds : [],
+                    plannedServiceStopIds: [],
+                    equipmentId: line.equipmentId || "",
+                    serviceLocationId: line.serviceLocationId || "",
+                    bodyOfWaterId: line.bodyOfWaterId || "",
                 })),
                 materialSummaries: normalizedShoppingItems.map((item, index) => ({
                     id: item.id,
@@ -1140,6 +1419,11 @@ const BasicWorkOrderCreate = () => {
             jobId,
             jobName: jobInternalId,
             serviceLocationId: selectedServiceLocation.id,
+            bodyOfWaterId: resolvedBodyOfWaterId,
+            bodyOfWaterName: resolvedBodyOfWaterName,
+            equipmentId: selectedEquipmentId,
+            equipmentIds: selectedEquipmentId ? [selectedEquipmentId] : [],
+            equipmentName: selectedEquipmentName,
             tech: selectedAssignee.userName,
             techId: selectedAssignee.userId,
             internalId: serviceStopInternalId,
@@ -1246,6 +1530,26 @@ const BasicWorkOrderCreate = () => {
             return;
         }
 
+        if (mode === "template" && selectedTemplate?.id && !templateDetailsReady) {
+            await appAlert("Template details are still loading. Please wait for the template scope to finish loading before creating the work order.");
+            return;
+        }
+
+        if (selectedTemplateLaborLinesMissing) {
+            await appAlert(`This template says it has ${expectedTemplateLaborLineCount} service line${expectedTemplateLaborLineCount === 1 ? "" : "s"}, but none loaded. Re-select the template and try again.`);
+            return;
+        }
+
+        if (mode === "template" && selectedTemplateRequiresEquipment && !selectedEquipmentId) {
+            await appAlert("Select equipment before creating this template work order.");
+            return;
+        }
+
+        if (mode === "template" && selectedTemplateRequiresBodyOfWater && !resolvedBodyOfWaterId) {
+            await appAlert("Select a body of water before creating this template work order.");
+            return;
+        }
+
         if (!canCreate) {
             await appAlert("Pick a template or custom work order, customer, service location, technician, scheduled time, and assigned admin.");
             return;
@@ -1289,13 +1593,9 @@ const BasicWorkOrderCreate = () => {
                 [task.id]: normalizedTasks[index]?.id,
             }), {});
             const normalizedPlannedStops = buildPlannedStopsForJob(jobId, planId, taskIdMap, normalizedTasks);
-            const plannedStopIdMap = normalizedPlannedStops.reduce((map, stop) => ({
-                ...map,
-                [stop.sourceTemplatePlannedStopId || stop.id]: stop.id,
-            }), {});
             const normalizedLaborLineItems = mode === "template"
                 ? templateDetails.laborLineItems.map((line, index) => (
-                    normalizeTemplateLaborLineForJob(line, jobId, planId, taskIdMap, plannedStopIdMap, index)
+                    normalizeTemplateLaborLineForJob(line, jobId, planId, taskIdMap, index)
                 ))
                 : [];
             const normalizedShoppingItems = mode === "template"
@@ -1313,7 +1613,8 @@ const BasicWorkOrderCreate = () => {
                 nowTimestamp,
                 nowMillis,
             });
-            const issuePriorityLabel = getIssuePriorityLabel(DEFAULT_JOB_PLAN_TIER);
+            const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedTemplate);
+            const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
             const starterPlanTierLabel = getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER);
             const jobData = {
                 id: jobId,
@@ -1327,11 +1628,11 @@ const BasicWorkOrderCreate = () => {
                 description: description.trim() || selectedTemplate?.description || "",
                 operationStatus: "Scheduled",
                 billingStatus: "Draft",
-                issuePriorityLevel: DEFAULT_JOB_PLAN_TIER,
+                issuePriorityLevel,
                 issuePriorityLabel,
-                priorityLevel: DEFAULT_JOB_PLAN_TIER,
+                priorityLevel: issuePriorityLevel,
                 priorityLabel: issuePriorityLabel,
-                solutionTier: DEFAULT_JOB_PLAN_TIER,
+                solutionTier: issuePriorityLevel,
                 solutionTierLabel: issuePriorityLabel,
                 activePlanId: planId,
                 activePlanTier: DEFAULT_JOB_PLAN_TIER,
@@ -1347,6 +1648,11 @@ const BasicWorkOrderCreate = () => {
                 customerName,
                 serviceLocationId: selectedServiceLocation.id,
                 serviceLocationName: selectedServiceLocation.label || "",
+                bodyOfWaterId: resolvedBodyOfWaterId,
+                bodyOfWaterName: resolvedBodyOfWaterName,
+                equipmentId: selectedEquipmentId,
+                equipmentName: selectedEquipmentName,
+                equipmentIds: selectedEquipmentId ? [selectedEquipmentId] : [],
                 serviceStopIds: [],
                 laborContractIds: [],
                 adminId: resolvedAdmin.id,
@@ -1436,22 +1742,34 @@ const BasicWorkOrderCreate = () => {
                 changes: [
                     { field: "adminName", label: "Admin", before: "-", after: resolvedAdmin.name || "-" },
                     { field: "assignedTechName", label: "Technician", before: "-", after: selectedAssignee.userName || "-" },
-                    { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
-                    { field: "serviceLocationName", label: "Service Location", before: "-", after: selectedServiceLocation.label || "-" },
-                    { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
-                    { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(starterPlanRecord.totalAmountCents || generatedPriceCents) },
-                ],
-                metadata: {
+	                    { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
+	                    { field: "serviceLocationName", label: "Service Location", before: "-", after: selectedServiceLocation.label || "-" },
+                        ...(resolvedBodyOfWaterName
+                            ? [{ field: "bodyOfWaterName", label: "Body Of Water", before: "-", after: resolvedBodyOfWaterName }]
+                            : []),
+                        ...(selectedEquipmentName
+                            ? [{ field: "equipmentName", label: "Equipment", before: "-", after: selectedEquipmentName }]
+                            : []),
+	                    { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
+                        { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
+	                    { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(starterPlanRecord.totalAmountCents || generatedPriceCents) },
+	                ],
+	                metadata: {
                     sourceTemplateId: selectedTemplate?.id || "",
                     sourceTemplateName: selectedTemplate?.name || "",
                     starterPlanId: planId,
                     activePlanId: planId,
                     activeSolutionId: planId,
-                    scheduledServiceStopId: scheduledStop.stopId,
-                    scheduledServiceStopInternalId: scheduledStop.serviceStopInternalId,
-                    createdFromBasicWorkOrderForm: true,
-                    basicWorkOrderMode: mode,
-                    adminAssignmentSource: resolvedAdmin.source,
+	                    scheduledServiceStopId: scheduledStop.stopId,
+	                    scheduledServiceStopInternalId: scheduledStop.serviceStopInternalId,
+                        bodyOfWaterId: resolvedBodyOfWaterId,
+                        bodyOfWaterName: resolvedBodyOfWaterName,
+                        equipmentId: selectedEquipmentId,
+                        equipmentName: selectedEquipmentName,
+                        laborLineCount: normalizedLaborLineItems.length,
+	                    createdFromBasicWorkOrderForm: true,
+	                    basicWorkOrderMode: mode,
+	                    adminAssignmentSource: resolvedAdmin.source,
                 },
                 severity: "success",
                 actorUserId: createdByUserId || "",
@@ -1566,19 +1884,37 @@ const BasicWorkOrderCreate = () => {
                                         />
                                     </div>
                                 </label>
-                                {selectedTemplate && (
-                                    <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
-                                        <Metric label="Tasks" value={templateDetails.tasks.length} />
-                                        <Metric label="Stops" value={templateDetails.plannedServiceStops.length || 1} />
-                                        <Metric label="Service Lines" value={templateDetails.laborLineItems.length} />
-                                        <Metric label="Products" value={templateDetails.shoppingItems.length} />
-                                        <Metric label="Price" value={moneyFromCents(templateGeneratedPriceCents)} />
-                                    </div>
-                                )}
-                                {!selectedTemplate && templateOptions.length === 0 && (
-                                    <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                                        No active templates are marked as technician-enabled yet.
-                                    </p>
+	                                {selectedTemplate && (
+	                                    <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
+	                                        <Metric label="Tasks" value={templateDetails.tasks.length} />
+	                                        <Metric label="Stops" value={templateDetails.plannedServiceStops.length || 1} />
+	                                        <Metric label="Service Lines" value={templateDetails.laborLineItems.length} />
+	                                        <Metric label="Products" value={templateDetails.shoppingItems.length} />
+	                                        <Metric label="Price" value={moneyFromCents(templateGeneratedPriceCents)} />
+	                                    </div>
+	                                )}
+                                    {selectedTemplate && loadingTemplateDetails && (
+                                        <p className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                                            Loading template services, tasks, stops, and materials...
+                                        </p>
+                                    )}
+                                    {selectedTemplateLaborLinesMissing && (
+                                        <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                                            This template reports {expectedTemplateLaborLineCount} service line{expectedTemplateLaborLineCount === 1 ? "" : "s"}, but none loaded.
+                                        </p>
+                                    )}
+                                    {selectedTemplate && (selectedTemplateRequiresEquipment || selectedTemplateRequiresBodyOfWater) && (
+                                        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                            This template needs {[
+                                                selectedTemplateRequiresEquipment ? "equipment" : "",
+                                                selectedTemplateRequiresBodyOfWater ? "body of water" : "",
+                                            ].filter(Boolean).join(" and ")} before it can be scheduled.
+                                        </p>
+                                    )}
+	                                {!selectedTemplate && templateOptions.length === 0 && (
+	                                    <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+	                                        No active templates are marked as technician-enabled yet.
+	                                    </p>
                                 )}
                             </section>
                         ) : (
@@ -1621,28 +1957,68 @@ const BasicWorkOrderCreate = () => {
                                             onChange={(option) => {
                                                 setSelectedCustomer(option);
                                                 setSelectedServiceLocation(null);
+                                                setSelectedBodyOfWater(null);
+                                                setSelectedEquipment(null);
                                             }}
                                             placeholder="Choose customer..."
                                             styles={selectStyles}
                                         />
                                     </div>
                                 </label>
-                                <label className="block">
-                                    <span className="text-sm font-semibold text-slate-700">Service Location</span>
-                                    <div className="mt-2">
-                                        <Select
-                                            value={selectedServiceLocation}
-                                            options={serviceLocationOptions}
-                                            onChange={setSelectedServiceLocation}
-                                            placeholder="Choose service location..."
-                                            styles={selectStyles}
-                                            isDisabled={!selectedCustomer}
-                                        />
-                                    </div>
-                                </label>
-                                <label className="block">
-                                    <span className="text-sm font-semibold text-slate-700">Technician</span>
-                                    <div className="mt-2">
+	                                <label className="block">
+	                                    <span className="text-sm font-semibold text-slate-700">Service Location</span>
+	                                    <div className="mt-2">
+	                                        <Select
+	                                            value={selectedServiceLocation}
+	                                            options={serviceLocationOptions}
+	                                            onChange={(option) => {
+                                                    setSelectedServiceLocation(option);
+                                                    setSelectedBodyOfWater(null);
+                                                    setSelectedEquipment(null);
+                                                }}
+	                                            placeholder="Choose service location..."
+	                                            styles={selectStyles}
+	                                            isDisabled={!selectedCustomer}
+	                                        />
+	                                    </div>
+	                                </label>
+                                    <label className="block">
+                                        <span className="text-sm font-semibold text-slate-700">
+                                            Body Of Water {selectedTemplateRequiresBodyOfWater ? <span className="text-rose-600">*</span> : null}
+                                        </span>
+                                        <div className="mt-2">
+                                            <Select
+                                                value={selectedBodyOfWater}
+                                                options={bodyOfWaterOptions}
+                                                onChange={setSelectedBodyOfWater}
+                                                placeholder="Choose body of water..."
+                                                styles={selectStyles}
+                                                isDisabled={!selectedServiceLocation || loadingLocationAssets}
+                                                isLoading={loadingLocationAssets}
+                                                isClearable={!selectedTemplateRequiresBodyOfWater}
+                                            />
+                                        </div>
+                                    </label>
+                                    <label className="block">
+                                        <span className="text-sm font-semibold text-slate-700">
+                                            Equipment {selectedTemplateRequiresEquipment ? <span className="text-rose-600">*</span> : null}
+                                        </span>
+                                        <div className="mt-2">
+                                            <Select
+                                                value={selectedEquipment}
+                                                options={equipmentOptions}
+                                                onChange={setSelectedEquipment}
+                                                placeholder="Choose equipment..."
+                                                styles={selectStyles}
+                                                isDisabled={!selectedServiceLocation || loadingLocationAssets}
+                                                isLoading={loadingLocationAssets}
+                                                isClearable={!selectedTemplateRequiresEquipment}
+                                            />
+                                        </div>
+                                    </label>
+	                                <label className="block">
+	                                    <span className="text-sm font-semibold text-slate-700">Technician</span>
+	                                    <div className="mt-2">
                                         <Select
                                             value={selectedAssignee}
                                             options={assigneeOptions}
@@ -1695,19 +2071,21 @@ const BasicWorkOrderCreate = () => {
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h2 className="text-base font-semibold text-slate-950">Summary</h2>
                             <div className="mt-4 space-y-3 text-sm">
-                                <Detail label="Mode" value={mode === "template" ? "Template" : "Custom"} />
-                                <Detail label="Customer" value={selectedCustomer?.label || "Not selected"} />
-                                <Detail label="Location" value={selectedServiceLocation?.label || "Not selected"} />
-                                <Detail label="Price" value={moneyFromCents(generatedPriceCents)} />
-                            </div>
-                            <button
-                                type="button"
-                                onClick={handleCreate}
-                                disabled={!canCreate || creating || loadingTemplateDetails}
-                                className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                {creating ? "Scheduling..." : "Create and Schedule"}
-                            </button>
+	                                <Detail label="Mode" value={mode === "template" ? "Template" : "Custom"} />
+	                                <Detail label="Customer" value={selectedCustomer?.label || "Not selected"} />
+	                                <Detail label="Location" value={selectedServiceLocation?.label || "Not selected"} />
+                                    <Detail label="Body Of Water" value={resolvedBodyOfWaterName || (selectedTemplateRequiresBodyOfWater ? "Required" : "Not selected")} />
+                                    <Detail label="Equipment" value={selectedEquipmentName || (selectedTemplateRequiresEquipment ? "Required" : "Not selected")} />
+	                                <Detail label="Price" value={moneyFromCents(generatedPriceCents)} />
+	                            </div>
+	                            <button
+	                                type="button"
+	                                onClick={handleCreate}
+	                                disabled={!canCreate || creating || loadingTemplateDetails}
+	                                className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+	                            >
+	                                {creating ? "Scheduling..." : loadingTemplateDetails ? "Loading Template..." : "Create and Schedule"}
+	                            </button>
                             <Link
                                 to="/company/jobs"
                                 className="mt-2 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-center text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"

@@ -8,6 +8,12 @@ import { isCompanyAccessInactive } from "../utils/invites";
 import { FIREBASE_NETWORK_FALLBACK_MS, isFirebaseNetworkError } from "../utils/firebaseNetwork";
 import { normalizeCustomerTag } from "../utils/customerTags";
 import { normalizeAccountType } from "../utils/accountTypes";
+import {
+    isCustomerBillingEnabled,
+    isSalesBillingAutomationEnabled,
+    isShoppingItemInstallInvoiceAutomationEnabled,
+} from "../utils/sales/billingSettings";
+import { isPayrollEnabled } from "../utils/companyWorkSettings";
 
 export const Context = createContext();
 
@@ -83,6 +89,10 @@ export function AuthContext({ children }) {
     const [recentlySelectedCompany, setRecentlySelectedCompany] = useState(null);
     const [recentlySelectedCompanyName, setRecentlySelectedCompanyName] = useState(null);
     const [stripeConnectedAccountId, setStripeConnectedAccountId] = useState(null);
+    const [customerBillingEnabled, setCustomerBillingEnabled] = useState(false);
+    const [salesBillingAutomationEnabled, setSalesBillingAutomationEnabled] = useState(false);
+    const [shoppingItemInstallInvoiceAutomationEnabled, setShoppingItemInstallInvoiceAutomationEnabled] = useState(false);
+    const [payrollEnabled, setPayrollEnabled] = useState(true);
     const [stripeId, setStripeId] = useState(null);
 
     // Role Information
@@ -158,11 +168,23 @@ export function AuthContext({ children }) {
                                     const companyData = companyDoc.data();
                                     setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
                                     setStripeConnectedAccountId(getStripeConnectedAccountId(companyData));
+                                    setCustomerBillingEnabled(isCustomerBillingEnabled(companyData));
+                                    setSalesBillingAutomationEnabled(isSalesBillingAutomationEnabled(companyData));
+                                    setShoppingItemInstallInvoiceAutomationEnabled(isShoppingItemInstallInvoiceAutomationEnabled(companyData));
+                                    setPayrollEnabled(isPayrollEnabled(companyData));
                                     setStripeId(getStripeCustomerId(dbUser) || getStripeCustomerId(companyData));
+                                } else {
+                                    setRecentlySelectedCompanyName(null);
+                                    setStripeConnectedAccountId(null);
+                                    setCustomerBillingEnabled(false);
+                                    setSalesBillingAutomationEnabled(false);
+                                    setShoppingItemInstallInvoiceAutomationEnabled(false);
+                                    setPayrollEnabled(true);
                                 }
                             }
                         } else {
                             setRecentlySelectedCompany(null);
+                            setPayrollEnabled(true);
                         }
                     } else {
                         console.log("No DB User Found on Auth Context");
@@ -182,6 +204,10 @@ export function AuthContext({ children }) {
                 setRecentlySelectedCompany(null);
                 setRecentlySelectedCompanyName(null);
                 setStripeConnectedAccountId(null);
+                setCustomerBillingEnabled(false);
+                setSalesBillingAutomationEnabled(false);
+                setShoppingItemInstallInvoiceAutomationEnabled(false);
+                setPayrollEnabled(true);
                 setStripeId(null);
                 setCompanyUserAccess(null);
                 setCompanyRole(null);
@@ -278,6 +304,10 @@ export function AuthContext({ children }) {
         const resetCompanyContext = () => {
             setRecentlySelectedCompanyName(null);
             setStripeConnectedAccountId(null);
+            setCustomerBillingEnabled(false);
+            setSalesBillingAutomationEnabled(false);
+            setShoppingItemInstallInvoiceAutomationEnabled(false);
+            setPayrollEnabled(true);
             setCompanyUserAccess(null);
             setCompanyRole(null);
             setCompanyRoleLoading(false);
@@ -288,6 +318,10 @@ export function AuthContext({ children }) {
             setRecentlySelectedCompany(null);
             setRecentlySelectedCompanyName(null);
             setStripeConnectedAccountId(null);
+            setCustomerBillingEnabled(false);
+            setSalesBillingAutomationEnabled(false);
+            setShoppingItemInstallInvoiceAutomationEnabled(false);
+            setPayrollEnabled(true);
             setCompanyUserAccess(null);
             setCompanyRole(null);
         };
@@ -316,10 +350,18 @@ export function AuthContext({ children }) {
                     const companyData = companyDoc.data();
                     setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
                     setStripeConnectedAccountId(getStripeConnectedAccountId(companyData));
+                    setCustomerBillingEnabled(isCustomerBillingEnabled(companyData));
+                    setSalesBillingAutomationEnabled(isSalesBillingAutomationEnabled(companyData));
+                    setShoppingItemInstallInvoiceAutomationEnabled(isShoppingItemInstallInvoiceAutomationEnabled(companyData));
+                    setPayrollEnabled(isPayrollEnabled(companyData));
                     setStripeId(getStripeCustomerId(dataBaseUser) || getStripeCustomerId(companyData));
                 } else {
                     setRecentlySelectedCompanyName(null);
                     setStripeConnectedAccountId(null);
+                    setCustomerBillingEnabled(false);
+                    setSalesBillingAutomationEnabled(false);
+                    setShoppingItemInstallInvoiceAutomationEnabled(false);
+                    setPayrollEnabled(true);
                 }
 
                 if (!userAccessDoc.exists()) {
@@ -423,6 +465,14 @@ export function AuthContext({ children }) {
         setRecentlySelectedCompany,
         stripeConnectedAccountId,
         setStripeConnectedAccountId,
+        customerBillingEnabled,
+        setCustomerBillingEnabled,
+        salesBillingAutomationEnabled,
+        setSalesBillingAutomationEnabled,
+        shoppingItemInstallInvoiceAutomationEnabled,
+        setShoppingItemInstallInvoiceAutomationEnabled,
+        payrollEnabled,
+        setPayrollEnabled,
         stripeId,
         setStripeId,
         recentlySelectedCompanyName,

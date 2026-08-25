@@ -1,22 +1,56 @@
 
-import React, { useState, useEffect, useContext } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useContext, useMemo } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
-import { ArrowLeftIcon, BuildingOffice2Icon, ChatBubbleLeftRightIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
-import { createClientCompanyChat, findVisibleChatWithParticipant } from '../../../utils/chatMessaging';
+import { ArrowLeftIcon, BuildingOffice2Icon, ChatBubbleLeftRightIcon, LinkIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
+import {
+    createClientCompanyChat,
+    findVisibleChatWithParticipant,
+    getConversationLinkLabel,
+    getUserDisplayName,
+    sendChatMessage,
+} from '../../../utils/chatMessaging';
 
 const NewCompanyChat = () => {
     const { companyId } = useParams();
     const navigate = useNavigate();
+    const location = useLocation();
     const { user, dataBaseUser } = useContext(Context);
+    const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const initialMessage = queryParams.get('message') || '';
+    const initialLink = useMemo(() => {
+        const linkType = queryParams.get('linkType') || queryParams.get('type') || '';
+        const recordId = queryParams.get('recordId') || queryParams.get('id') || '';
+        if (!linkType || !recordId) return null;
+
+        return {
+            type: linkType,
+            recordId,
+            title: queryParams.get('title') || getConversationLinkLabel(linkType),
+            subtitle: queryParams.get('subtitle') || '',
+            companyId: queryParams.get('companyId') || companyId || '',
+            customerId: queryParams.get('customerId') || '',
+            customerUserId: queryParams.get('customerUserId') || user?.uid || '',
+            collectionPath: queryParams.get('collectionPath') || '',
+            clientWebPath: queryParams.get('clientWebPath') || '',
+            companyWebPath: queryParams.get('companyWebPath') || '',
+        };
+    }, [companyId, queryParams, user?.uid]);
 
     const [company, setCompany] = useState(null);
-    const [message, setMessage] = useState('');
+    const [message, setMessage] = useState(initialMessage);
+    const [existingChat, setExistingChat] = useState(null);
     const [loading, setLoading] = useState(true);
     const [isSending, setIsSending] = useState(false);
     const [error, setError] = useState(null);
+
+    useEffect(() => {
+        if (initialMessage && !message) {
+            setMessage(initialMessage);
+        }
+    }, [initialMessage, message]);
 
     useEffect(() => {
         const fetchCompany = async () => {
@@ -33,11 +67,12 @@ const NewCompanyChat = () => {
                         })
                         : null;
 
-                    if (existingChat) {
+                    if (existingChat && !initialMessage && !initialLink) {
                         navigate(`/client/chat/details/${existingChat.id}`, { replace: true });
                         return;
                     }
 
+                    setExistingChat(existingChat);
                     setCompany(companyData);
                 } else {
                     setError("Company not found.");
@@ -52,23 +87,38 @@ const NewCompanyChat = () => {
         if (companyId) {
             fetchCompany();
         }
-    }, [companyId, navigate, user]);
+    }, [companyId, initialLink, initialMessage, navigate, user]);
 
     const handleSendMessage = async (e) => {
         e.preventDefault();
-        if (!message.trim()) return;
+        if (!message.trim() && !initialLink) return;
 
         setIsSending(true);
         setError(null);
 
         try {
-            const chatId = await createClientCompanyChat({
-                db,
-                user,
-                dataBaseUser,
-                company,
-                message,
-            });
+            let chatId = existingChat?.id || '';
+
+            if (existingChat) {
+                await sendChatMessage({
+                    db,
+                    chatId,
+                    chat: existingChat,
+                    text: message,
+                    link: initialLink,
+                    senderId: user.uid,
+                    senderName: getUserDisplayName(dataBaseUser, user),
+                });
+            } else {
+                chatId = await createClientCompanyChat({
+                    db,
+                    user,
+                    dataBaseUser,
+                    company,
+                    message,
+                    link: initialLink,
+                });
+            }
             if (!chatId) throw new Error("Unable to create message.");
 
             navigate(`/client/chat/details/${chatId}`);
@@ -111,10 +161,24 @@ const NewCompanyChat = () => {
                         <CompanyAvatar company={company} />
                         <div className="min-w-0">
                             <p className="truncate text-sm font-bold text-slate-950">{company?.name || 'Company'}</p>
-                            <p className="truncate text-sm text-slate-500">{company?.email || company?.ownerEmail || 'Message recipient'}</p>
+                            <p className="truncate text-sm text-slate-500">
+                                {existingChat ? 'Existing conversation' : company?.email || company?.ownerEmail || 'Message recipient'}
+                            </p>
                         </div>
                     </div>
                     <form onSubmit={handleSendMessage} className="p-4 sm:p-5">
+                        {initialLink && (
+                            <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                                <div className="flex items-start gap-3">
+                                    <LinkIcon className="mt-0.5 h-5 w-5 shrink-0" />
+                                    <div className="min-w-0">
+                                        <p className="font-bold">Linked {getConversationLinkLabel(initialLink.type)}</p>
+                                        <p className="mt-1 truncate">{initialLink.title}</p>
+                                        {initialLink.subtitle && <p className="mt-1 line-clamp-2 text-blue-700">{initialLink.subtitle}</p>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         <label className="block">
                             <span className="text-sm font-semibold text-slate-700">First message</span>
                             <textarea
@@ -129,12 +193,12 @@ const NewCompanyChat = () => {
                         <div className="mt-4 flex justify-end">
                             <button
                                 type="submit"
-                                disabled={isSending || !message.trim()}
+                                disabled={isSending || (!message.trim() && !initialLink)}
                                 className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
                                 aria-label="Send first message"
                             >
                                 <PaperAirplaneIcon className="h-5 w-5" />
-                                <span>{isSending ? 'Sending...' : 'Send Message'}</span>
+                                <span>{isSending ? 'Sending...' : existingChat ? 'Send to Conversation' : 'Send Message'}</span>
                             </button>
                         </div>
                     </form>

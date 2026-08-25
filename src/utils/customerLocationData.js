@@ -51,16 +51,32 @@ export const normalizeDateValue = (value, fallback = null) => {
 
 export const normalizeAddress = (address = {}) => {
   const source = address && typeof address === 'object' ? address : {};
-  const zip = asString(source.zip ?? source.zipCode).trim();
+  const zip = asString(
+    source.zip ??
+    source.zipCode ??
+    source.Zip ??
+    source.ZIP ??
+    source.postalCode ??
+    source.PostalCode
+  ).trim();
 
   return {
-    streetAddress: asString(source.streetAddress ?? source.address).trim(),
-    city: asString(source.city).trim(),
-    state: asString(source.state).trim(),
+    streetAddress: asString(
+      source.streetAddress ??
+      source.StreetAddress ??
+      source.address ??
+      source.Address ??
+      source.address1 ??
+      source.Address1 ??
+      source.line1 ??
+      source.Line1
+    ).trim(),
+    city: asString(source.city ?? source.City).trim(),
+    state: asString(source.state ?? source.State).trim(),
     zip,
     zipCode: zip,
-    latitude: asNumber(source.latitude, 0),
-    longitude: asNumber(source.longitude, 0),
+    latitude: asNumber(source.latitude ?? source.Latitude, 0),
+    longitude: asNumber(source.longitude ?? source.Longitude, 0),
   };
 };
 

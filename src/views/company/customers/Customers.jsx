@@ -31,7 +31,63 @@ const ACTIVE_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'pending_cancellatio
 
 const noConfiguredLimitState = { isUnlimited: true, remaining: Infinity };
 
-const getSearchText = (value) => (value ?? '').toString().toLowerCase();
+const getSearchText = (value) => (value ?? '').toString().trim().toLowerCase();
+
+const getPhoneSearchText = (value) => getSearchText(value).replace(/\D/g, '');
+
+const getAddressParts = (address = {}) => {
+    if (!address || typeof address !== 'object') return [];
+
+    return [
+        address.streetAddress,
+        address.addressLine1,
+        address.address,
+        address.addressLine2,
+        address.address2,
+        address.city,
+        address.state,
+        address.zip,
+        address.zipCode,
+    ];
+};
+
+const getCustomerEmails = (customer = {}) => [
+    customer.email,
+    customer.billingEmail,
+    customer.customerEmail,
+    customer.mainContact?.email,
+    customer.contact?.email,
+    ...(customer.sourceContactFields?.emails || []),
+    customer.linkedEmail,
+].filter(Boolean);
+
+const getCustomerPhones = (customer = {}) => [
+    customer.phoneNumber,
+    customer.phone,
+    customer.customerPhone,
+    customer.mobilePhone,
+    customer.mainContact?.phoneNumber,
+    customer.mainContact?.phone,
+    customer.contact?.phoneNumber,
+    customer.contact?.phone,
+    ...(customer.sourceContactFields?.phones || []),
+].filter(Boolean);
+
+const getCustomerAddressParts = (customer = {}) => [
+    ...getAddressParts(customer.billingAddress),
+    ...getAddressParts(customer.address),
+    ...getAddressParts(customer.serviceAddress),
+    typeof customer.billingAddress === 'string' ? customer.billingAddress : '',
+    customer.streetAddress,
+    customer.addressLine1,
+    typeof customer.address === 'string' ? customer.address : '',
+    customer.addressLine2,
+    customer.address2,
+    customer.city,
+    customer.state,
+    customer.zip,
+    customer.zipCode,
+].filter(Boolean);
 
 const getCustomerDisplayName = (customer) => {
     if (customer.displayAsCompany) return customer.company || customer.companyName || '';
@@ -39,31 +95,83 @@ const getCustomerDisplayName = (customer) => {
 };
 
 const getCustomerEmail = (customer = {}) => (
-    customer.email ||
-    customer.billingEmail ||
-    customer.mainContact?.email ||
-    customer.contact?.email ||
-    ''
+    getCustomerEmails(customer)[0] || ''
 );
 
 const getCustomerPhone = (customer = {}) => (
-    customer.phoneNumber ||
-    customer.phone ||
-    customer.mainContact?.phoneNumber ||
-    customer.contact?.phoneNumber ||
-    ''
+    getCustomerPhones(customer)[0] || ''
 );
 
 const getCustomerAddressLine = (customer = {}) => {
     const address = customer.billingAddress || customer.address || {};
+    const serviceAddress = customer.serviceAddress || {};
+    const billingAddressText = typeof customer.billingAddress === 'string' ? customer.billingAddress : '';
+    const rootAddressText = typeof customer.address === 'string' ? customer.address : '';
+    const streetAddress = (
+        address.streetAddress ||
+        address.addressLine1 ||
+        address.address ||
+        billingAddressText ||
+        customer.streetAddress ||
+        customer.addressLine1 ||
+        rootAddressText ||
+        serviceAddress.streetAddress ||
+        serviceAddress.addressLine1 ||
+        serviceAddress.address
+    );
+    const addressLine2 = (
+        address.addressLine2 ||
+        address.address2 ||
+        customer.addressLine2 ||
+        customer.address2 ||
+        serviceAddress.addressLine2 ||
+        serviceAddress.address2
+    );
+    const city = address.city || customer.city || serviceAddress.city;
+    const state = address.state || customer.state || serviceAddress.state;
+    const zip = address.zip || address.zipCode || customer.zip || customer.zipCode || serviceAddress.zip || serviceAddress.zipCode;
+
     return [
-        address.streetAddress || customer.streetAddress,
-        address.city || customer.city,
-        address.state || customer.state,
-        address.zip || customer.zip,
+        streetAddress,
+        addressLine2,
+        city,
+        state,
+        zip,
     ]
         .filter(Boolean)
         .join(' ');
+};
+
+const getCustomerSearchText = (customer = {}) => [
+    getCustomerDisplayName(customer),
+    customer.firstName,
+    customer.lastName,
+    customer.company,
+    customer.companyName,
+    customer.label,
+    ...getCustomerEmails(customer),
+    ...getCustomerPhones(customer),
+    ...getCustomerPhones(customer).map(getPhoneSearchText),
+    ...getCustomerAddressParts(customer),
+    ...normalizeCustomerTags(customer.tags),
+    customer.id,
+    customer.migrationSource?.sourceCustomerKey,
+    customer.migrationSource?.sourceLocationKey,
+]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+const searchTextIncludesTerm = (searchText, rawTerm) => {
+    const normalizedSearchText = getSearchText(searchText);
+    const normalizedTerm = getSearchText(rawTerm);
+    const normalizedPhoneTerm = getPhoneSearchText(rawTerm);
+
+    return (
+        !normalizedTerm ||
+        normalizedSearchText.includes(normalizedTerm) ||
+        Boolean(normalizedPhoneTerm && normalizedSearchText.includes(normalizedPhoneTerm))
+    );
 };
 
 const selectTheme = (theme) => ({
@@ -224,6 +332,7 @@ export default function Customers() {
                     customer.id,
                     customer.migrationSource?.sourceCustomerKey,
                     customer.migrationSource?.sourceLocationKey,
+                    getPhoneSearchText(phone),
                     ...tags,
                 ]
                     .filter(Boolean)
@@ -276,7 +385,10 @@ export default function Customers() {
                 // Fetch all customers
                 const customerQuery = query(collection(db, 'companies', recentlySelectedCompany, 'customers'), orderBy("firstName"));
                 const customerSnapshot = await getDocs(customerQuery);
-                const customerData = customerSnapshot.docs.map(doc => Customer.fromFirestore(doc));
+                const customerData = customerSnapshot.docs.map((customerDoc) => ({
+                    ...customerDoc.data(),
+                    ...Customer.fromFirestore(customerDoc),
+                }));
                 setAllCustomers(customerData);
                 setFilteredCustomers(filterCustomersByRegionalAccess(customerData, {
                     userAccess: companyUserAccess,
@@ -326,17 +438,8 @@ export default function Customers() {
     }, [recentlySelectedCompany, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled]);
 
     useEffect(() => {
-        const lowerCaseSearchTerm = searchTerm.toLowerCase();
         const filtered = visibleCustomers.filter(customer => {
-            const searchableFields = [
-                getCustomerDisplayName(customer),
-                customer.email,
-                customer.phoneNumber,
-                customer.billingAddress?.streetAddress,
-                ...normalizeCustomerTags(customer.tags),
-            ];
-
-            const matchesSearch = searchableFields.some(value => getSearchText(value).includes(lowerCaseSearchTerm));
+            const matchesSearch = searchTextIncludesTerm(getCustomerSearchText(customer), searchTerm);
             const matchesStatus =
                 statusFilter === 'all' ||
                 (statusFilter === 'active' && customer.active === true) ||
@@ -631,7 +734,7 @@ export default function Customers() {
                                         noOptionsMessage={() => 'No customers found'}
                                         formatOptionLabel={formatMergeCustomerOption}
                                         filterOption={(option, inputValue) => (
-                                            option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                                            searchTextIncludesTerm(option.data.searchText, inputValue)
                                         )}
                                         isOptionDisabled={(option) => option.value === duplicateCustomerId}
                                         theme={selectTheme}
@@ -660,7 +763,7 @@ export default function Customers() {
                                         noOptionsMessage={() => 'No customers found'}
                                         formatOptionLabel={formatMergeCustomerOption}
                                         filterOption={(option, inputValue) => (
-                                            option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                                            searchTextIncludesTerm(option.data.searchText, inputValue)
                                         )}
                                         isOptionDisabled={(option) => option.value === primaryCustomerId}
                                         theme={selectTheme}
@@ -720,8 +823,8 @@ export default function Customers() {
                 <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
                     <div className="space-y-4 border-b border-slate-200 p-5">
                         <input
-                            type="text"
-                            placeholder="Search customers..."
+                            type="search"
+                            placeholder="Search name, email, phone, address, or tag..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
@@ -872,11 +975,11 @@ export default function Customers() {
                                                 <p className="text-sm font-semibold text-slate-900">{getCustomerDisplayName(customer)}</p>
                                             </td>
                                             <td className="px-5 py-3">
-                                                <p className="text-sm text-slate-800">{customer.email}</p>
-                                                <p className="text-sm text-slate-500">{customer.phoneNumber}</p>
+                                                <p className="text-sm text-slate-800">{getCustomerEmail(customer)}</p>
+                                                <p className="text-sm text-slate-500">{getCustomerPhone(customer)}</p>
                                             </td>
                                             <td className="px-5 py-3 text-sm text-slate-600">
-                                                {customer.billingAddress?.streetAddress}
+                                                {getCustomerAddressLine(customer)}
                                             </td>
                                             <td className="px-5 py-3">
                                                 <div className="flex max-w-xs flex-wrap gap-1.5">

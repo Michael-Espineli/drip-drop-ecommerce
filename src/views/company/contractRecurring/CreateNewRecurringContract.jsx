@@ -340,6 +340,7 @@ const CreateNewRecurringContract = () => {
                 const getProductList = httpsCallable(functions, "getProductList");
                 const result = await getProductList({
                     active: true,
+                    companyId: recentlySelectedCompany,
                     connectedAccount: stripeConnectedAccountId,
                     method: "POST",
                 });
@@ -420,6 +421,7 @@ const CreateNewRecurringContract = () => {
         const getDefaultPrice = httpsCallable(functions, "getDefaultPrice");
         getDefaultPrice({
             priceId: selectedOption.default_price,
+            companyId: recentlySelectedCompany,
             connectedAccount: stripeConnectedAccountId,
             method: "POST",
         })

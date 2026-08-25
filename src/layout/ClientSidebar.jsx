@@ -12,7 +12,8 @@ import {
     ArrowLeftOnRectangleIcon,
     TruckIcon,
     CreditCardIcon,
-    XMarkIcon
+    XMarkIcon,
+    ClipboardDocumentCheckIcon
 } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 import { collection, onSnapshot } from "firebase/firestore";
@@ -44,8 +45,10 @@ const clientNavItems = {
             title: 'Finance',
             icon: <CreditCardIcon />,
             path: '/client/finance',
-            aliases: ['/client/billing', '/client/service-agreements', '/client/part-approvals'],
+            aliases: ['/client/billing'],
         },
+        { title: 'Estimates', icon: <DocumentTextIcon />, path: '/client/service-agreements' },
+        { title: 'Part Approvals', icon: <ClipboardDocumentCheckIcon />, path: '/client/part-approvals' },
     ],
     'NA': [
         { title: 'Settings', icon: <CogIcon />, path: '/client/settings' },
@@ -57,6 +60,10 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
     const { pathname } = useLocation();
     const { user, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const [notificationCount, setNotificationCount] = useState(0);
+
+    useEffect(() => {
+        setShowSidebar(false);
+    }, [pathname, setShowSidebar]);
 
     useEffect(() => {
         const alertsEnabled = featureFlagsLoaded && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
@@ -96,10 +103,14 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
     return (
         <div>
             {/* Overlay for mobile view */}
-            <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 lg:hidden ${showSidebar ? 'w-screen h-screen bg-black/50 top-0 left-0 z-10' : 'w-0'}`}></div>
+            <div
+                aria-hidden="true"
+                onClick={() => setShowSidebar(false)}
+                className={`app-mobile-sidebar-overlay fixed left-0 z-40 w-screen bg-black/50 transition-opacity duration-200 lg:hidden ${showSidebar ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`}
+            ></div>
 
             {/* Sidebar */}
-            <div className={`app-mobile-sidebar-shell w-full lg:w-[260px] fixed bg-white z-50 top-0 h-screen shadow-lg transition-all ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
+            <div className={`app-mobile-sidebar-shell fixed top-0 z-50 h-screen w-[min(20rem,88vw)] bg-white shadow-lg transition-all lg:w-[260px] ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
                 <div className='flex h-full flex-col overflow-hidden'>
                     {/* Header */}
                     <div className='h-[95px] flex items-center justify-between border-b border-b-slate-200 px-4 shrink-0 lg:justify-center'>

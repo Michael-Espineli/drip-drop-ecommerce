@@ -4,6 +4,8 @@ const OPEN_WORK_OFFER_STATUSES = new Set([
   "posted",
   "viewed",
   "pending",
+  "pending approval",
+  "acceptance pending approval",
   "open",
   "offered",
 ]);
@@ -22,6 +24,25 @@ const normalizeWorkOfferTypeKey = (value) =>
 
 const BOARD_WORK_OFFER_TYPES = new Set(["board", "internal board"]);
 
+const cents = (value) => {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? Math.round(n) : 0;
+};
+
+const moneyFromCents = (value) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(cents(value) / 100);
+
+const normalizeIncentiveTypeKey = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
 export const WORK_OFFER_STATUS_FILTERS = [
   { value: "open", label: "Open" },
   { value: "ready", label: "Ready to Schedule" },
@@ -36,6 +57,20 @@ export const WORK_OFFER_TYPE_FILTERS = [
   { value: "direct user", label: "Direct" },
   { value: "internal board", label: "Board" },
   { value: "external company", label: "External" },
+];
+
+export const WORK_OFFER_CATEGORY_FILTERS = [
+  { value: "all", label: "All Work" },
+  { value: "fullRoute", label: "Full Routes" },
+  { value: "partialRoute", label: "Partial Routes" },
+  { value: "oneOffJob", label: "One-Off Jobs" },
+  { value: "recurringWork", label: "Recurring Work" },
+];
+
+export const WORK_OFFER_INCENTIVE_TYPES = [
+  { value: "none", label: "No Incentive" },
+  { value: "flat", label: "Flat Rate" },
+  { value: "percentage", label: "Percentage Bump" },
 ];
 
 export const normalizeWorkOfferStatus = (status) => {
@@ -99,7 +134,21 @@ export const getWorkOfferTypeText = (offer = {}) => {
 };
 
 export const getWorkOfferEstimatedPayCents = (offer = {}) => {
+  const explicitTotal =
+    offer.estimatedPayWithIncentiveCents ??
+    offer.totalPayWithIncentiveCents;
+
+  if (explicitTotal !== undefined && explicitTotal !== null) {
+    return cents(explicitTotal);
+  }
+
+  return getWorkOfferBasePayCents(offer) + getWorkOfferIncentiveCents(offer);
+};
+
+export const getWorkOfferBasePayCents = (offer = {}) => {
   const value =
+    offer.estimatedBasePayCents ??
+    offer.basePayCents ??
     offer.estimatedPayCents ??
     offer.estimatedPayTotalCents ??
     offer.estimatedLaborCents ??
@@ -108,8 +157,102 @@ export const getWorkOfferEstimatedPayCents = (offer = {}) => {
     offer.offeredAmountCents ??
     offer.rate ??
     0;
-  const cents = Number(value || 0);
-  return Number.isFinite(cents) ? cents : 0;
+  return cents(value);
+};
+
+export const normalizeWorkOfferIncentive = (offer = {}) => {
+  const incentive = offer.incentive && typeof offer.incentive === "object"
+    ? offer.incentive
+    : {};
+  const type = normalizeIncentiveTypeKey(incentive.type || offer.incentiveType || "none");
+  const normalizedType =
+    type === "flat" || type === "flat rate"
+      ? "flat"
+      : type === "percentage" || type === "percentage bump"
+        ? "percentage"
+        : "none";
+  const amountCents = Math.max(0, cents(
+    incentive.amountCents ??
+    offer.incentiveAmountCents ??
+    offer.flatIncentiveCents ??
+    0
+  ));
+  const percentage = Math.max(0, Number(
+    incentive.percentage ??
+    offer.incentivePercentage ??
+    offer.percentageIncentive ??
+    0
+  ) || 0);
+  const notes = String(incentive.notes || offer.incentiveNotes || "").trim();
+
+  if (normalizedType === "flat") {
+    return {
+      type: "flat",
+      amountCents,
+      percentage: 0,
+      notes,
+    };
+  }
+
+  if (normalizedType === "percentage") {
+    return {
+      type: "percentage",
+      amountCents: 0,
+      percentage,
+      notes,
+    };
+  }
+
+  return {
+    type: "none",
+    amountCents: 0,
+    percentage: 0,
+    notes: "",
+  };
+};
+
+export const getWorkOfferIncentiveCents = (offer = {}) => {
+  const incentive = normalizeWorkOfferIncentive(offer);
+
+  if (incentive.type === "flat") return incentive.amountCents;
+  if (incentive.type === "percentage") {
+    return Math.round(getWorkOfferBasePayCents(offer) * (incentive.percentage / 100));
+  }
+
+  return 0;
+};
+
+export const getWorkOfferIncentiveText = (offer = {}) => {
+  const incentive = normalizeWorkOfferIncentive(offer);
+  const incentiveCents = getWorkOfferIncentiveCents(offer);
+
+  if (incentive.type === "flat") {
+    return incentiveCents > 0 ? `Flat ${moneyFromCents(incentiveCents)}` : "Flat incentive";
+  }
+
+  if (incentive.type === "percentage") {
+    return incentive.percentage > 0 ? `${incentive.percentage}% bump` : "Percentage bump";
+  }
+
+  return "No incentive";
+};
+
+export const getWorkOfferCategoryText = (offer = {}) => {
+  switch (offer.workOfferCategory || offer.workCategory || offer.sourceType) {
+    case "fullRoute":
+    case "route":
+      return "Full Route";
+    case "partialRoute":
+    case "routeStops":
+      return "Partial Route";
+    case "oneOffJob":
+    case "job":
+      return "One-Off Job";
+    case "recurringWork":
+      return "Recurring Work";
+    default:
+      return getWorkOfferTaskCount(offer) > 0 ? "Job Tasks" : "Work";
+  }
 };
 
 export const getWorkOfferCanSelfSchedule = (offer = {}) =>
@@ -153,6 +296,12 @@ export const buildWorkOfferSearchText = (offer = {}) =>
     offer.serviceLocationName,
     offer.serviceStopTypeName,
     offer.companyServiceStopTypeName,
+    offer.routeName,
+    offer.routeTechName,
+    offer.boardName,
+    Array.isArray(offer.boardNames) ? offer.boardNames.join(" ") : "",
+    getWorkOfferCategoryText(offer),
+    getWorkOfferIncentiveText(offer),
     offer.status,
     getWorkOfferTargetText(offer),
     getWorkOfferTypeText(offer),

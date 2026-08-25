@@ -17,7 +17,7 @@ import { Context } from "../../../../context/AuthContext";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
 import useCompanyPermissions from "../../../../hooks/useCompanyPermissions";
-import { jobTaskTypeOptionsFromDocs } from "../../../../utils/jobTaskTypes";
+import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs } from "../../../../utils/jobTaskTypes";
 
 const TaskGroupDetails = () => {
   const navigate = useNavigate();
@@ -137,7 +137,7 @@ const TaskGroupDetails = () => {
           name: taskName,
           description: taskDescription,
           typeId: selectedTaskType.id,
-          type: selectedTaskType.name,
+          type: canonicalJobTaskType(selectedTaskType.name),
           contractedRate: labor,
           estimatedTime: time,
         }
@@ -526,9 +526,9 @@ const TaskGroupDetails = () => {
               <div className="mt-2 text-sm text-slate-600 space-y-2">
                 {(selectedTaskType.name === "Basic") && <p>Basic</p>}
                 {(selectedTaskType.name === "Clean") && <p>Clean</p>}
-                {(selectedTaskType.name === "Empty Water") && (
+                {(canonicalJobTaskType(selectedTaskType.name) === "Drain Water") && (
                   <div>
-                    <p className="font-semibold">Empty Water</p>
+                    <p className="font-semibold">Drain Water</p>
                     <p>Select Body Of Water</p>
                   </div>
                 )}
@@ -541,20 +541,23 @@ const TaskGroupDetails = () => {
                 {(selectedTaskType.name === "Install") && (
                   <div>
                     <p className="font-semibold">Install</p>
-                    <p>Select New Piece of Equipment to Install</p>
+                    <p>Select Body Of Water</p>
+                    <p>Select Equipment Item to Install</p>
                   </div>
                 )}
                 {(selectedTaskType.name === "Remove") && (
                   <div>
                     <p className="font-semibold">Remove</p>
+                    <p>Select Body Of Water</p>
                     <p>Select Equipment To remove</p>
                   </div>
                 )}
                 {(selectedTaskType.name === "Replace") && (
                   <div>
                     <p className="font-semibold">Replace</p>
+                    <p>Select Body Of Water</p>
                     <p>Select Equipment To remove</p>
-                    <p>Select New Piece of Equipment to Install</p>
+                    <p>Select Equipment Item to Install</p>
                   </div>
                 )}
               </div>

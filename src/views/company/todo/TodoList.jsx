@@ -1224,10 +1224,10 @@ const TodoList = () => {
         </section>
 
         <section className="grid gap-6 2xl:grid-cols-[320px_minmax(0,1fr)]">
-          <div className="space-y-6 2xl:sticky 2xl:top-4 2xl:self-start">
+          <div className={`space-y-6 2xl:sticky 2xl:top-4 2xl:self-start ${createTodoModalOpen || boardModalOpen ? "relative z-[100]" : "relative z-0"}`}>
             {createTodoModalOpen && (
               <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
+                className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
                 onMouseDown={(event) => {
                   if (!saving && event.target === event.currentTarget) {
                     setCreateTodoModalOpen(false);
@@ -1493,7 +1493,7 @@ const TodoList = () => {
 
             {boardModalOpen && (
               <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
+                className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
                 onMouseDown={(event) => {
                   if (!savingBoard && event.target === event.currentTarget) {
                     closeBoardModal();

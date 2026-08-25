@@ -340,7 +340,7 @@ const MyPool = () => {
     }
 
     return (
-        <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
+        <div className="px-4 py-6 bg-gray-50 min-h-screen md:px-8">
             <div className="max-w-7xl mx-auto">
                 <Header
                     locations={serviceLocations}
@@ -409,20 +409,20 @@ const getLocationLabel = (location) => (
 );
 
 const Header = ({ locations, selected, onSelect }) => (
-    <div className="flex flex-col md:flex-row justify-between md:items-center mb-8 gap-4">
-        <h1 className="text-3xl font-bold text-gray-900">My Pool Dashboard</h1>
-        <div className="flex items-center gap-4">
+    <div className="flex flex-col justify-between gap-4 mb-8 md:flex-row md:items-center">
+        <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">My Pool Dashboard</h1>
+        <div className="flex w-full flex-col gap-3 sm:flex-row md:w-auto md:items-center">
             <select
                 value={selected}
                 onChange={(e) => onSelect(e.target.value)}
-                className="w-full md:w-auto px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:py-2 md:w-auto"
             >
                 <option value="all">All Locations</option>
                 {locations.map(loc => (
                     <option key={loc.id} value={loc.id}>{getLocationLabel(loc)}</option>
                 ))}
             </select>
-            <Link to="/serviceLocation/create" className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700">
+            <Link to="/serviceLocation/create" className="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-white shadow-md hover:bg-blue-700 sm:py-2">
                 <PlusIcon className="w-5 h-5" />
                 <span>Add Location</span>
             </Link>
@@ -513,11 +513,11 @@ const EditServiceLocationModal = ({ form, saving, error, onChange, onClose, onSu
 };
 
 const NoPoolsView = () => (
-    <div className="flex items-center justify-center h-screen -mt-20">
+    <div className="flex min-h-[60vh] items-center justify-center px-4 py-10">
         <div className="text-center">
             <h2 className="text-2xl font-semibold text-gray-700 mb-4">No pools found.</h2>
             <p className="text-gray-500 mb-6">It looks like you haven't added a pool yet.</p>
-            <Link to="/client/my-pool/new" className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700">
+            <Link to="/client/my-pool/new" className="inline-flex w-full justify-center rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white shadow-md hover:bg-blue-700 sm:w-auto">
                 Add Your First Pool
             </Link>
         </div>
@@ -526,12 +526,12 @@ const NoPoolsView = () => (
 
 const Widget = ({ title, icon: Icon, linkTo, addLinkTo, children }) => (
     <div className="bg-white rounded-lg shadow-md">
-        <div className="flex justify-between items-center p-4 border-b">
+        <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
                 {Icon && <Icon className="w-6 h-6 text-gray-600" />}
                 <h2 className="text-xl font-bold text-gray-800">{title}</h2>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
                 {addLinkTo && (
                     <Link to={addLinkTo} className="text-sm font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1">
                         <PlusIcon className="w-4 h-4" />

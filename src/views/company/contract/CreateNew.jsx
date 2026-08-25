@@ -132,6 +132,7 @@ const CreateNew = () => {
             const getProductList = httpsCallable(functions, 'getProductList');
             getProductList({
                 active: true,
+                companyId: recentlySelectedCompany,
                 connectedAccount: stripeConnectedAccountId,
                 method: "POST",
             })
@@ -191,6 +192,7 @@ const CreateNew = () => {
         const getDefaultPrice = httpsCallable(functions, 'getDefaultPrice');
         getDefaultPrice({
             priceId: selectedOption2.default_price,
+            companyId: recentlySelectedCompany,
             connectedAccount: stripeConnectedAccountId,
             method: "POST",
         })
@@ -264,14 +266,10 @@ const CreateNew = () => {
                     startDate: currentTime,
                     status: "pending",
                     terms: terms,
-                    // priceId: defaultPrice.id, 
-                    // productId:selectedProduct.id,
-
-                    priceId: 'price_1QJN3JPPLD20PPKnO8w5XHVa',
-
-                    productId: 'acct_1QIep2PPLD20PPKn',
+                    priceId: defaultPrice?.id || "",
+                    productId: selectedProduct?.id || "",
                     stripeCustomerId: "",
-                    connectedAccountId: "",
+                    connectedAccountId: stripeConnectedAccountId || "",
                 });
                 console.log('Successfully Uploaded. ')
                 //Navigate Back to Contract PAGe

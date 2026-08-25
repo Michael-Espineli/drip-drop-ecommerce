@@ -199,8 +199,8 @@ function Contracts() {
             try {
                 const getSubcriptionList = httpsCallable(functions, 'getSubcriptionList');
                 const result = await getSubcriptionList({
-                    customerId: 'cus_RBsy3ZCArWYVkW',
-                    connectedAccount: stripeConnectedAccountId || 'acct_1QIep2PPLD20PPKn',
+                    companyId: recentlySelectedCompany,
+                    connectedAccount: stripeConnectedAccountId,
                     method: 'POST',
                 });
 
@@ -217,13 +217,23 @@ function Contracts() {
         e.preventDefault();
 
         try {
+            const subscriptionForTest = contractList?.[0];
+            const customerId = subscriptionForTest?.customer;
+            const priceId = subscriptionForTest?.items?.data?.[0]?.price?.id;
+
+            if (!customerId || !priceId) {
+                console.warn('No connected-account customer and price available for the legacy acceptContract test.');
+                return;
+            }
+
             const callable = httpsCallable(functions, 'acceptContract');
             const result = await callable({
                 name: 'name',
                 description: 'description',
-                customerId: 'cus_RBsy3ZCArWYVkW',
-                priceId: 'price_1QJN3JPPLD20PPKnO8w5XHVa',
-                connectedAccount: stripeConnectedAccountId || 'acct_1QIep2PPLD20PPKn',
+                customerId,
+                priceId,
+                companyId: recentlySelectedCompany,
+                connectedAccount: stripeConnectedAccountId,
                 method: 'POST',
             });
 
@@ -237,13 +247,23 @@ function Contracts() {
         e.preventDefault();
 
         try {
+            const subscriptionForTest = contractList?.[0];
+            const customerId = subscriptionForTest?.customer;
+            const priceId = subscriptionForTest?.items?.data?.[0]?.price?.id;
+
+            if (!customerId || !priceId) {
+                console.warn('No connected-account customer and price available for the legacy acceptContract2 test.');
+                return;
+            }
+
             const callable = httpsCallable(functions, 'acceptContract2');
             const result = await callable({
                 name: 'name',
                 description: 'description',
-                customerId: 'cus_RBsy3ZCArWYVkW',
-                priceId: 'price_1QJN3JPPLD20PPKnO8w5XHVa',
-                connectedAccount: stripeConnectedAccountId || 'acct_1QIep2PPLD20PPKn',
+                customerId,
+                priceId,
+                companyId: recentlySelectedCompany,
+                connectedAccount: stripeConnectedAccountId,
                 method: 'POST',
             });
 
@@ -260,11 +280,12 @@ function Contracts() {
         e.preventDefault();
 
         try {
-            const callable = httpsCallable(functions, 'setUpCustomer');
+            const callable = httpsCallable(functions, 'setUpConnectedAccountCustomer');
             const result = await callable({
                 name: 'name',
                 description: 'description',
-                connectedAccount: stripeConnectedAccountId || 'acct_1QIep2PPLD20PPKn',
+                companyId: recentlySelectedCompany,
+                connectedAccount: stripeConnectedAccountId,
                 method: 'POST',
             });
 

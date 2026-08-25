@@ -8,9 +8,17 @@ import { collection, getDocs, onSnapshot, query, where } from "firebase/firestor
 import { db } from '../utils/config';
 import { COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID } from '../utils/companyPermissions';
 import { REPAIR_REQUEST_STATUS } from '../utils/models/RepairRequest';
-import { normalizeEquipmentStatus } from '../utils/models/Equipment';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
 import { getFilteredDocsCount, getServerCount, listenForForegroundRefresh, sumServerCounts } from '../utils/firestoreCounts';
+import {
+    buildCustomerActiveById,
+    equipmentNeedsMaintenanceForActiveBoard,
+} from '../utils/equipmentMaintenance';
+import {
+    SHOPPING_LIST_STATUS,
+    canonicalShoppingListStatus,
+    normalizeShoppingListStatus,
+} from '../utils/shoppingListStatus';
 import {
     TODO_LIST_FEATURE_FLAG_ID,
     normalizeTodo,
@@ -61,33 +69,6 @@ const isFirestorePermissionDenied = (error) => (
     String(error?.message || "").toLowerCase().includes("insufficient permissions")
 );
 
-const toDateMillis = (value) => {
-    if (!value) return null;
-    if (value instanceof Date) return value.getTime();
-    if (typeof value.toDate === "function") return value.toDate().getTime();
-    if (typeof value.seconds === "number") return value.seconds * 1000;
-
-    const parsed = new Date(value);
-    const millis = parsed.getTime();
-    return Number.isNaN(millis) ? null : millis;
-};
-
-const dateIsDueThroughToday = (value) => {
-    const millis = toDateMillis(value);
-    if (millis === null) return false;
-
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-
-    return millis <= endOfToday.getTime();
-};
-
-const maintenanceStatusValues = [
-    "Needs Maintenance",
-    "Maintenance",
-    "Needs Service",
-];
-
 const openWorkOfferStatusValues = [
     "Draft",
     "Sent",
@@ -105,16 +86,76 @@ const openWorkOfferStatusValues = [
     "offered",
 ];
 
-const equipmentNeedsMaintenance = (equipment = {}) => {
-    const status = normalizeEquipmentStatus(equipment.status);
-    if (status === "nonoperational") return false;
+const purchaseReadyShoppingStatusValues = [
+    SHOPPING_LIST_STATUS.needToPurchase,
+    "Need To Purchase",
+    "needToPurchase",
+    "Need Purchase",
+    "needPurchase",
+    "Ready to Purchase",
+    "readyToPurchase",
+    "readytopurchase",
+    "approved",
+    "Approved",
+];
 
-    const statusSaysMaintenance =
-        status === "needsmaintenance" ||
-        status === "maintenance" ||
-        status === "needsservice";
+const approvalReadyStatusValues = new Set([
+    "approved",
+    "approvedawaitingpurchase",
+]);
 
-    return statusSaysMaintenance || (equipment.needsService === true && dateIsDueThroughToday(equipment.nextServiceDate));
+const rejectedShoppingStatusValues = new Set([
+    "customerrejected",
+    "rejected",
+    "denied",
+]);
+
+const waitingApprovalShoppingStatusValues = new Set([
+    "needsapproval",
+    "needscustomerapproval",
+    "customerapproval",
+    "pendingapproval",
+    "pendingcustomerapproval",
+    "awaitingcustomerapproval",
+]);
+
+const shoppingItemComesFromPartApproval = (item = {}) => {
+    const sourceType = normalizeShoppingListStatus(item.sourceType || item.sourceRecordType || item.sourceRecordTypeLabel);
+
+    return Boolean(
+        item.partApprovalRequestId ||
+        item.approvalRequestId ||
+        item.customerApprovalRequestId ||
+        sourceType === "partapproval" ||
+        sourceType === "partapprovalrequest" ||
+        sourceType === "customerpartapproval" ||
+        sourceType === "customerpartapprovalrequest"
+    );
+};
+
+const shoppingItemApprovalIsReady = (item = {}) => {
+    const approvalRequired = Boolean(item.customerApprovalRequired || shoppingItemComesFromPartApproval(item));
+    if (!approvalRequired) return true;
+
+    return [
+        item.status,
+        item.customerApprovalStatus,
+        item.customerApprovalResponse,
+        item.approvalStatus,
+        item.response,
+        item.fulfillmentStatus,
+    ].some((value) => approvalReadyStatusValues.has(normalizeShoppingListStatus(value)));
+};
+
+const shoppingItemIsReadyToPurchase = (item = {}) => {
+    const status = normalizeShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase);
+    if (rejectedShoppingStatusValues.has(status)) return false;
+    if (waitingApprovalShoppingStatusValues.has(status) && !shoppingItemApprovalIsReady(item)) return false;
+
+    return (
+        canonicalShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase) === SHOPPING_LIST_STATUS.needToPurchase &&
+        shoppingItemApprovalIsReady(item)
+    );
 };
 
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
@@ -206,16 +247,6 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             where("status", "==", "Pending")
         );
 
-        const shoppingQuery = query(
-            collection(db, "companies", recentlySelectedCompany, "shoppingList"),
-            where("status", "==", "Need to Purchase")
-        );
-
-        const legacyShoppingQuery = query(
-            collection(db, "companies", recentlySelectedCompany, "shoppingListItems"),
-            where("status", "==", "Need to Purchase")
-        );
-
         const equipmentRef = collection(db, "companies", recentlySelectedCompany, "equipment");
 
         const internalRepairRequestsOpenQuery = query(
@@ -270,41 +301,21 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         };
 
         const getEquipmentMaintenanceCount = async () => {
-            const dueThrough = new Date();
-            dueThrough.setHours(23, 59, 59, 999);
+            const [equipmentSnap, customersSnap] = await Promise.all([
+                getDocs(equipmentRef),
+                getDocs(collection(db, "companies", recentlySelectedCompany, "customers")).catch((error) => {
+                    console.warn("Unable to load customers for equipment maintenance count:", error);
+                    return { docs: [] };
+                }),
+            ]);
+            const customerActiveById = buildCustomerActiveById(
+                customersSnap.docs.map((customerDoc) => ({ id: customerDoc.id, ...customerDoc.data() }))
+            );
 
-            let statusSnap;
-            let dueSnap;
-
-            try {
-                [statusSnap, dueSnap] = await Promise.all([
-                    getDocs(query(
-                        equipmentRef,
-                        where("isActive", "==", true),
-                        where("status", "in", maintenanceStatusValues)
-                    )),
-                    getDocs(query(
-                        equipmentRef,
-                        where("isActive", "==", true),
-                        where("needsService", "==", true),
-                        where("nextServiceDate", "<=", dueThrough)
-                    )),
-                ]);
-            } catch (error) {
-                console.warn("Falling back to active-equipment maintenance count:", error);
-                const activeSnap = await getDocs(query(equipmentRef, where("isActive", "==", true)));
-                return activeSnap.docs
-                    .map((equipmentDoc) => ({ id: equipmentDoc.id, ...equipmentDoc.data() }))
-                    .filter(equipmentNeedsMaintenance)
-                    .length;
-            }
-
-            const candidates = new Map();
-            [...statusSnap.docs, ...dueSnap.docs].forEach((equipmentDoc) => {
-                candidates.set(equipmentDoc.id, { id: equipmentDoc.id, ...equipmentDoc.data() });
-            });
-
-            return Array.from(candidates.values()).filter(equipmentNeedsMaintenance).length;
+            return equipmentSnap.docs
+                .map((equipmentDoc) => ({ id: equipmentDoc.id, ...equipmentDoc.data() }))
+                .filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById))
+                .length;
         };
 
         const getActionableJobCount = async () => {
@@ -325,6 +336,18 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             return actionableJobIds.size;
         };
 
+        const getPurchaseReadyShoppingCount = async (collectionName) => {
+            const snapshot = await getDocs(query(
+                collection(db, "companies", recentlySelectedCompany, collectionName),
+                where("status", "in", purchaseReadyShoppingStatusValues)
+            ));
+
+            return snapshot.docs
+                .map((shoppingDoc) => ({ id: shoppingDoc.id, ...shoppingDoc.data() }))
+                .filter(shoppingItemIsReadyToPurchase)
+                .length;
+        };
+
         const loadServerBackedCounts = async () => {
             const [
                 leads,
@@ -337,8 +360,8 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 equipmentMaintenance,
             ] = await Promise.all([
                 loadCount("lead", () => getServerCount(leadsQuery)),
-                loadCount("shopping", () => getServerCount(shoppingQuery)),
-                loadCount("legacy shopping", () => getServerCount(legacyShoppingQuery)),
+                loadCount("shopping", () => getPurchaseReadyShoppingCount("shoppingList")),
+                loadCount("legacy shopping", () => getPurchaseReadyShoppingCount("shoppingListItems")),
                 loadCount("repair request", () => sumServerCounts([
                     internalRepairRequestsOpenQuery,
                     externalRepairRequestsOpenQuery,

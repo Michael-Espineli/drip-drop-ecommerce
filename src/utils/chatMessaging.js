@@ -55,6 +55,7 @@ export const CONVERSATION_LINK_TYPES = {
   serviceLocation: 'serviceLocation',
   bodyOfWater: 'bodyOfWater',
   equipment: 'equipment',
+  partApproval: 'partApproval',
   purchase: 'purchase',
   shoppingListItem: 'shoppingListItem',
   databaseItem: 'databaseItem',
@@ -68,6 +69,7 @@ export const COMPANY_CONVERSATION_LINK_OPTIONS = [
   { value: CONVERSATION_LINK_TYPES.serviceStop, label: 'Service Stop' },
   { value: CONVERSATION_LINK_TYPES.estimate, label: 'Estimate' },
   { value: CONVERSATION_LINK_TYPES.serviceAgreement, label: 'Service Agreement' },
+  { value: CONVERSATION_LINK_TYPES.partApproval, label: 'Part Approval' },
   { value: CONVERSATION_LINK_TYPES.invoice, label: 'Invoice' },
   { value: CONVERSATION_LINK_TYPES.repairRequest, label: 'Repair Request' },
   { value: CONVERSATION_LINK_TYPES.serviceRequest, label: 'Service Request' },
@@ -89,6 +91,7 @@ export const COMPANY_CONVERSATION_LINK_OPTIONS = [
 export const CLIENT_CONVERSATION_LINK_OPTIONS = [
   { value: CONVERSATION_LINK_TYPES.serviceRequest, label: 'Service Request' },
   { value: CONVERSATION_LINK_TYPES.repairRequest, label: 'Repair Request' },
+  { value: CONVERSATION_LINK_TYPES.partApproval, label: 'Part Approval' },
   { value: CONVERSATION_LINK_TYPES.serviceAgreement, label: 'Service Agreement' },
   { value: CONVERSATION_LINK_TYPES.invoice, label: 'Invoice' },
   { value: CONVERSATION_LINK_TYPES.equipment, label: 'Equipment' },
@@ -110,6 +113,9 @@ const normalizeLinkType = (value) => {
     dbItem: CONVERSATION_LINK_TYPES.databaseItem,
     shoppingItem: CONVERSATION_LINK_TYPES.shoppingListItem,
     shoppingList: CONVERSATION_LINK_TYPES.shoppingListItem,
+    customerPartApproval: CONVERSATION_LINK_TYPES.partApproval,
+    partApprovalRequest: CONVERSATION_LINK_TYPES.partApproval,
+    partApproval: CONVERSATION_LINK_TYPES.partApproval,
     bodyOfWaterDetail: CONVERSATION_LINK_TYPES.bodyOfWater,
     company_user: CONVERSATION_LINK_TYPES.companyUser,
   };
@@ -317,6 +323,7 @@ export const getConversationLinkMobileRoute = (type) => {
     [CONVERSATION_LINK_TYPES.serviceAgreement]: 'serviceAgreementDetail',
     [CONVERSATION_LINK_TYPES.invoice]: 'accountsReceivableDetail',
     [CONVERSATION_LINK_TYPES.job]: 'job',
+    [CONVERSATION_LINK_TYPES.partApproval]: 'partApprovalDetail',
     [CONVERSATION_LINK_TYPES.purchase]: 'purchase',
     [CONVERSATION_LINK_TYPES.receipt]: 'receipt',
     [CONVERSATION_LINK_TYPES.shoppingListItem]: 'shoppingListDetail',
@@ -524,6 +531,8 @@ const recordTitle = (type, record = {}) => {
       return record.invoiceNumber ? `Invoice ${record.invoiceNumber}` : record.title || 'Invoice';
     case CONVERSATION_LINK_TYPES.job:
       return record.title || record.name || record.description || 'Job';
+    case CONVERSATION_LINK_TYPES.partApproval:
+      return record.itemName || record.name || record.dbItemName || record.title || 'Part Approval';
     case CONVERSATION_LINK_TYPES.customer:
       return record.customerName || [record.firstName, record.lastName].filter(Boolean).join(' ') || record.name || 'Customer';
     case CONVERSATION_LINK_TYPES.purchase:
@@ -582,6 +591,13 @@ const recordSubtitle = (type, record = {}) => {
       ].filter(Boolean).join(' - ');
     case CONVERSATION_LINK_TYPES.job:
       return [record.customerName, record.operationStatus || record.status, date].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.partApproval:
+      return [
+        record.customerName,
+        record.companyName,
+        record.status || record.approvalStatus,
+        formatMoney(record.plannedTotalPriceCents || record.totalPriceCents || record.amountCents),
+      ].filter(Boolean).join(' - ');
     case CONVERSATION_LINK_TYPES.customer:
       return [record.email || record.customerEmail, record.phoneNumber || record.phone].filter(Boolean).join(' - ');
     case CONVERSATION_LINK_TYPES.purchase:
@@ -722,6 +738,7 @@ export const getConversationLinkRoute = (link = {}, audience = 'company') => {
     [CONVERSATION_LINK_TYPES.serviceAgreement]: `/company/sales/agreements/${id}`,
     [CONVERSATION_LINK_TYPES.invoice]: `/company/sales/invoices/${id}`,
     [CONVERSATION_LINK_TYPES.job]: `/company/jobs/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.partApproval]: `/company/part-approvals?approvalId=${id}`,
     [CONVERSATION_LINK_TYPES.customer]: `/company/customers/details/${id}`,
     [CONVERSATION_LINK_TYPES.serviceLocation]: `/company/serviceLocations/detail/${id}`,
     [CONVERSATION_LINK_TYPES.bodyOfWater]: `/company/bodiesOfWater/detail/${id}`,
@@ -739,6 +756,7 @@ export const getConversationLinkRoute = (link = {}, audience = 'company') => {
     [CONVERSATION_LINK_TYPES.serviceRequest]: `/client/service-requests/${id}`,
     [CONVERSATION_LINK_TYPES.repairRequest]: `/client/repair-requests/${id}`,
     [CONVERSATION_LINK_TYPES.serviceStop]: `/serviceStop/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.partApproval]: `/client/part-approvals/${id}`,
     [CONVERSATION_LINK_TYPES.serviceAgreement]: `/client/service-agreements/${id}`,
     [CONVERSATION_LINK_TYPES.invoice]: `/client/billing/invoices/${id}`,
     [CONVERSATION_LINK_TYPES.equipment]: `/client/equipment/${id}`,
@@ -862,6 +880,19 @@ const loadClientConversationLinkRecords = async ({ db, type, user, chat = {} }) 
         audience: 'client',
         collectionPath: salesCollectionNames.agreements,
         webPath: `/client/service-agreements/${record.id}`,
+      }));
+  }
+
+  if (type === CONVERSATION_LINK_TYPES.partApproval) {
+    const records = await safeGetDocs(query(collection(db, 'customerPartApprovals'), where('customerUserId', '==', uid)));
+    return records
+      .filter((record) => !chatCompanyId || record.companyId === chatCompanyId)
+      .map((record) => buildPickerItem({
+        type,
+        record,
+        audience: 'client',
+        collectionPath: 'customerPartApprovals',
+        webPath: `/client/part-approvals/${record.id}`,
       }));
   }
 
@@ -1030,6 +1061,18 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
       companyId,
       collectionPath: 'homeownerServiceRequests',
       webPath: `/company/leads/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.partApproval) {
+    const records = await loadCompanyRootRecords({ db, collectionName: 'customerPartApprovals', companyId, context });
+    return records.map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: 'customerPartApprovals',
+      webPath: `/company/part-approvals?approvalId=${record.id}`,
     }));
   }
 
@@ -1639,9 +1682,9 @@ export const sendChatMessage = async ({
   return messageId;
 };
 
-export const createClientCompanyChat = async ({ db, user, dataBaseUser, company, message }) => {
+export const createClientCompanyChat = async ({ db, user, dataBaseUser, company, message, link = null }) => {
   const messageText = cleanString(message);
-  if (!db || !user?.uid || !company?.id || !messageText) return null;
+  if (!db || !user?.uid || !company?.id || (!messageText && !link)) return null;
 
   const chatId = `cha_${uuidv4()}`;
   const messageId = `msg_${uuidv4()}`;
@@ -1682,6 +1725,20 @@ export const createClientCompanyChat = async ({ db, user, dataBaseUser, company,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
+  const normalizedLink = link
+    ? buildConversationLinkSharePayload(link, {
+      chat: chatData,
+      audience: 'client',
+    })
+    : null;
+  const messageKind = normalizedLink ? CHAT_MESSAGE_KIND.linkedRecord : CHAT_MESSAGE_KIND.text;
+  const messagePreview = normalizedLink
+    ? `Shared ${getConversationLinkLabel(normalizedLink.type)}: ${normalizedLink.title}`
+    : messageText;
+
+  chatData.lastMessage = messagePreview;
+  chatData.lastMessageKind = messageKind;
+  chatData.lastConversationLink = normalizedLink;
 
   const batch = writeBatch(db);
   batch.set(chatRef, chatData);
@@ -1689,10 +1746,10 @@ export const createClientCompanyChat = async ({ db, user, dataBaseUser, company,
     id: messageId,
     chatId,
     message: messageText,
-    kind: CHAT_MESSAGE_KIND.text,
-    attachments: [],
-    conversationLink: null,
-    actionTitle: '',
+    kind: messageKind,
+    attachments: normalizedLink ? [normalizedLink] : [],
+    conversationLink: normalizedLink,
+    actionTitle: normalizedLink ? 'Open' : '',
     senderId: user.uid,
     senderName: homeownerName,
     senderCompanyId: '',
@@ -1709,8 +1766,8 @@ export const createClientCompanyChat = async ({ db, user, dataBaseUser, company,
     chatId,
     chat: chatData,
     messageId,
-    preview: messageText,
-    normalizedLink: null,
+    preview: messagePreview,
+    normalizedLink,
     senderId: user.uid,
     senderName: homeownerName,
     userTargets: ownerParticipant.userId ? [ownerParticipant.userId] : [],

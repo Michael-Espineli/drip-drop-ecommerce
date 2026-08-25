@@ -59,7 +59,7 @@ const StatusBadge = ({ status }) => {
   const tone = statusTone[key] || statusTone.pending;
 
   return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
+    <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
       {labelize(status || 'pending')}
     </span>
   );
@@ -70,7 +70,7 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
     <div className="flex items-start justify-between gap-3">
       <div>
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+        <p className="mt-2 break-words text-xl font-bold text-slate-950 sm:text-2xl">{value}</p>
       </div>
       <span className="rounded-md bg-slate-100 p-2 text-slate-600">
         <Icon className="h-5 w-5" />
@@ -78,6 +78,43 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
     </div>
     {helper && <p className="mt-2 text-sm text-slate-500">{helper}</p>}
   </div>
+);
+
+const MobileApprovalCard = ({ approval }) => (
+  <Link to={`/client/part-approvals/${approval.id}`} className="block p-4 transition hover:bg-slate-50">
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="break-words font-semibold text-slate-950">{approval.itemName || approval.name || 'Pool Part'}</p>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-500">{approval.description || approval.jobInternalId || 'Part approval'}</p>
+        </div>
+        <StatusBadge status={approval.status || approval.approvalStatus} />
+      </div>
+
+      <div className="grid gap-2 text-sm sm:grid-cols-2">
+        <div className="rounded-md bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Company</p>
+          <p className="mt-1 break-words font-semibold text-slate-800">{approval.companyName || 'Pool company'}</p>
+        </div>
+        <div className="rounded-md bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Qty</p>
+          <p className="mt-1 font-semibold text-slate-800">{approval.quantity || '1'}</p>
+        </div>
+        <div className="rounded-md bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Amount</p>
+          <p className="mt-1 font-semibold text-slate-800">{formatCurrency(approval.plannedTotalPriceCents || approval.totalPriceCents)}</p>
+        </div>
+        <div className="rounded-md bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Updated</p>
+          <p className="mt-1 font-semibold text-slate-800">{formatDate(approval.updatedAt || approval.requestedAt || approval.createdAt)}</p>
+        </div>
+      </div>
+
+      <span className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white sm:w-auto sm:self-start">
+        Review
+      </span>
+    </div>
+  </Link>
 );
 
 const PartApprovals = () => {
@@ -149,7 +186,7 @@ const PartApprovals = () => {
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900 sm:p-6 lg:p-8">
       <div className="w-full space-y-6">
         <section>
-          <h1 className="text-3xl font-bold text-slate-950">Part Approvals</h1>
+          <h1 className="text-2xl font-bold text-slate-950 sm:text-3xl">Part Approvals</h1>
           <p className="mt-2 text-sm text-slate-600">
             Review requested pool parts before the company purchases or installs them.
           </p>
@@ -182,7 +219,13 @@ const PartApprovals = () => {
           ) : filteredApprovals.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-500">No part approvals found.</div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            <div className="divide-y divide-slate-100 md:hidden">
+              {filteredApprovals.map((approval) => (
+                <MobileApprovalCard key={approval.id} approval={approval} />
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
@@ -216,10 +259,11 @@ const PartApprovals = () => {
                         </Link>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                ))}
+              </tbody>
+            </table>
             </div>
+            </>
           )}
         </section>
       </div>

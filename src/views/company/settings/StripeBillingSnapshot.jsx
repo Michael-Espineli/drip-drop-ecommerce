@@ -10,10 +10,16 @@ import {
     XCircleIcon,
 } from '@heroicons/react/24/outline';
 import { httpsCallable } from 'firebase/functions';
-import { collection, doc, getDoc, getDocs, limit, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { Context } from '../../../context/AuthContext';
 import { auth, db, functions } from '../../../utils/config';
+import {
+    SALES_BILLING_AUTOMATION_FIELD,
+    SHOPPING_ITEM_INSTALL_INVOICE_AUTOMATION_FIELD,
+    isSalesBillingAutomationEnabled,
+    isShoppingItemInstallInvoiceAutomationEnabled,
+} from '../../../utils/sales/billingSettings';
 
 const normalizeStripeAccountId = (value) => {
     const id = typeof value === 'string' ? value.trim() : '';
@@ -116,11 +122,17 @@ const StripeChecklistItem = ({ complete, label, detail }) => {
 
 const StripeBillingSnapshotPanel = ({
     accountId,
+    automationSaving,
+    billingAutomationEnabled,
     error,
+    installInvoiceAutomationEnabled,
+    installInvoiceAutomationSaving,
     loading,
     onManageStripe,
     onRefreshPayouts,
     onRefresh,
+    onToggleBillingAutomation,
+    onToggleInstallInvoiceAutomation,
     payoutError,
     payouts = [],
     payoutsLoading,
@@ -209,6 +221,62 @@ const StripeBillingSnapshotPanel = ({
 
     return (
         <section>
+            <div className="mb-5 rounded-md border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="text-lg font-semibold text-slate-900">Billing Automation</h2>
+                            <StripeStatusBadge ready={billingAutomationEnabled}>
+                                {billingAutomationEnabled ? "On" : "Off"}
+                            </StripeStatusBadge>
+                        </div>
+                        <p className="mt-1 max-w-3xl text-sm text-slate-500">
+                            When on, accepted service agreements automatically create Sales billing subscriptions. When off, agreements can still be created, sent, accepted, and stored without starting billing records.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => onToggleBillingAutomation(!billingAutomationEnabled)}
+                        disabled={automationSaving}
+                        className={billingAutomationEnabled ? secondaryButtonClass : primaryButtonClass}
+                    >
+                        {automationSaving
+                            ? "Saving..."
+                            : billingAutomationEnabled
+                                ? "Turn Off"
+                                : "Turn On Billing"}
+                    </button>
+                </div>
+            </div>
+
+            <div className="mb-5 rounded-md border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="text-lg font-semibold text-slate-900">Shopping Item Invoices</h2>
+                            <StripeStatusBadge ready={installInvoiceAutomationEnabled}>
+                                {installInvoiceAutomationEnabled ? "On" : "Off"}
+                            </StripeStatusBadge>
+                        </div>
+                        <p className="mt-1 max-w-3xl text-sm text-slate-500">
+                            When on, new shopping list items default to creating and sending a sales invoice after they are marked installed. Each item can still override this before it is finished.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => onToggleInstallInvoiceAutomation(!installInvoiceAutomationEnabled)}
+                        disabled={installInvoiceAutomationSaving}
+                        className={installInvoiceAutomationEnabled ? secondaryButtonClass : primaryButtonClass}
+                    >
+                        {installInvoiceAutomationSaving
+                            ? "Saving..."
+                            : installInvoiceAutomationEnabled
+                                ? "Turn Off"
+                                : "Turn On"}
+                    </button>
+                </div>
+            </div>
+
             <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h2 className="text-lg font-semibold text-slate-900">Stripe Billing Snapshot</h2>
@@ -436,6 +504,10 @@ const StripeBillingSnapshotPage = () => {
         recentlySelectedCompany,
         stripeConnectedAccountId,
         setStripeConnectedAccountId,
+        salesBillingAutomationEnabled,
+        setSalesBillingAutomationEnabled,
+        shoppingItemInstallInvoiceAutomationEnabled,
+        setShoppingItemInstallInvoiceAutomationEnabled,
     } = useContext(Context);
     const [selectedCompany, setSelectedCompany] = useState(null);
     const [companyLoading, setCompanyLoading] = useState(false);
@@ -446,6 +518,8 @@ const StripeBillingSnapshotPage = () => {
     const [stripePayouts, setStripePayouts] = useState([]);
     const [stripePayoutsLoading, setStripePayoutsLoading] = useState(false);
     const [stripePayoutsError, setStripePayoutsError] = useState("");
+    const [billingAutomationSaving, setBillingAutomationSaving] = useState(false);
+    const [installInvoiceAutomationSaving, setInstallInvoiceAutomationSaving] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -491,6 +565,12 @@ const StripeBillingSnapshotPage = () => {
         selectedCompany.ownerId === user.uid
     );
     const currentConnectedAccountId = getCompanyConnectedAccountId(selectedCompany) || stripeConnectedAccountId;
+    const billingAutomationEnabled = selectedCompany
+        ? isSalesBillingAutomationEnabled(selectedCompany)
+        : salesBillingAutomationEnabled;
+    const installInvoiceAutomationEnabled = selectedCompany
+        ? isShoppingItemInstallInvoiceAutomationEnabled(selectedCompany)
+        : shoppingItemInstallInvoiceAutomationEnabled;
 
     const loadStripePayouts = useCallback(async ({ showToast = false } = {}) => {
         if (!ownerCanManageStripe || !recentlySelectedCompany || !currentConnectedAccountId) {
@@ -674,6 +754,102 @@ const StripeBillingSnapshotPage = () => {
         }
     };
 
+    const handleToggleBillingAutomation = async (nextEnabled) => {
+        if (!recentlySelectedCompany) {
+            toast.error("Select a company before changing billing automation.");
+            return;
+        }
+
+        if (!ownerCanManageStripe) {
+            toast.error("Only the company owner can change billing automation.");
+            return;
+        }
+
+        setBillingAutomationSaving(true);
+
+        try {
+            const updatePayload = {
+                [SALES_BILLING_AUTOMATION_FIELD]: nextEnabled === true,
+                salesBillingAutomationUpdatedAt: serverTimestamp(),
+                salesBillingAutomationUpdatedByUserId: user?.uid || "",
+                salesBillingAutomationUpdatedByUserName:
+                    [dataBaseUser?.firstName, dataBaseUser?.lastName].filter(Boolean).join(" ").trim() ||
+                    dataBaseUser?.userName ||
+                    dataBaseUser?.name ||
+                    user?.displayName ||
+                    user?.email ||
+                    "",
+            };
+
+            await updateDoc(doc(db, "companies", recentlySelectedCompany), updatePayload);
+            setSalesBillingAutomationEnabled(nextEnabled === true);
+            setSelectedCompany((company) => company
+                ? {
+                    ...company,
+                    [SALES_BILLING_AUTOMATION_FIELD]: nextEnabled === true,
+                    salesBillingAutomationUpdatedAt: new Date(),
+                    salesBillingAutomationUpdatedByUserId: updatePayload.salesBillingAutomationUpdatedByUserId,
+                    salesBillingAutomationUpdatedByUserName: updatePayload.salesBillingAutomationUpdatedByUserName,
+                }
+                : company
+            );
+            toast.success(nextEnabled ? "Billing automation turned on." : "Billing automation turned off.");
+        } catch (error) {
+            console.error("Unable to update billing automation setting:", error);
+            toast.error(error.message || "Could not update billing automation.");
+        } finally {
+            setBillingAutomationSaving(false);
+        }
+    };
+
+    const handleToggleInstallInvoiceAutomation = async (nextEnabled) => {
+        if (!recentlySelectedCompany) {
+            toast.error("Select a company before changing shopping invoice automation.");
+            return;
+        }
+
+        if (!ownerCanManageStripe) {
+            toast.error("Only the company owner can change billing automation.");
+            return;
+        }
+
+        setInstallInvoiceAutomationSaving(true);
+
+        try {
+            const updatePayload = {
+                [SHOPPING_ITEM_INSTALL_INVOICE_AUTOMATION_FIELD]: nextEnabled === true,
+                shoppingItemInstallInvoiceAutomationUpdatedAt: serverTimestamp(),
+                shoppingItemInstallInvoiceAutomationUpdatedByUserId: user?.uid || "",
+                shoppingItemInstallInvoiceAutomationUpdatedByUserName:
+                    [dataBaseUser?.firstName, dataBaseUser?.lastName].filter(Boolean).join(" ").trim() ||
+                    dataBaseUser?.userName ||
+                    dataBaseUser?.name ||
+                    user?.displayName ||
+                    user?.email ||
+                    "",
+            };
+
+            await updateDoc(doc(db, "companies", recentlySelectedCompany), updatePayload);
+            setShoppingItemInstallInvoiceAutomationEnabled(nextEnabled === true);
+            setSelectedCompany((company) => company
+                ? {
+                    ...company,
+                    [SHOPPING_ITEM_INSTALL_INVOICE_AUTOMATION_FIELD]: nextEnabled === true,
+                    shoppingItemInstallInvoiceAutomationUpdatedAt: new Date(),
+                    shoppingItemInstallInvoiceAutomationUpdatedByUserId: updatePayload.shoppingItemInstallInvoiceAutomationUpdatedByUserId,
+                    shoppingItemInstallInvoiceAutomationUpdatedByUserName: updatePayload.shoppingItemInstallInvoiceAutomationUpdatedByUserName,
+                }
+                : company
+            );
+            toast.success(nextEnabled ? "Shopping item invoice automation turned on." : "Shopping item invoice automation turned off.");
+        } catch (error) {
+            console.error("Unable to update shopping item invoice automation setting:", error);
+            toast.error(error.message || "Could not update shopping item invoice automation.");
+        } finally {
+            setInstallInvoiceAutomationSaving(false);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
             <div className="w-full">
@@ -694,11 +870,17 @@ const StripeBillingSnapshotPage = () => {
                 ) : ownerCanManageStripe ? (
                     <StripeBillingSnapshotPanel
                         accountId={currentConnectedAccountId}
+                        automationSaving={billingAutomationSaving}
+                        billingAutomationEnabled={billingAutomationEnabled}
                         error={stripeReadinessError}
+                        installInvoiceAutomationEnabled={installInvoiceAutomationEnabled}
+                        installInvoiceAutomationSaving={installInvoiceAutomationSaving}
                         loading={stripeReadinessLoading}
                         onManageStripe={handleStripeAccountLink}
                         onRefresh={() => verifyStripeReadiness({ showToast: true })}
                         onRefreshPayouts={() => loadStripePayouts({ showToast: true })}
+                        onToggleBillingAutomation={handleToggleBillingAutomation}
+                        onToggleInstallInvoiceAutomation={handleToggleInstallInvoiceAutomation}
                         payoutError={stripePayoutsError}
                         payouts={stripePayouts}
                         payoutsLoading={stripePayoutsLoading}

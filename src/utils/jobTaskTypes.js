@@ -1,10 +1,9 @@
 export const JOB_TASK_TYPE_NAMES = [
   "Basic",
   "Clean",
-  "Clean Filter",
   "Maintenance",
   "Repair",
-  "Empty Water",
+  "Drain Water",
   "Fill Water",
   "Inspection",
   "Install",
@@ -14,6 +13,25 @@ export const JOB_TASK_TYPE_NAMES = [
 
 const taskTypeKey = (value = "") => (
   String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "")
+);
+
+const retiredFilterMaintenanceTaskTypeKeys = new Set(["cleanfilter", "filterclean"]);
+const legacyDrainTaskTypeKeys = new Set(["emptywater", "empty", "drain"]);
+
+export const isRetiredFilterMaintenanceTaskType = (value = "") => (
+  retiredFilterMaintenanceTaskTypeKeys.has(taskTypeKey(value))
+);
+
+export const isLegacyDrainWaterTaskType = (value = "") => (
+  legacyDrainTaskTypeKeys.has(taskTypeKey(value))
+);
+
+export const canonicalJobTaskType = (value = "") => (
+  isRetiredFilterMaintenanceTaskType(value)
+    ? "Maintenance"
+    : isLegacyDrainWaterTaskType(value)
+      ? "Drain Water"
+      : value
 );
 
 export const taskTypeOption = (name, source = {}) => ({
@@ -30,7 +48,12 @@ export const mergeJobTaskTypeOptions = (options = []) => {
   options.forEach((option) => {
     const name = option?.name || option?.value || option?.label;
     const key = taskTypeKey(name);
-    if (!key || optionsByKey.has(key)) return;
+    if (
+      !key ||
+      retiredFilterMaintenanceTaskTypeKeys.has(key) ||
+      legacyDrainTaskTypeKeys.has(key) ||
+      optionsByKey.has(key)
+    ) return;
 
     optionsByKey.set(key, taskTypeOption(name, option));
   });
@@ -69,9 +92,33 @@ export const EQUIPMENT_JOB_TASK_TYPES = new Set([
 
 export const BODY_OF_WATER_JOB_TASK_TYPES = new Set([
   "Empty Water",
+  "Drain Water",
   "Fill Water",
   "Install",
+  "Remove",
   "Replace",
 ]);
 
 export const INSTALL_ITEM_JOB_TASK_TYPES = new Set(["Install", "Replace"]);
+
+export const taskTypeRequiresEquipment = (type = "") => (
+  EQUIPMENT_JOB_TASK_TYPES.has(canonicalJobTaskType(type)) ||
+  isRetiredFilterMaintenanceTaskType(type)
+);
+
+export const taskTypeRequiresBodyOfWater = (type = "") => (
+  BODY_OF_WATER_JOB_TASK_TYPES.has(canonicalJobTaskType(type)) ||
+  isLegacyDrainWaterTaskType(type)
+);
+
+export const taskTypeRequiresInstallItem = (type = "") => (
+  INSTALL_ITEM_JOB_TASK_TYPES.has(canonicalJobTaskType(type))
+);
+
+export const isInstallOrReplaceTaskType = (type = "") => (
+  taskTypeRequiresInstallItem(type)
+);
+
+export const isRemoveOrReplaceTaskType = (type = "") => (
+  ["Remove", "Replace"].includes(canonicalJobTaskType(type))
+);

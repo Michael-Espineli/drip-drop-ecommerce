@@ -6,6 +6,28 @@ import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
 import { appConfirm } from "../../../utils/appDialog";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+  SalesCatalogBillingBehavior,
+  SalesCatalogItem,
+  SalesCatalogItemType,
+  SalesCatalogSourceType,
+} from "../../../utils/models/Sales";
+import { salesCatalogCollection, saveSalesCatalogItem } from "../../../utils/sales/salesFirestore";
+import {
+  CATEGORY_OPTIONS,
+  DEFAULT_CATEGORY,
+  DEFAULT_SUBCATEGORY,
+  DEFAULT_UOM,
+  SUBCATEGORY_OPTIONS,
+  UOM_OPTIONS,
+} from "../databaseItems/databaseItemOptions";
+import { JOB_TASK_TYPE_NAMES, canonicalJobTaskType } from "../../../utils/jobTaskTypes";
+import {
+  DEFAULT_ISSUE_PRIORITY,
+  ISSUE_PRIORITY_OPTIONS,
+  getIssuePriorityLabel,
+  normalizeIssuePriority,
+} from "../../../utils/models/JobPlan";
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -20,7 +42,7 @@ const dollarsFromCents = (value) => ((Number(value || 0) / 100) || 0).toFixed(2)
 const emptyTemplateForm = () => ({
   name: "",
   description: "",
-  jobType: "",
+  defaultIssuePriorityLevel: DEFAULT_ISSUE_PRIORITY,
   defaultRate: "0.00",
   defaultLaborCost: "0.00",
   isActive: true,
@@ -30,7 +52,7 @@ const emptyTemplateForm = () => ({
 
 const emptyTaskForm = () => ({
   name: "",
-  type: "General",
+  type: "Basic",
   description: "",
   contractedRate: "0.00",
   estimatedTime: "0",
@@ -47,7 +69,7 @@ const emptyStopForm = () => ({
   serviceStopTypeUseCaseRawValue: "",
   estimatedMinutes: "0",
   sortOrder: "0",
-  taskTemplateIds: "",
+  taskTemplateIds: [],
   plannedLaborCost: "0.00",
   plannedLaborNotes: "",
 });
@@ -58,6 +80,7 @@ const emptyShoppingForm = () => ({
   description: "",
   quantity: "1",
   dbItemId: "",
+  dbItemName: "",
   genericItemId: "",
   plannedUnitCost: "0.00",
   plannedUnitPrice: "0.00",
@@ -66,15 +89,40 @@ const emptyShoppingForm = () => ({
 });
 
 const emptyLaborLineForm = () => ({
+  selectedSalesCatalogItemId: "",
   name: "",
   description: "",
   quantity: "1",
   unitPrice: "0.00",
   totalPrice: "0.00",
   internalCost: "0.00",
-  taskTemplateIds: "",
-  plannedServiceStopTemplateIds: "",
+  taskTemplateIds: [],
   sortOrder: "0",
+});
+
+const emptyServiceCatalogForm = () => ({
+  name: "",
+  description: "",
+  type: SalesCatalogItemType.service,
+  billingBehavior: SalesCatalogBillingBehavior.oneTime,
+  unitAmount: "0.00",
+  unitCost: "0.00",
+  defaultQuantity: "1",
+  taxable: false,
+});
+
+const emptyDatabaseProductForm = () => ({
+  name: "",
+  description: "",
+  sku: "",
+  category: DEFAULT_CATEGORY?.label || "Misc",
+  subCategory: DEFAULT_SUBCATEGORY?.label || "Misc",
+  uom: DEFAULT_UOM?.label || "Unit",
+  unitCost: "0.00",
+  unitPrice: "0.00",
+  billable: false,
+  size: "",
+  tracking: "",
 });
 
 const sortByOrder = (items) =>
@@ -93,6 +141,132 @@ const normalizeIdList = (value) => {
   }
 
   return splitIdList(value);
+};
+
+const uniqueIdList = (value) => Array.from(new Set(normalizeIdList(value)));
+
+const optionLabel = (option) => option?.label || option?.name || option?.value || "";
+
+const labelize = (value) => {
+  if (!value) return "Unknown";
+  return String(value)
+    .replace(/([A-Z])/g, " $1")
+    .replace(/[_-]/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const templateDefaultPriorityLevel = (template = {}) => normalizeIssuePriority(
+  template.defaultIssuePriorityLevel ??
+  template.issuePriorityLevel ??
+  template.priorityLevel ??
+  template.solutionTier ??
+  DEFAULT_ISSUE_PRIORITY
+);
+
+const templateDefaultPriorityDisplay = (template = {}) => {
+  const priorityLevel = templateDefaultPriorityLevel(template);
+  return `${priorityLevel} - ${getIssuePriorityLabel(priorityLevel)}`;
+};
+
+const catalogTypeLabel = (value) => ({
+  [SalesCatalogItemType.service]: "Service",
+  [SalesCatalogItemType.recurringService]: "Recurring Service",
+  [SalesCatalogItemType.labor]: "Service Labor",
+  [SalesCatalogItemType.manual]: "Custom Service",
+  [SalesCatalogItemType.fee]: "Fee",
+  [SalesCatalogItemType.discount]: "Discount",
+  [SalesCatalogItemType.tax]: "Tax",
+}[value] || labelize(value));
+
+const TEMPLATE_SERVICE_CATALOG_TYPES = new Set([
+  SalesCatalogItemType.service,
+  SalesCatalogItemType.recurringService,
+  SalesCatalogItemType.labor,
+  SalesCatalogItemType.manual,
+]);
+
+const isTemplateServiceCatalogItem = (item = {}) => (
+  item.active !== false && TEMPLATE_SERVICE_CATALOG_TYPES.has(item.type || SalesCatalogItemType.service)
+);
+
+const catalogServiceTaskTemplates = (item = {}) => {
+  const templates =
+    item.metadata?.taskTemplates ||
+    item.metadata?.tasks ||
+    item.taskTemplates ||
+    [];
+
+  return Array.isArray(templates) ? templates.filter(Boolean) : [];
+};
+
+const catalogNumber = (...values) => {
+  const found = values.find((value) => value !== undefined && value !== null && value !== "");
+  const parsed = Number(found || 0);
+  return Number.isFinite(parsed) ? Math.max(parsed, 0) : 0;
+};
+
+const catalogCents = (...values) => Math.round(catalogNumber(...values));
+
+const catalogTaskMinutes = (template = {}) => catalogNumber(
+  template.estimatedMinutes,
+  template.estimatedTime,
+  template.minutes,
+  template.durationMinutes,
+  template.duration
+);
+
+const catalogTaskType = (template = {}) => (
+  canonicalJobTaskType(
+    template.type ||
+    template.taskType ||
+    template.taskTypeName ||
+    "Basic"
+  )
+);
+
+const serviceCatalogItemLabel = (item = {}) => (
+  item.name ||
+  item.title ||
+  item.description ||
+  item.id ||
+  "Service"
+);
+
+const databaseProductLabel = (item = {}) => (
+  item.name ||
+  item.label ||
+  item.title ||
+  item.sku ||
+  item.id ||
+  "Database product"
+);
+
+const databaseProductCostCents = (item = {}) => cents(
+  item.rate ??
+  item.unitCostCents ??
+  item.cost ??
+  item.unitCost ??
+  0
+);
+
+const databaseProductPriceCents = (item = {}) => cents(
+  item.sellPrice ??
+  item.billingRate ??
+  item.unitAmountCents ??
+  item.price ??
+  item.rate ??
+  0
+);
+
+const searchMatches = (item = {}, term = "", fields = []) => {
+  const normalizedTerm = term.trim().toLowerCase();
+  if (!normalizedTerm) return true;
+
+  return fields
+    .map((field) => item[field])
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(normalizedTerm));
 };
 
 const detailTabLabel = (type) => ({
@@ -120,16 +294,6 @@ const getLaborLineTaskIds = (line = {}) => (
       : line.taskIds?.length
         ? line.taskIds
         : line.laborLineTaskIds || []
-  )
-);
-
-const getLaborLinePlannedStopIds = (line = {}) => (
-  normalizeIdList(
-    line.plannedServiceStopTemplateIds?.length
-      ? line.plannedServiceStopTemplateIds
-      : line.plannedServiceStopIds?.length
-        ? line.plannedServiceStopIds
-        : line.laborLinePlannedServiceStopIds || []
   )
 );
 
@@ -209,6 +373,20 @@ const JobTemplates = () => {
   const [companyUsers, setCompanyUsers] = useState([]);
   const [defaultAdminId, setDefaultAdminId] = useState("");
   const [savingDefaultAdmin, setSavingDefaultAdmin] = useState(false);
+  const [serviceCatalogItems, setServiceCatalogItems] = useState([]);
+  const [loadingServiceCatalogItems, setLoadingServiceCatalogItems] = useState(false);
+  const [serviceCatalogSearch, setServiceCatalogSearch] = useState("");
+  const [serviceCatalogPickerOpen, setServiceCatalogPickerOpen] = useState(false);
+  const [showServiceCatalogCreator, setShowServiceCatalogCreator] = useState(false);
+  const [serviceCatalogForm, setServiceCatalogForm] = useState(emptyServiceCatalogForm);
+  const [creatingServiceCatalogItem, setCreatingServiceCatalogItem] = useState(false);
+  const [databaseProducts, setDatabaseProducts] = useState([]);
+  const [loadingDatabaseProducts, setLoadingDatabaseProducts] = useState(false);
+  const [databaseProductSearch, setDatabaseProductSearch] = useState("");
+  const [databaseProductPickerOpen, setDatabaseProductPickerOpen] = useState(false);
+  const [showDatabaseProductCreator, setShowDatabaseProductCreator] = useState(false);
+  const [databaseProductForm, setDatabaseProductForm] = useState(emptyDatabaseProductForm);
+  const [creatingDatabaseProduct, setCreatingDatabaseProduct] = useState(false);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -286,6 +464,59 @@ const JobTemplates = () => {
     };
 
     loadTemplates();
+	  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setServiceCatalogItems([]);
+      setDatabaseProducts([]);
+      setLoadingServiceCatalogItems(false);
+      setLoadingDatabaseProducts(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadTemplatePickers = async () => {
+      setLoadingServiceCatalogItems(true);
+      setLoadingDatabaseProducts(true);
+
+      try {
+        const [catalogSnap, productsSnap] = await Promise.all([
+          getDocs(salesCatalogCollection(db, recentlySelectedCompany)),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase")),
+        ]);
+
+        if (cancelled) return;
+
+        setServiceCatalogItems(
+          catalogSnap.docs
+            .map((docSnap) => ({ id: docSnap.data().id || docSnap.id, ...docSnap.data() }))
+            .filter(isTemplateServiceCatalogItem)
+            .sort((left, right) => serviceCatalogItemLabel(left).localeCompare(serviceCatalogItemLabel(right)))
+        );
+        setDatabaseProducts(
+          productsSnap.docs
+            .map((docSnap) => ({ id: docSnap.data().id || docSnap.id, ...docSnap.data() }))
+            .filter((item) => item.active !== false && item.archived !== true)
+            .sort((left, right) => databaseProductLabel(left).localeCompare(databaseProductLabel(right)))
+        );
+      } catch (err) {
+        console.error("Error loading template picker catalogs:", err);
+        if (!cancelled) setActionError("Could not load service and product pickers.");
+      } finally {
+        if (!cancelled) {
+          setLoadingServiceCatalogItems(false);
+          setLoadingDatabaseProducts(false);
+        }
+      }
+    };
+
+    loadTemplatePickers();
+
+    return () => {
+      cancelled = true;
+    };
   }, [recentlySelectedCompany]);
 
   const filteredTemplates = useMemo(() => {
@@ -297,6 +528,10 @@ const JobTemplates = () => {
         template.id,
         template.name,
         template.description,
+        templateDefaultPriorityDisplay(template),
+        template.defaultIssuePriorityLabel,
+        template.issuePriorityLabel,
+        template.priorityLabel,
         template.jobType,
         template.templateReference,
         template.internalId,
@@ -317,9 +552,32 @@ const JobTemplates = () => {
     [details.tasks]
   );
 
-  const plannedStopById = useMemo(
-    () => new Map(details.plannedServiceStops.map((stop) => [stop.id, stop])),
-    [details.plannedServiceStops]
+  const serviceCatalogItemById = useMemo(
+    () => new Map(serviceCatalogItems.map((item) => [item.id, item])),
+    [serviceCatalogItems]
+  );
+
+  const databaseProductById = useMemo(
+    () => new Map(databaseProducts.map((item) => [item.id, item])),
+    [databaseProducts]
+  );
+
+  const filteredServiceCatalogItems = useMemo(
+    () => serviceCatalogItems.filter((item) => searchMatches(
+      item,
+      serviceCatalogSearch,
+      ["id", "name", "description", "type", "sourceType", "sourceId"]
+    )),
+    [serviceCatalogItems, serviceCatalogSearch]
+  );
+
+  const filteredDatabaseProducts = useMemo(
+    () => databaseProducts.filter((item) => searchMatches(
+      item,
+      databaseProductSearch,
+      ["id", "name", "description", "sku", "category", "subCategory", "UOM"]
+    )),
+    [databaseProductSearch, databaseProducts]
   );
 
   const servicePriceCents = useMemo(() => {
@@ -357,9 +615,9 @@ const JobTemplates = () => {
 
   const templateDetailSections = useMemo(() => ([
     { id: "overview", label: "Overview", helper: "Template summary and reusable plan", count: "Summary" },
-    { id: "laborLineItems", label: "Service Lines", helper: "Billable services with linked work underneath", count: details.laborLineItems.length },
+    { id: "laborLineItems", label: "Service Lines", helper: "Billing services with linked template tasks", count: details.laborLineItems.length },
     { id: "shoppingItems", label: "Products", helper: "Products needed for purchasing and billing", count: details.shoppingItems.length },
-    { id: "plannedServiceStops", label: "Planned Stops", helper: "Expected visits this template will create", count: details.plannedServiceStops.length },
+    { id: "plannedServiceStops", label: "Planned Stops", helper: "Operations visits with assigned template tasks", count: details.plannedServiceStops.length },
     { id: "tasks", label: "Tasks", helper: "Technician work steps included in the template", count: details.tasks.length },
     { id: "actual", label: "Actual", helper: "Service stops, payroll, and purchased products live on created jobs", count: "Job only", disabled: true },
     { id: "billing", label: "Billing", helper: "Invoices, payments, and Stripe status start after job creation", count: "Job only", disabled: true },
@@ -399,7 +657,7 @@ const JobTemplates = () => {
     setTemplateForm({
       name: template.name || "",
       description: template.description || "",
-      jobType: template.jobType || template.type || "",
+      defaultIssuePriorityLevel: templateDefaultPriorityLevel(template),
       defaultRate: dollarsFromCents(template.defaultRateCents || template.rate || 0),
       defaultLaborCost: dollarsFromCents(template.defaultLaborCostCents || 0),
       isActive: template.isActive !== false,
@@ -463,7 +721,7 @@ const JobTemplates = () => {
     if (type === "tasks") {
       setItemForm(item ? {
         name: item.name || "",
-        type: item.type || "General",
+        type: canonicalJobTaskType(item.type || "Basic"),
         description: item.description || "",
         contractedRate: dollarsFromCents(item.contractedRate || 0),
         estimatedTime: String(item.estimatedTime || 0),
@@ -478,70 +736,281 @@ const JobTemplates = () => {
         serviceStopTypeName: item.serviceStopTypeName || "",
         serviceStopTypeImage: item.serviceStopTypeImage || "",
         serviceStopTypeUseCaseRawValue: item.serviceStopTypeUseCaseRawValue || "",
-        estimatedMinutes: String(item.estimatedMinutes || 0),
-        sortOrder: String(item.sortOrder || 0),
-        taskTemplateIds: (item.taskTemplateIds || []).join(", "),
-        plannedLaborCost: dollarsFromCents(item.plannedLaborCostCents || 0),
-        plannedLaborNotes: item.plannedLaborNotes || "",
-      } : emptyStopForm());
-    } else if (type === "laborLineItems") {
-      const taskIds = item?.taskTemplateIds?.length ? item.taskTemplateIds : item?.taskIds || item?.laborLineTaskIds || [];
-      const plannedStopIds = item?.plannedServiceStopTemplateIds?.length
-        ? item.plannedServiceStopTemplateIds
-        : item?.plannedServiceStopIds || item?.laborLinePlannedServiceStopIds || [];
-      setItemForm(item ? {
-        name: item.name || "",
-        description: item.description || "",
-        quantity: String(item.quantity || 1),
-        unitPrice: dollarsFromCents(item.unitPriceCents || 0),
-        totalPrice: dollarsFromCents(item.totalPriceCents || item.totalAmountCents || 0),
-        internalCost: dollarsFromCents(item.internalCostCents || item.internalLaborCostCents || 0),
-        taskTemplateIds: taskIds.join(", "),
-        plannedServiceStopTemplateIds: plannedStopIds.join(", "),
-        sortOrder: String(item.sortOrder || 0),
-      } : emptyLaborLineForm());
-    } else {
-      setItemForm(item ? {
-        name: item.name || "",
-        subCategory: item.subCategory || "Misc",
-        description: item.description || "",
-        quantity: item.quantity || "1",
-        dbItemId: item.dbItemId || "",
-        genericItemId: item.genericItemId || "",
-        plannedUnitCost: dollarsFromCents(item.plannedUnitCostCents || 0),
-        plannedUnitPrice: dollarsFromCents(item.plannedUnitPriceCents || 0),
-        billable: Boolean(item.billable),
-        sortOrder: String(item.sortOrder || 0),
-      } : emptyShoppingForm());
-    }
+	        estimatedMinutes: String(item.estimatedMinutes || 0),
+	        sortOrder: String(item.sortOrder || 0),
+	        taskTemplateIds: uniqueIdList(item.taskTemplateIds || item.taskIds || []),
+	        plannedLaborCost: dollarsFromCents(item.plannedLaborCostCents || 0),
+	        plannedLaborNotes: item.plannedLaborNotes || "",
+	      } : emptyStopForm());
+	    } else if (type === "laborLineItems") {
+	      const taskIds = item?.taskTemplateIds?.length ? item.taskTemplateIds : item?.taskIds || item?.laborLineTaskIds || [];
+	      setItemForm(item ? {
+	        selectedSalesCatalogItemId: item.catalogItemId || item.salesCatalogItemId || "",
+	        name: item.name || "",
+	        description: item.description || "",
+	        quantity: String(item.quantity || 1),
+	        unitPrice: dollarsFromCents(item.unitPriceCents || 0),
+	        totalPrice: dollarsFromCents(item.totalPriceCents || item.totalAmountCents || 0),
+	        internalCost: dollarsFromCents(item.internalCostCents || item.internalLaborCostCents || 0),
+	        taskTemplateIds: uniqueIdList(taskIds),
+	        sortOrder: String(item.sortOrder || 0),
+	      } : emptyLaborLineForm());
+	    } else {
+	      setItemForm(item ? {
+	        name: item.name || "",
+	        subCategory: item.subCategory || "Misc",
+	        description: item.description || "",
+	        quantity: item.quantity || "1",
+	        dbItemId: item.dbItemId || item.dataBaseItemId || item.itemId || "",
+	        dbItemName: item.dbItemName || item.dataBaseItemName || "",
+	        genericItemId: item.genericItemId || "",
+	        plannedUnitCost: dollarsFromCents(item.plannedUnitCostCents || 0),
+	        plannedUnitPrice: dollarsFromCents(item.plannedUnitPriceCents || 0),
+	        billable: Boolean(item.billable),
+	        sortOrder: String(item.sortOrder || 0),
+	      } : emptyShoppingForm());
+	    }
 
-    setItemModal({ type, mode: item ? "edit" : "create", item });
-  };
+	    setServiceCatalogSearch("");
+	    setServiceCatalogPickerOpen(false);
+	    setDatabaseProductSearch("");
+	    setDatabaseProductPickerOpen(false);
+	    setShowServiceCatalogCreator(false);
+	    setShowDatabaseProductCreator(false);
+	    setServiceCatalogForm(emptyServiceCatalogForm());
+	    setDatabaseProductForm(emptyDatabaseProductForm());
+	    setItemModal({ type, mode: item ? "edit" : "create", item });
+	  };
 
   const closeItemModal = () => {
     if (savingItem) return;
     setItemModal(null);
     setItemForm({});
+    setServiceCatalogPickerOpen(false);
+    setDatabaseProductPickerOpen(false);
+    setShowServiceCatalogCreator(false);
+    setShowDatabaseProductCreator(false);
   };
 
-  const updateTemplateCount = (templateId, type, count) => {
-    const countField = {
-      tasks: "taskCount",
-      plannedServiceStops: "plannedStopCount",
-      laborLineItems: "laborLineCount",
-      shoppingItems: "shoppingItemCount",
-    }[type];
-    setTemplates((items) => items.map((item) => item.id === templateId ? { ...item, [countField]: count } : item));
+	  const updateTemplateCount = (templateId, type, count) => {
+	    const countField = {
+	      tasks: "taskCount",
+	      plannedServiceStops: "plannedStopCount",
+	      laborLineItems: "laborLineCount",
+	      shoppingItems: "shoppingItemCount",
+	    }[type];
+	    setTemplates((items) => items.map((item) => item.id === templateId ? { ...item, [countField]: count } : item));
+	  };
+
+  const toggleItemFormId = (field, id) => {
+    setItemForm((form) => {
+      const values = new Set(uniqueIdList(form[field]));
+      if (values.has(id)) {
+        values.delete(id);
+      } else {
+        values.add(id);
+      }
+
+      return { ...form, [field]: Array.from(values) };
+    });
   };
 
-  const buildItemPayload = (type, id) => {
-    if (type === "tasks") {
+  const updateServiceCatalogForm = (field, value) => {
+    setServiceCatalogForm((form) => ({ ...form, [field]: value }));
+  };
+
+  const updateDatabaseProductForm = (field, value) => {
+    setDatabaseProductForm((form) => ({ ...form, [field]: value }));
+  };
+
+  const applyServiceCatalogItemToForm = (catalogItemId, catalogItemOverride = null) => {
+    const catalogItem = catalogItemOverride || serviceCatalogItemById.get(catalogItemId);
+
+    setItemForm((form) => {
+      if (!catalogItem) {
+        return { ...form, selectedSalesCatalogItemId: catalogItemId };
+      }
+
+      const quantity = Math.max(Number(catalogItem.defaultQuantity || form.quantity || 1) || 1, 1);
+      const unitPriceCents = cents(catalogItem.unitAmountCents);
+      const totalPriceCents = Math.round(unitPriceCents * quantity);
+
       return {
-        id,
+        ...form,
+        selectedSalesCatalogItemId: catalogItem.id,
+        name: catalogItem.name || form.name || "",
+        description: catalogItem.description || form.description || "",
+        quantity: String(quantity),
+        unitPrice: dollarsFromCents(unitPriceCents),
+        totalPrice: dollarsFromCents(totalPriceCents),
+        internalCost: dollarsFromCents(cents(catalogItem.unitCostCents)),
+      };
+    });
+  };
+
+  const applyDatabaseProductToForm = (productId, productOverride = null) => {
+    const product = productOverride || databaseProductById.get(productId);
+
+    setItemForm((form) => {
+      if (!product) {
+        return { ...form, dbItemId: productId };
+      }
+
+      return {
+        ...form,
+        dbItemId: product.id,
+        dbItemName: databaseProductLabel(product),
+        genericItemId: "",
+        name: databaseProductLabel(product),
+        subCategory: product.subCategory || product.category || form.subCategory || "Misc",
+        description: product.description || form.description || "",
+        plannedUnitCost: dollarsFromCents(databaseProductCostCents(product)),
+        plannedUnitPrice: dollarsFromCents(databaseProductPriceCents(product)),
+        billable: Boolean(product.billable || databaseProductPriceCents(product)),
+      };
+    });
+  };
+
+  const startServiceCatalogCreator = () => {
+    setServiceCatalogForm({
+      ...emptyServiceCatalogForm(),
+      name: itemForm.name || "",
+      description: itemForm.description || "",
+      unitAmount: itemForm.unitPrice || "0.00",
+      unitCost: itemForm.internalCost || "0.00",
+      defaultQuantity: itemForm.quantity || "1",
+    });
+    setShowServiceCatalogCreator(true);
+  };
+
+  const startDatabaseProductCreator = () => {
+    setDatabaseProductForm({
+      ...emptyDatabaseProductForm(),
+      name: itemForm.name || "",
+      description: itemForm.description || "",
+      subCategory: itemForm.subCategory || DEFAULT_SUBCATEGORY?.label || "Misc",
+      unitCost: itemForm.plannedUnitCost || "0.00",
+      unitPrice: itemForm.plannedUnitPrice || "0.00",
+      billable: Boolean(itemForm.billable),
+    });
+    setShowDatabaseProductCreator(true);
+  };
+
+  const createServiceCatalogItemInline = async () => {
+    if (!recentlySelectedCompany || creatingServiceCatalogItem) return;
+
+    const name = serviceCatalogForm.name.trim();
+    if (!name) {
+      setActionError("Add a sales catalog item name.");
+      return;
+    }
+
+    setCreatingServiceCatalogItem(true);
+    setActionError("");
+    setActionMessage("");
+
+    try {
+      const catalogItem = new SalesCatalogItem({
+        companyId: recentlySelectedCompany,
+        name,
+        description: serviceCatalogForm.description.trim(),
+        type: serviceCatalogForm.type || SalesCatalogItemType.service,
+        billingBehavior: serviceCatalogForm.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+        sourceType: SalesCatalogSourceType.manual,
+        sourceId: "",
+        unitAmountCents: centsFromMoney(serviceCatalogForm.unitAmount),
+        unitCostCents: centsFromMoney(serviceCatalogForm.unitCost),
+        defaultQuantity: Math.max(Number(serviceCatalogForm.defaultQuantity || 1) || 1, 1),
+        taxable: Boolean(serviceCatalogForm.taxable),
+        active: true,
+        currency: "usd",
+        metadata: { taskTemplates: [] },
+      });
+
+      await saveSalesCatalogItem(db, recentlySelectedCompany, catalogItem);
+      setServiceCatalogItems((items) => (
+        [...items.filter((item) => item.id !== catalogItem.id), catalogItem]
+          .sort((left, right) => serviceCatalogItemLabel(left).localeCompare(serviceCatalogItemLabel(right)))
+      ));
+      applyServiceCatalogItemToForm(catalogItem.id, catalogItem);
+      setServiceCatalogPickerOpen(false);
+      setShowServiceCatalogCreator(false);
+      setServiceCatalogForm(emptyServiceCatalogForm());
+      setActionMessage("Sales catalog item created and selected.");
+    } catch (err) {
+      console.error("Error creating sales catalog item from job template:", err);
+      setActionError("Could not create sales catalog item.");
+    } finally {
+      setCreatingServiceCatalogItem(false);
+    }
+  };
+
+  const createDatabaseProductInline = async () => {
+    if (!recentlySelectedCompany || creatingDatabaseProduct) return;
+
+    const name = databaseProductForm.name.trim();
+    if (!name) {
+      setActionError("Add a database product name.");
+      return;
+    }
+
+    setCreatingDatabaseProduct(true);
+    setActionError("");
+    setActionMessage("");
+
+    try {
+      const productId = `com_sett_db_${uuidv4()}`;
+      const sellPriceCents = databaseProductForm.billable
+        ? centsFromMoney(databaseProductForm.unitPrice)
+        : 0;
+      const product = {
+        id: productId,
+        name,
+        description: databaseProductForm.description.trim(),
+        sku: databaseProductForm.sku.trim(),
+        category: databaseProductForm.category || DEFAULT_CATEGORY?.label || "Misc",
+        subCategory: databaseProductForm.subCategory || DEFAULT_SUBCATEGORY?.label || "Misc",
+        UOM: databaseProductForm.uom || DEFAULT_UOM?.label || "Unit",
+        rate: centsFromMoney(databaseProductForm.unitCost),
+        sellPrice: sellPriceCents,
+        billingRate: sellPriceCents,
+        billable: Boolean(databaseProductForm.billable),
+        size: databaseProductForm.size.trim(),
+        tracking: databaseProductForm.tracking.trim(),
+        color: "",
+        storeName: "",
+        venderId: "",
+        vendorId: "",
+        timesPurchased: 0,
+        dateUpdated: new Date(),
+      };
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", productId), product);
+      setDatabaseProducts((items) => (
+        [...items.filter((item) => item.id !== product.id), product]
+          .sort((left, right) => databaseProductLabel(left).localeCompare(databaseProductLabel(right)))
+      ));
+      applyDatabaseProductToForm(product.id, product);
+      setDatabaseProductPickerOpen(false);
+      setShowDatabaseProductCreator(false);
+      setDatabaseProductForm(emptyDatabaseProductForm());
+      setActionMessage("Database product created and selected.");
+    } catch (err) {
+      console.error("Error creating database product from job template:", err);
+      setActionError("Could not create database product.");
+    } finally {
+      setCreatingDatabaseProduct(false);
+    }
+  };
+
+	  const buildItemPayload = (type, id) => {
+	    if (type === "tasks") {
+	      return {
+	        id,
         companyId: recentlySelectedCompany,
         templateId: detailTemplate.id,
         name: itemForm.name.trim(),
-        type: itemForm.type.trim() || "General",
+        type: canonicalJobTaskType(itemForm.type.trim() || "Basic"),
         description: itemForm.description.trim(),
         contractedRate: centsFromMoney(itemForm.contractedRate),
         estimatedTime: Number(itemForm.estimatedTime || 0),
@@ -559,31 +1028,32 @@ const JobTemplates = () => {
         description: itemForm.description.trim(),
         serviceStopTypeId: itemForm.serviceStopTypeId.trim(),
         serviceStopTypeName: itemForm.serviceStopTypeName.trim(),
-        serviceStopTypeImage: itemForm.serviceStopTypeImage.trim(),
-        serviceStopTypeUseCaseRawValue: itemForm.serviceStopTypeUseCaseRawValue.trim(),
-        estimatedMinutes: Number(itemForm.estimatedMinutes || 0),
-        sortOrder: Number(itemForm.sortOrder || 0),
-        taskTemplateIds: itemForm.taskTemplateIds.split(",").map((idValue) => idValue.trim()).filter(Boolean),
-        plannedLaborCostCents: centsFromMoney(itemForm.plannedLaborCost),
-        plannedLaborNotes: itemForm.plannedLaborNotes.trim(),
-      };
-    }
+	        serviceStopTypeImage: itemForm.serviceStopTypeImage.trim(),
+	        serviceStopTypeUseCaseRawValue: itemForm.serviceStopTypeUseCaseRawValue.trim(),
+	        estimatedMinutes: Number(itemForm.estimatedMinutes || 0),
+	        sortOrder: Number(itemForm.sortOrder || 0),
+	        taskTemplateIds: uniqueIdList(itemForm.taskTemplateIds),
+	        plannedLaborCostCents: centsFromMoney(itemForm.plannedLaborCost),
+	        plannedLaborNotes: itemForm.plannedLaborNotes.trim(),
+	      };
+	    }
 
-    if (type === "laborLineItems") {
-      const quantity = Math.max(Number(itemForm.quantity || 1) || 1, 1);
-      const enteredUnitPriceCents = itemForm.unitPrice !== undefined && itemForm.unitPrice !== ""
-        ? centsFromMoney(itemForm.unitPrice)
-        : 0;
-      const enteredTotalPriceCents = centsFromMoney(itemForm.totalPrice);
-      const totalPriceCents = enteredTotalPriceCents || Math.round(enteredUnitPriceCents * quantity);
-      const unitPriceCents = enteredUnitPriceCents || Math.round(totalPriceCents / quantity);
-      const taskTemplateIds = splitIdList(itemForm.taskTemplateIds);
-      const plannedServiceStopTemplateIds = splitIdList(itemForm.plannedServiceStopTemplateIds);
+	    if (type === "laborLineItems") {
+	      const selectedCatalogItemId = itemForm.selectedSalesCatalogItemId || "";
+	      const selectedCatalogItem = selectedCatalogItemId ? serviceCatalogItemById.get(selectedCatalogItemId) : null;
+	      const quantity = Math.max(Number(itemForm.quantity || 1) || 1, 1);
+	      const enteredUnitPriceCents = itemForm.unitPrice !== undefined && itemForm.unitPrice !== ""
+	        ? centsFromMoney(itemForm.unitPrice)
+	        : 0;
+	      const enteredTotalPriceCents = centsFromMoney(itemForm.totalPrice);
+	      const totalPriceCents = enteredTotalPriceCents || Math.round(enteredUnitPriceCents * quantity);
+	      const unitPriceCents = enteredUnitPriceCents || Math.round(totalPriceCents / quantity);
+	      const taskTemplateIds = uniqueIdList(itemForm.taskTemplateIds);
 
-      return {
-        id,
-        laborLineId: id,
-        companyId: recentlySelectedCompany,
+	      return {
+	        id,
+	        laborLineId: id,
+	        companyId: recentlySelectedCompany,
         templateId: detailTemplate.id,
         name: itemForm.name.trim(),
         description: itemForm.description.trim(),
@@ -594,46 +1064,118 @@ const JobTemplates = () => {
         taskTemplateIds,
         taskIds: taskTemplateIds,
         laborLineTaskIds: taskTemplateIds,
-        plannedServiceStopTemplateIds,
-        plannedServiceStopIds: plannedServiceStopTemplateIds,
-        laborLinePlannedServiceStopIds: plannedServiceStopTemplateIds,
-        salesItemType: "labor",
-        billingBehavior: "oneTime",
-        sourceType: "manual",
-        sortOrder: Number(itemForm.sortOrder || 0),
-      };
-    }
+        plannedServiceStopTemplateIds: [],
+	        plannedServiceStopIds: [],
+	        laborLinePlannedServiceStopIds: [],
+	        salesItemType: selectedCatalogItem?.type || itemModal?.item?.salesItemType || SalesCatalogItemType.labor,
+	        billingBehavior: selectedCatalogItem?.billingBehavior || itemModal?.item?.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+	        sourceType: selectedCatalogItem?.sourceType || itemModal?.item?.sourceType || SalesCatalogSourceType.manual,
+	        sourceId: selectedCatalogItem?.sourceId || itemModal?.item?.sourceId || "",
+	        catalogItemId: selectedCatalogItemId || itemModal?.item?.catalogItemId || "",
+	        salesCatalogItemId: selectedCatalogItemId || itemModal?.item?.salesCatalogItemId || "",
+	        catalogItemName: selectedCatalogItem?.name || itemModal?.item?.catalogItemName || "",
+	        stripeProductId: selectedCatalogItem?.stripeProductId || itemModal?.item?.stripeProductId || "",
+	        stripePriceId: selectedCatalogItem?.stripePriceId || itemModal?.item?.stripePriceId || "",
+	        sortOrder: Number(itemForm.sortOrder || 0),
+	      };
+	    }
 
-    const unitCostCents = centsFromMoney(itemForm.plannedUnitCost);
-    const unitPriceCents = centsFromMoney(itemForm.plannedUnitPrice);
-    const quantity = Number.parseFloat(itemForm.quantity) || 0;
+	    const databaseProductId = String(itemForm.dbItemId || "").trim();
+	    const selectedDatabaseProduct = databaseProductId ? databaseProductById.get(databaseProductId) : null;
+	    const unitCostCents = centsFromMoney(itemForm.plannedUnitCost);
+	    const unitPriceCents = centsFromMoney(itemForm.plannedUnitPrice);
+	    const quantity = Number.parseFloat(itemForm.quantity) || 0;
 
-    return {
+	    return {
       id,
       companyId: recentlySelectedCompany,
       templateId: detailTemplate.id,
-      subCategory: itemForm.subCategory.trim() || "Misc",
-      name: itemForm.name.trim(),
-      description: itemForm.description.trim(),
-      quantity: itemForm.quantity || "1",
-      dbItemId: itemForm.dbItemId.trim() || null,
-      genericItemId: itemForm.genericItemId.trim() || null,
-      plannedUnitCostCents: unitCostCents,
-      plannedUnitPriceCents: unitPriceCents,
-      plannedTotalCostCents: unitCostCents * quantity,
-      plannedTotalPriceCents: unitPriceCents * quantity,
-      billable: Boolean(itemForm.billable),
-      sortOrder: Number(itemForm.sortOrder || 0),
-    };
-  };
+	      subCategory: itemForm.subCategory.trim() || "Misc",
+	      name: itemForm.name.trim(),
+	      description: itemForm.description.trim(),
+	      quantity: itemForm.quantity || "1",
+	      dbItemId: databaseProductId || null,
+	      dataBaseItemId: databaseProductId || null,
+	      itemId: databaseProductId || null,
+	      dbItemName: selectedDatabaseProduct ? databaseProductLabel(selectedDatabaseProduct) : itemForm.dbItemName || "",
+	      genericItemId: itemForm.genericItemId?.trim() || null,
+	      plannedUnitCostCents: unitCostCents,
+	      plannedUnitPriceCents: unitPriceCents,
+	      plannedTotalCostCents: unitCostCents * quantity,
+	      plannedTotalPriceCents: unitPriceCents * quantity,
+	      billable: Boolean(itemForm.billable),
+	      sourceType: databaseProductId ? SalesCatalogSourceType.databaseItem : SalesCatalogSourceType.manual,
+	      sortOrder: Number(itemForm.sortOrder || 0),
+	    };
+	  };
 
-  const saveTemplateItem = async (event) => {
-    event.preventDefault();
-    if (!recentlySelectedCompany || !detailTemplate || !itemModal || !itemForm.name?.trim()) return;
+  const buildTaskPayloadsFromCatalogItem = (catalogItem, laborLineId) => (
+    catalogServiceTaskTemplates(catalogItem)
+      .map((template, index) => {
+        const name = String(
+          template.name ||
+          template.title ||
+          template.description ||
+          `Task ${index + 1}`
+        ).trim();
+        if (!name) return null;
 
-    setSavingItem(true);
-    setActionError("");
-    setActionMessage("");
+        const taskId = `comp_job_template_task_${uuidv4()}`;
+        const laborCostCents = catalogCents(
+          template.laborCostCents,
+          template.contractRateCents,
+          template.contractedRateCents,
+          template.contractedRate,
+          template.costCents
+        );
+        const billingLaborPriceCents = catalogCents(
+          template.billingLaborPriceCents,
+          template.unitAmountCents,
+          template.priceCents,
+          template.rateCents
+        );
+
+        return {
+          id: taskId,
+          companyId: recentlySelectedCompany,
+          templateId: detailTemplate.id,
+          name,
+          type: catalogTaskType(template),
+          description: template.description || "",
+          contractedRate: laborCostCents,
+          billingLaborPriceCents,
+          estimatedTime: catalogTaskMinutes(template),
+          customerApproval: Boolean(template.customerApproval || template.customerApprovalRequired),
+          customerApprovalRequired: Boolean(template.customerApproval || template.customerApprovalRequired),
+          sourceType: "serviceCatalog",
+          sourceCatalogItemId: catalogItem.id,
+          sourceCatalogItemName: serviceCatalogItemLabel(catalogItem),
+          sourceCatalogTaskTemplateId: template.id || template.templateId || "",
+          laborLineId,
+          laborLineIds: [laborLineId],
+          sortOrder: details.tasks.length + index,
+        };
+      })
+      .filter(Boolean)
+  );
+
+	  const saveTemplateItem = async (event) => {
+	    event.preventDefault();
+	    if (!recentlySelectedCompany || !detailTemplate || !itemModal || !itemForm.name?.trim()) return;
+
+    if (itemModal.type === "laborLineItems" && itemModal.mode === "create" && !itemForm.selectedSalesCatalogItemId) {
+      setActionError("Select or create a sales catalog item before adding a service line.");
+      return;
+    }
+
+    if (itemModal.type === "shoppingItems" && itemModal.mode === "create" && !itemForm.dbItemId) {
+      setActionError("Select or create a database product before adding a product line.");
+      return;
+    }
+
+	    setSavingItem(true);
+	    setActionError("");
+	    setActionMessage("");
 
     try {
       const idPrefix = {
@@ -641,21 +1183,53 @@ const JobTemplates = () => {
         plannedServiceStops: "comp_job_template_plan_stop_",
         laborLineItems: "comp_job_template_labor_line_",
         shoppingItems: "comp_job_template_shop_item_",
-      }[itemModal.type];
-      const itemId = itemModal.mode === "create" ? `${idPrefix}${uuidv4()}` : itemModal.item.id;
-      const payload = buildItemPayload(itemModal.type, itemId);
-      const itemRef = doc(db, "companies", recentlySelectedCompany, "jobTemplates", detailTemplate.id, itemModal.type, itemId);
-      await setDoc(itemRef, payload, { merge: true });
+	      }[itemModal.type];
+	      const itemId = itemModal.mode === "create" ? `${idPrefix}${uuidv4()}` : itemModal.item.id;
+	      let payload = buildItemPayload(itemModal.type, itemId);
+      const selectedCatalogItem = itemModal.type === "laborLineItems" && itemModal.mode === "create"
+        ? serviceCatalogItemById.get(itemForm.selectedSalesCatalogItemId)
+        : null;
+      const catalogTaskPayloads = selectedCatalogItem
+        ? buildTaskPayloadsFromCatalogItem(selectedCatalogItem, itemId)
+        : [];
 
-      setDetails((current) => {
-        const nextList = sortByOrder([
-          ...current[itemModal.type].filter((item) => item.id !== itemId),
-          payload,
+      if (catalogTaskPayloads.length) {
+        const taskTemplateIds = uniqueIdList([
+          ...payload.taskTemplateIds,
+          ...catalogTaskPayloads.map((task) => task.id),
         ]);
-        updateTemplateCount(detailTemplate.id, itemModal.type, nextList.length);
-        return { ...current, [itemModal.type]: nextList };
-      });
-      setActionMessage("Template detail saved.");
+        payload = {
+          ...payload,
+          taskTemplateIds,
+          taskIds: taskTemplateIds,
+          laborLineTaskIds: taskTemplateIds,
+        };
+      }
+
+	      const itemRef = doc(db, "companies", recentlySelectedCompany, "jobTemplates", detailTemplate.id, itemModal.type, itemId);
+	      await Promise.all([
+        setDoc(itemRef, payload, { merge: true }),
+        ...catalogTaskPayloads.map((task) => (
+          setDoc(doc(db, "companies", recentlySelectedCompany, "jobTemplates", detailTemplate.id, "tasks", task.id), task)
+        )),
+      ]);
+
+	      setDetails((current) => {
+        const nextTasks = catalogTaskPayloads.length
+          ? sortByOrder([
+            ...current.tasks,
+            ...catalogTaskPayloads,
+          ])
+          : current.tasks;
+	        const nextList = sortByOrder([
+	          ...current[itemModal.type].filter((item) => item.id !== itemId),
+	          payload,
+	        ]);
+        if (catalogTaskPayloads.length) updateTemplateCount(detailTemplate.id, "tasks", nextTasks.length);
+	        updateTemplateCount(detailTemplate.id, itemModal.type, nextList.length);
+	        return { ...current, tasks: nextTasks, [itemModal.type]: nextList };
+	      });
+	      setActionMessage("Template detail saved.");
       setItemModal(null);
       setItemForm({});
     } catch (err) {
@@ -754,12 +1328,21 @@ const JobTemplates = () => {
       const isCreate = templateModal?.mode === "create";
       const templateId = isCreate ? `comp_job_template_${uuidv4()}` : templateModal.template.id;
       const templateRef = doc(db, "companies", recentlySelectedCompany, "jobTemplates", templateId);
+      const defaultIssuePriorityLevel = normalizeIssuePriority(templateForm.defaultIssuePriorityLevel);
+      const defaultIssuePriorityLabel = getIssuePriorityLabel(defaultIssuePriorityLevel);
       const payload = {
         id: templateId,
         companyId: recentlySelectedCompany,
         name: templateForm.name.trim(),
         description: templateForm.description.trim(),
-        jobType: templateForm.jobType.trim(),
+        defaultIssuePriorityLevel,
+        defaultIssuePriorityLabel,
+        issuePriorityLevel: defaultIssuePriorityLevel,
+        issuePriorityLabel: defaultIssuePriorityLabel,
+        priorityLevel: defaultIssuePriorityLevel,
+        priorityLabel: defaultIssuePriorityLabel,
+        solutionTier: defaultIssuePriorityLevel,
+        solutionTierLabel: defaultIssuePriorityLabel,
         defaultRateCents: centsFromMoney(templateForm.defaultRate),
         defaultLaborCostCents: centsFromMoney(templateForm.defaultLaborCost),
         isActive: templateForm.isActive,
@@ -796,9 +1379,9 @@ const JobTemplates = () => {
     }
   };
 
-  const renderLinkedChips = (ids, itemMap, fallbackLabel) => {
-    const linkedIds = normalizeIdList(ids);
-    if (!linkedIds.length) return null;
+	  const renderLinkedChips = (ids, itemMap, fallbackLabel) => {
+	    const linkedIds = normalizeIdList(ids);
+	    if (!linkedIds.length) return null;
 
     return (
       <div className="mt-2 flex flex-wrap gap-1.5">
@@ -810,11 +1393,608 @@ const JobTemplates = () => {
             </span>
           );
         })}
+	      </div>
+	    );
+	  };
+
+  const renderIdCheckboxPicker = ({ title, items, selectedIds, field, emptyLabel, metaForItem }) => {
+    const selected = uniqueIdList(selectedIds);
+
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{title}</p>
+          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-slate-600">
+            {selected.length}
+          </span>
+        </div>
+        <div className="mt-2 max-h-56 space-y-2 overflow-y-auto pr-1">
+          {!items.length ? (
+            <p className="rounded-md border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-500">{emptyLabel}</p>
+          ) : (
+            items.map((item) => {
+              const checked = selected.includes(item.id);
+              return (
+                <label
+                  key={item.id}
+                  className={[
+                    "flex cursor-pointer items-start gap-2 rounded-md border p-2 text-xs transition",
+                    checked ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50",
+                  ].join(" ")}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleItemFormId(field, item.id)}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-bold text-slate-900">{item.name || item.serviceStopTypeName || item.type || "Untitled"}</span>
+                    {metaForItem ? <span className="mt-0.5 block text-slate-500">{metaForItem(item)}</span> : null}
+                  </span>
+                </label>
+              );
+            })
+          )}
+        </div>
       </div>
     );
   };
 
-  const renderTemplateStatusPills = () => (
+  const renderServiceCatalogCreator = () => (
+    <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-bold text-slate-900">New Sales Catalog Item</p>
+          <p className="mt-0.5 text-xs text-slate-600">Create it here, then use it for this service line.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setShowServiceCatalogCreator(false);
+            setServiceCatalogForm(emptyServiceCatalogForm());
+          }}
+          disabled={creatingServiceCatalogItem}
+          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600 sm:col-span-2">
+          Name
+          <input
+            value={serviceCatalogForm.name}
+            onChange={(event) => updateServiceCatalogForm("name", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+            placeholder="Filter clean"
+          />
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Type
+          <select
+            value={serviceCatalogForm.type}
+            onChange={(event) => updateServiceCatalogForm("type", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          >
+            {[SalesCatalogItemType.service, SalesCatalogItemType.recurringService, SalesCatalogItemType.labor, SalesCatalogItemType.manual].map((option) => (
+              <option key={option} value={option}>{catalogTypeLabel(option)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Billing
+          <select
+            value={serviceCatalogForm.billingBehavior}
+            onChange={(event) => updateServiceCatalogForm("billingBehavior", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          >
+            {Object.values(SalesCatalogBillingBehavior).map((option) => (
+              <option key={option} value={option}>{labelize(option)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Customer Price
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={serviceCatalogForm.unitAmount}
+            onChange={(event) => updateServiceCatalogForm("unitAmount", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Internal Cost
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={serviceCatalogForm.unitCost}
+            onChange={(event) => updateServiceCatalogForm("unitCost", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Default Qty
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={serviceCatalogForm.defaultQuantity}
+            onChange={(event) => updateServiceCatalogForm("defaultQuantity", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+        <label className="mt-5 flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+          <input
+            type="checkbox"
+            checked={Boolean(serviceCatalogForm.taxable)}
+            onChange={(event) => updateServiceCatalogForm("taxable", event.target.checked)}
+          />
+          Taxable
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600 sm:col-span-2">
+          Description
+          <textarea
+            rows={2}
+            value={serviceCatalogForm.description}
+            onChange={(event) => updateServiceCatalogForm("description", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          onClick={createServiceCatalogItemInline}
+          disabled={creatingServiceCatalogItem}
+          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creatingServiceCatalogItem ? "Creating..." : "Create & Select"}
+        </button>
+      </div>
+    </div>
+  );
+
+	  const renderServiceCatalogPicker = () => {
+	    const selectedId = itemForm.selectedSalesCatalogItemId || "";
+	    const selectedItem = selectedId ? serviceCatalogItemById.get(selectedId) : null;
+	    const selectedTaskTemplates = selectedItem ? catalogServiceTaskTemplates(selectedItem) : [];
+
+	    const renderCatalogOptions = () => (
+	      <>
+	        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+	          <input
+	            type="search"
+	            value={serviceCatalogSearch}
+	            onChange={(event) => setServiceCatalogSearch(event.target.value)}
+	            placeholder="Search sales catalog"
+	            autoFocus
+	            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 sm:flex-1"
+	          />
+	          <button
+	            type="button"
+	            onClick={startServiceCatalogCreator}
+	            className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+	          >
+	            New Catalog Item
+	          </button>
+	        </div>
+
+	        {showServiceCatalogCreator ? <div className="mt-3">{renderServiceCatalogCreator()}</div> : null}
+
+	        {loadingServiceCatalogItems ? (
+	          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">Loading sales catalog...</div>
+	        ) : !filteredServiceCatalogItems.length ? (
+	          <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-500">
+	            No sales catalog services match that search.
+	          </div>
+	        ) : (
+	          <div className="mt-3 grid gap-2">
+	            {filteredServiceCatalogItems.map((item) => {
+	              const selected = item.id === selectedId;
+	              const taskTemplates = catalogServiceTaskTemplates(item);
+
+	              return (
+	                <button
+	                  key={item.id}
+	                  type="button"
+	                  onClick={() => {
+	                    applyServiceCatalogItemToForm(item.id);
+	                    setServiceCatalogPickerOpen(false);
+	                  }}
+	                  className={[
+	                    "w-full rounded-md border p-3 text-left transition",
+	                    selected ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-slate-50 hover:bg-white",
+	                  ].join(" ")}
+	                >
+	                  <span className="flex items-start justify-between gap-3">
+	                    <span className="min-w-0">
+	                      <span className="block truncate text-sm font-bold text-slate-900">{serviceCatalogItemLabel(item)}</span>
+	                      <span className="mt-1 line-clamp-2 block text-xs text-slate-500">{item.description || "No description"}</span>
+	                    </span>
+	                    <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-slate-600">
+	                      {selected ? "Selected" : catalogTypeLabel(item.type)}
+	                    </span>
+	                  </span>
+	                  <span className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
+	                    <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Price {moneyFromCents(item.unitAmountCents)}</span>
+	                    <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Cost {moneyFromCents(item.unitCostCents)}</span>
+	                    <span className="rounded-full border border-blue-200 bg-white px-2 py-1 text-blue-700">
+	                      {taskTemplates.length} task template{taskTemplates.length === 1 ? "" : "s"}
+	                    </span>
+	                  </span>
+	                </button>
+	              );
+	            })}
+	          </div>
+	        )}
+	      </>
+	    );
+
+	    return (
+	      <>
+	        <div className="rounded-lg border border-blue-200 bg-white p-3">
+	          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+	            <div>
+	              <p className="text-sm font-bold text-slate-900">Sales Catalog Service</p>
+	              <p className="mt-0.5 text-xs text-slate-500">Choose the reusable service this template line is based on.</p>
+	            </div>
+	            <button
+	              type="button"
+	              onClick={() => setServiceCatalogPickerOpen(true)}
+	              className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+	            >
+	              {selectedId ? "Change Service" : "Choose Service"}
+	            </button>
+	          </div>
+
+	          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+	            {selectedItem ? (
+	              <>
+	                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+	                  <div className="min-w-0">
+	                    <p className="truncate text-sm font-bold text-slate-900">{serviceCatalogItemLabel(selectedItem)}</p>
+	                    <p className="mt-1 line-clamp-2 text-xs text-slate-500">{selectedItem.description || "No description"}</p>
+	                  </div>
+	                  <span className="shrink-0 rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[11px] font-bold text-blue-700">
+	                    {catalogTypeLabel(selectedItem.type)}
+	                  </span>
+	                </div>
+	                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
+	                  <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Price {moneyFromCents(selectedItem.unitAmountCents)}</span>
+	                  <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Cost {moneyFromCents(selectedItem.unitCostCents)}</span>
+	                  <span className="rounded-full border border-blue-200 bg-white px-2 py-1 text-blue-700">
+	                    {selectedTaskTemplates.length} task template{selectedTaskTemplates.length === 1 ? "" : "s"}
+	                  </span>
+	                </div>
+	              </>
+	            ) : selectedId ? (
+	              <p className="text-sm text-slate-500">Selected catalog item could not be loaded from the active catalog.</p>
+	            ) : (
+	              <p className="text-sm text-slate-500">No sales catalog service selected.</p>
+	            )}
+	          </div>
+	        </div>
+
+	        {serviceCatalogPickerOpen ? (
+	          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-4">
+	            <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+	              <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+	                <div>
+	                  <h3 className="text-lg font-bold text-slate-900">Choose Sales Catalog Service</h3>
+	                  <p className="mt-1 text-sm text-slate-500">Search existing catalog services or create a new one for this line.</p>
+	                </div>
+	                <button
+	                  type="button"
+	                  onClick={() => setServiceCatalogPickerOpen(false)}
+	                  className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100"
+	                >
+	                  Close
+	                </button>
+	              </div>
+	              <div className="min-h-0 flex-1 overflow-y-auto p-5">
+	                {renderCatalogOptions()}
+	              </div>
+	            </div>
+	          </div>
+	        ) : null}
+	      </>
+	    );
+	  };
+
+  const renderDatabaseProductCreator = () => (
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-bold text-slate-900">New Database Product</p>
+          <p className="mt-0.5 text-xs text-slate-600">Create it here, then use it for this product line.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setShowDatabaseProductCreator(false);
+            setDatabaseProductForm(emptyDatabaseProductForm());
+          }}
+          disabled={creatingDatabaseProduct}
+          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600 sm:col-span-2">
+          Product Name
+          <input
+            value={databaseProductForm.name}
+            onChange={(event) => updateDatabaseProductForm("name", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+            placeholder="Chlorine tabs"
+          />
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          SKU
+          <input
+            value={databaseProductForm.sku}
+            onChange={(event) => updateDatabaseProductForm("sku", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          UOM
+          <select
+            value={databaseProductForm.uom}
+            onChange={(event) => updateDatabaseProductForm("uom", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          >
+            {UOM_OPTIONS.map((option) => (
+              <option key={option.id || option.label} value={optionLabel(option)}>{optionLabel(option)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Category
+          <select
+            value={databaseProductForm.category}
+            onChange={(event) => updateDatabaseProductForm("category", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          >
+            {CATEGORY_OPTIONS.map((option) => (
+              <option key={option.id || option.label} value={optionLabel(option)}>{optionLabel(option)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Subcategory
+          <select
+            value={databaseProductForm.subCategory}
+            onChange={(event) => updateDatabaseProductForm("subCategory", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          >
+            {SUBCATEGORY_OPTIONS.map((option) => (
+              <option key={option.id || option.label} value={optionLabel(option)}>{optionLabel(option)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Unit Cost
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={databaseProductForm.unitCost}
+            onChange={(event) => updateDatabaseProductForm("unitCost", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+        <label className="mt-5 flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+          <input
+            type="checkbox"
+            checked={Boolean(databaseProductForm.billable)}
+            onChange={(event) => updateDatabaseProductForm("billable", event.target.checked)}
+          />
+          Billable
+        </label>
+        {databaseProductForm.billable ? (
+          <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+            Unit Price
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={databaseProductForm.unitPrice}
+              onChange={(event) => updateDatabaseProductForm("unitPrice", event.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+            />
+          </label>
+        ) : null}
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Size
+          <input
+            value={databaseProductForm.size}
+            onChange={(event) => updateDatabaseProductForm("size", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
+          Tracking
+          <input
+            value={databaseProductForm.tracking}
+            onChange={(event) => updateDatabaseProductForm("tracking", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+        <label className="text-xs font-bold uppercase tracking-wide text-slate-600 sm:col-span-2">
+          Description
+          <textarea
+            rows={2}
+            value={databaseProductForm.description}
+            onChange={(event) => updateDatabaseProductForm("description", event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
+          />
+        </label>
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          onClick={createDatabaseProductInline}
+          disabled={creatingDatabaseProduct}
+          className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creatingDatabaseProduct ? "Creating..." : "Create & Select"}
+        </button>
+      </div>
+    </div>
+  );
+
+	  const renderDatabaseProductPicker = () => {
+	    const selectedId = itemForm.dbItemId || "";
+	    const selectedProduct = selectedId ? databaseProductById.get(selectedId) : null;
+
+	    const renderProductOptions = () => (
+	      <>
+	        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+	          <input
+	            type="search"
+	            value={databaseProductSearch}
+	            onChange={(event) => setDatabaseProductSearch(event.target.value)}
+	            placeholder="Search database products"
+	            autoFocus
+	            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 sm:flex-1"
+	          />
+	          <button
+	            type="button"
+	            onClick={startDatabaseProductCreator}
+	            className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+	          >
+	            New Database Product
+	          </button>
+	        </div>
+
+	        {showDatabaseProductCreator ? <div className="mt-3">{renderDatabaseProductCreator()}</div> : null}
+
+	        {loadingDatabaseProducts ? (
+	          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">Loading database products...</div>
+	        ) : !filteredDatabaseProducts.length ? (
+	          <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-500">
+	            No database products match that search.
+	          </div>
+	        ) : (
+	          <div className="mt-3 grid gap-2">
+	            {filteredDatabaseProducts.map((item) => {
+	              const selected = item.id === selectedId;
+
+	              return (
+	                <button
+	                  key={item.id}
+	                  type="button"
+	                  onClick={() => {
+	                    applyDatabaseProductToForm(item.id);
+	                    setDatabaseProductPickerOpen(false);
+	                  }}
+	                  className={[
+	                    "w-full rounded-md border p-3 text-left transition",
+	                    selected ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-slate-50 hover:bg-white",
+	                  ].join(" ")}
+	                >
+	                  <span className="flex items-start justify-between gap-3">
+	                    <span className="min-w-0">
+	                      <span className="block truncate text-sm font-bold text-slate-900">{databaseProductLabel(item)}</span>
+	                      <span className="mt-1 line-clamp-2 block text-xs text-slate-500">{item.description || item.sku || "No description"}</span>
+	                    </span>
+	                    <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-slate-600">
+	                      {selected ? "Selected" : item.subCategory || item.category || "Product"}
+	                    </span>
+	                  </span>
+	                  <span className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
+	                    <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Cost {moneyFromCents(databaseProductCostCents(item))}</span>
+	                    <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Price {moneyFromCents(databaseProductPriceCents(item))}</span>
+	                    <span className="rounded-full border border-emerald-200 bg-white px-2 py-1 text-emerald-700">{item.UOM || "Unit"}</span>
+	                  </span>
+	                </button>
+	              );
+	            })}
+	          </div>
+	        )}
+	      </>
+	    );
+
+	    return (
+	      <>
+	        <div className="rounded-lg border border-emerald-200 bg-white p-3">
+	          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+	            <div>
+	              <p className="text-sm font-bold text-slate-900">Database Product</p>
+	              <p className="mt-0.5 text-xs text-slate-500">Choose the reusable product this template line should use.</p>
+	            </div>
+	            <button
+	              type="button"
+	              onClick={() => setDatabaseProductPickerOpen(true)}
+	              className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+	            >
+	              {selectedId ? "Change Product" : "Choose Product"}
+	            </button>
+	          </div>
+
+	          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+	            {selectedProduct ? (
+	              <>
+	                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+	                  <div className="min-w-0">
+	                    <p className="truncate text-sm font-bold text-slate-900">{databaseProductLabel(selectedProduct)}</p>
+	                    <p className="mt-1 line-clamp-2 text-xs text-slate-500">{selectedProduct.description || selectedProduct.sku || "No description"}</p>
+	                  </div>
+	                  <span className="shrink-0 rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[11px] font-bold text-emerald-700">
+	                    {selectedProduct.subCategory || selectedProduct.category || "Product"}
+	                  </span>
+	                </div>
+	                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
+	                  <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Cost {moneyFromCents(databaseProductCostCents(selectedProduct))}</span>
+	                  <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">Price {moneyFromCents(databaseProductPriceCents(selectedProduct))}</span>
+	                  <span className="rounded-full border border-emerald-200 bg-white px-2 py-1 text-emerald-700">{selectedProduct.UOM || "Unit"}</span>
+	                </div>
+	              </>
+	            ) : selectedId ? (
+	              <p className="text-sm text-slate-500">Selected database product could not be loaded from the active catalog.</p>
+	            ) : (
+	              <p className="text-sm text-slate-500">No database product selected.</p>
+	            )}
+	          </div>
+	        </div>
+
+	        {databaseProductPickerOpen ? (
+	          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-4">
+	            <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+	              <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+	                <div>
+	                  <h3 className="text-lg font-bold text-slate-900">Choose Database Product</h3>
+	                  <p className="mt-1 text-sm text-slate-500">Search existing database products or create a new one for this line.</p>
+	                </div>
+	                <button
+	                  type="button"
+	                  onClick={() => setDatabaseProductPickerOpen(false)}
+	                  className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100"
+	                >
+	                  Close
+	                </button>
+	              </div>
+	              <div className="min-h-0 flex-1 overflow-y-auto p-5">
+	                {renderProductOptions()}
+	              </div>
+	            </div>
+	          </div>
+	        ) : null}
+	      </>
+	    );
+	  };
+
+	  const renderTemplateStatusPills = () => (
     <div className="mt-3 flex flex-wrap gap-2">
       <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${detailTemplate?.isActive === false ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
         {detailTemplate?.isActive === false ? "Inactive" : "Active"}
@@ -826,7 +2006,7 @@ const JobTemplates = () => {
         <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">Locked</span>
       ) : null}
       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-        {detailTemplate?.jobType || detailTemplate?.type || "General Job"}
+        Priority {templateDefaultPriorityDisplay(detailTemplate)}
       </span>
     </div>
   );
@@ -838,7 +2018,7 @@ const JobTemplates = () => {
           <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
             <p className="font-medium text-slate-700">No service lines yet.</p>
             <p className="mt-1">
-              Add a service line to price the work, then attach template tasks and planned stops underneath it.
+              Add a service line to price the work, then attach template tasks underneath it.
             </p>
             <div className="mt-3 flex flex-wrap justify-center gap-2">
               <button
@@ -873,7 +2053,6 @@ const JobTemplates = () => {
       const internalCostCents = laborLineInternalCostCents(line);
       const profitCents = totalPriceCents - internalCostCents;
       const taskIds = getLaborLineTaskIds(line);
-      const plannedStopIds = getLaborLinePlannedStopIds(line);
 
       return (
         <tr key={line.id} className="align-top hover:bg-slate-50">
@@ -881,7 +2060,6 @@ const JobTemplates = () => {
             <div className="font-semibold text-slate-900">{line.name || "Untitled service line"}</div>
             {line.description ? <p className="mt-1 text-xs text-slate-500">{line.description}</p> : null}
             {renderLinkedChips(taskIds, taskById, "Task")}
-            {renderLinkedChips(plannedStopIds, plannedStopById, "Stop")}
           </td>
           <td className="px-4 py-3 text-right text-slate-700">{line.quantity || 1}</td>
           <td className="px-4 py-3 text-right text-slate-700">{moneyFromCents(laborLineUnitPriceCents(line))}</td>
@@ -1065,7 +2243,7 @@ const JobTemplates = () => {
             <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h4 className="text-sm font-bold text-slate-950">Services</h4>
-                <p className="mt-0.5 text-xs text-slate-500">Billable service price with tasks and planned stops underneath.</p>
+                <p className="mt-0.5 text-xs text-slate-500">Billable service price with linked template tasks underneath.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
@@ -1204,7 +2382,6 @@ const JobTemplates = () => {
             <tbody className="divide-y divide-slate-100">
               {rows.map((item) => {
                 const taskIds = type === "plannedServiceStops" ? normalizeIdList(item.taskTemplateIds) : getLaborLineTaskIds(item);
-                const stopIds = type === "laborLineItems" ? getLaborLinePlannedStopIds(item) : [];
                 const billingSummary = type === "tasks"
                   ? moneyFromCents(taskBillingPriceCents(item))
                   : type === "plannedServiceStops"
@@ -1230,9 +2407,8 @@ const JobTemplates = () => {
                         </>
                       ) : type === "laborLineItems" ? (
                         <>
-                          <span>{taskIds.length} task link(s) - {stopIds.length} planned stop link(s)</span>
+                          <span>{taskIds.length} task link(s)</span>
                           {renderLinkedChips(taskIds, taskById, "Task")}
-                          {renderLinkedChips(stopIds, plannedStopById, "Stop")}
                         </>
                       ) : (
                         <span>{item.subCategory || "Product"} - Qty {item.quantity || 1} - {item.billable ? "Billable" : "Internal"}</span>
@@ -1325,7 +2501,7 @@ const JobTemplates = () => {
               <SnapshotRow label="Default Admin" value={selectedDefaultAdmin?.userName || "Not set"} muted={!selectedDefaultAdmin} />
               <SnapshotSkeletonRow label="Site" width="w-52" />
               <SnapshotSkeletonRow label="Scheduled Date" width="w-32" />
-              <SnapshotRow label="Job Type" value={detailTemplate?.jobType || detailTemplate?.type || "General Job"} />
+              <SnapshotRow label="Default Priority" value={templateDefaultPriorityDisplay(detailTemplate)} />
               <SnapshotRow label="Template Price" value={moneyFromCents(templatePriceCents)} strong />
               <SnapshotRow
                 label="Projected Profit"
@@ -1502,7 +2678,7 @@ const JobTemplates = () => {
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search templates by name, description, or job type"
+                placeholder="Search templates by name, description, or priority"
                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
               />
               <div className="text-sm text-slate-500">
@@ -1515,7 +2691,7 @@ const JobTemplates = () => {
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="border-b border-slate-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Template</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Job Type</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Default Priority</th>
                     <th className="border-b border-slate-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
                     <th className="border-b border-slate-200 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Parts</th>
                     <th className="border-b border-slate-200 px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Default Price</th>
@@ -1534,7 +2710,7 @@ const JobTemplates = () => {
                           </span>
                         </Link>
                       </td>
-                      <td className="px-5 py-3 text-sm text-slate-700">{template.jobType || template.type || "--"}</td>
+                      <td className="px-5 py-3 text-sm text-slate-700">{templateDefaultPriorityDisplay(template)}</td>
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap gap-1.5">
                           <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${template.isActive === false ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
@@ -1607,23 +2783,47 @@ const JobTemplates = () => {
               <h2 className="text-xl font-bold text-slate-900">
                 {itemModal.mode === "create" ? "Add" : "Edit"} {detailTabLabel(itemModal.type)}
               </h2>
-              <button type="button" onClick={closeItemModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
-                Close
-              </button>
-            </div>
+	              <button type="button" onClick={closeItemModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
+	                Close
+	              </button>
+	            </div>
 
-            <div className="mt-5 grid gap-4">
-              <label className="text-sm font-semibold text-slate-700">
-                Name
-                <input required value={itemForm.name || ""} onChange={(event) => setItemForm((form) => ({ ...form, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              </label>
+	            {actionMessage ? (
+	              <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">{actionMessage}</div>
+	            ) : null}
+	            {actionError ? (
+	              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{actionError}</div>
+	            ) : null}
 
-              {itemModal.type === "tasks" ? (
-                <>
-                  <div className="grid gap-4 sm:grid-cols-3">
+	            <div className="mt-5 grid gap-4">
+	              {itemModal.type === "laborLineItems" ? (
+	                renderServiceCatalogPicker()
+	              ) : itemModal.type === "shoppingItems" ? (
+	                renderDatabaseProductPicker()
+	              ) : (
+	                <label className="text-sm font-semibold text-slate-700">
+	                  Name
+	                  <input required value={itemForm.name || ""} onChange={(event) => setItemForm((form) => ({ ...form, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+	                </label>
+	              )}
+
+	              {["laborLineItems", "shoppingItems"].includes(itemModal.type) ? (
+	                <label className="text-sm font-semibold text-slate-700">
+	                  Line name
+	                  <input required value={itemForm.name || ""} onChange={(event) => setItemForm((form) => ({ ...form, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+	                </label>
+	              ) : null}
+
+	              {itemModal.type === "tasks" ? (
+	                <>
+	                  <div className="grid gap-4 sm:grid-cols-3">
                     <label className="text-sm font-semibold text-slate-700">
                       Type
-                      <input value={itemForm.type || ""} onChange={(event) => setItemForm((form) => ({ ...form, type: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      <select value={itemForm.type || ""} onChange={(event) => setItemForm((form) => ({ ...form, type: canonicalJobTaskType(event.target.value) }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                        {[...new Set([canonicalJobTaskType(itemForm.type || ""), ...JOB_TASK_TYPE_NAMES].filter(Boolean))].map((type) => (
+                          <option key={type} value={type}>{type}</option>
+                        ))}
+                      </select>
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
                       Rate
@@ -1656,50 +2856,84 @@ const JobTemplates = () => {
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
                       Planned service cost
-                      <input type="number" min="0" step="0.01" value={itemForm.plannedLaborCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, plannedLaborCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                  </div>
-                  <label className="text-sm font-semibold text-slate-700">
-                    Linked task template IDs
-                    <input value={itemForm.taskTemplateIds || ""} onChange={(event) => setItemForm((form) => ({ ...form, taskTemplateIds: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                  <label className="text-sm font-semibold text-slate-700">
-                    Service notes
-                    <input value={itemForm.plannedLaborNotes || ""} onChange={(event) => setItemForm((form) => ({ ...form, plannedLaborNotes: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
+	                      <input type="number" min="0" step="0.01" value={itemForm.plannedLaborCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, plannedLaborCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+	                    </label>
+	                  </div>
+	                  {renderIdCheckboxPicker({
+	                    title: "Linked Tasks",
+	                    items: details.tasks,
+	                    selectedIds: itemForm.taskTemplateIds,
+	                    field: "taskTemplateIds",
+	                    emptyLabel: "Add template tasks first, then link them to this planned stop.",
+	                    metaForItem: (task) => `${task.type || "Task"} - ${task.estimatedTime || 0} min`,
+	                  })}
+	                  <label className="text-sm font-semibold text-slate-700">
+	                    Service notes
+	                    <input value={itemForm.plannedLaborNotes || ""} onChange={(event) => setItemForm((form) => ({ ...form, plannedLaborNotes: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+	                  </label>
                 </>
               ) : itemModal.type === "laborLineItems" ? (
-                <>
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <label className="text-sm font-semibold text-slate-700">
-                      Quantity
-                      <input type="number" min="1" step="1" value={itemForm.quantity || "1"} onChange={(event) => setItemForm((form) => ({ ...form, quantity: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Unit price
-                      <input type="number" min="0" step="0.01" value={itemForm.unitPrice || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, unitPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Total price
+	                <>
+	                  <div className="grid gap-4 sm:grid-cols-3">
+	                    <label className="text-sm font-semibold text-slate-700">
+	                      Quantity
+	                      <input
+	                        type="number"
+	                        min="1"
+	                        step="1"
+	                        value={itemForm.quantity || "1"}
+	                        onChange={(event) => {
+	                          const quantity = event.target.value;
+	                          setItemForm((form) => ({
+	                            ...form,
+	                            quantity,
+	                            totalPrice: dollarsFromCents(centsFromMoney(form.unitPrice) * Math.max(Number(quantity || 1) || 1, 1)),
+	                          }));
+	                        }}
+	                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+	                      />
+	                    </label>
+	                    <label className="text-sm font-semibold text-slate-700">
+	                      Unit price
+	                      <input
+	                        type="number"
+	                        min="0"
+	                        step="0.01"
+	                        value={itemForm.unitPrice || "0.00"}
+	                        onChange={(event) => {
+	                          const unitPrice = event.target.value;
+	                          setItemForm((form) => ({
+	                            ...form,
+	                            unitPrice,
+	                            totalPrice: dollarsFromCents(centsFromMoney(unitPrice) * Math.max(Number(form.quantity || 1) || 1, 1)),
+	                          }));
+	                        }}
+	                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+	                      />
+	                    </label>
+	                    <label className="text-sm font-semibold text-slate-700">
+	                      Total price
                       <input type="number" min="0" step="0.01" value={itemForm.totalPrice || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, totalPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
                       Internal cost
-                      <input type="number" min="0" step="0.01" value={itemForm.internalCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, internalCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                  </div>
-                  <label className="text-sm font-semibold text-slate-700">
-                    Linked task template IDs
-                    <input value={itemForm.taskTemplateIds || ""} onChange={(event) => setItemForm((form) => ({ ...form, taskTemplateIds: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                  <label className="text-sm font-semibold text-slate-700">
-                    Linked planned stop template IDs
-                    <input value={itemForm.plannedServiceStopTemplateIds || ""} onChange={(event) => setItemForm((form) => ({ ...form, plannedServiceStopTemplateIds: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                </>
-              ) : (
-                <>
-                  <div className="grid gap-4 sm:grid-cols-3">
+	                      <input type="number" min="0" step="0.01" value={itemForm.internalCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, internalCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+	                    </label>
+	                  </div>
+	                  <div className="grid gap-4">
+	                    {renderIdCheckboxPicker({
+	                      title: "Linked Tasks",
+	                      items: details.tasks,
+	                      selectedIds: itemForm.taskTemplateIds,
+	                      field: "taskTemplateIds",
+	                      emptyLabel: "Add template tasks first, or select a catalog service that seeds tasks.",
+	                      metaForItem: (task) => `${task.type || "Task"} - ${task.estimatedTime || 0} min`,
+	                    })}
+	                  </div>
+	                </>
+	              ) : (
+	                <>
+	                  <div className="grid gap-4 sm:grid-cols-3">
                     <label className="text-sm font-semibold text-slate-700">
                       Subcategory
                       <input value={itemForm.subCategory || ""} onChange={(event) => setItemForm((form) => ({ ...form, subCategory: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
@@ -1712,21 +2946,13 @@ const JobTemplates = () => {
                       Unit cost
                       <input type="number" min="0" step="0.01" value={itemForm.plannedUnitCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, plannedUnitCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Unit price
-                      <input type="number" min="0" step="0.01" value={itemForm.plannedUnitPrice || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, plannedUnitPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Database product ID
-                      <input value={itemForm.dbItemId || ""} onChange={(event) => setItemForm((form) => ({ ...form, dbItemId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Generic product ID
-                      <input value={itemForm.genericItemId || ""} onChange={(event) => setItemForm((form) => ({ ...form, genericItemId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                  </div>
-                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
-                    <input type="checkbox" checked={Boolean(itemForm.billable)} onChange={(event) => setItemForm((form) => ({ ...form, billable: event.target.checked }))} />
+	                    <label className="text-sm font-semibold text-slate-700">
+	                      Unit price
+	                      <input type="number" min="0" step="0.01" value={itemForm.plannedUnitPrice || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, plannedUnitPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+	                    </label>
+	                  </div>
+	                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
+	                    <input type="checkbox" checked={Boolean(itemForm.billable)} onChange={(event) => setItemForm((form) => ({ ...form, billable: event.target.checked }))} />
                     Billable
                   </label>
                 </>
@@ -1791,13 +3017,21 @@ const JobTemplates = () => {
 
               <div className="grid gap-4 md:grid-cols-3">
                 <label className="text-sm font-semibold text-slate-700">
-                  Job type
-                  <input
-                    type="text"
-                    value={templateForm.jobType}
-                    onChange={(event) => setTemplateForm((form) => ({ ...form, jobType: event.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
+                  Default job priority
+                  <select
+                    value={templateForm.defaultIssuePriorityLevel}
+                    onChange={(event) => setTemplateForm((form) => ({
+                      ...form,
+                      defaultIssuePriorityLevel: normalizeIssuePriority(event.target.value),
+                    }))}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {ISSUE_PRIORITY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.value} - {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="text-sm font-semibold text-slate-700">
                   Default price

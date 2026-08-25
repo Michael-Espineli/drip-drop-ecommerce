@@ -7,7 +7,6 @@ import {
   FaChartLine,
   FaCheckCircle,
   FaCreditCard,
-  FaExclamationTriangle,
   FaExternalLinkAlt,
   FaFileInvoiceDollar,
   FaFileSignature,
@@ -25,8 +24,7 @@ import {
   SalesPaymentStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
-import { buildTermsContent, getTermDescription } from '../../../utils/models/TermsTemplate';
-import { getTerms, listenTermsTemplates } from '../../../utils/terms/termsTemplateFirestore';
+import { JOB_OPERATION_STATUS, isFinishedOutstandingJob } from '../../../utils/jobStatusFilters';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import BillingReadinessCard from './components/BillingReadinessCard';
 
@@ -145,7 +143,7 @@ const ProgressBar = ({ value, tone = 'blue' }) => {
   );
 };
 
-const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate' }) => {
+const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate', to }) => {
   const tones = {
     slate: 'text-slate-500',
     blue: 'text-blue-600',
@@ -154,37 +152,22 @@ const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate' }) => {
     rose: 'text-rose-600',
   };
 
-  return (
-    <div className="min-w-0 border-l border-slate-200 px-4 first:border-l-0 first:pl-0">
+  const content = (
+    <>
       <div className="flex items-center gap-2">
         <Icon className={`h-4 w-4 ${tones[tone] || tones.slate}`} />
         <p className="truncate text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
       </div>
       <p className="mt-2 truncate text-2xl font-bold leading-none text-slate-950">{value}</p>
       {helper && <p className="mt-1 truncate text-xs font-semibold text-slate-500">{helper}</p>}
-    </div>
+    </>
   );
-};
 
-const QueueLink = ({ to, label, value, helper, tone = 'slate' }) => {
-  const tones = {
-    slate: 'bg-white text-slate-950',
-    amber: 'bg-amber-300 text-slate-950',
-    rose: 'bg-rose-300 text-slate-950',
-    emerald: 'bg-emerald-300 text-slate-950',
-  };
+  const className = "block min-w-0 rounded-md border border-slate-200 px-3 py-3 transition hover:border-blue-200 hover:bg-blue-50/60 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2";
 
-  return (
-    <Link to={to} className="block rounded-md bg-white/10 px-3 py-3 transition hover:bg-white/15">
-      <div className="flex items-start justify-between gap-3">
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-bold text-white">{label}</span>
-          {helper && <span className="mt-0.5 block truncate text-xs text-slate-300">{helper}</span>}
-        </span>
-        <span className={`shrink-0 rounded px-2 py-1 text-xs font-bold ${tones[tone] || tones.slate}`}>{value}</span>
-      </div>
-    </Link>
-  );
+  if (to) return <Link to={to} className={className}>{content}</Link>;
+
+  return <div className={className}>{content}</div>;
 };
 
 const PipelineRow = ({ label, value, maxValue, helper, tone = 'blue' }) => (
@@ -206,7 +189,7 @@ const EmptyState = ({ title, body }) => (
 );
 
 const Sales = () => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId } = useContext(Context);
+  const { recentlySelectedCompany, stripeConnectedAccountId } = useContext(Context);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState([]);
   const [agreements, setAgreements] = useState([]);
@@ -214,10 +197,7 @@ const Sales = () => {
   const [billingSubscriptions, setBillingSubscriptions] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [payments, setPayments] = useState([]);
-  const [termsTemplates, setTermsTemplates] = useState([]);
-  const [selectedTermsTemplateId, setSelectedTermsTemplateId] = useState('');
-  const [selectedTerms, setSelectedTerms] = useState([]);
-  const [termsLoading, setTermsLoading] = useState(false);
+  const [finishedJobs, setFinishedJobs] = useState([]);
 
   useEffect(() => {
     setErrors([]);
@@ -229,11 +209,12 @@ const Sales = () => {
       setBillingSubscriptions([]);
       setInvoices([]);
       setPayments([]);
+      setFinishedJobs([]);
       return undefined;
     }
 
     setLoading(true);
-    let firstSnapshotsRemaining = 5;
+    let firstSnapshotsRemaining = 6;
 
     const handleSnapshot = (setter) => (snapshot) => {
       setter(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
@@ -277,56 +258,29 @@ const Sales = () => {
         handleSnapshot(setPayments),
         handleError(salesCollectionNames.payments)
       ),
+      onSnapshot(
+        query(
+          collection(db, 'companies', recentlySelectedCompany, 'workOrders'),
+          where('operationStatus', '==', JOB_OPERATION_STATUS.finished)
+        ),
+        (snapshot) => {
+          setFinishedJobs(
+            snapshot.docs
+              .map((doc) => ({ id: doc.id, ...doc.data() }))
+              .filter(isFinishedOutstandingJob)
+          );
+          firstSnapshotsRemaining -= 1;
+
+          if (firstSnapshotsRemaining <= 0) {
+            setLoading(false);
+          }
+        },
+        handleError('finished jobs')
+      ),
     ];
 
     return () => subscriptions.forEach((unsubscribe) => unsubscribe());
   }, [recentlySelectedCompany]);
-
-  useEffect(() => {
-    if (!recentlySelectedCompany) {
-      setTermsTemplates([]);
-      setSelectedTermsTemplateId('');
-      return undefined;
-    }
-
-    return listenTermsTemplates(
-      recentlySelectedCompany,
-      (templates) => {
-        setTermsTemplates(templates);
-        setSelectedTermsTemplateId((currentTemplateId) => currentTemplateId || templates[0]?.id || '');
-      },
-      (error) => {
-        console.error('Unable to load terms templates', error);
-        setErrors((current) => [...current, `Service Agreement Templates: ${error.message}`]);
-      }
-    );
-  }, [recentlySelectedCompany]);
-
-  useEffect(() => {
-    if (!recentlySelectedCompany || !selectedTermsTemplateId) {
-      setSelectedTerms([]);
-      return undefined;
-    }
-
-    let isActive = true;
-    setTermsLoading(true);
-
-    getTerms(recentlySelectedCompany, selectedTermsTemplateId)
-      .then((terms) => {
-        if (isActive) setSelectedTerms(terms);
-      })
-      .catch((error) => {
-        console.error('Unable to load terms for template', error);
-        if (isActive) setErrors((current) => [...current, `Template Terms: ${error.message}`]);
-      })
-      .finally(() => {
-        if (isActive) setTermsLoading(false);
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, [recentlySelectedCompany, selectedTermsTemplateId]);
 
   const billingProfileByCustomerId = useMemo(() => {
     const profileMap = new Map();
@@ -375,11 +329,6 @@ const Sales = () => {
     const paidThroughAppCents = postedPayments
       .filter((payment) => appPaymentMethods.has(payment.method) || payment.stripePaymentIntentId || payment.stripeChargeId)
       .reduce((total, payment) => total + (Number(payment.amountCents) || 0), 0);
-    const manualPaymentCents = postedPayments
-      .filter((payment) => !appPaymentMethods.has(payment.method) && !payment.stripePaymentIntentId && !payment.stripeChargeId)
-      .reduce((total, payment) => total + (Number(payment.amountCents) || 0), 0);
-    const emailOnlyProfileCount = billingProfiles.filter((profile) => !profile.customerUserId && profile.email).length;
-    const manualInvoiceCount = invoices.filter((invoice) => normalizeStatus(invoice.type) === 'manual').length;
     const acceptedAgreements = agreements.filter(
       (agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted
     );
@@ -393,23 +342,17 @@ const Sales = () => {
       accountsReceivableCents,
       postedPaymentCents,
       paidThroughAppCents,
-      manualPaymentCents,
-      emailOnlyProfileCount,
-      manualInvoiceCount,
       pendingBillingCount,
       sentAgreementCount: agreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.sent)
         .length,
       acceptedAgreementCount: acceptedAgreements.length,
     };
-  }, [activeSubscriptions, agreements, activatedAgreementIds, billingProfiles, invoices, payments]);
+  }, [activeSubscriptions, agreements, activatedAgreementIds, invoices, payments]);
 
   const recentAgreements = useMemo(() => sortByFreshest(agreements).slice(0, 8), [agreements]);
   const recentSubscriptions = useMemo(() => sortByFreshest(billingSubscriptions).slice(0, 8), [billingSubscriptions]);
   const recentInvoices = useMemo(() => sortByFreshest(invoices).slice(0, 8), [invoices]);
   const recentPayments = useMemo(() => sortByFreshest(payments).slice(0, 6), [payments]);
-  const sentAgreements = useMemo(() => (
-    agreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.sent)
-  ), [agreements]);
   const pendingBillingAgreements = useMemo(() => (
     agreements
       .filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted)
@@ -425,19 +368,9 @@ const Sales = () => {
 
     return invoices.filter((invoice) => openStatuses.has(normalizeStatus(invoice.status)) && invoiceBalanceCents(invoice) > 0);
   }, [invoices]);
-  const overdueInvoices = useMemo(() => {
-    const now = Date.now();
-
-    return openInvoices.filter((invoice) => {
-      const status = normalizeStatus(invoice.status);
-      const dueMillis = toMillis(invoice.dueDate || invoice.dueAt);
-      return status === normalizeStatus(SalesInvoiceStatus.overdue) || status === 'pastdue' || (dueMillis && dueMillis < now);
-    });
-  }, [openInvoices]);
   const collectionsPercent = percentOf(salesSummary.postedPaymentCents, salesSummary.issuedInvoiceCents);
   const receivablePercent = percentOf(salesSummary.accountsReceivableCents, salesSummary.issuedInvoiceCents);
   const appPaymentPercent = percentOf(salesSummary.paidThroughAppCents, salesSummary.postedPaymentCents);
-  const manualPaymentPercent = percentOf(salesSummary.manualPaymentCents, salesSummary.postedPaymentCents);
   const pipelineMax = Math.max(
     1,
     salesSummary.sentAgreementCount,
@@ -445,36 +378,18 @@ const Sales = () => {
     pendingBillingAgreements.length,
     activeSubscriptions.length
   );
-  const selectedTermsTemplate = useMemo(
-    () => termsTemplates.find((template) => template.id === selectedTermsTemplateId) || null,
-    [selectedTermsTemplateId, termsTemplates]
-  );
-  const selectedTermsContent = useMemo(
-    () => buildTermsContent(selectedTermsTemplate, selectedTerms),
-    [selectedTerms, selectedTermsTemplate]
-  );
 
   const customerNameFor = (record) => {
     const profile = billingProfileByCustomerId.get(record.customerId) || billingProfileByCustomerId.get(record.customerUserId);
     return record.customerName || profile?.customerName || profile?.displayName || 'Customer';
   };
 
-  const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
-
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
       <div className="w-full space-y-5">
         <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                Feature Flag 004
-              </span>
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">
-                {selectedCompanyName}
-              </span>
-            </div>
-            <div className="mt-2 flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold text-slate-950">Sales Dashboard</h1>
               <FeatureInfoButton title="How Sales Works" align="left">
                 <p>
@@ -530,27 +445,24 @@ const Sales = () => {
         )}
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid xl:grid-cols-[minmax(0,1fr)_390px]">
-            <div className="p-5">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Sales Pulse</p>
-                  <h2 className="mt-1 text-xl font-bold text-slate-950">Revenue and collections</h2>
-                </div>
-                <div className="rounded-md bg-slate-900 px-4 py-3 text-white">
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-300">Monthly Recurring</p>
-                  <p className="mt-1 text-3xl font-bold leading-none">{formatCurrency(salesSummary.mrrCents)}</p>
-                </div>
+          <div className="p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Sales Pulse</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-950">Revenue and collections</h2>
               </div>
+            </div>
 
-              <div className="mt-5 grid gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
-                <PulseMetric icon={FaCreditCard} label="Active Subs" value={activeSubscriptions.length} helper={`${billingProfiles.length} billing profiles`} tone="blue" />
-                <PulseMetric icon={FaFileInvoiceDollar} label="Receivable" value={formatCurrency(salesSummary.accountsReceivableCents)} helper={`${openInvoices.length} open invoices`} tone={openInvoices.length ? 'amber' : 'emerald'} />
-                <PulseMetric icon={FaReceipt} label="Received" value={formatCurrency(salesSummary.postedPaymentCents)} helper={`${collectionsPercent}% of issued`} tone="emerald" />
-                <PulseMetric icon={FaCheckCircle} label="Accepted" value={salesSummary.acceptedAgreementCount} helper={`${pendingBillingAgreements.length} need billing`} tone={pendingBillingAgreements.length ? 'amber' : 'emerald'} />
-              </div>
+            <div className="mt-5 grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px] xl:items-start">
+              <div className="space-y-5">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <PulseMetric to="/company/sales/subscriptions" icon={FaCreditCard} label="Monthly Recurring" value={formatCurrency(salesSummary.mrrCents)} helper={`${activeSubscriptions.length} active subs`} tone="blue" />
+                  <PulseMetric to="/company/jobs/billing" icon={FaCheckCircle} label="Finished Jobs" value={finishedJobs.length} helper="ready for billing" tone={finishedJobs.length ? 'amber' : 'emerald'} />
+                  <PulseMetric to="/company/sales/invoices" icon={FaFileInvoiceDollar} label="Receivable" value={formatCurrency(salesSummary.accountsReceivableCents)} helper={`${openInvoices.length} open invoices`} tone={openInvoices.length ? 'amber' : 'emerald'} />
+                  <PulseMetric to="/company/sales/payments" icon={FaReceipt} label="Received" value={formatCurrency(salesSummary.postedPaymentCents)} helper={`${collectionsPercent}% of issued`} tone="emerald" />
+                  <PulseMetric to="/company/sales/agreements" icon={FaFileSignature} label="Accepted" value={salesSummary.acceptedAgreementCount} helper={`${pendingBillingAgreements.length} need billing`} tone={pendingBillingAgreements.length ? 'amber' : 'emerald'} />
+                </div>
 
-              <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
                     <span>Collections against issued invoices</span>
@@ -574,45 +486,19 @@ const Sales = () => {
                     </div>
                   </div>
                 </div>
+              </div>
 
-                <div className="space-y-3">
-                  <PipelineRow label="Sent" value={salesSummary.sentAgreementCount} maxValue={pipelineMax} helper="waiting on customer" tone="blue" />
-                  <PipelineRow label="Pending Billing" value={pendingBillingAgreements.length} maxValue={pipelineMax} helper="accepted but not active" tone="amber" />
-                  <PipelineRow label="Active Subs" value={activeSubscriptions.length} maxValue={pipelineMax} helper={formatCurrency(salesSummary.mrrCents)} tone="emerald" />
+              <div className="w-full space-y-3 xl:self-start xl:justify-self-end">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">Sales Flow</h3>
+                  <span className="text-xs font-semibold text-slate-400">{activeSubscriptions.length} active</span>
                 </div>
+                <PipelineRow label="Sent" value={salesSummary.sentAgreementCount} maxValue={pipelineMax} helper="waiting on customer" tone="blue" />
+                <PipelineRow label="Accepted" value={salesSummary.acceptedAgreementCount} maxValue={pipelineMax} helper="signed agreements" tone="emerald" />
+                <PipelineRow label="Pending Billing" value={pendingBillingAgreements.length} maxValue={pipelineMax} helper="accepted but not active" tone="amber" />
+                <PipelineRow label="Active Subs" value={activeSubscriptions.length} maxValue={pipelineMax} helper={formatCurrency(salesSummary.mrrCents)} tone="emerald" />
               </div>
             </div>
-
-            <aside className="border-t border-slate-800 bg-slate-900 p-5 text-white xl:border-l xl:border-t-0">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wide text-amber-300">Action Queue</p>
-                  <h2 className="mt-1 text-xl font-bold">Needs follow-up</h2>
-                </div>
-                <FaExclamationTriangle className={pendingBillingAgreements.length || overdueInvoices.length ? 'mt-1 text-amber-300' : 'mt-1 text-emerald-300'} />
-              </div>
-
-              <div className="mt-5 space-y-3">
-                <QueueLink to="/company/sales/agreements" label="Accepted agreements need billing" value={pendingBillingAgreements.length} helper="turn accepted work into active billing" tone={pendingBillingAgreements.length ? 'amber' : 'emerald'} />
-                <QueueLink to="/company/sales/invoices" label="Overdue invoices" value={overdueInvoices.length} helper={formatCurrency(overdueInvoices.reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0))} tone={overdueInvoices.length ? 'rose' : 'emerald'} />
-                <QueueLink to="/company/sales/agreements" label="Sent agreements waiting" value={sentAgreements.length} helper="customer signatures outstanding" tone={sentAgreements.length ? 'amber' : 'emerald'} />
-                <QueueLink to="/company/sales/invoices" label="Manual invoices" value={salesSummary.manualInvoiceCount} helper={`${manualPaymentPercent}% of payments recorded manually`} />
-              </div>
-
-              <div className="mt-5 border-t border-white/10 pt-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-300">Billing readiness</p>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <p className="text-2xl font-bold leading-none">{billingProfiles.length}</p>
-                    <p className="mt-1 text-xs font-semibold text-slate-300">profiles</p>
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold leading-none">{salesSummary.emailOnlyProfileCount}</p>
-                    <p className="mt-1 text-xs font-semibold text-slate-300">email only</p>
-                  </div>
-                </div>
-              </div>
-            </aside>
           </div>
         </section>
 
@@ -854,79 +740,6 @@ const Sales = () => {
                     <FaFileSignature className="text-xs" />
                     Service Agreement Templates
                   </span>
-                  <FaExternalLinkAlt className="text-xs" />
-                </Link>
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-bold text-slate-950">Agreement Terms</h2>
-                <FaFileSignature className="text-slate-400" />
-              </div>
-
-              <div className="mt-4 space-y-3">
-                <label htmlFor="termsTemplate" className="block text-sm font-semibold text-slate-700">
-                  Service Agreement Template
-                </label>
-                <select
-                  id="termsTemplate"
-                  value={selectedTermsTemplateId}
-                  onChange={(event) => setSelectedTermsTemplateId(event.target.value)}
-                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                >
-                  <option value="">Select a template</option>
-                  {termsTemplates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.name}
-                    </option>
-                  ))}
-                </select>
-
-                {selectedTermsTemplate ? (
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <p className="font-semibold text-slate-900">{selectedTermsTemplate.name}</p>
-                    {selectedTermsTemplate.description && (
-                      <p className="mt-1 text-sm text-slate-500">{selectedTermsTemplate.description}</p>
-                    )}
-
-                    <div className="mt-3 border-t border-slate-200 pt-3">
-                      {termsLoading ? (
-                        <p className="text-sm text-slate-500">Loading terms...</p>
-                      ) : selectedTerms.length > 0 || selectedTermsTemplate.content ? (
-                        <div className="space-y-2 text-sm text-slate-700">
-                          {selectedTermsTemplate.content && (
-                            <p className="whitespace-pre-wrap">{selectedTermsTemplate.content}</p>
-                          )}
-                          {selectedTerms.map((term, index) => (
-                            <p key={term.id} className="flex gap-2">
-                              <span className="font-semibold text-slate-500">{index + 1}.</span>
-                              <span>{getTermDescription(term)}</span>
-                            </p>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-slate-500">No terms saved for this template.</p>
-                      )}
-                    </div>
-
-                    {selectedTermsContent && (
-                      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                        Ready for service agreement drafts
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                    No terms template selected.
-                  </div>
-                )}
-
-                <Link
-                  to="/company/settings/terms-templates"
-                  className="inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-800"
-                >
-                  Manage templates
                   <FaExternalLinkAlt className="text-xs" />
                 </Link>
               </div>

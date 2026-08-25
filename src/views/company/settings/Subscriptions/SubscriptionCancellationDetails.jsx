@@ -90,8 +90,8 @@ const SubscriptionCancellationDetails= () => {
     
             const functionName = httpsCallable(functions, 'cancelStripeSubscription');
             functionName({ 
+                subscriptionId: job.stripeSubscriptionId,
                 companyId: recentlySelectedCompany,
-                currentSubscription: job
             })
             .then((result) => {
                 console.log(result)

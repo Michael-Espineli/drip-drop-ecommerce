@@ -7,7 +7,7 @@ import { Context } from "../../../../context/AuthContext";
 const functions = getFunctions();
 
 function EditProduct () {
-    const {stripeConnectedAccountId, user} = useContext(Context);
+    const {stripeConnectedAccountId, recentlySelectedCompany, user} = useContext(Context);
 
     const {productId} = useParams();
     const [priceList, setPricelist] = useState([]);
@@ -18,6 +18,7 @@ function EditProduct () {
         console.log(stripeConnectedAccountId)
         getPriceList({ 
             active : true,
+            companyId: recentlySelectedCompany,
             connectedAccount : stripeConnectedAccountId,
             method : "POST",
             productId : productId,

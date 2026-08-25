@@ -1,4 +1,5 @@
 import {
+  isAcceptedNotScheduledJob,
   isDraftOperationJob,
   isFinishedOutstandingJob,
 } from "./jobStatusFilters";
@@ -39,5 +40,28 @@ describe("jobStatusFilters", () => {
       operationStatus: "Finished",
       billingStatus: "Customer Resolved",
     })).toBe(false);
+  });
+
+  describe("isAcceptedNotScheduledJob", () => {
+    it("counts accepted jobs only when operation status is unscheduled", () => {
+      expect(isAcceptedNotScheduledJob({
+        operationStatus: "Unscheduled",
+        billingStatus: "Accepted",
+      })).toBe(true);
+    });
+
+    it("does not count accepted jobs already in progress", () => {
+      expect(isAcceptedNotScheduledJob({
+        operationStatus: "In Progress",
+        billingStatus: "Accepted",
+      })).toBe(false);
+    });
+
+    it("does not count accepted jobs waiting for parts", () => {
+      expect(isAcceptedNotScheduledJob({
+        operationStatus: "Waiting for Parts",
+        billingStatus: "Accepted",
+      })).toBe(false);
+    });
   });
 });

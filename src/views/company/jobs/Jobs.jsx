@@ -155,6 +155,15 @@ const getJobPriorityLevel = (job = {}) => (
     normalizeIssuePriority(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)
 );
 
+const getTemplateDefaultPriorityLevel = (template = {}) => (
+    normalizeIssuePriority(
+        template.defaultIssuePriorityLevel ??
+        template.issuePriorityLevel ??
+        template.priorityLevel ??
+        template.solutionTier
+    )
+);
+
 const toMillis = (value) => {
     if (!value) return 0;
     if (typeof value.toMillis === "function") return value.toMillis();
@@ -464,6 +473,7 @@ const Jobs = () => {
     const [showCreateOptionsModal, setShowCreateOptionsModal] = useState(false);
     const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
     const [loadingTemplates, setLoadingTemplates] = useState(false);
+    const [templateSearchTerm, setTemplateSearchTerm] = useState("");
     const [selectedJobIds, setSelectedJobIds] = useState(() => new Set());
     const [bulkOperationStatus, setBulkOperationStatus] = useState("");
     const [bulkBillingStatus, setBulkBillingStatus] = useState("");
@@ -716,6 +726,27 @@ const Jobs = () => {
         );
     }, [adminFilterActive, adminFilterLookupIds, jobs, priorityFilter, searchTerm, sortBy]);
 
+    const filteredJobTemplates = useMemo(() => {
+        const normalizedSearchTerm = templateSearchTerm.trim().toLowerCase();
+        if (!normalizedSearchTerm) return jobTemplates;
+
+        return jobTemplates.filter((template) => {
+            const priorityLevel = getTemplateDefaultPriorityLevel(template);
+            return [
+                template.name,
+                template.description,
+                template.id,
+                template.defaultRateCents,
+                template.rate,
+                template.defaultLaborCostCents,
+                priorityLevel,
+                getIssuePriorityLabel(priorityLevel),
+                template.locked ? "locked" : "",
+                template.isActive === false ? "inactive" : "active",
+            ].some((value) => String(value || "").toLowerCase().includes(normalizedSearchTerm));
+        });
+    }, [jobTemplates, templateSearchTerm]);
+
     useEffect(() => {
         setSelectedJobIds((previousIds) => {
             if (previousIds.size === 0) return previousIds;
@@ -919,12 +950,14 @@ const Jobs = () => {
 
     const handleOpenTemplatePicker = async () => {
         setShowCreateOptionsModal(false);
+        setTemplateSearchTerm("");
         setShowTemplatePickerModal(true);
         await fetchJobTemplates();
     };
 
     const handleCreateFromTemplate = (template) => {
         setShowTemplatePickerModal(false);
+        setTemplateSearchTerm("");
 
         navigate("/company/jobs/createNew", {
             state: {
@@ -1543,7 +1576,7 @@ const Jobs = () => {
     const TemplatePickerModal = () => {
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-                <div className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div className="max-h-[85vh] w-full max-w-5xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-slate-200 p-5">
                         <div className="flex items-start justify-between gap-4">
                             <div>
@@ -1554,7 +1587,10 @@ const Jobs = () => {
                             </div>
 
                             <button
-                                onClick={() => setShowTemplatePickerModal(false)}
+                                onClick={() => {
+                                    setShowTemplatePickerModal(false);
+                                    setTemplateSearchTerm("");
+                                }}
                                 className="h-9 w-9 rounded-md border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
                             >
                                 ✕
@@ -1562,66 +1598,117 @@ const Jobs = () => {
                         </div>
                     </div>
 
-                    <div className="max-h-[65vh] overflow-y-auto p-5">
+                    <div className="border-b border-slate-200 p-5">
+                        <div className="grid gap-3 sm:grid-cols-[minmax(240px,1fr)_auto] sm:items-center">
+                            <input
+                                value={templateSearchTerm}
+                                onChange={(event) => setTemplateSearchTerm(event.target.value)}
+                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                type="text"
+                                placeholder="Search templates by name, description, price, priority, or status..."
+                                autoFocus
+                            />
+                            <p className="text-sm font-semibold text-slate-500">
+                                {filteredJobTemplates.length} of {jobTemplates.length} shown
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="max-h-[56vh] overflow-y-auto">
                         {loadingTemplates ? (
-                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center">
+                            <div className="m-5 rounded-lg border border-slate-200 bg-slate-50 p-6 text-center">
                                 <p className="font-semibold text-slate-800">Loading templates...</p>
                             </div>
                         ) : jobTemplates.length === 0 ? (
-                            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+                            <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
                                 <p className="font-semibold text-slate-800">No templates found.</p>
                                 <p className="mt-1 text-sm text-slate-500">
                                     Create a job template first, then return here.
                                 </p>
                             </div>
+                        ) : filteredJobTemplates.length === 0 ? (
+                            <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+                                <p className="font-semibold text-slate-800">No templates match that search.</p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                    Try a name, description, price, priority, or status.
+                                </p>
+                            </div>
                         ) : (
-                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                                {jobTemplates.map((template) => (
+                            <div className="min-w-full">
+                                <div className="sticky top-0 z-10 hidden grid-cols-[minmax(260px,1fr)_140px_180px_150px_96px] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-bold uppercase tracking-wide text-slate-500 md:grid">
+                                    <span>Template</span>
+                                    <span>Price</span>
+                                    <span>Priority</span>
+                                    <span>Labor</span>
+                                    <span className="text-right">Action</span>
+                                </div>
+
+                                <div className="divide-y divide-slate-200">
+                                    {filteredJobTemplates.map((template) => (
                                     <button
                                         key={template.id}
                                         type="button"
                                         onClick={() => handleCreateFromTemplate(template)}
-                                        className="rounded-md border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                                        className="grid w-full gap-3 px-5 py-4 text-left transition hover:bg-blue-50 focus:outline-none focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 md:grid-cols-[minmax(260px,1fr)_140px_180px_150px_96px] md:items-center md:gap-4"
                                     >
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <p className="font-bold text-slate-900">
-                                                    {template.name || "Job Template"}
-                                                </p>
+                                        <div>
+                                            <p className="font-bold text-slate-900">
+                                                {template.name || "Job Template"}
+                                            </p>
 
-                                                {template.description && (
-                                                    <p className="mt-1 line-clamp-2 text-sm text-slate-500">
-                                                        {template.description}
-                                                    </p>
+                                            {template.description && (
+                                                <p className="mt-1 line-clamp-2 text-sm text-slate-500 md:line-clamp-1">
+                                                    {template.description}
+                                                </p>
+                                            )}
+
+                                            <div className="mt-2 flex flex-wrap gap-2 md:hidden">
+                                                {template.locked && (
+                                                    <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
+                                                        Locked
+                                                    </span>
+                                                )}
+                                                {template.isActive === false && (
+                                                    <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                                                        Inactive
+                                                    </span>
                                                 )}
                                             </div>
-
-                                            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700">
-                                                {formatTemplateMoney(template)}
-                                            </span>
                                         </div>
 
-                                        <div className="mt-4 flex flex-wrap gap-2">
-                                            {template.type && (
-                                                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                                                    {template.type}
-                                                </span>
-                                            )}
+                                        <div className="font-bold text-slate-900 md:text-sm">
+                                            {formatTemplateMoney(template)}
+                                        </div>
 
+                                        <div>
+                                            {renderSolutionTier(getTemplateDefaultPriorityLevel(template))}
+                                        </div>
+
+                                        <div className="text-sm font-semibold text-slate-700">
                                             {template.defaultLaborCostCents !== undefined && (
-                                                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                                                    Labor {moneyFromCents(template.defaultLaborCostCents)}
-                                                </span>
+                                                <span>{moneyFromCents(template.defaultLaborCostCents)}</span>
                                             )}
+                                            {template.defaultLaborCostCents === undefined && <span className="text-slate-400">-</span>}
+                                        </div>
 
+                                        <div className="flex items-center justify-between gap-3 md:justify-end">
+                                            <div className="hidden flex-wrap justify-end gap-2 md:flex">
                                             {template.locked && (
                                                 <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
                                                     Locked
                                                 </span>
                                             )}
+                                                {template.isActive === false && (
+                                                    <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                                                        Inactive
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <span className="text-sm font-bold text-blue-700">Select</span>
                                         </div>
                                     </button>
-                                ))}
+                                    ))}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -1654,7 +1741,16 @@ const Jobs = () => {
                             </div>
                         </div>
 
-                        {canCreateAnyJobs && (
+                        <div className="flex flex-wrap gap-2 lg:justify-end">
+                            <button
+                                type="button"
+                                onClick={() => navigate("/company/settings/job-templates")}
+                                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                            >
+                                Job Templates
+                            </button>
+
+                            {canCreateAnyJobs && (
                             <button
                                 type="button"
                                 onClick={openCreateOptions}
@@ -1662,7 +1758,8 @@ const Jobs = () => {
                             >
                                 Create Job
                             </button>
-                        )}
+                            )}
+                        </div>
                     </div>
                 </section>
 
@@ -1685,7 +1782,7 @@ const Jobs = () => {
                         <JobMetricCard
                             label="Accepted Not Scheduled"
                             value={jobSummary.acceptedNotScheduledCount}
-                            detail="Billing accepted without Scheduled operation"
+                            detail="Billing accepted and operation Unscheduled"
                             tone="green"
                         />
                     )}

@@ -812,9 +812,26 @@ const CreateNewRecurringServiceStop = () => {
                 payload: newRSSData,
             });
             const rssId = await createFirstRecurringServiceStop(recentlySelectedCompany, newRSSData);
+            const routeSyncResult = await addRecurringServiceStopToPlannedRoute({
+                db,
+                companyId: recentlySelectedCompany,
+                recurringServiceStop: {
+                    ...newRSSData,
+                    id: rssId,
+                },
+            });
+            const recurringRouteId = routeSyncResult?.routeId || "";
             const setupUpdate = {
-                operationsSetupStatus: "recurringServiceStopCreated",
+                operationsSetupStatus: recurringRouteId
+                    ? "recurringServiceStopAndRouteCreated"
+                    : "recurringServiceStopCreated",
                 recurringServiceStopId: rssId,
+                ...(recurringRouteId
+                    ? {
+                        recurringRouteId,
+                        recurringRouteLinkedAt: serverTimestamp(),
+                    }
+                    : {}),
                 recurringServiceStopCreatedAt: serverTimestamp(),
                 operationsSetupUpdatedAt: serverTimestamp(),
                 updatedAt: serverTimestamp(),
@@ -826,10 +843,11 @@ const CreateNewRecurringServiceStop = () => {
             });
             const setupWrites = [];
 
-            if (agreementId || billingSubscriptionId) {
+            if (agreementId || billingSubscriptionId || recurringRouteId) {
                 setupWrites.push(updateDoc(doc(db, "companies", recentlySelectedCompany, "recurringServiceStop", rssId), {
                     salesAgreementId: agreementId,
                     salesBillingSubscriptionId: billingSubscriptionId,
+                    ...(recurringRouteId ? { recurringRouteId } : {}),
                     updatedAt: serverTimestamp(),
                 }));
             }
@@ -854,15 +872,6 @@ const CreateNewRecurringServiceStop = () => {
             if (setupWrites.length) {
                 await Promise.all(setupWrites);
             }
-
-            await addRecurringServiceStopToPlannedRoute({
-                db,
-                companyId: recentlySelectedCompany,
-                recurringServiceStop: {
-                    ...newRSSData,
-                    id: rssId,
-                },
-            });
 
             console.log(rssId)
             toast.success('Successfully created recurring stop!', { id: toastId });

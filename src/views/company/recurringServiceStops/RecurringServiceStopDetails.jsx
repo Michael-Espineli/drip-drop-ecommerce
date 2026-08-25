@@ -8,9 +8,8 @@ import {
   where,
   doc,
   getDoc,
-  updateDoc,
   setDoc,
-  serverTimestamp,
+  updateDoc,
   orderBy,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -20,28 +19,65 @@ import Select from "react-select";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
 import { removeRecurringServiceStopFromPlannedRoutes } from "../../../utils/recurringRouteSync";
-import { salesCollectionNames } from "../../../utils/models/Sales";
-import { recurringFrequencyToAgreementService } from "../../../utils/sales/agreementCadence";
 import { appConfirm } from "../../../utils/appDialog";
 import { reportAppError } from "../../../utils/errorReporting";
 import ShareItemButton from "../../components/share/ShareItemButton";
+import {
+  RSS_DAY_OPTIONS,
+  RSS_FREQUENCY_OPTIONS,
+  buildRecurringServiceStopEditForm,
+  buildRecurringServiceStopUpdatePayload,
+  companyUserOptionFromDoc,
+  formatDateInputValue,
+  optionsWithCurrentValue,
+  payTypeOptionFromDoc,
+  recurringRoutePayTypeOptions,
+  selectedPayTypeOptionForStop,
+  selectedTechOptionForStop,
+} from "../../../utils/recurringServiceStopEdit";
+import { sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+  JOB_TASK_TYPE_NAMES,
+  canonicalJobTaskType,
+  taskTypeRequiresBodyOfWater,
+  taskTypeRequiresEquipment,
+  taskTypeRequiresInstallItem,
+  isInstallOrReplaceTaskType,
+} from "../../../utils/jobTaskTypes";
+import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import {
+  EQUIPMENT_DATABASE_CATEGORY,
+  databaseEquipmentMappingFromItem,
+  databaseEquipmentMappingPatch,
+  emptyDatabaseEquipmentMapping,
+  equipmentDatabaseItemLabel,
+  hasDatabaseEquipmentMapping,
+  isEquipmentDatabaseItem,
+} from "../../../utils/databaseEquipmentItems";
+import {
+  applyTaskGroupToRecurringServiceStop,
+  fetchRecurringTaskGroupOptions,
+  loadRecurringServiceStopTasks,
+} from "../../../utils/recurringServiceStopTasks";
 
 import { v4 as uuidv4 } from 'uuid';
 const functions = getFunctions();
 
-const jobTaskTypeOptions = [
-  "Basic",
-  "Clean",
-  "Clean Filter",
-  "Maintenance",
-  "Repair",
-  "Empty Water",
-  "Fill Water",
-  "Inspection",
-  "Install",
-  "Remove",
-  "Replace",
-];
+const jobTaskTypeOptions = JOB_TASK_TYPE_NAMES;
+
+const buildEquipmentDatabaseItemOption = (data = {}, docId = "") => {
+  const id = data.id || docId;
+  return {
+    id,
+    value: id,
+    label: equipmentDatabaseItemLabel({ ...data, id }),
+    name: data.name || "Equipment item",
+    category: data.category || "",
+    dbItemId: id,
+    itemId: id,
+    ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(data)),
+  };
+};
 
 const getDateValue = (value) => {
   if (!value) return null;
@@ -89,14 +125,28 @@ const RecurringServiceStopDetails = () => {
 
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [startDateInput, setStartDateInput] = useState("");
 
   const [serviceStopList, setServiceStopList] = useState([]);
   const [pastServiceStopList, setPastServiceStopList] = useState([]);
   const [recurringServiceStopTasks, setRecurringServiceStopTasks] = useState([]);
+  const [taskGroupOptions, setTaskGroupOptions] = useState([]);
+  const [selectedTaskTemplate, setSelectedTaskTemplate] = useState(null);
+  const [applyingTaskTemplate, setApplyingTaskTemplate] = useState(false);
   const [durationHistory, setDurationHistory] = useState([]);
   const [loadingDurationHistory, setLoadingDurationHistory] = useState(false);
   const [durationAction, setDurationAction] = useState("");
   const [estimatedTimeInput, setEstimatedTimeInput] = useState("");
+  const [bodiesOfWater, setBodiesOfWater] = useState([]);
+  const [equipmentList, setEquipmentList] = useState([]);
+  const [equipmentDatabaseItems, setEquipmentDatabaseItems] = useState([]);
+  const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
+  const [companyUserOptions, setCompanyUserOptions] = useState([]);
+  const [selectedServiceStopType, setSelectedServiceStopType] = useState(null);
+  const [selectedTech, setSelectedTech] = useState(null);
+  const [noEndDateInput, setNoEndDateInput] = useState(true);
+  const [endDateInput, setEndDateInput] = useState("");
+  const [showAllDurationHistory, setShowAllDurationHistory] = useState(false);
 
   const [showAddTask, setShowAddTask] = useState(false);
   const [savingTask, setSavingTask] = useState(false);
@@ -108,7 +158,11 @@ const RecurringServiceStopDetails = () => {
     contractedRate: "",
     estimatedTime: "",
     status: "Not Finished",
+    equipmentId: "",
+    bodyOfWaterId: "",
+    dataBaseItemId: "",
   });
+  const [newTaskEquipmentMapping, setNewTaskEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
 
   const [recurringServiceStop, setRecurringServiceStop] = useState({
     id: "",
@@ -116,6 +170,10 @@ const RecurringServiceStopDetails = () => {
     type: "",
     typeId: "",
     typeImage: "",
+    payTypeId: "",
+    payTypeName: "",
+    category: "",
+    serviceStopTypeUseCaseRawValue: "",
     customerId: "",
     customerName: "",
 
@@ -152,22 +210,34 @@ const RecurringServiceStopDetails = () => {
   });
 
   const frequencyOptions = useMemo(
-    () =>
-      ["Weekly", "Twice Weekly", "Three Times Weekly", "Biweekly", "Monthly", "Every 2 Weeks", "Every 4 Weeks", "Custom"].map((v) => ({
-        value: v,
-        label: v,
-      })),
-    []
+    () => optionsWithCurrentValue(RSS_FREQUENCY_OPTIONS, recurringServiceStop.frequency),
+    [recurringServiceStop.frequency]
   );
 
   const daysOptions = useMemo(
-    () =>
-      ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => ({
-        value: d,
-        label: d,
-      })),
-    []
+    () => optionsWithCurrentValue(RSS_DAY_OPTIONS, recurringServiceStop.day || recurringServiceStop.daysOfWeek),
+    [recurringServiceStop.day, recurringServiceStop.daysOfWeek]
   );
+
+  const serviceStopTypeOptions = useMemo(
+    () => recurringRoutePayTypeOptions(companyServiceStopTypes),
+    [companyServiceStopTypes]
+  );
+
+  const equipmentById = useMemo(() => (
+    new Map(equipmentList.map((equipment) => [equipment.id, equipment]))
+  ), [equipmentList]);
+  const equipmentDatabaseItemById = useMemo(() => (
+    new Map(equipmentDatabaseItems.map((item) => [item.id, item]))
+  ), [equipmentDatabaseItems]);
+  const newTaskTypeValue = canonicalJobTaskType(newTask.type || "");
+  const newTaskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(newTaskTypeValue);
+  const newTaskNeedsEquipment = taskTypeRequiresEquipment(newTaskTypeValue);
+  const newTaskNeedsInstallItem = taskTypeRequiresInstallItem(newTaskTypeValue);
+  const newTaskNeedsEquipmentDatabaseItem = isInstallOrReplaceTaskType(newTaskTypeValue);
+  const selectedNewTaskEquipmentItem = newTask.dataBaseItemId
+    ? equipmentDatabaseItemById.get(newTask.dataBaseItemId) || null
+    : null;
 
   const [selectedFrequency, setSelectedFrequency] = useState(null);
   const [selectedDays, setSelectedDays] = useState([]);
@@ -227,6 +297,60 @@ const RecurringServiceStopDetails = () => {
     }),
     menu: (base) => ({ ...base, borderRadius: 12, overflow: "hidden" }),
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadEditOptions = async () => {
+      if (!recentlySelectedCompany) {
+        setCompanyServiceStopTypes([]);
+        setCompanyUserOptions([]);
+        setTaskGroupOptions([]);
+        return;
+      }
+
+      try {
+        const [payTypesSnapshot, techSnapshot, taskGroupOptionsResult] = await Promise.all([
+          getDocs(collection(db, "companies", recentlySelectedCompany, "companyPayTypes")),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers")),
+          fetchRecurringTaskGroupOptions({ db, companyId: recentlySelectedCompany }),
+        ]);
+        if (!cancelled) {
+          setCompanyServiceStopTypes(payTypesSnapshot.docs.map(payTypeOptionFromDoc));
+          setCompanyUserOptions(sortCompanyUsersByName(techSnapshot.docs.map(companyUserOptionFromDoc)));
+          setTaskGroupOptions(taskGroupOptionsResult);
+        }
+      } catch (error) {
+        console.error("Failed to load recurring stop edit options:", error);
+        if (!cancelled) {
+          setCompanyServiceStopTypes([]);
+          setCompanyUserOptions([]);
+          setTaskGroupOptions([]);
+        }
+        await reportDetailsError(error, {
+          where: "RecurringServiceStopDetails.loadEditOptions",
+          title: "Recurring service stop edit options failed to load",
+          description: "The recurring service stop detail page could not load company pay types or technicians.",
+        });
+        toast.error("Failed to load edit options");
+      }
+    };
+
+    loadEditOptions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recentlySelectedCompany, reportDetailsError]);
+
+  useEffect(() => {
+    if (edit) return;
+    setSelectedServiceStopType(selectedPayTypeOptionForStop(recurringServiceStop, serviceStopTypeOptions));
+    setSelectedTech(selectedTechOptionForStop(recurringServiceStop, companyUserOptions));
+    setStartDateInput(formatDateInputValue(recurringServiceStop.startDate));
+    setNoEndDateInput(recurringServiceStop.noEndDate !== false);
+    setEndDateInput(formatDateInputValue(recurringServiceStop.endDate));
+  }, [companyUserOptions, edit, recurringServiceStop, serviceStopTypeOptions]);
 
   const loadDurationHistory = useCallback(async () => {
     if (!recentlySelectedCompany || !recurringServiceStopId) return;
@@ -327,6 +451,10 @@ const RecurringServiceStopDetails = () => {
           type: rssData.type,
           typeId: rssData.typeId,
           typeImage: rssData.typeImage,
+          payTypeId: rssData.payTypeId || rssData.typeId || "",
+          payTypeName: rssData.payTypeName || rssData.type || "",
+          category: rssData.category || "",
+          serviceStopTypeUseCaseRawValue: rssData.serviceStopTypeUseCaseRawValue || "",
           customerId: rssData.customerId,
           customerName: rssData.customerName,
 
@@ -363,25 +491,30 @@ const RecurringServiceStopDetails = () => {
         }));
         const loadedEstimatedTime = rssData.estimatedTime ?? rssData.estimatedDuration ?? "";
         setEstimatedTimeInput(loadedEstimatedTime === "" || loadedEstimatedTime === null ? "" : String(loadedEstimatedTime));
+        setSelectedServiceStopType(selectedPayTypeOptionForStop({
+          payTypeId: rssData.payTypeId || rssData.typeId || "",
+          payTypeName: rssData.payTypeName || rssData.type || "",
+          typeId: rssData.typeId || "",
+          type: rssData.type || "",
+        }));
+        setSelectedTech(selectedTechOptionForStop({
+          tech: rssData.tech || "",
+          techId: rssData.techId || "",
+        }));
+        setStartDateInput(formatDateInputValue(rssData.startDate));
+        setNoEndDateInput(rssData.noEndDate !== false);
+        setEndDateInput(formatDateInputValue(rssData.endDate));
 
-        let tasks = [];
-
-        if (Array.isArray(rssData.tasks)) {
-          tasks = rssData.tasks;
-        } else if (Array.isArray(rssData.serviceTasks)) {
-          tasks = rssData.serviceTasks;
-        } else if (Array.isArray(rssData.recurringServiceStopTasks)) {
-          tasks = rssData.recurringServiceStopTasks;
-        }
-
+        const tasks = await loadRecurringServiceStopTasks({
+          db,
+          companyId: recentlySelectedCompany,
+          recurringServiceStopId,
+          recurringServiceStop: { id: docSnap.id, ...rssData },
+        });
         setRecurringServiceStopTasks(tasks);
 
-        const start = rssData.startDate?.toDate?.()
-          ? format(rssData.startDate.toDate(), "MMMM d, yyyy")
-          : "";
-        const end = rssData.endDate?.toDate?.()
-          ? format(rssData.endDate.toDate(), "MMMM d, yyyy")
-          : "";
+        const start = formatDateValue(rssData.startDate, "MMMM d, yyyy");
+        const end = rssData.noEndDate ? "" : formatDateValue(rssData.endDate, "MMMM d, yyyy");
 
         setStartDate(start);
         setEndDate(end);
@@ -470,6 +603,88 @@ const RecurringServiceStopDetails = () => {
     })();
   }, [recentlySelectedCompany, recurringServiceStopId, reportDetailsError]);
 
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setEquipmentDatabaseItems([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadEquipmentDatabaseItems = async () => {
+      try {
+        const itemsSnap = await getDocs(
+          query(
+            collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"),
+            orderBy("name")
+          )
+        );
+        if (cancelled) return;
+        setEquipmentDatabaseItems(
+          itemsSnap.docs
+            .map((itemDoc) => buildEquipmentDatabaseItemOption(itemDoc.data(), itemDoc.id))
+            .filter(isEquipmentDatabaseItem)
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load equipment database items:", error);
+          setEquipmentDatabaseItems([]);
+        }
+      }
+    };
+
+    loadEquipmentDatabaseItems();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !recurringServiceStop.serviceLocationId) {
+      setBodiesOfWater([]);
+      setEquipmentList([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadLocationAssets = async () => {
+      try {
+        const [bodyOfWaterSnapshot, equipmentSnapshot] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"),
+              where("serviceLocationId", "==", recurringServiceStop.serviceLocationId)
+            )
+          ),
+          getDocs(
+            query(
+              collection(db, "companies", recentlySelectedCompany, "equipment"),
+              where("serviceLocationId", "==", recurringServiceStop.serviceLocationId)
+            )
+          ),
+        ]);
+
+        if (cancelled) return;
+        setBodiesOfWater(bodyOfWaterSnapshot.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+        setEquipmentList(equipmentSnapshot.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load recurring stop equipment context:", error);
+          setBodiesOfWater([]);
+          setEquipmentList([]);
+        }
+      }
+    };
+
+    loadLocationAssets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recentlySelectedCompany, recurringServiceStop.serviceLocationId]);
+
   const deleteRSS = async (e) => {
     e.preventDefault();
     try {
@@ -509,6 +724,18 @@ const RecurringServiceStopDetails = () => {
 
   const editRSS = (e) => {
     e.preventDefault();
+    const form = buildRecurringServiceStopEditForm({
+      stop: recurringServiceStop,
+      payTypeOptions: serviceStopTypeOptions,
+      technicianOptions: companyUserOptions,
+    });
+    setSelectedFrequency(form.frequency);
+    setSelectedDays(form.day ? [form.day] : []);
+    setSelectedServiceStopType(form.payType);
+    setSelectedTech(form.technician);
+    setStartDateInput(form.startDate);
+    setNoEndDateInput(form.noEndDate);
+    setEndDateInput(form.endDate);
     setEdit(true);
   };
 
@@ -516,102 +743,64 @@ const RecurringServiceStopDetails = () => {
     e.preventDefault();
     setEdit(false);
 
-    setSelectedFrequency(
-      recurringServiceStop.frequency
-        ? { value: recurringServiceStop.frequency, label: recurringServiceStop.frequency }
-        : null
-    );
-
-    const daysRaw = recurringServiceStop.daysOfWeek;
-    const daysArr = Array.isArray(daysRaw)
-      ? daysRaw
-      : typeof daysRaw === "string"
-        ? daysRaw.split(",").map((s) => s.trim()).filter(Boolean)
-        : [];
-    setSelectedDays(daysArr.map((d) => ({ value: d, label: d })));
+    const form = buildRecurringServiceStopEditForm({
+      stop: recurringServiceStop,
+      payTypeOptions: serviceStopTypeOptions,
+      technicianOptions: companyUserOptions,
+    });
+    setSelectedFrequency(form.frequency);
+    setSelectedDays(form.day ? [form.day] : []);
     setEstimatedTimeInput(
       recurringServiceStop.estimatedTime === undefined || recurringServiceStop.estimatedTime === null
         ? ""
         : String(recurringServiceStop.estimatedTime)
     );
+    setSelectedServiceStopType(form.payType);
+    setSelectedTech(form.technician);
+    setStartDateInput(form.startDate);
+    setNoEndDateInput(form.noEndDate);
+    setEndDateInput(form.endDate);
   };
 
   const saveEdits = async (e) => {
     e.preventDefault();
     try {
-      const rssRef = doc(
-        db,
-        "companies",
-        recentlySelectedCompany,
-        "recurringServiceStop",
-        recurringServiceStopId
-      );
-
-      const frequency = selectedFrequency?.value || recurringServiceStop.frequency || "";
-      const selectedDayValues = (selectedDays || []).map((d) => d.value).filter(Boolean);
-      const daysOfWeek = selectedDayValues.join(",");
-      const day = selectedDayValues[0] || recurringServiceStop.day || "";
-      const serviceScheduleUpdate = recurringFrequencyToAgreementService({
-        frequency,
-        daysOfWeek,
-        day,
+      const recurringServiceStopPayload = buildRecurringServiceStopUpdatePayload({
+        stop: {
+          ...recurringServiceStop,
+          id: recurringServiceStopId,
+        },
+        form: {
+          payType: selectedServiceStopType,
+          frequency: selectedFrequency,
+          technician: selectedTech,
+          day: selectedDays?.[0] || null,
+          startDate: startDateInput,
+          noEndDate: noEndDateInput,
+          endDate: endDateInput,
+        },
+        companyServiceStopTypes,
+      });
+      const callable = httpsCallable(functions, "updateRecurringServiceStop");
+      const result = await callable({
+        companyId: recentlySelectedCompany,
+        recurringServiceStop: recurringServiceStopPayload,
+        syncRoute: true,
       });
 
-      await updateDoc(rssRef, {
-        frequency,
-        daysOfWeek,
-        day,
-        ...serviceScheduleUpdate,
-        updatedAt: serverTimestamp(),
-      });
-
-      let linkedAgreementId = recurringServiceStop.salesAgreementId || "";
-      let linkedBillingSubscriptionId = recurringServiceStop.salesBillingSubscriptionId || "";
-
-      if (!linkedAgreementId) {
-        const linkedAgreementsSnap = await getDocs(query(
-          collection(db, salesCollectionNames.agreements),
-          where("companyId", "==", recentlySelectedCompany),
-          where("recurringServiceStopId", "==", recurringServiceStopId),
-          limit(1)
-        ));
-        const linkedAgreementDoc = linkedAgreementsSnap.docs[0];
-        linkedAgreementId = linkedAgreementDoc?.id || "";
-        linkedBillingSubscriptionId = linkedBillingSubscriptionId || linkedAgreementDoc?.data()?.billingSubscriptionId || "";
+      if (result.data?.success === false || (result.data?.status && Number(result.data.status) >= 400)) {
+        throw new Error(result.data?.error || "Recurring service stop update failed.");
       }
-
-      const linkedWrites = [];
-      if (linkedAgreementId) {
-        linkedWrites.push(updateDoc(doc(db, salesCollectionNames.agreements, linkedAgreementId), {
-          ...serviceScheduleUpdate,
-          recurringServiceStopId,
-          operationsSetupStatus: "recurringServiceStopCreated",
-          operationsSetupUpdatedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        }));
-      }
-
-      if (linkedBillingSubscriptionId) {
-        linkedWrites.push(updateDoc(doc(db, salesCollectionNames.billingSubscriptions, linkedBillingSubscriptionId), {
-          ...serviceScheduleUpdate,
-          recurringServiceStopId,
-          operationsSetupStatus: "recurringServiceStopCreated",
-          operationsSetupUpdatedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        }));
-      }
-
-      if (linkedWrites.length) await Promise.all(linkedWrites);
 
       setRecurringServiceStop((prev) => ({
         ...prev,
-        frequency,
-        daysOfWeek,
-        day,
-        ...serviceScheduleUpdate,
-        salesAgreementId: linkedAgreementId || prev.salesAgreementId,
-        salesBillingSubscriptionId: linkedBillingSubscriptionId || prev.salesBillingSubscriptionId,
+        ...recurringServiceStopPayload,
       }));
+      setStartDate(formatDateValue(recurringServiceStopPayload.startDate, "MMMM d, yyyy"));
+      setStartDateInput(formatDateInputValue(recurringServiceStopPayload.startDate));
+      setEndDate(recurringServiceStopPayload.noEndDate ? "" : formatDateValue(recurringServiceStopPayload.endDate));
+      setSelectedServiceStopType(selectedPayTypeOptionForStop(recurringServiceStopPayload, serviceStopTypeOptions));
+      setSelectedTech(selectedTechOptionForStop(recurringServiceStopPayload, companyUserOptions));
 
       toast.success("Saved");
       setEdit(false);
@@ -623,7 +812,9 @@ const RecurringServiceStopDetails = () => {
         description: "Saving recurring service stop schedule changes or linked sales records failed.",
         data: {
           selectedFrequency: selectedFrequency?.value || "",
-          selectedDays: (selectedDays || []).map((day) => day.value || day).join(","),
+          selectedDay: selectedDays?.[0]?.value || "",
+          selectedTech: selectedTech?.value || "",
+          startDateInput,
         },
       });
       toast.error("Failed to save changes");
@@ -755,7 +946,78 @@ const RecurringServiceStopDetails = () => {
     </div>
   );
 
+  useEffect(() => {
+    if (!newTaskNeedsInstallItem) {
+      if (newTask.dataBaseItemId) {
+        setNewTask((current) => ({ ...current, dataBaseItemId: "" }));
+      }
+      setNewTaskEquipmentMapping(emptyDatabaseEquipmentMapping());
+      return;
+    }
+
+    setNewTaskEquipmentMapping(
+      selectedNewTaskEquipmentItem
+        ? databaseEquipmentMappingFromItem(selectedNewTaskEquipmentItem)
+        : emptyDatabaseEquipmentMapping()
+    );
+  }, [newTask.dataBaseItemId, newTaskNeedsInstallItem, selectedNewTaskEquipmentItem]);
+
+  useEffect(() => {
+    if (!newTaskNeedsBodyOfWater || newTask.bodyOfWaterId || !newTask.equipmentId) return;
+
+    const selectedEquipment = equipmentById.get(newTask.equipmentId);
+    if (!selectedEquipment?.bodyOfWaterId) return;
+
+    setNewTask((current) => (
+      current.bodyOfWaterId
+        ? current
+        : { ...current, bodyOfWaterId: selectedEquipment.bodyOfWaterId }
+    ));
+  }, [equipmentById, newTask.bodyOfWaterId, newTask.equipmentId, newTaskNeedsBodyOfWater]);
+
   const handleNewTaskChange = (field, value) => {
+    if (field === "type") {
+      const canonicalType = canonicalJobTaskType(value);
+      const needsBodyOfWater = taskTypeRequiresBodyOfWater(canonicalType);
+      const needsExistingEquipment = taskTypeRequiresEquipment(canonicalType);
+      const needsInstallItem = taskTypeRequiresInstallItem(canonicalType);
+
+      setNewTask((prev) => {
+        const selectedEquipment = prev.equipmentId ? equipmentById.get(prev.equipmentId) : null;
+        return {
+          ...prev,
+          type: canonicalType,
+          equipmentId: needsExistingEquipment ? prev.equipmentId : "",
+          bodyOfWaterId: needsBodyOfWater
+            ? prev.bodyOfWaterId ||
+            selectedEquipment?.bodyOfWaterId ||
+            (bodiesOfWater.length === 1 ? bodiesOfWater[0].id : "")
+            : "",
+          dataBaseItemId: needsInstallItem ? prev.dataBaseItemId : "",
+        };
+      });
+
+      if (!needsInstallItem) {
+        setNewTaskEquipmentMapping(emptyDatabaseEquipmentMapping());
+      }
+      return;
+    }
+
+    if (field === "equipmentId") {
+      const selectedEquipment = equipmentById.get(value);
+      setNewTask((prev) => {
+        const taskType = canonicalJobTaskType(prev.type);
+        return {
+          ...prev,
+          equipmentId: value,
+          bodyOfWaterId: taskTypeRequiresBodyOfWater(taskType)
+            ? selectedEquipment?.bodyOfWaterId || prev.bodyOfWaterId || ""
+            : prev.bodyOfWaterId,
+        };
+      });
+      return;
+    }
+
     setNewTask((prev) => ({
       ...prev,
       [field]: value,
@@ -770,7 +1032,41 @@ const RecurringServiceStopDetails = () => {
       contractedRate: "",
       estimatedTime: "",
       status: "Not Finished",
+      equipmentId: "",
+      bodyOfWaterId: "",
+      dataBaseItemId: "",
     });
+    setNewTaskEquipmentMapping(emptyDatabaseEquipmentMapping());
+  };
+
+  const saveEquipmentMappingForDatabaseItem = async (dbItem, mapping) => {
+    if (!dbItem?.id) return null;
+
+    if (!hasDatabaseEquipmentMapping(mapping)) {
+      toast.error("Connect this database item to equipment type, make, and model");
+      return null;
+    }
+
+    const patch = {
+      ...databaseEquipmentMappingPatch(mapping),
+      category: EQUIPMENT_DATABASE_CATEGORY,
+      dateUpdated: new Date(),
+    };
+    const nextItem = {
+      ...dbItem,
+      ...patch,
+      label: equipmentDatabaseItemLabel({ ...dbItem, ...patch }),
+    };
+
+    await updateDoc(
+      doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", dbItem.id),
+      patch
+    );
+    setEquipmentDatabaseItems((current) =>
+      current.map((item) => (item.id === dbItem.id ? nextItem : item))
+    );
+
+    return nextItem;
   };
 
   const saveNewRecurringTask = async (e) => {
@@ -788,17 +1084,72 @@ const RecurringServiceStopDetails = () => {
       return;
     }
 
+    const newTaskType = canonicalJobTaskType(newTask.type);
+    const selectedEquipment = newTask.equipmentId ? equipmentById.get(newTask.equipmentId) || null : null;
+    const resolvedBodyOfWaterId =
+      newTask.bodyOfWaterId ||
+      selectedEquipment?.bodyOfWaterId ||
+      (bodiesOfWater.length === 1 ? bodiesOfWater[0].id : "") ||
+      "";
+    const needsBodyOfWater = taskTypeRequiresBodyOfWater(newTaskType);
+    const needsExistingEquipment = taskTypeRequiresEquipment(newTaskType);
+    const needsInstallItem = taskTypeRequiresInstallItem(newTaskType);
+    const needsEquipmentDatabaseItem = isInstallOrReplaceTaskType(newTaskType);
+
+    if (needsBodyOfWater && !resolvedBodyOfWaterId) {
+      toast.error("Select a body of water for this task");
+      return;
+    }
+
+    if (needsExistingEquipment && !newTask.equipmentId) {
+      toast.error("Select equipment for this task");
+      return;
+    }
+
+    let taskDbItem = selectedNewTaskEquipmentItem;
+    let equipmentMapping = newTaskEquipmentMapping;
+
+    if (needsEquipmentDatabaseItem) {
+      if (!taskDbItem || !isEquipmentDatabaseItem(taskDbItem)) {
+        toast.error("Select an equipment database item for this task");
+        return;
+      }
+
+      if (!hasDatabaseEquipmentMapping(equipmentMapping)) {
+        equipmentMapping = databaseEquipmentMappingFromItem(taskDbItem);
+      }
+
+      if (!hasDatabaseEquipmentMapping(equipmentMapping)) {
+        toast.error("Connect this database item to equipment type, make, and model");
+        return;
+      }
+    }
+
     try {
       setSavingTask(true);
+
+      if (needsEquipmentDatabaseItem) {
+        taskDbItem = await saveEquipmentMappingForDatabaseItem(taskDbItem, equipmentMapping);
+        if (!taskDbItem) {
+          setSavingTask(false);
+          return;
+        }
+      }
+
       let recurringTaskId = "com_rss_tas_" + uuidv4()
       const recurringTaskPayload = {
         id: recurringTaskId,
         name: newTask.name.trim(),
         description: newTask.description.trim(),
-        type: newTask.type,
+        type: newTaskType,
         contractedRate: Number(newTask.contractedRate || 0),
         estimatedTime: Number(newTask.estimatedTime || 0),
         status: newTask.status || "Not Finished",
+        equipmentId: needsExistingEquipment ? newTask.equipmentId || "" : "",
+        serviceLocationId: recurringServiceStop.serviceLocationId || "",
+        bodyOfWaterId: needsBodyOfWater ? resolvedBodyOfWaterId : "",
+        dataBaseItemId: needsInstallItem ? taskDbItem?.id || newTask.dataBaseItemId || "" : "",
+        shoppingListItemId: "",
         isTaskGroup: false,
         taskGroupId: "",
         taskGroupTaskId: ""
@@ -833,7 +1184,7 @@ const RecurringServiceStopDetails = () => {
           const serviceStopTaskPayload = {
             id: serviceStopTaskId,
             name: newTask.name.trim(),
-            type: newTask.type,
+            type: newTaskType,
             status: newTask.status || "Not Finished",
             contractedRate: Number(newTask.contractedRate || 0),
             estimatedTime: Number(newTask.estimatedTime || 0),
@@ -860,9 +1211,10 @@ const RecurringServiceStopDetails = () => {
             },
             jobTaskId: "",
             recurringServiceStopTaskId: recurringTaskPayload.id,
-            equipmentId: "",
+            equipmentId: needsExistingEquipment ? newTask.equipmentId || "" : "",
             serviceLocationId: stop.serviceLocationId || recurringServiceStop.serviceLocationId || "",
-            bodyOfWaterId: "",
+            bodyOfWaterId: needsBodyOfWater ? resolvedBodyOfWaterId : "",
+            dataBaseItemId: needsInstallItem ? taskDbItem?.id || newTask.dataBaseItemId || "" : "",
             shoppingListItemId: "",
           };
 
@@ -906,6 +1258,47 @@ const RecurringServiceStopDetails = () => {
     }
   };
 
+  const applySelectedTaskTemplate = async () => {
+    if (!recentlySelectedCompany || !recurringServiceStopId || !selectedTaskTemplate) return;
+
+    try {
+      setApplyingTaskTemplate(true);
+      const result = await applyTaskGroupToRecurringServiceStop({
+        db,
+        companyId: recentlySelectedCompany,
+        recurringServiceStop: {
+          ...recurringServiceStop,
+          id: recurringServiceStopId,
+        },
+        recurringServiceStopId,
+        taskGroup: selectedTaskTemplate,
+      });
+
+      setRecurringServiceStopTasks((current) => [
+        ...result.recurringTasks,
+        ...current,
+      ]);
+      setSelectedTaskTemplate(null);
+      toast.success(
+        `${result.recurringTasks.length} task${result.recurringTasks.length === 1 ? "" : "s"} added to ${result.futureStopCount} future service stop${result.futureStopCount === 1 ? "" : "s"}`
+      );
+    } catch (error) {
+      console.error("Failed to apply recurring stop task template:", error);
+      await reportDetailsError(error, {
+        where: "RecurringServiceStopDetails.applySelectedTaskTemplate",
+        title: "Recurring service stop task template failed",
+        description: "Applying a task template to the recurring service stop and its future service stops failed.",
+        data: {
+          taskGroupId: selectedTaskTemplate?.id || "",
+          taskGroupName: selectedTaskTemplate?.label || "",
+        },
+      });
+      toast.error(error.message || "Failed to apply task template");
+    } finally {
+      setApplyingTaskTemplate(false);
+    }
+  };
+
   const durationStats = recurringServiceStop.durationStats || {};
   const currentEstimateMinutes = recurringServiceStop.estimatedTime ?? recurringServiceStop.estimatedDuration ?? "";
   const historicAverageMinutes = durationStats.averageMinutes ?? recurringServiceStop.historicalAverageDuration ?? null;
@@ -916,6 +1309,8 @@ const RecurringServiceStopDetails = () => {
       ? "Manual"
       : "Default";
   const durationActionInProgress = Boolean(durationAction);
+  const visibleDurationHistory = showAllDurationHistory ? durationHistory : durationHistory.slice(0, 3);
+  const hiddenDurationHistoryCount = Math.max(durationHistory.length - visibleDurationHistory.length, 0);
   const CompactServiceStopSection = ({ title, subtitle, stops, emptyMessage }) => (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div>
@@ -1067,9 +1462,75 @@ const RecurringServiceStopDetails = () => {
                 <Field label="Internal Id" value={recurringServiceStop.internalId} />
                 <Field label="Customer" value={recurringServiceStop.customerName} />
                 <Field label="Street Address" value={recurringServiceStop.streetAddress} />
-                <Field label="Tech" value={recurringServiceStop.tech} />
-                <Field label="Start Date" value={startDate} />
-                <Field label="End Date" value={recurringServiceStop.noEndDate ? "No End Date" : endDate} />
+                <Field label="Tech">
+                  {!edit ? (
+                    <p className="text-gray-800">{recurringServiceStop.tech || "—"}</p>
+                  ) : (
+                    <Select
+                      value={selectedTech}
+                      options={companyUserOptions}
+                      onChange={setSelectedTech}
+                      isSearchable
+                      placeholder="Select technician"
+                      theme={selectTheme}
+                      styles={selectStyles}
+                    />
+                  )}
+                </Field>
+                <Field label="Pay Type">
+                  {!edit ? (
+                    <p className="text-gray-800">{recurringServiceStop.payTypeName || recurringServiceStop.type || "—"}</p>
+                  ) : (
+                    <Select
+                      value={selectedServiceStopType}
+                      options={serviceStopTypeOptions}
+                      onChange={setSelectedServiceStopType}
+                      isSearchable
+                      placeholder="Select a Pay Type"
+                      theme={selectTheme}
+                      styles={selectStyles}
+                    />
+                  )}
+                </Field>
+                <Field label="Start Date">
+                  {!edit ? (
+                    <p className="text-gray-800">{startDate}</p>
+                  ) : (
+                    <input
+                      type="date"
+                      value={startDateInput}
+                      onChange={(event) => setStartDateInput(event.target.value)}
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  )}
+                </Field>
+                <Field label="End Date">
+                  {!edit ? (
+                    <p className="text-gray-800">{recurringServiceStop.noEndDate ? "No End Date" : endDate}</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={noEndDateInput}
+                          onChange={(event) => setNoEndDateInput(event.target.checked)}
+                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        No End Date
+                      </label>
+
+                      {!noEndDateInput && (
+                        <input
+                          type="date"
+                          value={endDateInput}
+                          min={startDateInput || formatDateInputValue(recurringServiceStop.startDate) || undefined}
+                          onChange={(event) => setEndDateInput(event.target.value)}
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        />
+                      )}
+                    </div>
+                  )}
+                </Field>
 
                 <Field label="Frequency">
                   {!edit ? (
@@ -1094,11 +1555,10 @@ const RecurringServiceStopDetails = () => {
                     </p>
                   ) : (
                     <Select
-                      value={selectedDays}
+                      value={selectedDays?.[0] || null}
                       options={daysOptions}
-                      onChange={setSelectedDays}
-                      isMulti
-                      placeholder="Select days"
+                      onChange={(option) => setSelectedDays(option ? [option] : [])}
+                      placeholder="Select day"
                       theme={selectTheme}
                       styles={selectStyles}
                     />
@@ -1110,20 +1570,42 @@ const RecurringServiceStopDetails = () => {
             </section>
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div>
                   <h3 className="text-xl font-bold text-slate-950">Tasks</h3>
                   <p className="text-sm text-slate-600">Tasks configured for this recurring stop</p>
                 </div>
 
-                {!showAddTask && (
+                <div className="grid w-full gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] xl:w-[42rem]">
+                  <Select
+                    value={selectedTaskTemplate}
+                    options={taskGroupOptions}
+                    onChange={setSelectedTaskTemplate}
+                    isSearchable
+                    isClearable
+                    isDisabled={applyingTaskTemplate}
+                    placeholder={taskGroupOptions.length ? "Select task template" : "No task templates found"}
+                    theme={selectTheme}
+                    styles={selectStyles}
+                  />
                   <button
-                    onClick={() => setShowAddTask(true)}
-                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                    type="button"
+                    onClick={applySelectedTaskTemplate}
+                    disabled={!selectedTaskTemplate || applyingTaskTemplate}
+                    className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
-                    Add Task
+                    {applyingTaskTemplate ? "Applying..." : "Apply Template"}
                   </button>
-                )}
+                  {!showAddTask && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddTask(true)}
+                      className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                    >
+                      Add Task
+                    </button>
+                  )}
+                </div>
               </div>
 
               {showAddTask && (
@@ -1177,6 +1659,66 @@ const RecurringServiceStopDetails = () => {
                       />
                     </div>
 
+                    {newTaskNeedsBodyOfWater && (
+                      <div>
+                        <label className="mb-1 block text-sm font-semibold text-slate-600">
+                          Body of Water
+                        </label>
+                        <select
+                          value={newTask.bodyOfWaterId}
+                          onChange={(e) => handleNewTaskChange("bodyOfWaterId", e.target.value)}
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+                        >
+                          <option value="">Select body of water</option>
+                          {bodiesOfWater.map((body) => (
+                            <option key={body.id} value={body.id}>
+                              {body.name || "Unnamed Body Of Water"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {newTaskNeedsEquipment && (
+                      <div>
+                        <label className="mb-1 block text-sm font-semibold text-slate-600">
+                          Equipment
+                        </label>
+                        <select
+                          value={newTask.equipmentId}
+                          onChange={(e) => handleNewTaskChange("equipmentId", e.target.value)}
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+                        >
+                          <option value="">Select equipment</option>
+                          {equipmentList.map((equipment) => (
+                            <option key={equipment.id} value={equipment.id}>
+                              {equipment.name || equipment.model || equipment.type || "Unnamed Equipment"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {newTaskNeedsInstallItem && (
+                      <div>
+                        <label className="mb-1 block text-sm font-semibold text-slate-600">
+                          Equipment Item
+                        </label>
+                        <select
+                          value={newTask.dataBaseItemId}
+                          onChange={(e) => handleNewTaskChange("dataBaseItemId", e.target.value)}
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+                        >
+                          <option value="">Select equipment item</option>
+                          {equipmentDatabaseItems.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label || item.name || "Equipment item"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
                     <div>
                       <label className="mb-1 block text-sm font-semibold text-slate-600">
                         Estimated Time (mins)
@@ -1191,6 +1733,19 @@ const RecurringServiceStopDetails = () => {
                       />
                     </div>
                   </div>
+
+                  {newTaskNeedsEquipmentDatabaseItem && selectedNewTaskEquipmentItem && (
+                    <div className="rounded-md border border-slate-200 bg-white p-3">
+                      <p className="text-sm font-semibold text-slate-700">
+                        Equipment Mapping
+                      </p>
+                      <EquipmentCatalogPicker
+                        value={newTaskEquipmentMapping}
+                        onChange={setNewTaskEquipmentMapping}
+                        className="mt-3"
+                      />
+                    </div>
+                  )}
 
                   <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">
                     Saving this task will also add it to all future service stops tied to this recurring service stop.
@@ -1354,7 +1909,7 @@ const RecurringServiceStopDetails = () => {
                         </td>
                       </tr>
                     ) : durationHistory.length ? (
-                      durationHistory.map((point) => (
+                      visibleDurationHistory.map((point) => (
                         <tr key={point.id} className="transition-colors hover:bg-slate-50">
                           <td className="whitespace-nowrap p-4 text-slate-700">
                             {point.serviceStopId ? (
@@ -1397,6 +1952,20 @@ const RecurringServiceStopDetails = () => {
                   </tbody>
                 </table>
               </div>
+
+              {durationHistory.length > 3 && (
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllDurationHistory((current) => !current)}
+                    className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    {showAllDurationHistory
+                      ? "Show Most Recent 3"
+                      : `Show ${hiddenDurationHistoryCount} Older Duration Point${hiddenDurationHistoryCount === 1 ? "" : "s"}`}
+                  </button>
+                </div>
+              )}
             </section>
           </main>
 

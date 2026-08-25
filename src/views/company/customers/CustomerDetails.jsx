@@ -56,11 +56,13 @@ import {
     normalizeSuggestedWorkTier,
 } from '../../../utils/models/SuggestedWork';
 import {
+    canReactivateEquipmentWithCustomer,
     EQUIPMENT_STATUS,
     EQUIPMENT_STATUS_OPTIONS,
     buildEquipmentNickname,
     displayEquipmentStatus,
     equipmentDefaultsToNeedsService,
+    isFinalInactiveEquipmentStatus,
     isFilterEquipment,
 } from '../../../utils/models/Equipment';
 import { appConfirm } from '../../../utils/appDialog';
@@ -694,6 +696,12 @@ const getOutstandingWorkMillis = (item = {}) => (
 
 const getCustomerName = getCustomerDisplayName;
 
+const normalizeComparableName = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+const customerDisplayNamesMatch = (left, right) => (
+    normalizeComparableName(left) === normalizeComparableName(right)
+);
+
 const formatRecurringDays = (stop) => {
     const days = stop.daysOfWeek ?? stop.day;
 
@@ -977,7 +985,13 @@ const TimelineEventTable = ({ events }) => (
 );
 
 // Profile Tab
-const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerInactiveCascade }) => {
+const ProfileTab = ({
+    customer,
+    onCustomerUpdate,
+    onDeleteCustomer,
+    onCustomerInactiveCascade,
+    onCustomerActiveCascade,
+}) => {
     const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
@@ -1029,11 +1043,16 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
         const wasActive = (customer.active ?? customer.isActive ?? true) !== false;
         const nextActive = (payload.active ?? payload.isActive ?? true) !== false;
         const shouldCascadeInactive = wasActive && !nextActive;
+        const shouldCascadeActive = !wasActive && nextActive;
+        const shouldSyncCustomerName = !customerDisplayNamesMatch(getCustomerDisplayName(customer), customerDisplayName);
 
         try {
             await updateDoc(customerRef, payload);
             const inactiveCascadeCounts = shouldCascadeInactive
                 ? await onCustomerInactiveCascade?.()
+                : null;
+            const activeCascadeCounts = shouldCascadeActive
+                ? await onCustomerActiveCascade?.()
                 : null;
             const pipelineRowsEnded = shouldCascadeInactive
                 ? await endCustomerPipelineRowsForInactiveCustomer({
@@ -1045,14 +1064,42 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
                 })
                 : 0;
 
-            toast.success(
-                inactiveCascadeCounts
+            let nameCascadeResult = null;
+            let nameCascadeFailed = false;
+            if (shouldSyncCustomerName) {
+                try {
+                    const syncCustomerNameReferences = httpsCallable(functions, 'syncCustomerNameReferencesForCustomer');
+                    const authPayload = await getCallableAuthPayload();
+                    const result = await syncCustomerNameReferences({
+                        ...authPayload,
+                        auth: authPayload,
+                        companyId: recentlySelectedCompany,
+                        customerId: customer.id,
+                    });
+                    nameCascadeResult = result.data || null;
+                } catch (cascadeError) {
+                    nameCascadeFailed = true;
+                    console.error('Failed to sync customer name references.', cascadeError);
+                }
+            }
+
+            if (nameCascadeFailed) {
+                toast.error('Customer saved, but linked record name sync failed. Background sync may still update those records shortly.');
+            } else {
+                const successMessage = inactiveCascadeCounts
                     ? `Customer details updated. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`
-                    : 'Customer details updated!'
-            );
+                    : activeCascadeCounts
+                        ? `Customer details updated. ${activeCascadeCounts.serviceLocations} service locations, ${activeCascadeCounts.bodiesOfWater} bodies of water, and ${activeCascadeCounts.equipment} equipment records were restored. ${activeCascadeCounts.skippedEquipment} uninstalled equipment record(s) were left inactive.`
+                        : nameCascadeResult?.writeCount > 0
+                            ? `Customer details updated. ${nameCascadeResult.writeCount} linked record(s) were synced to the new name.`
+                            : 'Customer details updated!';
+
+                toast.success(successMessage);
+            }
             onCustomerUpdate?.(payload);
             setIsEditing(false);
         } catch (error) {
+            console.error('Failed to update customer.', error);
             toast.error('Failed to update customer.');
         }
     };
@@ -1465,7 +1512,7 @@ const ServiceLocationsTab = ({ customer }) => {
                     return docs.map((relatedDoc) => updateDoc(relatedDoc.ref, { isActive: false, active: false }));
                 }
                 if (mode === 'bodyOfWater') {
-                    return docs.map((relatedDoc) => updateDoc(relatedDoc.ref, { isActive: false }));
+                    return docs.map((relatedDoc) => updateDoc(relatedDoc.ref, { isActive: false, active: false }));
                 }
                 return docs.map((relatedDoc) => deleteDoc(relatedDoc.ref));
             })
@@ -3538,8 +3585,8 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                         onChange={(event) => updateEquipmentEditField('status', event.target.value)}
                                         className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                     >
-                                        {equipmentEditForm.status === EQUIPMENT_STATUS.REPLACED && (
-                                            <option value={EQUIPMENT_STATUS.REPLACED}>{EQUIPMENT_STATUS.REPLACED}</option>
+                                        {isFinalInactiveEquipmentStatus(equipmentEditForm.status) && (
+                                            <option value={equipmentEditForm.status}>{displayEquipmentStatus(equipmentEditForm.status)}</option>
                                         )}
                                         {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
                                             <option key={statusOption} value={statusOption}>
@@ -4270,12 +4317,32 @@ const fetchCustomerSalesRecords = async ({ db, collectionName, companyId, custom
     ).sort((left, right) => toMillis(right.updatedAt || right.createdAt || right.sentAt || right.dueDate) - toMillis(left.updatedAt || left.createdAt || left.sentAt || left.dueDate));
 };
 
-const SalesRecordList = ({ title, children, empty }) => {
+const buildCustomerCreatePath = (basePath, customer = {}) => {
+    const params = new URLSearchParams();
+    if (customer.id) params.set('customerId', customer.id);
+
+    const queryString = params.toString();
+    return queryString ? `${basePath}?${queryString}` : basePath;
+};
+
+const SalesRecordList = ({ title, children, empty, createTo = '', createLabel = '' }) => {
     const visibleChildren = React.Children.toArray(children).filter(Boolean);
 
     return (
         <div>
-            <h4 className="mb-2 text-sm font-bold text-slate-900">{title}</h4>
+            <div className="mb-2 flex items-center justify-between gap-3">
+                <h4 className="text-sm font-bold text-slate-900">{title}</h4>
+                {createTo && (
+                    <Link
+                        to={createTo}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-base font-bold leading-none text-blue-700 transition hover:bg-blue-100"
+                        aria-label={createLabel || `Create ${title}`}
+                        title={createLabel || `Create ${title}`}
+                    >
+                        +
+                    </Link>
+                )}
+            </div>
             <div className="divide-y divide-slate-100 rounded-md border border-slate-200">
                 {visibleChildren.length > 0 ? visibleChildren : <div className="p-4 text-sm text-slate-500">{empty}</div>}
             </div>
@@ -4330,6 +4397,8 @@ const SalesActivitySection = ({ customer }) => {
     const latestInvoices = salesData.invoices.slice(0, 4);
     const latestSubscriptions = salesData.subscriptions.slice(0, 3);
     const latestPayments = salesData.payments.slice(0, 4);
+    const createAgreementPath = buildCustomerCreatePath('/company/sales/agreements/new', customer);
+    const createInvoicePath = buildCustomerCreatePath('/company/sales/invoices/new', customer);
     const agreementHistory = useMemo(() => {
         const groupedAgreements = new Map();
 
@@ -4420,7 +4489,12 @@ const SalesActivitySection = ({ customer }) => {
                         </div>
                     )}
 
-                    <SalesRecordList title="Service Agreement History" empty="No service agreement history found.">
+                    <SalesRecordList
+                        title="Service Agreement History"
+                        empty="No service agreement history found."
+                        createTo={createAgreementPath}
+                        createLabel="Create service agreement"
+                    >
                         {agreementHistory.map(({ agreement, amountCents, effectiveAt, rateDeltaCents }) => {
                             const statusKey = String(agreement.status || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
                             const endLabel = agreement.endDate
@@ -4463,7 +4537,12 @@ const SalesActivitySection = ({ customer }) => {
                     </SalesRecordList>
 
                     <div className="grid gap-5 xl:grid-cols-2">
-                        <SalesRecordList title="Service Agreements" empty="No service agreements found.">
+                        <SalesRecordList
+                            title="Service Agreements"
+                            empty="No service agreements found."
+                            createTo={createAgreementPath}
+                            createLabel="Create service agreement"
+                        >
                             {latestAgreements.length > 0 && <div className="mb-2 flex items-center justify-between gap-3 p-3">
                                 <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Latest</span>
                                 <Link to="/company/sales/agreements" className="text-xs font-semibold text-blue-600 hover:text-blue-800">
@@ -4488,7 +4567,12 @@ const SalesActivitySection = ({ customer }) => {
                             ))}
                         </SalesRecordList>
 
-                        <SalesRecordList title="Invoices" empty="No invoices found.">
+                        <SalesRecordList
+                            title="Invoices"
+                            empty="No invoices found."
+                            createTo={createInvoicePath}
+                            createLabel="Create invoice"
+                        >
                             {latestInvoices.length > 0 && latestInvoices.map((invoice) => (
                                 <div key={invoice.id} className="flex items-center justify-between gap-3 p-3">
                                     <div className="min-w-0">
@@ -5154,14 +5238,20 @@ export default function CustomerDetails() {
             ...bodiesByCustomerSnapshot.docs,
             ...bodiesByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
         ]);
+        const bodyOfWaterIds = bodyOfWaterDocs.map((bodyDoc) => bodyDoc.id);
+        const equipmentByBodyOfWaterSnapshots = await Promise.all(bodyOfWaterIds.map((bodyOfWaterId) => getDocs(query(
+            collection(db, 'companies', recentlySelectedCompany, 'equipment'),
+            where('bodyOfWaterId', '==', bodyOfWaterId)
+        ))));
         const equipmentDocs = uniqueDocsByPath([
             ...equipmentByCustomerSnapshot.docs,
             ...equipmentByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
+            ...equipmentByBodyOfWaterSnapshots.flatMap((snapshot) => snapshot.docs),
         ]);
 
         await Promise.all([
             ...serviceLocationDocs.map((locationDoc) => updateDoc(locationDoc.ref, { isActive: false, active: false })),
-            ...bodyOfWaterDocs.map((bodyDoc) => updateDoc(bodyDoc.ref, { isActive: false })),
+            ...bodyOfWaterDocs.map((bodyDoc) => updateDoc(bodyDoc.ref, { isActive: false, active: false })),
             ...equipmentDocs.map((equipmentDoc) => updateDoc(equipmentDoc.ref, { isActive: false, active: false })),
         ]);
 
@@ -5169,6 +5259,83 @@ export default function CustomerDetails() {
             serviceLocations: serviceLocationDocs.length,
             bodiesOfWater: bodyOfWaterDocs.length,
             equipment: equipmentDocs.length,
+        };
+    };
+
+    const reactivateCustomerRelations = async () => {
+        if (!recentlySelectedCompany || !customerId) {
+            return { serviceLocations: 0, bodiesOfWater: 0, equipment: 0, skippedEquipment: 0 };
+        }
+
+        const serviceLocationsSnapshot = await getDocs(query(
+            collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'),
+            where('customerId', '==', customerId)
+        ));
+        const serviceLocationDocs = serviceLocationsSnapshot.docs;
+        const serviceLocationIds = serviceLocationDocs.map((locationDoc) => locationDoc.id);
+
+        const [bodiesByCustomerSnapshot, equipmentByCustomerSnapshot] = await Promise.all([
+            getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),
+                where('customerId', '==', customerId)
+            )),
+            getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'equipment'),
+                where('customerId', '==', customerId)
+            )),
+        ]);
+
+        const [bodiesByLocationSnapshots, equipmentByLocationSnapshots] = await Promise.all([
+            Promise.all(serviceLocationIds.map((locationId) => getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),
+                where('serviceLocationId', '==', locationId)
+            )))),
+            Promise.all(serviceLocationIds.map((locationId) => getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'equipment'),
+                where('serviceLocationId', '==', locationId)
+            )))),
+        ]);
+
+        const bodyOfWaterDocs = uniqueDocsByPath([
+            ...bodiesByCustomerSnapshot.docs,
+            ...bodiesByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
+        ]);
+        const bodyOfWaterIds = bodyOfWaterDocs.map((bodyDoc) => bodyDoc.id);
+        const equipmentByBodyOfWaterSnapshots = await Promise.all(bodyOfWaterIds.map((bodyOfWaterId) => getDocs(query(
+            collection(db, 'companies', recentlySelectedCompany, 'equipment'),
+            where('bodyOfWaterId', '==', bodyOfWaterId)
+        ))));
+        const equipmentDocs = uniqueDocsByPath([
+            ...equipmentByCustomerSnapshot.docs,
+            ...equipmentByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
+            ...equipmentByBodyOfWaterSnapshots.flatMap((snapshot) => snapshot.docs),
+        ]);
+
+        const inactiveServiceLocationDocs = serviceLocationDocs.filter((locationDoc) => (
+            (locationDoc.data()?.isActive ?? locationDoc.data()?.active ?? true) === false
+        ));
+        const inactiveBodyOfWaterDocs = bodyOfWaterDocs.filter((bodyDoc) => (
+            (bodyDoc.data()?.isActive ?? bodyDoc.data()?.active ?? true) === false
+        ));
+        const inactiveEquipmentDocs = equipmentDocs.filter((equipmentDoc) => (
+            (equipmentDoc.data()?.isActive ?? equipmentDoc.data()?.active ?? true) === false
+        ));
+        const restorableEquipmentDocs = inactiveEquipmentDocs.filter((equipmentDoc) => (
+            canReactivateEquipmentWithCustomer(equipmentDoc.data() || {})
+        ));
+        const skippedEquipment = inactiveEquipmentDocs.length - restorableEquipmentDocs.length;
+
+        await Promise.all([
+            ...inactiveServiceLocationDocs.map((locationDoc) => updateDoc(locationDoc.ref, { isActive: true, active: true })),
+            ...inactiveBodyOfWaterDocs.map((bodyDoc) => updateDoc(bodyDoc.ref, { isActive: true, active: true })),
+            ...restorableEquipmentDocs.map((equipmentDoc) => updateDoc(equipmentDoc.ref, { isActive: true, active: true })),
+        ]);
+
+        return {
+            serviceLocations: inactiveServiceLocationDocs.length,
+            bodiesOfWater: inactiveBodyOfWaterDocs.length,
+            equipment: restorableEquipmentDocs.length,
+            skippedEquipment,
         };
     };
 
@@ -5201,6 +5368,7 @@ export default function CustomerDetails() {
             await updateDoc(customerRef, { active: nextActive, isActive: nextActive });
 
             const inactiveCascadeCounts = !nextActive ? await deactivateCustomerRelations() : null;
+            const activeCascadeCounts = nextActive ? await reactivateCustomerRelations() : null;
             const pipelineRowsEnded = !nextActive
                 ? await endCustomerPipelineRowsForInactiveCustomer({
                     companyId: recentlySelectedCompany,
@@ -5214,10 +5382,13 @@ export default function CustomerDetails() {
             toast.success(
                 inactiveCascadeCounts
                     ? `Customer marked inactive. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`
+                    : activeCascadeCounts
+                        ? `Customer marked active. ${activeCascadeCounts.serviceLocations} service locations, ${activeCascadeCounts.bodiesOfWater} bodies of water, and ${activeCascadeCounts.equipment} equipment records were restored. ${activeCascadeCounts.skippedEquipment} uninstalled equipment record(s) were left inactive.`
                     : `Customer has been marked as ${nextActive ? 'active' : 'inactive'}.`
             );
             setCustomer(prev => ({ ...prev, active: nextActive, isActive: nextActive })); // Update local state
         } catch (error) {
+            console.error('Failed to update customer status.', error);
             toast.error('Failed to update customer status.');
         } finally {
             setShowInactiveModal(false);
@@ -5415,7 +5586,7 @@ export default function CustomerDetails() {
                     </div>
                 </section>
 
-                <section className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-6">
+                <section className="grid gap-4 lg:grid-cols-[450px_minmax(0,1fr)] lg:gap-6">
                     <aside className="space-y-4">
                         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
                             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
@@ -5512,6 +5683,7 @@ export default function CustomerDetails() {
                                 onCustomerUpdate={(updates) => setCustomer((prev) => ({ ...prev, ...updates }))}
                                 onDeleteCustomer={() => setShowDeleteModal(true)}
                                 onCustomerInactiveCascade={deactivateCustomerRelations}
+                                onCustomerActiveCascade={reactivateCustomerRelations}
                             />
                         )}
                         {activeTab === 'locations' && <ServiceLocationsTab customer={customer} />}
@@ -5575,7 +5747,7 @@ export default function CustomerDetails() {
                 >
                     <p>
                         Are you sure you want to mark this customer as {customer.active ? 'inactive' : 'active'}?
-                        {customer.active ? ' This will not delete their data. Linked service locations, bodies of water, and equipment will also be marked inactive.' : ' They will appear in active customer views again.'}
+                        {customer.active ? ' This will not delete their data. Linked service locations, bodies of water, and equipment will also be marked inactive.' : ' Linked service locations, bodies of water, and equipment that has not been uninstalled will also be marked active.'}
                     </p>
                 </ModalShell>
             )}

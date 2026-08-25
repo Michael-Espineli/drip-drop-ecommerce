@@ -62,7 +62,8 @@ const UpdateSubscription= () => {
             
                     const functionName = httpsCallable(functions, 'getStripeSubscriptionInformation');
                     functionName({ 
-                        subscriptionId: subscriptionData.stripeSubscriptionId
+                        subscriptionId: subscriptionData.stripeSubscriptionId,
+                        companyId: recentlySelectedCompany,
                     })
                     .then((result) => {
                         console.log(result)
@@ -122,8 +123,9 @@ const UpdateSubscription= () => {
             if (job.name == "Free") {
                 const functionName = httpsCallable(functions, 'updateStripeSubscription');
                 functionName({ 
-                    newSubscription: newSubscription,
-                    currentSubscription: job
+                    subscriptionId: job.stripeSubscriptionId,
+                    newPriceId: newSubscription.stripePriceId,
+                    companyId: recentlySelectedCompany,
                 })
                 .then((result) => {
                     console.log(result)
@@ -137,8 +139,9 @@ const UpdateSubscription= () => {
             } else {
                 const functionName = httpsCallable(functions, 'updateStripeSubscription');
                 functionName({ 
-                    newSubscription: newSubscription,
-                    currentSubscription: job
+                    subscriptionId: job.stripeSubscriptionId,
+                    newPriceId: newSubscription.stripePriceId,
+                    companyId: recentlySelectedCompany,
                 })
                 .then((result) => {
                     console.log(result)

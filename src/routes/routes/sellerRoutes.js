@@ -25,7 +25,6 @@ const SuggestedWork = lazy(() => import("../../views/company/suggestedWork/Sugge
 const OfferedWork = lazy(() => import("../../views/company/offeredWork/OfferedWork"))
 
 const PublicPage = lazy(() => import("../../views/company/PublicPage"))
-const Settings = lazy(() => import("../../views/company/settings/Settings"))
 
 const ChatInitiation = lazy(() => import("../../views/company/messages/ChatInitiation"));
 const Chat = lazy(() => import("../../views/tech/techChat/Chat"));
@@ -78,11 +77,14 @@ const ShoppingListView = lazy(() => import("../../views/company/shoppingList/Sho
 const CreateNewShoppingList = lazy(() => import("../../views/company/shoppingList/ShoppingListCreateView"))
 const ShoppingListDetailView = lazy(() => import("../../views/company/shoppingList/ShoppingListDetailView"))
 const PartApprovals = lazy(() => import("../../views/company/partApprovals/PartApprovals"))
+const PartApprovalHistory = lazy(() => import("../../views/company/partApprovals/PartApprovalHistory"))
 
 const DataBaseItemDetailView = lazy(() => import("../../views/company/databaseItems/DataBaseItemDetailView"))
 const CreateNewDataBaseItem = lazy(() => import("../../views/company/databaseItems/CreateNewDataBaseItem"))
 const DataBaseItems = lazy(() => import("../../views/company/databaseItems/DataBaseItems"))
 const DataBaseItemBulkUpload = lazy(() => import("../../views/company/databaseItems/DataBaseItemBulkUpload"))
+const ProductCatalog = lazy(() => import("../../views/company/productCatalog/ProductCatalog"))
+const ProductCatalogImport = lazy(() => import("../../views/company/productCatalog/ProductCatalogImport"))
 
 const ReceiptListView = lazy(() => import("../../views/company/purchases/ReceiptListView"))
 const ReceiptDetailView = lazy(() => import("../../views/company/purchases/ReceiptDetailView"))
@@ -123,6 +125,7 @@ const Vendors = lazy(() => import("../../views/company/venders/Venders"))
 const CreateNewVendor = lazy(() => import("../../views/company/venders/CreateNewVenders"))
 
 const Reports = lazy(() => import("../../views/company/reports/Reports"))
+const CustomReports = lazy(() => import("../../views/company/reports/CustomReports"))
 const CustomerMigrationTracker = lazy(() => import("../../views/company/migration/CustomerMigrationTracker"))
 const CustomerExportImport = lazy(() => import("../../views/company/migration/CustomerExportImport"))
 const EquipmentImport = lazy(() => import("../../views/company/migration/EquipmentImport"))
@@ -133,6 +136,7 @@ const CompanyDataExport = lazy(() => import("../../views/company/migration/Compa
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
 const ServiceHistory = lazy(() => import("../../views/company/history/ServiceHistory"))
 const CompanySettings = lazy(() => import("../../views/company/settings/CompanySettings"))
+const CompanyWideSettings = lazy(() => import("../../views/company/settings/CompanyWideSettings"))
 const TesterStripSettings = lazy(() => import("../../views/company/settings/TesterStripSettings"))
 const StripeBillingSnapshot = lazy(() => import("../../views/company/settings/StripeBillingSnapshot"))
 const OnboardingChecklistSettings = lazy(() => import("../../views/company/settings/OnboardingChecklistSettings"))
@@ -197,6 +201,12 @@ export const sellerRoutes = [
         element: <CompanySettings />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }, {
+        path: '/company/settings/company-wide',
+        element: <CompanyWideSettings />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '900',
     }, {
         path: '/company/settings/tester-strips',
         element: <TesterStripSettings />,
@@ -499,13 +509,50 @@ export const sellerRoutes = [
         element: <Home />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
-    }, {//DataBase Items
+    }, {
+        path: '/company/product-catalog',
+        element: <ProductCatalog />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
+    }, {
+        path: '/company/settings/product-catalog',
+        element: <ProductCatalog />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
+    }, {
+        path: '/company/product-catalog/import',
+        element: <ProductCatalogImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
+    }, {
+        path: '/company/product-catalog/reconciliation',
+        element: <ProductCatalogImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
+    }, {//Vendor Items
         path: '/company/items',
         element: <DataBaseItems />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        permissionId: '850',
+    }, {
+        path: '/company/settings/vendor-items',
+        element: <DataBaseItems />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
     }, {
         path: '/company/items/bulk-upload',
+        element: <DataBaseItemBulkUpload />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '910',
+    }, {
+        path: '/company/settings/vendor-items/bulk-upload',
         element: <DataBaseItemBulkUpload />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
@@ -514,14 +561,30 @@ export const sellerRoutes = [
         path: '/company/items/createNew',
         element: <CreateNewDataBaseItem />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        permissionId: '852',
+    }, {
+        path: '/company/settings/vendor-items/createNew',
+        element: <CreateNewDataBaseItem />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '852',
     }
     ,
     {
         path: '/company/items/detail/:id',
         element: <DataBaseItemDetailView />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        permissionId: '850',
+    }
+    ,
+    {
+        path: '/company/settings/vendor-items/detail/:id',
+        element: <DataBaseItemDetailView />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
     }
     //Purchased Items
     ,
@@ -635,6 +698,13 @@ export const sellerRoutes = [
     {
         path: '/company/shopping-list/detail/:shoppingItemId',
         element: <ShoppingListDetailView />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/part-approvals/history',
+        element: <PartApprovalHistory />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
@@ -1253,6 +1323,13 @@ export const sellerRoutes = [
     {
         path: '/company/taskGroups/details/:taskGroupId',
         element: <TaskGroupDetails />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/reports/custom',
+        element: <CustomReports />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }

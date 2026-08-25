@@ -6,6 +6,7 @@ export const EQUIPMENT_STATUS = {
   NON_OPERATIONAL: "Non-Operational",
   LEGACY_NONOPERATIONAL: "Nonoperational",
   NEEDS_MAINTENANCE: "Needs Maintenance",
+  UNINSTALLED: "Uninstalled",
   REPLACED: "Replaced",
 };
 
@@ -18,6 +19,25 @@ export const EQUIPMENT_STATUS_OPTIONS = [
 
 export const normalizeEquipmentStatus = (status) => (
   String(status || "").trim().toLowerCase().replace(/[-_\s]/g, "")
+);
+
+const finalInactiveEquipmentStatusKeys = new Set([
+  EQUIPMENT_STATUS.UNINSTALLED,
+  EQUIPMENT_STATUS.REPLACED,
+].map(normalizeEquipmentStatus));
+
+export const isFinalInactiveEquipmentStatus = (status) => (
+  finalInactiveEquipmentStatusKeys.has(normalizeEquipmentStatus(status))
+);
+
+export const isFinalInactiveEquipment = (equipment = {}) => (
+  isFinalInactiveEquipmentStatus(equipment.status || equipment.operationStatus || equipment.equipmentStatus) ||
+  Boolean(equipment.dateUninstalled) ||
+  Boolean(equipment.replacedByEquipmentId)
+);
+
+export const canReactivateEquipmentWithCustomer = (equipment = {}) => (
+  !isFinalInactiveEquipment(equipment)
 );
 
 export const displayEquipmentStatus = (status) => {
@@ -63,6 +83,31 @@ export const buildEquipmentNickname = (equipment = {}) => (
   || equipment.type
   || equipment.category
   || ""
+);
+
+const equipmentDateValue = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value.toDate === "function") return value.toDate();
+  if (typeof value.toMillis === "function") {
+    const date = new Date(value.toMillis());
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value.seconds === "number") {
+    const date = new Date(value.seconds * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const numericValue = typeof value === "number" ? value : Number(value);
+  const parsed = Number.isFinite(numericValue)
+    ? new Date(numericValue < 1000000000000 ? numericValue * 1000 : numericValue)
+    : new Date(value);
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const equipmentPhotoUrls = (value) => (
+  Array.isArray(value) ? value.map(url => new DripDropStoredImage(url)) : []
 );
 
 export class Equipment {
@@ -184,11 +229,11 @@ export class Equipment {
       currentPressure: data.currentPressure || 0,
       customerId: data.customerId || "",
       customerName: data.customerName || "",
-      createdAt: data.createdAt ? data.createdAt.toDate() : null,
+      createdAt: equipmentDateValue(data.createdAt || data.createdAtMillis),
       createdAtMillis: data.createdAtMillis || null,
-      dateInstalled: data.dateInstalled ? data.dateInstalled.toDate() : null,
-      dateUninstalled: data.dateUninstalled ? data.dateUninstalled.toDate() : null,
-      lastServiceDate: data.lastServiceDate ? data.lastServiceDate.toDate() : null,
+      dateInstalled: equipmentDateValue(data.dateInstalled),
+      dateUninstalled: equipmentDateValue(data.dateUninstalled),
+      lastServiceDate: equipmentDateValue(data.lastServiceDate),
       make: data.make || "",
       makeId: data.makeId || "",
       model: data.model || "",
@@ -198,9 +243,9 @@ export class Equipment {
       name: data.name || "",
       needsService: data.needsService || false,
       isActive: data.isActive ?? data.active ?? false,
-      nextServiceDate: data.nextServiceDate ? data.nextServiceDate.toDate() : null,
+      nextServiceDate: equipmentDateValue(data.nextServiceDate),
       notes: data.notes || "",
-      photoUrls: data.photoUrls ? data.photoUrls.map(url => new DripDropStoredImage(url)) : [],
+      photoUrls: equipmentPhotoUrls(data.photoUrls),
       serviceFrequency:
         typeof rawServiceFrequency === "number"
           ? rawServiceFrequency
@@ -214,7 +259,7 @@ export class Equipment {
             ? (legacyFrequencyUnits[rawServiceFrequency] || rawServiceFrequency)
             : "",
       serviceLocationId: data.serviceLocationId || "",
-      status: data.status || "",
+      status: data.status || data.operationStatus || data.equipmentStatus || "",
       verified: data.verified || false,
     });
   }

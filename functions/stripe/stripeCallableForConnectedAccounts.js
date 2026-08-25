@@ -23,6 +23,7 @@ const salesCollectionNames = {
   billingProfiles: 'salesBillingProfiles',
   agreements: 'salesAgreements',
   billingSubscriptions: 'salesBillingSubscriptions',
+  catalogItems: 'salesCatalogItems',
 };
 
 const timestampFromStripeSeconds = (seconds) => (
@@ -339,6 +340,73 @@ const publicAgreementLinkCanAccess = ({ agreement, accessToken, email }) => {
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
+const companyCustomerBillingEnabled = (companyData = {}) => (
+  companyData.customerBillingEnabled === true ||
+  companyData.salesBillingEnabled === true ||
+  companyData.salesBillingAutomationEnabled === true
+);
+
+const companyCreateBillingSubscriptionOnAcceptanceDefault = (companyData = {}) => {
+  if (typeof companyData.salesCreateBillingSubscriptionOnAcceptanceDefault === 'boolean') {
+    return companyData.salesCreateBillingSubscriptionOnAcceptanceDefault === true;
+  }
+
+  return companyData.salesBillingAutomationEnabled === true ||
+    companyData.salesBillingEnabled === true ||
+    companyData.customerBillingEnabled === true;
+};
+
+const shouldCreateBillingSubscriptionFromRequest = (receivedData = {}, companyData = {}) => {
+  if (typeof receivedData.createBillingSubscriptionOnAcceptance === 'boolean') {
+    return receivedData.createBillingSubscriptionOnAcceptance === true;
+  }
+
+  if (typeof receivedData.createBillingSubscription === 'boolean') {
+    return receivedData.createBillingSubscription === true;
+  }
+
+  return companyCreateBillingSubscriptionOnAcceptanceDefault(companyData);
+};
+
+const normalizeCustomerBillingPreference = (value = '', fallback = 'requestInvoice') => {
+  const normalized = String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+  if (normalized === 'paynow' || normalized === 'payrightaway' || normalized === 'autopay') {
+    return 'payNow';
+  }
+
+  if (normalized === 'chargeondelivery' || normalized === 'payoncedelivered' || normalized === 'payondelivery') {
+    return 'chargeOnDelivery';
+  }
+
+  if (normalized === 'requestinvoice' || normalized === 'sendinvoice' || normalized === 'invoice') {
+    return 'requestInvoice';
+  }
+
+  return fallback;
+};
+
+const agreementSupportsBillingSubscription = (agreement = {}) => {
+  const serviceCadenceKey = normalizeStatus(agreement.serviceCadence);
+  const rateTypeKey = normalizeStatus(agreement.rateType);
+  const sourceTypeKey = normalizeStatus(agreement.sourceType);
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  const hasRecurringLineItem = lineItems.some((item) => (
+    normalizeStatus(item.billingBehavior || item.metadata?.billingBehavior) === 'recurring'
+  ));
+
+  if (serviceCadenceKey === 'onetime' || rateTypeKey === 'onetime' || sourceTypeKey === 'oneoffjob') {
+    return false;
+  }
+
+  return (
+    sourceTypeKey === 'recurringservice' ||
+    Boolean(agreement.billingSubscriptionId) ||
+    hasRecurringLineItem ||
+    Boolean(serviceCadenceKey || rateTypeKey)
+  );
+};
+
 const valueToMillis = (value) => {
   if (!value) return 0;
   if (typeof value.toMillis === 'function') return value.toMillis();
@@ -608,13 +676,16 @@ const promoteSelectedJobSolutionScope = async ({
     return;
   }
 
-  const [taskDocs, plannedStopDocs, shoppingDocs, planDocs, solutionDocs] = await Promise.all([
+  const [taskDocs, plannedStopDocs, shoppingDocs, planDocs, solutionDocs, companySnap] = await Promise.all([
     jobRef.collection('tasks').get(),
     jobRef.collection('plannedServiceStops').get(),
     companyRef.collection('shoppingList').where('jobId', '==', jobId).get(),
     jobRef.collection('plans').get(),
     jobRef.collection('solutions').get(),
+    companyRef.get(),
   ]);
+  const companyData = companySnap.exists ? companySnap.data() || {} : {};
+  const autoInvoiceOnInstallDefault = companyData.shoppingItemInstallInvoiceAutomationEnabled === true;
 
   const operations = [];
   taskDocs.docs.forEach((docSnap) => operations.push((batch) => batch.delete(docSnap.ref)));
@@ -659,9 +730,10 @@ const promoteSelectedJobSolutionScope = async ({
       companyId,
       category: 'Job',
       jobId,
-      status: item.customerApprovalRequired && item.customerApprovalStatus !== 'approved'
-        ? 'Needs Customer Approval'
-        : 'Ready to Purchase',
+      status: 'Need to Purchase',
+      autoInvoiceOnInstall: item.autoInvoiceOnInstall === undefined
+        ? autoInvoiceOnInstallDefault
+        : item.autoInvoiceOnInstall === true,
       estimateAccepted: true,
       estimateAcceptedAt: timestamp,
       jobBillingStatus: 'accepted',
@@ -1067,6 +1139,89 @@ const requireCompanyManagerForSalesSubscription = async ({ auth, billingSubscrip
   return { subscriptionRef, subscription };
 };
 
+const findCompanyByConnectedAccountId = async (connectedAccount) => {
+  const accountId = normalizeStripeAccountId(connectedAccount);
+  if (!accountId) return null;
+
+  const primarySnapshot = await db
+    .collection('companies')
+    .where('stripeConnectedAccountId', '==', accountId)
+    .limit(1)
+    .get();
+
+  if (!primarySnapshot.empty) {
+    const docSnap = primarySnapshot.docs[0];
+    return { ref: docSnap.ref, data: { id: docSnap.id, ...docSnap.data() } };
+  }
+
+  const legacySnapshot = await db
+    .collection('companies')
+    .where('stripeConnectAccountId', '==', accountId)
+    .limit(1)
+    .get();
+
+  if (legacySnapshot.empty) return null;
+
+  const docSnap = legacySnapshot.docs[0];
+  return { ref: docSnap.ref, data: { id: docSnap.id, ...docSnap.data() } };
+};
+
+const requireManagedConnectedAccount = async ({ data, context, message }) => {
+  const callableAuth = await getCallableAuth(
+    data,
+    context,
+    message || 'You must be signed in to manage this Stripe connected account.'
+  );
+  const receivedData = getCallableData(data);
+  const requestedAccount = normalizeStripeAccountId(
+    receivedData.connectedAccount ||
+    receivedData.stripeConnectedAccountId ||
+    receivedData.accountId
+  );
+  const companyId = String(receivedData.companyId || '').trim();
+
+  let company = null;
+  if (companyId) {
+    const companyRef = db.collection('companies').doc(companyId);
+    const companySnap = await companyRef.get();
+
+    if (!companySnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Company was not found.');
+    }
+
+    company = { ref: companyRef, data: { id: companySnap.id, ...companySnap.data() } };
+  } else if (requestedAccount) {
+    company = await findCompanyByConnectedAccountId(requestedAccount);
+  }
+
+  if (!company) {
+    throw new functions.https.HttpsError('invalid-argument', 'companyId or a saved connected account id is required.');
+  }
+
+  const hasAccess = company.data.ownerId === callableAuth.uid || await userHasCompanyAccess(callableAuth.uid, company.data.id);
+  if (!hasAccess) {
+    throw new functions.https.HttpsError('permission-denied', 'You do not have access to this company Stripe account.');
+  }
+
+  const companyConnectedAccount = getCompanyConnectedAccountId(company.data);
+  if (!companyConnectedAccount) {
+    throw new functions.https.HttpsError('failed-precondition', 'This company does not have a Stripe connected account yet.');
+  }
+
+  if (requestedAccount && requestedAccount !== companyConnectedAccount) {
+    throw new functions.https.HttpsError('permission-denied', 'Connected account does not belong to this company.');
+  }
+
+  return {
+    auth: callableAuth,
+    companyId: company.data.id,
+    companyRef: company.ref,
+    companyData: company.data,
+    connectedAccount: companyConnectedAccount,
+    receivedData,
+  };
+};
+
 const buildStripeSubscriptionUpdateData = ({ stripeSubscription, connectedAccount }) => {
   const firstItem = stripeSubscription.items?.data?.[0] || {};
   const stripeStatus = stripeSubscription.status || '';
@@ -1247,6 +1402,218 @@ const createConnectedAccountPriceForSalesLineItem = async ({ connectedAccount, s
   };
 };
 
+const createConnectedAccountStripeObjectForSalesCatalogItem = async ({
+  connectedAccount,
+  companyId,
+  catalogItemId,
+  catalogItem,
+}) => {
+  const existingProductId = String(catalogItem.stripeProductId || '').trim();
+  const existingPriceId = String(catalogItem.stripePriceId || '').trim();
+  const currency = String(catalogItem.currency || 'usd').toLowerCase();
+  const unitAmount = Math.round(Number(catalogItem.unitAmountCents || 0));
+  const billingBehavior = String(catalogItem.billingBehavior || 'oneTime');
+  const recurringInterval = normalizeStripeInterval(catalogItem.stripeRecurringInterval || 'month');
+  const recurringIntervalCount = Math.max(Number(catalogItem.stripeRecurringIntervalCount || 1), 1);
+  const name = String(catalogItem.name || '').trim() || 'Service';
+  const description = String(catalogItem.description || '').trim();
+  const metadata = {
+    companyId: String(companyId || ''),
+    salesCatalogItemId: String(catalogItemId || ''),
+    sourceType: String(catalogItem.sourceType || 'manual'),
+    sourceId: String(catalogItem.sourceId || ''),
+  };
+
+  if (!Number.isFinite(unitAmount) || unitAmount < 0) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Service price must be zero or greater before creating a Stripe object.'
+    );
+  }
+
+  let productId = existingProductId;
+  let priceId = existingPriceId;
+  let createdProduct = false;
+  let createdPrice = false;
+
+  if (priceId) {
+    try {
+      const price = await stripe.prices.retrieve(priceId, { expand: ['product'] }, {
+        stripeAccount: connectedAccount,
+      });
+      if (!productId) {
+        productId = typeof price.product === 'string' ? price.product : price.product?.id || '';
+      }
+    } catch (error) {
+      console.warn('Saved Stripe price could not be retrieved. A new price will be created.', {
+        companyId,
+        catalogItemId,
+        priceId,
+        error: error.message,
+      });
+      priceId = '';
+    }
+  }
+
+  if (productId) {
+    try {
+      const product = await stripe.products.retrieve(productId, {}, {
+        stripeAccount: connectedAccount,
+      });
+      if (product?.deleted) productId = '';
+    } catch (error) {
+      console.warn('Saved Stripe product could not be retrieved. A new product will be created.', {
+        companyId,
+        catalogItemId,
+        productId,
+        error: error.message,
+      });
+      productId = '';
+    }
+  }
+
+  if (!productId) {
+    const product = await stripe.products.create({
+      name,
+      description: description || undefined,
+      metadata,
+    }, {
+      stripeAccount: connectedAccount,
+      idempotencyKey: `sales-catalog-product-${companyId}-${catalogItemId}`,
+    });
+
+    productId = product.id;
+    createdProduct = true;
+  }
+
+  if (!priceId) {
+    const pricePayload = {
+      currency,
+      unit_amount: unitAmount,
+      product: productId,
+      metadata,
+    };
+
+    if (billingBehavior === 'recurring') {
+      pricePayload.recurring = {
+        interval: recurringInterval,
+        interval_count: recurringIntervalCount,
+      };
+    }
+
+    const price = await stripe.prices.create(pricePayload, {
+      stripeAccount: connectedAccount,
+      idempotencyKey: [
+        'sales-catalog-price',
+        companyId,
+        catalogItemId,
+        currency,
+        unitAmount,
+        billingBehavior,
+        billingBehavior === 'recurring' ? recurringInterval : 'one-time',
+        billingBehavior === 'recurring' ? recurringIntervalCount : 1,
+      ].join('-'),
+    });
+
+    priceId = price.id;
+    createdPrice = true;
+  }
+
+  return {
+    stripeConnectedAccountId: connectedAccount,
+    stripeProductId: productId,
+    stripePriceId: priceId,
+    createdProduct,
+    createdPrice,
+  };
+};
+
+exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (data, context) => {
+  const callableAuth = await getCallableAuth(
+    data,
+    context,
+    'You must be signed in to create Stripe objects for service catalog items.'
+  );
+  const receivedData = getCallableData(data);
+  const companyId = String(receivedData.companyId || '').trim();
+  const catalogItemId = String(receivedData.catalogItemId || '').trim();
+
+  if (!companyId || !catalogItemId) {
+    throw new functions.https.HttpsError('invalid-argument', 'companyId and catalogItemId are required.');
+  }
+
+  const companyRef = db.collection('companies').doc(companyId);
+  const companySnap = await companyRef.get();
+
+  if (!companySnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Company was not found.');
+  }
+
+  const companyData = companySnap.data() || {};
+  const hasAccess = companyData.ownerId === callableAuth.uid || await userHasCompanyAccess(callableAuth.uid, companyId);
+
+  if (!hasAccess) {
+    throw new functions.https.HttpsError(
+      'permission-denied',
+      'You do not have access to manage this company service catalog.'
+    );
+  }
+
+  const connectedAccount = getCompanyConnectedAccountId(companyData);
+  if (!connectedAccount) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Connect this company to Stripe before creating Stripe objects for catalog services.'
+    );
+  }
+
+  const catalogItemRef = companyRef.collection(salesCollectionNames.catalogItems).doc(catalogItemId);
+  const catalogItemSnap = await catalogItemRef.get();
+
+  if (!catalogItemSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Service catalog item was not found.');
+  }
+
+  const catalogItem = { id: catalogItemSnap.id, ...catalogItemSnap.data() };
+  if (catalogItem.companyId && catalogItem.companyId !== companyId) {
+    throw new functions.https.HttpsError(
+      'permission-denied',
+      'This service catalog item belongs to another company.'
+    );
+  }
+
+  try {
+    const stripeObject = await createConnectedAccountStripeObjectForSalesCatalogItem({
+      connectedAccount,
+      companyId,
+      catalogItemId,
+      catalogItem,
+    });
+
+    await catalogItemRef.set({
+      stripeConnectedAccountId: stripeObject.stripeConnectedAccountId,
+      stripeProductId: stripeObject.stripeProductId,
+      stripePriceId: stripeObject.stripePriceId,
+      stripeObjectUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      stripeObjectUpdatedByUserId: callableAuth.uid,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return stripeObject;
+  } catch (error) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('Unable to create Stripe object for sales catalog item', {
+      companyId,
+      catalogItemId,
+      error,
+    });
+    throw new functions.https.HttpsError(
+      'internal',
+      error.message || 'Unable to create Stripe object for this service.'
+    );
+  }
+});
+
 exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, context) => {
   const callableAuth = await getCallableAuth(data, context, 'You must be signed in to accept a service agreement.');
   const receivedData = getCallableData(data);
@@ -1287,6 +1654,43 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
 
   const companyDoc = await db.collection('companies').doc(acceptanceAgreement.companyId).get();
   const companyData = companyDoc.exists ? companyDoc.data() : {};
+  const companyBillingEnabled = companyCustomerBillingEnabled(companyData);
+  const requestedBillingPreference = normalizeCustomerBillingPreference(
+    receivedData.customerBillingPreference ||
+    receivedData.billingPreference ||
+    receivedData.paymentPreference ||
+    receivedData.paymentCollectionPreference ||
+    '',
+    ''
+  );
+  const createBillingSubscriptionOnAcceptance = requestedBillingPreference
+    ? requestedBillingPreference === 'payNow'
+    : shouldCreateBillingSubscriptionFromRequest(receivedData, companyData);
+  const customerBillingPreference = requestedBillingPreference || (
+    createBillingSubscriptionOnAcceptance ? 'payNow' : 'requestInvoice'
+  );
+  const salesBillingAutomationEnabled = (
+    companyBillingEnabled &&
+    createBillingSubscriptionOnAcceptance &&
+    agreementSupportsBillingSubscription(acceptanceAgreement)
+  );
+  const agreementBillingSubscriptionEligible = agreementSupportsBillingSubscription(acceptanceAgreement);
+  const billingSkippedReason = !companyBillingEnabled
+    ? 'billingAutomationDisabled'
+    : !agreementBillingSubscriptionEligible
+      ? 'oneTimeAgreement'
+      : 'acceptanceBillingSkipped';
+  const skippedBillingFlowStatus = !companyBillingEnabled
+    ? 'billingDisabled'
+    : !agreementBillingSubscriptionEligible
+      ? 'billingNotApplicable'
+      : 'notStarted';
+  const skippedBillingFlowNextAction = !companyBillingEnabled
+    ? 'enableBillingAutomation'
+    : !agreementBillingSubscriptionEligible
+      ? 'convertToInvoice'
+      : 'createBillingSubscription';
+  const skippedBillingCollectionMethod = companyBillingEnabled ? 'manualInvoices' : 'externalBilling';
   const stripeConnectedAccountId = acceptanceAgreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
   const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId });
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
@@ -1295,10 +1699,10 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   const acceptedByName = callableAuth.token?.name || agreement.customerName || acceptedByEmail || 'Customer';
 
   await db.runTransaction(async (transaction) => {
-    const [freshAgreementSnap, subscriptionSnap] = await Promise.all([
-      transaction.get(agreementRef),
-      transaction.get(subscriptionRef),
-    ]);
+    const freshAgreementSnap = await transaction.get(agreementRef);
+    const subscriptionSnap = salesBillingAutomationEnabled
+      ? await transaction.get(subscriptionRef)
+      : null;
 
     if (!freshAgreementSnap.exists) {
       throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
@@ -1311,7 +1715,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
     }
 
-    const existingSubscription = subscriptionSnap.exists
+    const existingSubscription = subscriptionSnap?.exists
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
     const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
@@ -1431,7 +1835,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       const previousAgreementSnap = await transaction.get(previousAgreementRef);
       if (previousAgreementSnap.exists) {
         previousAgreement = { id: previousAgreementSnap.id, ...previousAgreementSnap.data() };
-        if (previousAgreement.billingSubscriptionId) {
+        if (salesBillingAutomationEnabled && previousAgreement.billingSubscriptionId) {
           previousSubscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(previousAgreement.billingSubscriptionId);
           const previousSubscriptionSnap = await transaction.get(previousSubscriptionRef);
           if (previousSubscriptionSnap.exists) {
@@ -1441,7 +1845,53 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       }
     }
 
-    transaction.set(subscriptionRef, nextSubscription, { merge: true });
+    const billingAcceptanceFields = salesBillingAutomationEnabled
+      ? {
+        billingSubscriptionId: subscriptionDraft.id,
+        billingFlowStatus: nextSubscription.status,
+        billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+        customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
+        salesBillingAutomationEnabled: true,
+        billingAutomationDisabledAtAcceptance: false,
+      }
+      : {
+        salesBillingAutomationEnabled: false,
+        billingAutomationDisabledAtAcceptance: !companyBillingEnabled,
+        billingFlowStatus: skippedBillingFlowStatus,
+        billingFlowNextAction: skippedBillingFlowNextAction,
+        billingCollectionMethod: skippedBillingCollectionMethod,
+        autopayStatus: 'unavailable',
+        manualBillingEnabled: false,
+        manualBillingAutoSendEnabled: false,
+        customerCanPayImmediately: false,
+      };
+    const billingSnapshotFields = salesBillingAutomationEnabled
+      ? {
+        billingSubscriptionId: subscriptionDraft.id,
+        billingFlowStatus: nextSubscription.status,
+        billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+      }
+      : {
+        billingFlowStatus: skippedBillingFlowStatus,
+        billingFlowNextAction: skippedBillingFlowNextAction,
+        billingCollectionMethod: skippedBillingCollectionMethod,
+        autopayStatus: 'unavailable',
+        manualBillingEnabled: false,
+        manualBillingAutoSendEnabled: false,
+      };
+
+    if (salesBillingAutomationEnabled) {
+      transaction.set(subscriptionRef, nextSubscription, { merge: true });
+    }
+
     transaction.set(agreementRef, {
       status: 'accepted',
       acceptedAt,
@@ -1450,6 +1900,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       acceptedByEmail,
       acceptedSource: 'customerPortal',
       acceptedNote: acceptanceNote,
+      createBillingSubscriptionOnAcceptance: salesBillingAutomationEnabled,
       acceptedSignatureName: acceptanceConfirmation.signatureName,
       acceptedTermsConfirmed: acceptanceConfirmation.acceptedTermsConfirmed,
       acceptedPricingConfirmed: acceptanceConfirmation.acceptedPricingConfirmed,
@@ -1485,19 +1936,14 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         acceptedAutopayNoticeConfirmed: acceptanceConfirmation.acceptedAutopayNoticeConfirmed,
         acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
         acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
+        customerBillingPreference,
+        customerBillingPreferenceSelectedAt: acceptedAt,
         previousAgreementId: previousAgreementId || '',
         supersedesAgreementId: previousAgreementId || '',
         agreementHistoryGroupId: historyGroupId,
         agreementVersion: String(freshAgreement.agreementVersion || 1),
-        billingSubscriptionId: subscriptionDraft.id,
-        billingFlowStatus: nextSubscription.status,
-        billingFlowNextAction: nextSubscription.nextAction,
-        billingCollectionMethod: nextSubscription.billingCollectionMethod,
-        autopayStatus: nextSubscription.autopayStatus,
-        manualBillingEnabled: nextSubscription.manualBillingEnabled,
-        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+        ...billingSnapshotFields,
       },
-      billingSubscriptionId: subscriptionDraft.id,
       selectedPlanId: selectedSolutionId,
       selectedSolutionId,
       acceptedPlanId: selectedSolutionId,
@@ -1508,15 +1954,12 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       acceptedPlanTierLabel: selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
       acceptedSolutionTier: selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
       acceptedSolutionTierLabel: selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
-      billingFlowStatus: nextSubscription.status,
-      billingFlowNextAction: nextSubscription.nextAction,
       billingFlowUpdatedAt: acceptedAt,
-      billingCollectionMethod: nextSubscription.billingCollectionMethod,
-      autopayStatus: nextSubscription.autopayStatus,
-      manualBillingEnabled: nextSubscription.manualBillingEnabled,
-      manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+      customerBillingPreference,
+      customerBillingPreferenceSelectedAt: acceptedAt,
+      requestedBillingPreference: customerBillingPreference,
+      ...billingAcceptanceFields,
       customerUserId: freshAgreement.customerUserId || callableAuth.uid,
-      customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       agreementHistoryGroupId: historyGroupId,
       agreementVersion: Math.max(Number(freshAgreement.agreementVersion || 1), 1),
       activatedAt: freshAgreement.activatedAt || acceptedAt,
@@ -1548,7 +1991,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       }, { merge: true });
     }
 
-    if (previousSubscriptionRef && previousSubscription) {
+    if (salesBillingAutomationEnabled && previousSubscriptionRef && previousSubscription) {
       transaction.set(previousSubscriptionRef, {
         ...supersededSubscriptionUpdates(previousSubscription, acceptedAt),
         supersededByAgreementId: freshAgreement.id,
@@ -1575,11 +2018,100 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   return {
     status: 'success',
     agreementId,
-    billingSubscriptionId: subscriptionDraft.id,
+    billingSubscriptionId: salesBillingAutomationEnabled ? subscriptionDraft.id : '',
+    billingSkipped: !salesBillingAutomationEnabled,
+    billingSkippedReason,
+    salesBillingAutomationEnabled,
+    customerBillingPreference,
     selectedPlanId: selectedSolutionId,
     selectedSolutionId,
-    customerCanPayImmediately: subscriptionDraft.customerCanPayImmediately,
-    nextAction: subscriptionDraft.nextAction,
+    customerCanPayImmediately: salesBillingAutomationEnabled ? subscriptionDraft.customerCanPayImmediately : false,
+    nextAction: salesBillingAutomationEnabled
+      ? subscriptionDraft.nextAction
+      : skippedBillingFlowNextAction,
+  };
+});
+
+exports.rejectSalesServiceAgreement = functions.https.onCall(async (data, context) => {
+  const callableAuth = await getCallableAuth(data, context, 'You must be signed in to decline a service agreement.');
+  const receivedData = getCallableData(data);
+  const agreementId = String(receivedData.agreementId || '').trim();
+  const rejectionNote = String(receivedData.rejectionNote || receivedData.responseNote || '').trim().slice(0, 2000);
+
+  if (!agreementId) {
+    throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
+  }
+
+  const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
+  const agreementSnap = await agreementRef.get();
+
+  if (!agreementSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+  }
+
+  const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
+  const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: agreement });
+
+  if (!canAccess) {
+    throw new functions.https.HttpsError('permission-denied', 'This service agreement does not belong to your account.');
+  }
+
+  const statusKey = normalizeStatus(agreement.status);
+  if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
+    throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to decline.');
+  }
+
+  const rejectedAt = admin.firestore.FieldValue.serverTimestamp();
+  const rejectedByEmail = callableAuth.token?.email || agreement.email || '';
+  const rejectedByName = callableAuth.token?.name || agreement.customerName || rejectedByEmail || 'Customer';
+
+  await db.runTransaction(async (transaction) => {
+    const freshAgreementSnap = await transaction.get(agreementRef);
+
+    if (!freshAgreementSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    }
+
+    const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
+    const freshStatusKey = normalizeStatus(freshAgreement.status);
+
+    if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
+      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to decline.');
+    }
+
+    transaction.set(agreementRef, {
+      status: 'rejected',
+      rejectedAt,
+      rejectedByUserId: callableAuth.uid,
+      rejectedByUserName: rejectedByName,
+      rejectedByEmail,
+      rejectedSource: 'customerPortal',
+      rejectedNote: rejectionNote,
+      customerUserId: freshAgreement.customerUserId || callableAuth.uid,
+      statusChangedAt: rejectedAt,
+      statusChangedByUserId: callableAuth.uid,
+      statusChangedByUserName: rejectedByName,
+      statusChangeReason: rejectionNote || 'Customer declined from the client portal.',
+      updatedAt: rejectedAt,
+    }, { merge: true });
+  });
+
+  await syncLinkedJobForAgreementStatus({
+    agreement,
+    status: 'rejected',
+    actorUserId: callableAuth.uid,
+    actorUserName: rejectedByName,
+    timestamp: rejectedAt,
+  });
+  await syncLinkedLeadForAgreementStatus({
+    agreement,
+    status: 'rejected',
+    timestamp: rejectedAt,
+  });
+
+  return {
+    status: 'success',
+    agreementId,
   };
 });
 
@@ -1626,6 +2158,43 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
 
   const companyDoc = await db.collection('companies').doc(acceptanceAgreement.companyId).get();
   const companyData = companyDoc.exists ? companyDoc.data() : {};
+  const companyBillingEnabled = companyCustomerBillingEnabled(companyData);
+  const requestedBillingPreference = normalizeCustomerBillingPreference(
+    receivedData.customerBillingPreference ||
+    receivedData.billingPreference ||
+    receivedData.paymentPreference ||
+    receivedData.paymentCollectionPreference ||
+    '',
+    ''
+  );
+  const createBillingSubscriptionOnAcceptance = requestedBillingPreference
+    ? requestedBillingPreference === 'payNow'
+    : shouldCreateBillingSubscriptionFromRequest(receivedData, companyData);
+  const customerBillingPreference = requestedBillingPreference || (
+    createBillingSubscriptionOnAcceptance ? 'payNow' : 'requestInvoice'
+  );
+  const salesBillingAutomationEnabled = (
+    companyBillingEnabled &&
+    createBillingSubscriptionOnAcceptance &&
+    agreementSupportsBillingSubscription(acceptanceAgreement)
+  );
+  const agreementBillingSubscriptionEligible = agreementSupportsBillingSubscription(acceptanceAgreement);
+  const billingSkippedReason = !companyBillingEnabled
+    ? 'billingAutomationDisabled'
+    : !agreementBillingSubscriptionEligible
+      ? 'oneTimeAgreement'
+      : 'acceptanceBillingSkipped';
+  const skippedBillingFlowStatus = !companyBillingEnabled
+    ? 'billingDisabled'
+    : !agreementBillingSubscriptionEligible
+      ? 'billingNotApplicable'
+      : 'notStarted';
+  const skippedBillingFlowNextAction = !companyBillingEnabled
+    ? 'enableBillingAutomation'
+    : !agreementBillingSubscriptionEligible
+      ? 'convertToInvoice'
+      : 'createBillingSubscription';
+  const skippedBillingCollectionMethod = companyBillingEnabled ? 'manualInvoices' : 'externalBilling';
   const stripeConnectedAccountId = acceptanceAgreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
   const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId });
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
@@ -1635,10 +2204,10 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   const acceptedByUserId = agreement.customerUserId || '';
 
   await db.runTransaction(async (transaction) => {
-    const [freshAgreementSnap, subscriptionSnap] = await Promise.all([
-      transaction.get(agreementRef),
-      transaction.get(subscriptionRef),
-    ]);
+    const freshAgreementSnap = await transaction.get(agreementRef);
+    const subscriptionSnap = salesBillingAutomationEnabled
+      ? await transaction.get(subscriptionRef)
+      : null;
 
     if (!freshAgreementSnap.exists) {
       throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
@@ -1654,7 +2223,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
     }
 
-    const existingSubscription = subscriptionSnap.exists
+    const existingSubscription = subscriptionSnap?.exists
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
     const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
@@ -1774,7 +2343,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       const previousAgreementSnap = await transaction.get(previousAgreementRef);
       if (previousAgreementSnap.exists) {
         previousAgreement = { id: previousAgreementSnap.id, ...previousAgreementSnap.data() };
-        if (previousAgreement.billingSubscriptionId) {
+        if (salesBillingAutomationEnabled && previousAgreement.billingSubscriptionId) {
           previousSubscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(previousAgreement.billingSubscriptionId);
           const previousSubscriptionSnap = await transaction.get(previousSubscriptionRef);
           if (previousSubscriptionSnap.exists) {
@@ -1784,7 +2353,53 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       }
     }
 
-    transaction.set(subscriptionRef, nextSubscription, { merge: true });
+    const billingAcceptanceFields = salesBillingAutomationEnabled
+      ? {
+        billingSubscriptionId: subscriptionDraft.id,
+        billingFlowStatus: nextSubscription.status,
+        billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+        customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
+        salesBillingAutomationEnabled: true,
+        billingAutomationDisabledAtAcceptance: false,
+      }
+      : {
+        salesBillingAutomationEnabled: false,
+        billingAutomationDisabledAtAcceptance: !companyBillingEnabled,
+        billingFlowStatus: skippedBillingFlowStatus,
+        billingFlowNextAction: skippedBillingFlowNextAction,
+        billingCollectionMethod: skippedBillingCollectionMethod,
+        autopayStatus: 'unavailable',
+        manualBillingEnabled: false,
+        manualBillingAutoSendEnabled: false,
+        customerCanPayImmediately: false,
+      };
+    const billingSnapshotFields = salesBillingAutomationEnabled
+      ? {
+        billingSubscriptionId: subscriptionDraft.id,
+        billingFlowStatus: nextSubscription.status,
+        billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+      }
+      : {
+        billingFlowStatus: skippedBillingFlowStatus,
+        billingFlowNextAction: skippedBillingFlowNextAction,
+        billingCollectionMethod: skippedBillingCollectionMethod,
+        autopayStatus: 'unavailable',
+        manualBillingEnabled: false,
+        manualBillingAutoSendEnabled: false,
+      };
+
+    if (salesBillingAutomationEnabled) {
+      transaction.set(subscriptionRef, nextSubscription, { merge: true });
+    }
+
     transaction.set(agreementRef, {
       status: 'accepted',
       acceptedAt,
@@ -1793,6 +2408,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       acceptedByEmail,
       acceptedSource: 'emailLink',
       acceptedNote: acceptanceNote,
+      createBillingSubscriptionOnAcceptance: salesBillingAutomationEnabled,
       acceptedSignatureName: acceptanceConfirmation.signatureName,
       acceptedTermsConfirmed: acceptanceConfirmation.acceptedTermsConfirmed,
       acceptedPricingConfirmed: acceptanceConfirmation.acceptedPricingConfirmed,
@@ -1828,19 +2444,14 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
         acceptedAutopayNoticeConfirmed: acceptanceConfirmation.acceptedAutopayNoticeConfirmed,
         acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
         acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
+        customerBillingPreference,
+        customerBillingPreferenceSelectedAt: acceptedAt,
         previousAgreementId: previousAgreementId || '',
         supersedesAgreementId: previousAgreementId || '',
         agreementHistoryGroupId: historyGroupId,
         agreementVersion: String(freshAgreement.agreementVersion || 1),
-        billingSubscriptionId: subscriptionDraft.id,
-        billingFlowStatus: nextSubscription.status,
-        billingFlowNextAction: nextSubscription.nextAction,
-        billingCollectionMethod: nextSubscription.billingCollectionMethod,
-        autopayStatus: nextSubscription.autopayStatus,
-        manualBillingEnabled: nextSubscription.manualBillingEnabled,
-        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+        ...billingSnapshotFields,
       },
-      billingSubscriptionId: subscriptionDraft.id,
       selectedPlanId: selectedSolutionId,
       selectedSolutionId,
       acceptedPlanId: selectedSolutionId,
@@ -1851,15 +2462,12 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       acceptedPlanTierLabel: selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
       acceptedSolutionTier: selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
       acceptedSolutionTierLabel: selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
-      billingFlowStatus: nextSubscription.status,
-      billingFlowNextAction: nextSubscription.nextAction,
       billingFlowUpdatedAt: acceptedAt,
-      billingCollectionMethod: nextSubscription.billingCollectionMethod,
-      autopayStatus: nextSubscription.autopayStatus,
-      manualBillingEnabled: nextSubscription.manualBillingEnabled,
-      manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+      customerBillingPreference,
+      customerBillingPreferenceSelectedAt: acceptedAt,
+      requestedBillingPreference: customerBillingPreference,
+      ...billingAcceptanceFields,
       customerUserId: freshAgreement.customerUserId || null,
-      customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       agreementHistoryGroupId: historyGroupId,
       agreementVersion: Math.max(Number(freshAgreement.agreementVersion || 1), 1),
       activatedAt: freshAgreement.activatedAt || acceptedAt,
@@ -1891,7 +2499,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       }, { merge: true });
     }
 
-    if (previousSubscriptionRef && previousSubscription) {
+    if (salesBillingAutomationEnabled && previousSubscriptionRef && previousSubscription) {
       transaction.set(previousSubscriptionRef, {
         ...supersededSubscriptionUpdates(previousSubscription, acceptedAt),
         supersededByAgreementId: freshAgreement.id,
@@ -1918,11 +2526,17 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   return {
     status: 'success',
     agreementId,
-    billingSubscriptionId: subscriptionDraft.id,
+    billingSubscriptionId: salesBillingAutomationEnabled ? subscriptionDraft.id : '',
+    billingSkipped: !salesBillingAutomationEnabled,
+    billingSkippedReason,
+    salesBillingAutomationEnabled,
+    customerBillingPreference,
     selectedPlanId: selectedSolutionId,
     selectedSolutionId,
-    customerCanPayImmediately: subscriptionDraft.customerCanPayImmediately,
-    nextAction: subscriptionDraft.nextAction,
+    customerCanPayImmediately: salesBillingAutomationEnabled ? subscriptionDraft.customerCanPayImmediately : false,
+    nextAction: salesBillingAutomationEnabled
+      ? subscriptionDraft.nextAction
+      : skippedBillingFlowNextAction,
   };
 });
 
@@ -2073,6 +2687,13 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
   const companySnapshot = await db.collection('companies').doc(companyId).get();
   const companyData = companySnapshot.exists ? companySnapshot.data() : {};
   const companyConnectedAccount = getCompanyConnectedAccountId(companyData);
+
+  if (!companyCustomerBillingEnabled(companyData)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Turn on customer billing before starting Stripe Checkout.'
+    );
+  }
 
   if (companyConnectedAccount && connectedAccount !== companyConnectedAccount) {
     throw new functions.https.HttpsError('permission-denied', 'Billing subscription is not connected to this company Stripe account.');
@@ -2659,99 +3280,176 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
 
 
 exports.getProductList = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to list connected-account products.',
+    });
     try {
-      const products = await stripe.products.list({
-        stripeAccount: receivedData.connectedAccount,
-        active: receivedData.active,
+      const listParams = {
+        limit: Math.min(Number(receivedData.limit || 100), 100),
+      };
+
+      if (typeof receivedData.active === 'boolean') {
+        listParams.active = receivedData.active;
+      }
+
+      const products = await stripe.products.list(listParams, {
+        stripeAccount: connectedAccount,
       });
       return {
         productList:products
       }
     } catch(error) {
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to list connected-account products.');
     }
   });
+
+exports.createNewProduct = functions.https.onCall(async(data,context) => {
+    const { connectedAccount, companyId, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to create connected-account products.',
+    });
+    const name = String(receivedData.name || '').trim();
+    const description = String(receivedData.description || '').trim();
+    const unitAmountCents = Math.round(Number(receivedData.unitAmountCents || receivedData.priceCents || 0));
+    const currency = String(receivedData.currency || 'usd').toLowerCase();
+
+    if (!name) {
+      throw new functions.https.HttpsError('invalid-argument', 'Product name is required.');
+    }
+
+    try {
+      const productPayload = {
+        name,
+        description: description || undefined,
+        active: receivedData.active !== false,
+        metadata: {
+          companyId,
+          source: 'legacyConnectedAccountProductScreen',
+        },
+        expand: ['default_price'],
+      };
+
+      if (unitAmountCents > 0) {
+        productPayload.default_price_data = {
+          currency,
+          unit_amount: unitAmountCents,
+          recurring: {
+            interval: ['day', 'week', 'month', 'year'].includes(String(receivedData.interval || '').toLowerCase())
+              ? String(receivedData.interval).toLowerCase()
+              : 'month',
+            interval_count: Math.max(Number(receivedData.intervalCount || 1), 1),
+          },
+        };
+      }
+
+      const product = await stripe.products.create(productPayload, {
+        stripeAccount: connectedAccount,
+      });
+
+      return { product };
+    } catch(error) {
+      console.error(error);
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account product.');
+    }
+  });
+
   //------------------CRUD Price------------------
   exports.createNewPrice = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to create connected-account prices.',
+    });
     try {
-      const product = await stripe.price.create({
-        name: receivedData.name,
-        description: receivedData.description,
-        active: receivedData.active
-      },
-      {
-        stripeAccount: receivedData.connectedAccount,
+      const price = await stripe.prices.create({
+        product: receivedData.productId,
+        currency: String(receivedData.currency || 'usd').toLowerCase(),
+        unit_amount: Math.round(Number(receivedData.unitAmountCents || receivedData.price || 0)),
+        active: receivedData.active !== false,
+      }, {
+        stripeAccount: connectedAccount,
       });
       return {
-        product:product
+        price
   
       }
     } catch(error) {
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account price.');
     }
   });
   exports.getPriceList = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
-    console.log('-------------- receivedData -------------------')
-  
-    console.log(receivedData)
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to list connected-account prices.',
+    });
     try {
-      const prices = await stripe.prices.list({
-        product : receivedData.productId,
-        active : receivedData.active
-      },
+      const listParams = {
+        limit: Math.min(Number(receivedData.limit || 100), 100),
+      };
+
+      if (receivedData.productId) {
+        listParams.product = receivedData.productId;
+      }
+
+      if (typeof receivedData.active === 'boolean') {
+        listParams.active = receivedData.active;
+      }
+
+      const prices = await stripe.prices.list(listParams,
       {
-        stripeAccount: receivedData.connectedAccount,
+        stripeAccount: connectedAccount,
       }
       );
-      console.log('-------------- Prices -------------------')
-      console.log(prices)
       return {
         priceList:prices
       }
     } catch(error) {
   
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to list connected-account prices.');
     }
   });
 
   
 exports.getDefaultPrice = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
-    console.log('-------------- receivedData -------------------')
-    //priceId:String
-    //connectedAccount:String
-    console.log(receivedData)
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to retrieve connected-account prices.',
+    });
     try {
       const price = await stripe.prices.retrieve(
         receivedData.priceId
         ,
+        {},
         {
-          stripeAccount: receivedData.connectedAccount,
+          stripeAccount: connectedAccount,
         }
       );
-  
-      console.log('-------------- Prices -------------------')
-      console.log(price)
       return {
         price:price
       }
     } catch(error) {
   
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to retrieve connected-account price.');
     }
   });
   //------------------CRUD Contract------------------
 
 exports.acceptContract = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
-  
-    console.log('-------------- Received Data -------------------')
-  
-    console.log(receivedData)
-  
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to create connected-account subscriptions.',
+    });
+
     try {
   
       const subscription = await stripe.subscriptions.create(
@@ -2765,29 +3463,27 @@ exports.acceptContract = functions.https.onCall(async(data,context) => {
           expand: ['latest_invoice.payment_intent'],
         },
         {
-          stripeAccount: receivedData.connectedAccount,
+          stripeAccount: connectedAccount,
         }
       );
-  
-      console.log('-------------- subscription -------------------')
-      console.log(subscription)
       return {
         subscription:subscription
       }
     } catch(error) {
   
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account subscription.');
     }
   });
   
 
 exports.acceptContract2 = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
-  
-    console.log('-------------- Received Data -------------------')
-  
-    console.log(receivedData)
-  
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to create connected-account checkout sessions.',
+    });
+
     try {
   
       const session = await stripe.checkout.sessions.create({
@@ -2807,67 +3503,74 @@ exports.acceptContract2 = functions.https.onCall(async(data,context) => {
         cancel_url: 'http://localhost:3000/canceled',
       },
       {
-        stripeAccount: receivedData.connectedAccount,
+        stripeAccount: connectedAccount,
       });
-  
-      console.log('-------------- subscription -------------------')
-      console.log(session)
       return {
         session:session
       }
     } catch(error) {
   
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account checkout session.');
     }
   });
   
   exports.getSubcriptionList = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
-    console.log('-------------- receivedData -------------------')
-  
-    console.log(receivedData)
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to list connected-account subscriptions.',
+    });
     try {
-      const subscriptions = await stripe.subscriptions.list({
-        customer: receivedData.customerId,
-      },
+      const listParams = {
+        limit: Math.min(Number(receivedData.limit || 100), 100),
+      };
+
+      if (receivedData.customerId) {
+        listParams.customer = receivedData.customerId;
+      }
+
+      const subscriptions = await stripe.subscriptions.list(listParams,
       {
-        stripeAccount: receivedData.connectedAccount,
+        stripeAccount: connectedAccount,
       });
-      
-      console.log('-------------- subscriptions -------------------')
-      console.log(subscriptions)
+
       return {
         subscriptions:subscriptions
       }
     } catch(error) {
   
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to list connected-account subscriptions.');
     }
   }); 
   
   //------------------CRUD Customer------------------
   exports.setUpConnectedAccountCustomer = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
-    console.log('-------------- receivedData -------------------')
-  
-    console.log(receivedData)
+    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
+      data,
+      context,
+      message: 'You must be signed in to create connected-account customers.',
+    });
     try {
       const customer = await stripe.customers.create({
         name: receivedData.name,
         email: receivedData.email,
+        metadata: {
+          companyId: receivedData.companyId || '',
+        },
       },
        {
-        stripeAccount: receivedData.connectedAccount,
+        stripeAccount: connectedAccount,
       }
     );
-   
-      console.log('-------------- Prices -------------------')
-      console.log(customer)
+
       return {
         customer:customer
       }
     } catch(error) {
   
       console.error(error)
+      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account customer.');
     }
   });

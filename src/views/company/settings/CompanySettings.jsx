@@ -17,6 +17,7 @@ import {
     ChevronRightIcon,
     ArrowDownIcon,
     ArrowDownTrayIcon,
+    ArrowUpTrayIcon,
     ArrowUpIcon,
     XMarkIcon,
     BookmarkIcon,
@@ -476,6 +477,13 @@ const CompanySettings = () => {
                 permissionId: '810',
             },
             {
+                to: '/company/settings/company-wide',
+                icon: <CogIcon className="w-6 h-6" />,
+                title: 'Company Settings',
+                description: 'Manage company-wide workflow switches for offered work, route coverage, assignment, and incentives.',
+                permissionId: '900',
+            },
+            {
                 to: '/Company/TaskGroups',
                 icon: <ArchiveBoxIcon className="w-6 h-6" />,
                 title: 'Task Groups',
@@ -546,7 +554,44 @@ const CompanySettings = () => {
                 permissionIds: ['900', '634'],
             },
         ],
+        catalog: [
+            {
+                to: '/company/settings/product-catalog',
+                icon: <BiPurchaseTagAlt className="w-6 h-6" />,
+                title: 'Products',
+                description: 'Manage the generic Product Catalog used by jobs, invoices, and service templates.',
+                permissionId: '850',
+            },
+            {
+                to: '/company/settings/vendor-items',
+                icon: <ArchiveBoxIcon className="w-6 h-6" />,
+                title: 'Vendor Items',
+                description: 'Manage vendor-specific purchasable items for receipts, costs, suppliers, and audit history.',
+                permissionId: '850',
+            },
+            {
+                to: '/company/sales/catalog-items',
+                icon: <BiPurchaseTagAlt className="w-6 h-6" />,
+                title: 'Service Catalog',
+                description: 'Manage billable services, recurring service charges, fees, discounts, and Stripe references.',
+                permissionId: '400',
+            },
+            {
+                to: '/company/settings/terms-templates',
+                icon: <DocumentTextIcon className="w-6 h-6" />,
+                title: 'Service Agreement Templates',
+                description: 'Create and manage reusable agreement language and billing defaults.',
+                permissionId: '880',
+            },
+        ],
         uploads: [
+            {
+                to: '/company/settings/vendor-items/bulk-upload',
+                icon: <ArrowUpTrayIcon className="w-6 h-6" />,
+                title: 'Vendor Item Upload',
+                description: 'Import supplier SKUs, costs, vendor links, and purchase-side item records.',
+                permissionId: '910',
+            },
             {
                 to: '/company/migration/customer-export-import',
                 icon: <DocumentTextIcon className="w-6 h-6" />,
@@ -657,24 +702,10 @@ const CompanySettings = () => {
             ...(ownerCanManageStripe ? [{
                 to: '/company/settings/stripe-billing',
                 icon: <CreditCardIcon className="w-6 h-6" />,
-                title: 'Stripe Billing Snapshot',
-                description: 'Review connected account setup, webhook sync, platform fee, and recent payouts.',
+                title: 'Customer Billing',
+                description: 'Turn billing automation on or off, review Stripe setup, and check recent payouts.',
                 permissionId: '400',
             }] : []),
-            {
-                to: '/Company/Items',
-                icon: <ArchiveBoxIcon className="w-6 h-6" />,
-                title: 'Database Products Catalog',
-                description: 'Manage reusable products, parts, materials, costs, vendors, and billing defaults.',
-                permissionId: '850',
-            },
-            {
-                to: '/company/sales/catalog-items',
-                icon: <BiPurchaseTagAlt className="w-6 h-6" />,
-                title: 'Service Catalog',
-                description: 'Manage billable services, recurring service charges, fees, discounts, and Stripe references.',
-                permissionId: '400',
-            },
             // Update 3.1
             // {
             //     to: '/Company/StripeProfile',
@@ -682,13 +713,6 @@ const CompanySettings = () => {
             //     title: 'Stripe Profile',
             //     description: 'Manage your company\'s Stripe account and payment details.'
             // },
-            {
-                to: '/company/settings/terms-templates',
-                icon: <DocumentTextIcon className="w-6 h-6" />,
-                title: 'Service Agreement Templates',
-                description: 'Create and manage reusable agreement language and billing defaults.',
-                permissionId: '880',
-            },
             {
                 to: '/company/settings/payroll-setup',
                 icon: <CurrencyDollarIcon className="w-6 h-6" />,
@@ -741,14 +765,15 @@ const CompanySettings = () => {
 
                 {visibleSettings.general.length > 0 && <SettingsSection title="General" items={visibleSettings.general} />}
                 {visibleSettings.configuration.length > 0 && <SettingsSection title="Configuration" items={visibleSettings.configuration} />}
+                {visibleSettings.catalog.length > 0 && <SettingsSection title="Products & Services" items={visibleSettings.catalog} />}
+                {visibleSettings.billing.length > 0 && <SettingsSection title="Billing & Payroll" items={visibleSettings.billing} />}
+                {visibleSettings.other.length > 0 && <SettingsSection title="Other" items={visibleSettings.other} />}
                 {visibleSettings.uploads.length > 0 && (
                     <SettingsSection title="Data Uploads" items={visibleSettings.uploads} />
                 )}
                 {visibleSettings.exports.length > 0 && (
                     <SettingsSection title="Data Exports" items={visibleSettings.exports} />
                 )}
-                {visibleSettings.other.length > 0 && <SettingsSection title="Other" items={visibleSettings.other} />}
-                {visibleSettings.billing.length > 0 && <SettingsSection title="Billing & Payroll" items={visibleSettings.billing} />}
 
                 <NavigationOrderSettings />
 

@@ -22,12 +22,17 @@ import { format } from "date-fns";
 import { displayRecordReference, linkedReferenceText } from "../../../utils/displayReferences";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
 import { syncLinkedShoppingPurchase } from "../../../utils/shoppingPurchaseSync";
+import {
+    SHOPPING_LIST_STATUS,
+    SHOPPING_LIST_STATUS_OPTIONS,
+    shoppingListStatusMatches,
+} from "../../../utils/shoppingListStatus";
 import ShareItemButton from "../../components/share/ShareItemButton";
 
 const purchaseCategoryOptions = ["PVC", "Galvanized", "Chemicals", "Useables", "Equipment", "Parts", "Electrical", "Tools", "Misc", "Uncategorized"];
 const normalizePurchaseCategory = (value) => String(value || "").trim() || "Uncategorized";
-const shoppingListStatusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed", "Invoiced"];
-const defaultShoppingListStatusFilters = ["Purchased", "Installed", "Invoiced"];
+const shoppingListStatusOptions = SHOPPING_LIST_STATUS_OPTIONS;
+const defaultShoppingListStatusFilters = [SHOPPING_LIST_STATUS.purchased, SHOPPING_LIST_STATUS.installed, SHOPPING_LIST_STATUS.invoiced];
 const jobBillingIsInvoiced = (status = "") =>
     ["invoiced", "paid"].includes(String(status || "").trim().toLowerCase());
 const purchaseConnectedStatus = (invoiced) => invoiced ? "Invoiced" : "Connected to Job";
@@ -1189,7 +1194,7 @@ const PurchaseDetailView = () => {
         const activeStatusFilters = shoppingListStatusFilters.filter(Boolean);
         const matchesStatus =
             activeStatusFilters.length === 0 ||
-            activeStatusFilters.includes(item.status || "");
+            shoppingListStatusMatches(item.status, activeStatusFilters);
         if (!matchesStatus) return false;
         if (!search) return true;
 

@@ -1,16 +1,19 @@
-import React, { useState, useEffect, useContext } from "react";
-import { Link } from "react-router-dom";
+import React, { useState, useEffect, useContext, useMemo } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
+  arrayUnion,
   collection,
   doc,
   getDocs,
+  orderBy,
+  query,
   writeBatch,
 } from "firebase/firestore";
 import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
-import { useNavigate } from "react-router-dom";
 import Select from "react-select";
+import toast from "react-hot-toast";
 import { fetchCompanyVendors } from "../../../utils/vendors";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
@@ -34,6 +37,20 @@ import {
   uploadItemPhoto,
   validateItemPhotoFile,
 } from "../../../utils/itemPhotos";
+import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import {
+  databaseEquipmentMappingPatch,
+  emptyDatabaseEquipmentMapping,
+  isEquipmentDatabaseCategory,
+} from "../../../utils/databaseEquipmentItems";
+import {
+  buildProductFromVendorItem,
+  buildVendorItemProductPatch,
+  getProductDisplayName,
+  productCatalogCollectionRef,
+  productCatalogDocRef,
+  productOptionSearchText,
+} from "../../../utils/productCatalog";
 
 const centsFromDollarInput = (value) => {
   const parsed = Number(String(value || "").replace(/[^0-9.-]/g, ""));
@@ -45,6 +62,10 @@ const CreateNewDataBaseItem = () => {
   const { requirePermission } = useCompanyPermissions();
 
   const navigate = useNavigate();
+  const location = useLocation();
+  const vendorItemsBasePath = location.pathname.toLowerCase().startsWith("/company/settings")
+    ? "/company/settings/vendor-items"
+    : "/company/items";
 
   const [billable, setBillable] = useState(false);
 
@@ -75,12 +96,19 @@ const CreateNewDataBaseItem = () => {
   const [dosages, setDosages] = useState([]);
   const [linkedDosageIds, setLinkedDosageIds] = useState([]);
   const [dosageSearchTerm, setDosageSearchTerm] = useState("");
+  const [equipmentMapping, setEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
+  const [products, setProducts] = useState([]);
+  const [productLinkMode, setProductLinkMode] = useState("create");
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [productName, setProductName] = useState("");
+  const [productSellPrice, setProductSellPrice] = useState("0");
 
   const [uomList] = useState(UOM_OPTIONS);
   const [categoryList] = useState(CATEGORY_OPTIONS);
   const [subcategoryList] = useState(SUBCATEGORY_OPTIONS);
 
   const allowsLinkedDosages = isChemicalCategory(category);
+  const allowsEquipmentMapping = isEquipmentDatabaseCategory(category?.label || category);
 
   useEffect(() => {
     return () => {
@@ -156,6 +184,22 @@ const CreateNewDataBaseItem = () => {
   useEffect(() => {
     (async () => {
       if (!recentlySelectedCompany) {
+        setProducts([]);
+        return;
+      }
+
+      try {
+        const productSnap = await getDocs(query(productCatalogCollectionRef(db, recentlySelectedCompany), orderBy("commonName")));
+        setProducts(productSnap.docs.map((productDoc) => ({ id: productDoc.id, ...productDoc.data() })));
+      } catch (error) {
+        console.log("Error loading products", error);
+      }
+    })();
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    (async () => {
+      if (!recentlySelectedCompany) {
         setDosages([]);
         setLinkedDosageIds([]);
         return;
@@ -182,6 +226,26 @@ const CreateNewDataBaseItem = () => {
   );
 
   const selectedLinkedDosages = dosages.filter((dosage) => linkedDosageIds.includes(dosage.id));
+  const productOptions = useMemo(
+    () =>
+      products.map((product) => ({
+        value: product.id,
+        label: getProductDisplayName(product),
+        product,
+        searchText: productOptionSearchText(product),
+      })),
+    [products]
+  );
+
+  useEffect(() => {
+    if (productLinkMode !== "create") return;
+    setProductName((current) => current || itemName);
+  }, [itemName, productLinkMode]);
+
+  useEffect(() => {
+    if (productLinkMode !== "create") return;
+    setProductSellPrice(sellPriceUSD || sellPrice || "0");
+  }, [productLinkMode, sellPrice, sellPriceUSD]);
 
   const toggleLinkedDosageId = (dosageId) => {
     setLinkedDosageIds((currentIds) =>
@@ -241,15 +305,31 @@ const CreateNewDataBaseItem = () => {
 
   async function createNewItem(e) {
     e.preventDefault();
-    if (!requirePermission("852", "create products")) return;
+    if (!requirePermission("852", "create vendor items")) return;
 
     try {
+      if (
+        allowsEquipmentMapping &&
+        (!equipmentMapping.type || !equipmentMapping.make || !equipmentMapping.model)
+      ) {
+        toast.error("Connect this equipment item to universal equipment or enter custom type, make, and model.");
+        return;
+      }
+
       let id = "com_sett_db_" + uuidv4();
 
       let rateCents = centsFromDollarInput(rateUSD || rate);
       let sellPriceCents = centsFromDollarInput(sellPriceUSD || sellPrice);
+      let productSellPriceCents = centsFromDollarInput(productSellPrice || sellPriceUSD || sellPrice);
       const selectedVendorId = vender?.id || venderId || "";
       const selectedVendorName = vender?.label || vender?.name || venderName || "";
+      const linkedProduct = productLinkMode === "connect" ? selectedProduct?.product || null : null;
+
+      if (productLinkMode === "connect" && !linkedProduct) {
+        toast.error("Choose an existing product or switch to creating a new product.");
+        return;
+      }
+
       let uploadedPhoto = {
         photoUrl: photoUrl.trim(),
         storagePath: "",
@@ -267,7 +347,7 @@ const CreateNewDataBaseItem = () => {
 
       const photoFields = itemPhotoFieldsFromUrl(
         uploadedPhoto.photoUrl,
-        itemName || "Product photo",
+        itemName || "Vendor item photo",
         uploadedPhoto.storagePath
       );
 
@@ -291,10 +371,45 @@ const CreateNewDataBaseItem = () => {
         sellPrice: sellPriceCents,
         billingRate: sellPriceCents,
         tracking: tracking,
+        ...(allowsEquipmentMapping ? databaseEquipmentMappingPatch(equipmentMapping) : {}),
         ...photoFields,
       };
 
+      let productRecord = linkedProduct;
+      const now = new Date();
+      if (productLinkMode === "create") {
+        const productId = "com_prod_" + uuidv4();
+        productRecord = buildProductFromVendorItem({
+          productId,
+          vendorItem: item,
+          overrides: {
+            name: productName || itemName,
+            sellPrice: productSellPriceCents,
+          },
+          source: "manualVendorItemCreate",
+          now,
+        });
+      }
+
+      if (productRecord) {
+        item = {
+          ...item,
+          ...buildVendorItemProductPatch(productRecord, now),
+        };
+      }
+
       const batch = writeBatch(db);
+      if (productLinkMode === "create" && productRecord) {
+        batch.set(productCatalogDocRef(db, recentlySelectedCompany, productRecord.id), productRecord);
+      } else if (productRecord) {
+        batch.update(productCatalogDocRef(db, recentlySelectedCompany, productRecord.id), {
+          storeItems: arrayUnion(item.name),
+          storeItemsIds: arrayUnion(id),
+          vendorItemIds: arrayUnion(id),
+          dateUpdated: now,
+          updatedAt: now,
+        });
+      }
       batch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), item);
       queueDatabaseItemDosageLinkUpdates(batch, {
         companyId: recentlySelectedCompany,
@@ -303,7 +418,7 @@ const CreateNewDataBaseItem = () => {
         selectedDosageIds: allowsLinkedDosages ? linkedDosageIds : [],
       });
       await batch.commit();
-      navigate("/company/items/detail/" + id);
+      navigate(`${vendorItemsBasePath}/detail/${id}`);
     } catch (error) {
       console.log(error);
     }
@@ -315,30 +430,30 @@ const CreateNewDataBaseItem = () => {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Products</p>
-              <h2 className="mt-1 text-3xl font-bold text-slate-950">Create Product</h2>
-              <p className="mt-1 text-sm text-slate-500">Add a reusable product, part, material, or supply to your catalog.</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Vendor Items</p>
+              <h2 className="mt-1 text-3xl font-bold text-slate-950">Create Vendor Item</h2>
+              <p className="mt-1 text-sm text-slate-500">Add a vendor-specific purchasable item and link it to the Product Catalog.</p>
             </div>
 
             <Link
               className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              to={`/company/items`}
+              to={vendorItemsBasePath}
             >
-              &larr; Back to Products
+              &larr; Back to Vendor Items
             </Link>
           </div>
         </section>
 
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="px-6 py-5 border-b border-slate-200 bg-slate-50">
-            <div className="text-sm font-semibold text-slate-700">Product Details</div>
-            <div className="text-xs text-slate-500 mt-1">Fill out the fields below and create the product.</div>
+            <div className="text-sm font-semibold text-slate-700">Vendor Item Details</div>
+            <div className="text-xs text-slate-500 mt-1">Fill out the supplier-specific item details and product catalog link.</div>
           </div>
 
           <div className="p-6 space-y-4">
             {/* Item Name */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700">Product Name</label>
+              <label className="block text-sm font-semibold text-slate-700">Vendor Item Name</label>
               <input
                 className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setItemName(e.target.value)}
@@ -366,7 +481,7 @@ const CreateNewDataBaseItem = () => {
 
                 <div className="min-w-0 flex-1 space-y-3">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700">Product Photo</label>
+                    <label className="block text-sm font-semibold text-slate-700">Vendor Item Photo</label>
                     <input
                       className="mt-2 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
                       type="file"
@@ -453,6 +568,86 @@ const CreateNewDataBaseItem = () => {
                   </div>
                 </div>
               )}
+            </div>
+
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-blue-950">Product Catalog Link</div>
+                  <div className="mt-1 text-xs leading-5 text-blue-800">
+                    Products are the generic items used on invoices and jobs. Vendor items stay supplier-specific for receipts and audit history.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { value: "create", label: "Create Product" },
+                    { value: "connect", label: "Connect Product" },
+                    { value: "skip", label: "Skip" },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setProductLinkMode(option.value)}
+                      className={`rounded-md px-3 py-2 text-xs font-bold transition ${
+                        productLinkMode === option.value
+                          ? "bg-blue-700 text-white"
+                          : "border border-blue-200 bg-white text-blue-800 hover:bg-blue-100"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {productLinkMode === "connect" ? (
+                <div className="mt-4">
+                  <label className="block text-sm font-semibold text-blue-950">Existing Product</label>
+                  <div className="mt-2">
+                    <Select
+                      value={selectedProduct}
+                      options={productOptions}
+                      onChange={setSelectedProduct}
+                      isSearchable
+                      isClearable
+                      placeholder="Search the Product Catalog"
+                      filterOption={(option, inputValue) =>
+                        option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                      }
+                      styles={databaseItemSelectStyles}
+                      theme={databaseItemSelectTheme}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {productLinkMode === "create" ? (
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-semibold text-blue-950">Product Name</label>
+                    <input
+                      className="mt-2 w-full rounded-md border border-blue-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      onChange={(e) => setProductName(e.target.value)}
+                      type="text"
+                      placeholder="Generic product name"
+                      value={productName}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-blue-950">Product Sell Price</label>
+                    <div className="mt-2 flex items-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
+                      <span className="text-sm font-semibold text-slate-500">$</span>
+                      <input
+                        className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                        onChange={(e) => setProductSellPrice(e.target.value.replace(/[^\d.]/g, ""))}
+                        type="text"
+                        placeholder="0.00"
+                        value={productSellPrice}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {/* SKU */}
@@ -641,6 +836,26 @@ const CreateNewDataBaseItem = () => {
                 ) : null}
               </div>
             )}
+
+            {allowsEquipmentMapping && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-4">
+                  <div className="text-sm font-semibold text-slate-800">Equipment Mapping</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Connect this product to universal equipment or enter a custom equipment type, make, and model.
+                  </div>
+                </div>
+                <EquipmentCatalogPicker
+                  value={equipmentMapping}
+                  onChange={setEquipmentMapping}
+                  preferCustom
+                  inputClassName="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+                  gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+                  labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Actions */}
@@ -651,10 +866,10 @@ const CreateNewDataBaseItem = () => {
               }}
               className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
             >
-              Create Product
+              Create Vendor Item
             </button>
             <div className="text-xs text-slate-500 mt-2 text-center">
-              This will add the item to your company database.
+              This will add the supplier-specific item and any selected product catalog link.
             </div>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import { itemPhotoFieldsFromSource } from "./itemPhotos";
+import { SHOPPING_LIST_STATUS, shoppingItemNeedsAction } from "./shoppingListStatus";
 
 const unique = (values = []) => Array.from(new Set(values.filter(Boolean)));
 
@@ -40,7 +41,7 @@ export const buildPartApprovalShoppingItemPayload = ({
   shoppingListItemId,
   now,
   generated = false,
-  status = "Ready to Purchase",
+  status = SHOPPING_LIST_STATUS.needToPurchase,
 } = {}) => {
   const quantity = String(approval.quantity || "1");
   const numericQuantity = Number.parseFloat(quantity) || 1;
@@ -81,17 +82,23 @@ export const buildPartApprovalShoppingItemPayload = ({
     approval.assignedTechName,
     approval.assignedToUserName,
   ]);
-  const photoFields = itemPhotoFieldsFromSource(approval, approval.itemName || approval.name || "Part photo");
+  const productId = approval.productId || approval.genericItemId || "";
+  const productName = approval.productName || (productId ? approval.itemName || approval.name || "" : "");
+  const vendorItemId = productId ? "" : approval.dbItemId || "";
+  const itemType = productId ? "Product" : approval.subCategory || (vendorItemId ? "Data Base" : "Part");
+  const photoFields = itemPhotoFieldsFromSource(approval, approval.itemName || approval.name || productName || "Part photo");
 
   return {
     id: shoppingListItemId,
     category: jobId ? "Job" : "Customer",
-    subCategory: approval.subCategory || (approval.dbItemId ? "Data Base" : "Part"),
+    subCategory: itemType,
     status,
     purchaserId: approval.purchaserId || techId || "",
     purchaserName: approval.purchaserName || techName || "",
-    genericItemId: approval.genericItemId || "",
-    name: approval.itemName || approval.name || approval.dbItemName || "Pool Part",
+    genericItemId: productId,
+    productId,
+    productName,
+    name: approval.itemName || approval.name || productName || approval.dbItemName || "Pool Part",
     description: approval.description || "",
     quantity,
     jobId,
@@ -121,7 +128,7 @@ export const buildPartApprovalShoppingItemPayload = ({
       linkedTaskId ? `jobTask:${linkedTaskId}` : "",
       techId ? `user:${techId}` : "",
     ]),
-    needsAction: !isShoppingItemDelivered({ status }),
+    needsAction: shoppingItemNeedsAction(status),
     actionDate: scheduledDate || now,
     assignedTechIds,
     assignedTechNames,
@@ -129,10 +136,10 @@ export const buildPartApprovalShoppingItemPayload = ({
     assignedTechName: techName,
     assignedToUserId: techId,
     assignedToUserName: techName,
-    dbItemId: approval.dbItemId || "",
-    dbItemName: approval.dbItemName || approval.itemName || approval.name || "",
-    itemId: approval.dbItemId || "",
-    itemType: approval.subCategory || (approval.dbItemId ? "Data Base" : "Part"),
+    dbItemId: vendorItemId,
+    dbItemName: vendorItemId ? approval.dbItemName || "" : "",
+    itemId: productId || vendorItemId,
+    itemType,
     purchasedItem: approval.purchasedItem || "",
     invoiced: false,
     cost: plannedUnitCostCents,
@@ -153,6 +160,9 @@ export const buildPartApprovalShoppingItemPayload = ({
     approvalRequestId: approvalId,
     partApprovalRequestId: approvalId,
     sourceType: approval.sourceType || "partApprovalRequest",
+    autoInvoiceOnInstall: approval.autoInvoiceOnInstall === true,
+    paymentCollectionPreference: approval.paymentCollectionPreference || approval.paymentPreference || "sendInvoice",
+    paymentPreference: approval.paymentPreference || approval.paymentCollectionPreference || "sendInvoice",
     ...photoFields,
     updatedAt: now,
     ...(generated ? { datePurchased: null, createdAt: now } : {}),

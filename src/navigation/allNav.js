@@ -47,6 +47,7 @@ import { FaClipboardQuestion, FaWrench, FaFileContract, FaFileInvoiceDollar, FaR
 import { IoDocumentTextOutline } from "react-icons/io5";
 import { GiBugNet } from "react-icons/gi";
 import { GoTools } from "react-icons/go";
+import { OFFERED_WORK_PERMISSION_ID } from "../utils/companyPermissions";
 
 
 export const allNav = [
@@ -60,6 +61,8 @@ export const allNav = [
     { id: 14, title: 'Errors', icon: <FaExclamationTriangle />, role: 'Admin', path: '/admin/errors', category: 'Development' },
     { id: 12, title: 'Documentation', icon: <AiOutlineFileText />, role: 'Admin', path: '/admin/documentation', category: 'Development' },
     { id: 2, title: 'Companies', icon: <AiOutlineShoppingCart />, role: 'Admin', path: '/admin/company', category: 'Management' },
+    { id: 18, title: 'Users', icon: <FaUsers />, role: 'Admin', path: '/admin/users', category: 'Management' },
+    { id: 19, title: 'Homeowners', icon: <FaHouseUser />, role: 'Admin', path: '/admin/homeowners', category: 'Management' },
     { id: 3, title: 'Subscriptions', icon: <BiCategory />, role: 'Admin', path: '/admin/subscriptions', category: 'Management' },
     { id: 15, title: 'Billing Calculator', icon: <MdOutlineCalculate />, role: 'Admin', path: '/admin/billing-fee-calculator', category: 'Management' },
     { id: 17, title: 'Pool Prospects', icon: <FaSwimmingPool />, role: 'Admin', path: '/admin/pool-prospect-lists', category: 'Management' },
@@ -99,15 +102,17 @@ export const allNav = [
     { id: 31, title: 'Equipment', icon: <FaWrench />, role: 'Company', path: '/company/equipment/needs-maintenance', category: 'Operations', permissionId: '60' },
     { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations', permissionId: '30' },
     { id: 30, title: 'Jobs', icon: <AiOutlineSolution />, role: 'Company', path: '/company/jobs/operations', category: 'Operations', permissionId: '20' },
-    { id: 40, title: 'Offered Work', icon: <FaBriefcase />, role: 'Company', path: '/company/offered-work', category: 'Operations', permissionId: '20' },
+    { id: 40, title: 'Offered Work', icon: <FaBriefcase />, role: 'Company', path: '/company/offered-work', category: 'Operations', permissionId: OFFERED_WORK_PERMISSION_ID },
     { id: 37, title: 'Part Approvals', icon: <FaClipboardList />, role: 'Company', path: '/company/part-approvals', category: 'Operations' },
     { id: 35, title: 'Shopping List', icon: <MdShoppingCart />, role: 'Company', path: '/company/shopping-list', category: 'Operations' },
+    { id: 119, title: 'Product Catalog', icon: <BiCategory />, role: 'Company', path: '/company/product-catalog', category: 'Operations', permissionId: '850' },
+    { id: 120, title: 'Vendor Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/items', category: 'Operations', permissionId: '850' },
     { id: 36, title: 'Purchased Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/purchased-items', category: 'Operations', permissionId: '400' },
     { id: 103, title: 'Receipts', icon: <IoDocumentTextOutline />, role: 'Company', path: '/company/receipts', category: 'Operations', permissionId: '400' },
 
     // Management
-    { id: 51, title: 'Daily Route Board', icon: <FaRoute />, role: 'Company', path: '/company/route-day-management', category: 'Management', permissionId: '210' },
     { id: 50, title: 'Route Dashboard', icon: <FaRegMap />, role: 'Company', path: '/company/route-dashboard', category: 'Management', permissionId: '210' },
+    { id: 51, title: 'Daily Route Board', icon: <FaRoute />, role: 'Company', path: '/company/route-day-management', category: 'Management', permissionId: '210' },
     { id: 52, title: 'Planned Routes', icon: <MdAltRoute />, role: 'Company', path: '/company/route-management', category: 'Management', permissionId: '230' },
     { id: 111, title: 'User Dashboard', icon: <MdManageAccounts />, role: 'Company', path: '/company/user-dashboard', category: 'Management', permissionId: '260' },
     { id: 112, title: 'Users', icon: <FaUsers />, role: 'Company', path: '/company/companyUsers', category: 'Management', permissionId: '260' },

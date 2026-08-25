@@ -67,7 +67,7 @@ const StatusBadge = ({ status }) => {
   const tone = statusTone[key] || statusTone.draft;
 
   return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
+    <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
       {labelize(status)}
     </span>
   );
@@ -78,7 +78,7 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
     <div className="flex items-start justify-between gap-3">
       <div>
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+        <p className="mt-2 break-words text-xl font-bold text-slate-950 sm:text-2xl">{value}</p>
       </div>
       <span className="rounded-md bg-slate-100 p-2 text-slate-600">
         <Icon className="h-5 w-5" />
@@ -86,6 +86,39 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
     </div>
     {helper && <p className="mt-2 text-sm text-slate-500">{helper}</p>}
   </div>
+);
+
+const MobileAgreementCard = ({ agreement }) => (
+  <Link to={`/client/service-agreements/${agreement.id}`} className="block p-4 transition hover:bg-slate-50">
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="break-words font-semibold text-slate-950">{agreement.title || 'Service Agreement'}</p>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-500">{agreement.description || 'Service agreement'}</p>
+        </div>
+        <StatusBadge status={agreement.status || SalesAgreementStatus.draft} />
+      </div>
+
+      <div className="grid gap-2 text-sm sm:grid-cols-2">
+        <div className="rounded-md bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Company</p>
+          <p className="mt-1 break-words font-semibold text-slate-800">{agreement.companyName || 'Pool company'}</p>
+        </div>
+        <div className="rounded-md bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Amount</p>
+          <p className="mt-1 font-semibold text-slate-800">{formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents)}</p>
+        </div>
+        <div className="rounded-md bg-slate-50 p-3 sm:col-span-2">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Updated</p>
+          <p className="mt-1 font-semibold text-slate-800">{formatDate(agreement.updatedAt || agreement.sentAt || agreement.createdAt)}</p>
+        </div>
+      </div>
+
+      <span className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white sm:w-auto sm:self-start">
+        Review
+      </span>
+    </div>
+  </Link>
 );
 
 const ServiceAgreements = () => {
@@ -157,23 +190,23 @@ const ServiceAgreements = () => {
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-950">Service Agreements</h1>
+          <h1 className="text-2xl font-bold text-slate-950 sm:text-3xl">Estimates</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Review agreements from pool service companies and track what has been accepted.
+            Review estimates and service agreements from pool service companies.
           </p>
         </div>
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <StatTile icon={ClockIcon} label="Needs Review" value={summary.pendingCount} helper="Sent, revised, or draft agreements" />
-        <StatTile icon={CheckCircleIcon} label="Accepted" value={summary.acceptedCount} helper="Approved agreements" />
-        <StatTile icon={DocumentTextIcon} label="Agreement Value" value={formatCurrency(summary.totalValueCents)} helper="Total visible agreement amount" />
+        <StatTile icon={ClockIcon} label="Needs Review" value={summary.pendingCount} helper="Sent, revised, or draft records" />
+        <StatTile icon={CheckCircleIcon} label="Accepted" value={summary.acceptedCount} helper="Approved records" />
+        <StatTile icon={DocumentTextIcon} label="Visible Value" value={formatCurrency(summary.totalValueCents)} helper="Total estimate and agreement amount" />
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="font-semibold text-slate-900">Agreements</p>
+            <p className="font-semibold text-slate-900">Estimates & Agreements</p>
             <p className="text-sm text-slate-500">{filteredAgreements.length} record{filteredAgreements.length === 1 ? '' : 's'} shown</p>
           </div>
 
@@ -183,7 +216,7 @@ const ServiceAgreements = () => {
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              placeholder="Search agreements"
+              placeholder="Search estimates"
               type="search"
             />
           </label>
@@ -196,19 +229,25 @@ const ServiceAgreements = () => {
         )}
 
         {loading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading service agreements...</div>
+          <div className="p-8 text-center text-sm text-slate-500">Loading estimates...</div>
         ) : filteredAgreements.length === 0 ? (
           <div className="p-8 text-center">
             <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-slate-300" />
-            <p className="mt-3 font-semibold text-slate-800">No service agreements found.</p>
-            <p className="mt-1 text-sm text-slate-500">When a company sends one to this account, it will show here.</p>
+            <p className="mt-3 font-semibold text-slate-800">No estimates found.</p>
+            <p className="mt-1 text-sm text-slate-500">When a company sends an estimate or agreement to this account, it will show here.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+          <div className="divide-y divide-slate-100 md:hidden">
+            {filteredAgreements.map((agreement) => (
+              <MobileAgreementCard key={agreement.id} agreement={agreement} />
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Agreement</th>
+                  <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Estimate</th>
                   <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Company</th>
                   <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Amount</th>
                   <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Status</th>
@@ -238,10 +277,11 @@ const ServiceAgreements = () => {
                       </Link>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+              ))}
+            </tbody>
+          </table>
           </div>
+          </>
         )}
       </div>
     </div>

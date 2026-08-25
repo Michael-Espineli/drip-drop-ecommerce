@@ -14,6 +14,227 @@ const sgMail = require("@sendgrid/mail");
 admin.initializeApp();
 const db = admin.firestore();
 
+const normalizeSalesWorkflowText = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const salesWorkflowFirstText = (...values) => (
+  values.map((value) => String(value || '').trim()).find(Boolean) || ''
+);
+
+const labelizeSalesWorkflowValue = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+
+  return text
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/[_-]/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const salesAgreementIsEstimateRecord = (agreement = {}) => {
+  const sourceType = normalizeSalesWorkflowText(agreement.sourceType);
+  const rateType = normalizeSalesWorkflowText(agreement.rateType);
+  const serviceCadence = normalizeSalesWorkflowText(agreement.serviceCadence);
+
+  return (
+    sourceType === 'oneoffjob' ||
+    sourceType === 'workoffer' ||
+    sourceType === 'lead' ||
+    rateType === 'onetime' ||
+    serviceCadence === 'onetime'
+  );
+};
+
+const salesAgreementRecordLabel = (agreement = {}) => (
+  salesAgreementIsEstimateRecord(agreement) ? 'Estimate' : 'Service Agreement'
+);
+
+const salesAgreementAcceptedByClient = (agreement = {}) => (
+  ['customerportal', 'emaillink'].includes(normalizeSalesWorkflowText(agreement.acceptedSource))
+);
+
+const salesAgreementRecurringSetupReady = (agreement = {}) => {
+  const setupStatus = normalizeSalesWorkflowText(agreement.operationsSetupStatus);
+
+  return Boolean(
+    agreement.recurringServiceStopId ||
+    agreement.recurringRouteId ||
+    [
+      'recurringservicestopcreated',
+      'recurringservicestopandroutecreated',
+      'recurringroutecreated',
+      'recurringrouteassigned',
+      'servicestopcreated',
+      'ready',
+      'complete',
+      'completed',
+    ].includes(setupStatus)
+  );
+};
+
+const createCompanySalesAgreementAcceptedAlert = async ({ agreementId, agreement }) => {
+  const companyId = salesWorkflowFirstText(agreement.companyId, agreement.recipientCompanyId);
+  if (!agreementId || !companyId) return '';
+
+  const recordLabel = salesAgreementRecordLabel(agreement);
+  const recordTitle = salesWorkflowFirstText(agreement.title, recordLabel);
+  const customerName = salesWorkflowFirstText(
+    agreement.acceptedByUserName,
+    agreement.customerName,
+    agreement.acceptedByEmail,
+    'Customer'
+  );
+  const billingChoice = labelizeSalesWorkflowValue(
+    agreement.customerBillingPreference ||
+    agreement.requestedBillingPreference ||
+    agreement.billingPreference ||
+    agreement.paymentPreference
+  );
+  const alertId = `sales_agreement_accepted_${agreementId}`;
+  const companyWebPath = `/company/sales/agreements/${agreementId}`;
+  const clientWebPath = `/client/service-agreements/${agreementId}`;
+  const message = [
+    `${customerName} accepted ${recordTitle}.`,
+    billingChoice ? `Billing choice: ${billingChoice}.` : '',
+  ].filter(Boolean).join(' ');
+
+  await db.collection('companies').doc(companyId).collection('alerts').doc(alertId).set({
+    id: alertId,
+    companyId,
+    title: `${recordLabel} accepted`,
+    name: `${recordLabel} accepted`,
+    message,
+    description: message,
+    status: 'unread',
+    read: false,
+    severity: 'success',
+    type: 'sales_agreement_accepted',
+    source: 'salesAgreements',
+    sourceId: agreementId,
+    route: companyWebPath,
+    hasItem: true,
+    itemId: agreementId,
+    itemName: recordTitle,
+    deliveryTargets: ['web', 'ios'],
+    channels: {
+      dashboard: true,
+      ios: true,
+      push: true,
+    },
+    relatedEntity: {
+      type: salesAgreementIsEstimateRecord(agreement) ? 'estimate' : 'serviceAgreement',
+      id: agreementId,
+      label: recordTitle,
+      companyId,
+      webPath: companyWebPath,
+      companyWebPath,
+      clientWebPath,
+    },
+    share: {
+      type: salesAgreementIsEstimateRecord(agreement) ? 'estimate' : 'serviceAgreement',
+      recordId: agreementId,
+      title: recordTitle,
+      subtitle: `${customerName} accepted`,
+      companyId,
+      collectionPath: `salesAgreements/${agreementId}`,
+      webPath: companyWebPath,
+      companyWebPath,
+      clientWebPath,
+    },
+    customerId: agreement.customerId || '',
+    customerUserId: agreement.customerUserId || agreement.acceptedByUserId || '',
+    customerName: agreement.customerName || customerName,
+    acceptedByUserId: agreement.acceptedByUserId || '',
+    acceptedByUserName: agreement.acceptedByUserName || customerName,
+    acceptedByEmail: agreement.acceptedByEmail || agreement.email || agreement.customerEmail || '',
+    acceptedAt: agreement.acceptedAt || admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return alertId;
+};
+
+const createClientSalesAgreementSetupAlert = async ({ agreementId, agreement }) => {
+  const companyId = salesWorkflowFirstText(agreement.companyId, agreement.recipientCompanyId);
+  const customerUserId = salesWorkflowFirstText(
+    agreement.customerUserId,
+    agreement.homeownerUserId,
+    agreement.homeownerId,
+    agreement.acceptedByUserId
+  );
+
+  if (!agreementId || !companyId || !customerUserId) return '';
+
+  const recordTitle = salesWorkflowFirstText(agreement.title, 'Service Agreement');
+  const companyName = salesWorkflowFirstText(agreement.companyName, 'Your pool company');
+  const recurringRouteId = salesWorkflowFirstText(agreement.recurringRouteId);
+  const alertId = `sales_agreement_service_setup_${agreementId}`;
+  const companyWebPath = `/company/sales/agreements/${agreementId}`;
+  const clientWebPath = `/client/service-agreements/${agreementId}`;
+  const message = recurringRouteId
+    ? `${companyName} created your recurring service stop and added it to a recurring route.`
+    : `${companyName} created your recurring service stop. Route planning details may still be in progress.`;
+
+  await db.collection('users').doc(customerUserId).collection('alerts').doc(alertId).set({
+    id: alertId,
+    companyId,
+    recipientCompanyId: companyId,
+    recipientUserId: customerUserId,
+    title: 'Recurring service setup started',
+    name: 'Recurring service setup started',
+    message,
+    description: message,
+    status: 'unread',
+    read: false,
+    severity: 'success',
+    type: 'sales_agreement_service_setup',
+    source: 'salesAgreements',
+    sourceId: agreementId,
+    route: clientWebPath,
+    hasItem: true,
+    itemId: agreementId,
+    itemName: recordTitle,
+    deliveryTargets: ['web', 'ios'],
+    channels: {
+      dashboard: true,
+      ios: true,
+      push: true,
+    },
+    relatedEntity: {
+      type: 'serviceAgreement',
+      id: agreementId,
+      label: recordTitle,
+      companyId,
+      webPath: clientWebPath,
+      companyWebPath,
+      clientWebPath,
+    },
+    share: {
+      type: 'serviceAgreement',
+      recordId: agreementId,
+      title: recordTitle,
+      subtitle: 'Recurring service setup started',
+      companyId,
+      collectionPath: `salesAgreements/${agreementId}`,
+      webPath: clientWebPath,
+      companyWebPath,
+      clientWebPath,
+    },
+    customerId: agreement.customerId || '',
+    customerUserId,
+    customerName: agreement.customerName || '',
+    recurringServiceStopId: agreement.recurringServiceStopId || '',
+    recurringRouteId,
+    setupStatus: agreement.operationsSetupStatus || '',
+    setupUpdatedAt: agreement.operationsSetupUpdatedAt || admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return alertId;
+};
+
 // =========================================================================
 //   CORRECTED AUTOMATED FUNCTION: Create Stripe customer on new user signup
 // =========================================================================
@@ -91,6 +312,7 @@ exports.updateCompanyHistory = callableGeneral.updateCompanyHistory;
 exports.createCompanyAdminNotes = callableGeneral.createCompanyAdminNotes;
 exports.updateCompanyAdminFlags = callableGeneral.updateCompanyAdminFlags;
 exports.getAdminCompanyListStats = callableGeneral.getAdminCompanyListStats;
+exports.getAdminUserListStats = callableGeneral.getAdminUserListStats;
 exports.deleteUser = callableGeneral.deleteUser;
 exports.acceptTechInvite = callableGeneral.acceptTechInvite;
 exports.createCompanyUserInvite = callableGeneral.createCompanyUserInvite;
@@ -130,6 +352,7 @@ exports.claimPublicServiceRequestLead = publicLeadIntake.claimPublicServiceReque
 
 const customerNameCascade = require('./customerNameCascade');
 exports.syncCustomerNameReferencesOnCustomerUpdate = customerNameCascade.syncCustomerNameReferencesOnCustomerUpdate;
+exports.syncCustomerNameReferencesForCustomer = customerNameCascade.syncCustomerNameReferencesForCustomer;
 
 
 //-----------------Stripe Functions----------------------------
@@ -166,13 +389,16 @@ const connectedAcctFunc = require('./stripe/stripeCallableForConnectedAccounts')
 exports.verifyConnectedAccountBillingReadiness = connectedAcctFunc.verifyConnectedAccountBillingReadiness;
 exports.acceptSalesServiceAgreement = connectedAcctFunc.acceptSalesServiceAgreement;
 exports.acceptPublicSalesServiceAgreement = connectedAcctFunc.acceptPublicSalesServiceAgreement;
+exports.rejectSalesServiceAgreement = connectedAcctFunc.rejectSalesServiceAgreement;
 exports.deleteSalesAgreement = connectedAcctFunc.deleteSalesAgreement;
 exports.createSalesBillingSubscriptionCheckoutSession = connectedAcctFunc.createSalesBillingSubscriptionCheckoutSession;
 exports.syncSalesBillingSubscriptionFromStripe = connectedAcctFunc.syncSalesBillingSubscriptionFromStripe;
 exports.cancelSalesBillingSubscription = connectedAcctFunc.cancelSalesBillingSubscription;
 exports.resumeSalesBillingSubscription = connectedAcctFunc.resumeSalesBillingSubscription;
 exports.updateSalesBillingSubscriptionStripeItems = connectedAcctFunc.updateSalesBillingSubscriptionStripeItems;
+exports.createStripeObjectForSalesCatalogItem = connectedAcctFunc.createStripeObjectForSalesCatalogItem;
 exports.getProductList = connectedAcctFunc.getProductList;
+exports.createNewProduct = connectedAcctFunc.createNewProduct;
 exports.createNewPrice = connectedAcctFunc.createNewPrice;
 exports.getPriceList = connectedAcctFunc.getPriceList;
 exports.getDefaultPrice = connectedAcctFunc.getDefaultPrice;
@@ -306,4 +532,66 @@ exports.updatedContract = functions1.firestore
     } else {
       console.log('No Change To Status')
     }
+  });
+
+exports.onSalesAgreementWorkflowNotifications = functions1.firestore
+  .document("/salesAgreements/{agreementId}")
+  .onUpdate(async (change, context) => {
+    const agreementId = context.params.agreementId;
+    const before = change.before.data() || {};
+    const after = change.after.data() || {};
+    const markerUpdates = {};
+
+    const wasAccepted = normalizeSalesWorkflowText(before.status) === 'accepted';
+    const isAccepted = normalizeSalesWorkflowText(after.status) === 'accepted';
+    const acceptedByClient = salesAgreementAcceptedByClient(after);
+
+    if (
+      isAccepted &&
+      !wasAccepted &&
+      acceptedByClient &&
+      !after.companyAcceptanceAlertCreatedAt
+    ) {
+      const companyAlertId = await createCompanySalesAgreementAcceptedAlert({
+        agreementId,
+        agreement: after,
+      });
+
+      if (companyAlertId) {
+        markerUpdates.companyAcceptanceAlertId = companyAlertId;
+        markerUpdates.companyAcceptanceAlertCreatedAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+    }
+
+    const beforeSetupReady = wasAccepted &&
+      !salesAgreementIsEstimateRecord(before) &&
+      salesAgreementRecurringSetupReady(before);
+    const afterSetupReady = isAccepted &&
+      !salesAgreementIsEstimateRecord(after) &&
+      salesAgreementRecurringSetupReady(after);
+
+    if (
+      afterSetupReady &&
+      !beforeSetupReady &&
+      !after.recurringServiceSetupCustomerNotifiedAt
+    ) {
+      const customerAlertId = await createClientSalesAgreementSetupAlert({
+        agreementId,
+        agreement: after,
+      });
+
+      if (customerAlertId) {
+        markerUpdates.recurringServiceSetupCustomerNotificationId = customerAlertId;
+        markerUpdates.recurringServiceSetupCustomerNotifiedAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+    }
+
+    if (Object.keys(markerUpdates).length > 0) {
+      await change.after.ref.set({
+        ...markerUpdates,
+        notificationWorkflowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    return null;
   });

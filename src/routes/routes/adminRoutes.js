@@ -11,6 +11,7 @@ const BillingFeeCalculator = lazy(() => import("../../views/admin/billing/Billin
 
 const CompanyList = lazy(() => import("../../views/admin/company/CompanyList"))
 const CompanyDetailView = lazy(() => import("../../views/admin/company/CompanyDetailView"))
+const AdminUserList = lazy(() => import("../../views/admin/users/AdminUserList"))
 
 const UniversalEquipment = lazy(() => import("../../views/admin/universalEquipment/UniversalEquipment"))
 const UniversalReadingsDosages = lazy(() => import("../../views/admin/universalTemplates/UniversalReadingsDosages"))
@@ -107,6 +108,18 @@ export const adminRoutes = [
     {
         path: '/admin/company/detail/:companyId',
         element: <CompanyDetailView />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/users',
+        element: <AdminUserList mode="users" />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/homeowners',
+        element: <AdminUserList mode="homeowners" />,
         role: 'Admin'
     }
     ,

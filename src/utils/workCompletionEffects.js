@@ -9,11 +9,19 @@ import {
   where,
 } from "firebase/firestore";
 import { recordBodyOfWaterTaskHistory } from "./bodyOfWaterHistory";
-import { EQUIPMENT_STATUS } from "./models/Equipment";
+import {
+  EQUIPMENT_STATUS,
+  equipmentDefaultsToNeedsService,
+} from "./models/Equipment";
+import {
+  databaseEquipmentMappingFromItem,
+  hasDatabaseEquipmentMapping,
+} from "./databaseEquipmentItems";
 
 const EQUIPMENT_HISTORY_TYPES = {
   INSTALL: "Install",
   MAINTENANCE: "Maintenance",
+  REMOVE: "Remove",
   REPAIR: "Repair",
 };
 
@@ -37,16 +45,26 @@ const toDate = (value) => {
 };
 
 const normalizeTaskType = (type = "") => String(type || "").trim();
+const normalizeEquipmentStatusValue = (status = "") =>
+  String(status || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+const cleanText = (value) => String(value || "").trim();
+const firstText = (...values) => values.map(cleanText).find(Boolean) || "";
 
 const taskTypeToEquipmentHistoryType = (taskType) => {
-  switch (normalizeTaskType(taskType).toLowerCase()) {
+  const normalizedTaskType = normalizeTaskType(taskType).toLowerCase();
+  switch (normalizedTaskType) {
+    case "install":
+      return EQUIPMENT_HISTORY_TYPES.INSTALL;
     case "clean filter":
+    case "filter clean":
     case "maintenance":
       return EQUIPMENT_HISTORY_TYPES.MAINTENANCE;
     case "repair":
+      return EQUIPMENT_HISTORY_TYPES.REPAIR;
+    case "remove":
     case "replace":
     case "replacement":
-      return EQUIPMENT_HISTORY_TYPES.REPAIR;
+      return EQUIPMENT_HISTORY_TYPES.REMOVE;
     default:
       return null;
   }
@@ -54,6 +72,15 @@ const taskTypeToEquipmentHistoryType = (taskType) => {
 
 const isReplacementTaskType = (taskType) =>
   ["replace", "replacement"].includes(normalizeTaskType(taskType).toLowerCase());
+
+const isInstallTaskType = (taskType) =>
+  normalizeTaskType(taskType).toLowerCase() === "install";
+
+const isRemoveTaskType = (taskType) =>
+  normalizeTaskType(taskType).toLowerCase() === "remove";
+
+const isInstallOrReplacementTaskType = (taskType) =>
+  isInstallTaskType(taskType) || isReplacementTaskType(taskType);
 
 const replacementEquipmentIdFor = (task = {}) =>
   task.replacementEquipmentId || task.newEquipmentId || task.installedEquipmentId || "";
@@ -69,7 +96,7 @@ const replacedEquipmentUpdatesFor = ({
     active: false,
     needsService: false,
     nextServiceDate: null,
-    status: EQUIPMENT_STATUS.REPLACED,
+    status: EQUIPMENT_STATUS.UNINSTALLED,
     dateUninstalled: completedAt,
     replacementTaskId: sourceTaskIdFor(task),
   };
@@ -110,6 +137,26 @@ const fetchDataBaseItem = async ({ db, companyId, dataBaseItemId }) => {
   if (!dataBaseItemSnap.exists()) return null;
 
   return { id: dataBaseItemSnap.id, ...dataBaseItemSnap.data() };
+};
+
+const fetchUniversalEquipment = async ({ db, universalEquipmentId }) => {
+  if (!db || !universalEquipmentId) return null;
+
+  const universalEquipmentSnap = await getDoc(
+    doc(db, "universal", "equipment", "equipment", universalEquipmentId)
+  );
+  if (!universalEquipmentSnap.exists()) return null;
+
+  return { id: universalEquipmentSnap.id, ...universalEquipmentSnap.data() };
+};
+
+const fetchJobContext = async ({ db, companyId, jobId }) => {
+  if (!db || !companyId || !jobId) return null;
+
+  const jobSnap = await getDoc(doc(db, "companies", companyId, "workOrders", jobId));
+  if (!jobSnap.exists()) return null;
+
+  return { id: jobSnap.id, ...jobSnap.data() };
 };
 
 const fetchShoppingListItem = async ({ db, companyId, shoppingListItemId }) => {
@@ -179,15 +226,198 @@ const fetchPurchasedItemForTask = async ({
   );
 };
 
+const copyUniversalPartsToEquipment = async ({
+  db,
+  companyId,
+  equipmentId,
+  universalEquipmentId,
+  installedEquipment,
+  completedAt,
+}) => {
+  if (!db || !companyId || !equipmentId || !universalEquipmentId) return 0;
+
+  const partsSnap = await getDocs(
+    collection(db, "universal", "equipment", "equipment", universalEquipmentId, "parts")
+  );
+  const writes = partsSnap.docs.map((partDoc) => {
+    const part = partDoc.data() || {};
+    const partId = `com_equ_par_${fallbackId()}`;
+
+    return setDoc(
+      doc(db, "companies", companyId, "equipment", equipmentId, "parts", partId),
+      {
+        id: partId,
+        name: part.name || "",
+        sku: part.sku || "",
+        make: part.make || installedEquipment.make || "",
+        model: part.model || installedEquipment.model || "",
+        manualPdfLink: part.manualPdfLink || "",
+        universalPartId: part.id || partDoc.id,
+        universalEquipmentId,
+        createdAt: completedAt,
+      },
+      { merge: true }
+    );
+  });
+
+  await Promise.all(writes);
+  return writes.length;
+};
+
+const installedEquipmentContextFor = ({
+  oldEquipment = null,
+  task = {},
+  job = null,
+  serviceStop = null,
+}) => ({
+  customerId: firstText(
+    oldEquipment?.customerId,
+    task?.customerId,
+    job?.customerId,
+    serviceStop?.customerId
+  ),
+  customerName: firstText(
+    oldEquipment?.customerName,
+    task?.customerName,
+    job?.customerName,
+    serviceStop?.customerName
+  ),
+  serviceLocationId: firstText(
+    oldEquipment?.serviceLocationId,
+    task?.serviceLocationId,
+    job?.serviceLocationId,
+    serviceStop?.serviceLocationId
+  ),
+  bodyOfWaterId: firstText(
+    task?.bodyOfWaterId,
+    oldEquipment?.bodyOfWaterId,
+    job?.bodyOfWaterId,
+    serviceStop?.bodyOfWaterId
+  ),
+});
+
+const installedEquipmentMappingFor = ({
+  task = {},
+  dataBaseItem = null,
+  universalEquipment = null,
+  oldEquipment = null,
+}) => {
+  const databaseMapping = databaseEquipmentMappingFromItem(dataBaseItem || {});
+
+  return {
+    type: firstText(
+      task?.installedEquipmentType,
+      task?.replacementEquipmentType,
+      databaseMapping.type,
+      universalEquipment?.type,
+      universalEquipment?.category,
+      oldEquipment?.type
+    ),
+    category: firstText(
+      task?.installedEquipmentType,
+      task?.replacementEquipmentType,
+      databaseMapping.type,
+      universalEquipment?.type,
+      universalEquipment?.category,
+      oldEquipment?.type
+    ),
+    typeId: firstText(
+      task?.installedEquipmentTypeId,
+      databaseMapping.typeId,
+      universalEquipment?.typeId,
+      oldEquipment?.typeId
+    ),
+    make: firstText(
+      task?.installedEquipmentMake,
+      databaseMapping.make,
+      universalEquipment?.make
+    ),
+    makeId: firstText(
+      task?.installedEquipmentMakeId,
+      databaseMapping.makeId,
+      universalEquipment?.makeId
+    ),
+    model: firstText(
+      task?.installedEquipmentModel,
+      databaseMapping.model,
+      universalEquipment?.model,
+      universalEquipment?.name,
+      dataBaseItem?.name
+    ),
+    modelId: firstText(
+      task?.installedEquipmentModelId,
+      task?.universalEquipmentId,
+      databaseMapping.universalEquipmentId,
+      universalEquipment?.id,
+      universalEquipment?.modelId
+    ),
+    universalEquipmentId: firstText(
+      task?.universalEquipmentId,
+      databaseMapping.universalEquipmentId,
+      universalEquipment?.id,
+      universalEquipment?.modelId
+    ),
+    manualPdfLink: firstText(
+      task?.manualPdfLink,
+      databaseMapping.manualPdfLink,
+      universalEquipment?.manualPdfLink
+    ),
+  };
+};
+
+const writeInstallHistoryForEquipment = async ({
+  db,
+  companyId,
+  equipmentId,
+  task,
+  jobId,
+  completedAt,
+  serviceStop = null,
+  replacedEquipmentId = "",
+  installedDataBaseItemId = "",
+  installedShoppingListItemId = "",
+  installedPurchasedItemId = "",
+}) => {
+  const sourceTaskId = sourceTaskIdFor(task);
+  const history = {
+    id: `auto_equ_install_${cleanId(sourceTaskId)}`,
+    name: task?.name || task?.installedEquipmentName || "Installed equipment",
+    type: EQUIPMENT_HISTORY_TYPES.INSTALL,
+    date: completedAt,
+    description: `Auto-created from finished ${normalizeTaskType(task?.type) || "install"} task.`,
+    performedBy: performedByForWorkerType(task?.workerType),
+    addedBy: "Auto",
+    techId: task?.workerId || serviceStop?.techId || "",
+    techName: task?.workerName || serviceStop?.tech || "",
+    jobId: jobId || "",
+    sourceTaskId,
+    taskId: sourceTaskId,
+    serviceStopId: serviceStopIdFor({ task, serviceStop }),
+    replacedEquipmentId,
+    installedDataBaseItemId,
+    installedShoppingListItemId,
+    installedPurchasedItemId,
+  };
+
+  await setDoc(
+    doc(db, "companies", companyId, "equipment", equipmentId, "serviceHistory", history.id),
+    history,
+    { merge: true }
+  );
+
+  return history;
+};
+
 const createInstalledEquipmentFromTask = async ({
   db,
   companyId,
   oldEquipment,
   task,
   jobId,
+  serviceStop = null,
   completedAt,
 }) => {
-  if (!isReplacementTaskType(task?.type)) return null;
+  if (!isInstallOrReplacementTaskType(task?.type)) return null;
 
   const existingReplacementEquipmentId = replacementEquipmentIdFor(task);
   if (existingReplacementEquipmentId) {
@@ -232,6 +462,15 @@ const createInstalledEquipmentFromTask = async ({
     companyId,
     dataBaseItemId: resolvedDataBaseItemId,
   });
+  const databaseMapping = databaseEquipmentMappingFromItem(dataBaseItem || {});
+  const universalEquipmentId = firstText(
+    task?.universalEquipmentId,
+    databaseMapping.universalEquipmentId,
+    dataBaseItem?.universalEquipmentId,
+    dataBaseItem?.modelId
+  );
+  const universalEquipment = await fetchUniversalEquipment({ db, universalEquipmentId });
+  const job = await fetchJobContext({ db, companyId, jobId });
 
   const installedName =
     task?.installedEquipmentName ||
@@ -242,56 +481,68 @@ const createInstalledEquipmentFromTask = async ({
     "";
 
   if (!installedName) return null;
+  if (dataBaseItem && !hasDatabaseEquipmentMapping(dataBaseItem) && !universalEquipment) return null;
 
   const sourceTaskId = sourceTaskIdFor(task);
   const installedEquipmentId = `com_equ_installed_${cleanId(sourceTaskId)}`;
-  const installedType =
-    task?.installedEquipmentType ||
-    task?.replacementEquipmentType ||
-    dataBaseItem?.equipmentType ||
-    dataBaseItem?.type ||
-    dataBaseItem?.subCategory ||
-    oldEquipment?.type ||
-    "";
+  const mapping = installedEquipmentMappingFor({
+    task,
+    dataBaseItem,
+    universalEquipment,
+    oldEquipment,
+  });
+  const context = installedEquipmentContextFor({
+    oldEquipment,
+    task,
+    job,
+    serviceStop,
+  });
+  if (!context.bodyOfWaterId) return null;
+
+  const defaultNeedsService = equipmentDefaultsToNeedsService({
+    name: installedName,
+    type: mapping.type,
+    category: mapping.type,
+    make: mapping.make,
+    model: mapping.model,
+  });
+  const nextServiceDate = defaultNeedsService
+    ? computeNextServiceDate(completedAt, 6, "Month")
+    : null;
 
   const installedEquipment = {
     id: installedEquipmentId,
     name: installedName,
-    type: installedType,
-    category: installedType,
-    typeId: task?.installedEquipmentTypeId || dataBaseItem?.equipmentTypeId || dataBaseItem?.typeId || oldEquipment?.typeId || "",
-    make: task?.installedEquipmentMake || dataBaseItem?.equipmentMake || dataBaseItem?.make || "",
-    makeId: task?.installedEquipmentMakeId || dataBaseItem?.equipmentMakeId || dataBaseItem?.makeId || "",
-    model: task?.installedEquipmentModel || dataBaseItem?.equipmentModel || dataBaseItem?.model || dataBaseItem?.name || installedName,
-    modelId:
-      task?.installedEquipmentModelId ||
-      dataBaseItem?.equipmentModelId ||
-      dataBaseItem?.modelId ||
-      dataBaseItem?.universalEquipmentId ||
-      "",
-    universalEquipmentId:
-      task?.universalEquipmentId ||
-      dataBaseItem?.universalEquipmentId ||
-      dataBaseItem?.modelId ||
-      "",
-    manualPdfLink: dataBaseItem?.manualPdfLink || task?.manualPdfLink || "",
+    type: mapping.type,
+    category: mapping.type,
+    typeId: mapping.typeId,
+    make: mapping.make,
+    makeId: mapping.makeId,
+    model: mapping.model || installedName,
+    modelId: mapping.modelId,
+    universalEquipmentId: mapping.universalEquipmentId,
+    manualPdfLink: mapping.manualPdfLink,
     dateInstalled: completedAt,
     status: EQUIPMENT_STATUS.OPERATIONAL,
-    needsService: false,
+    needsService: defaultNeedsService,
+    lastServiceDate: defaultNeedsService ? completedAt : null,
+    nextServiceDate,
+    serviceFrequency: defaultNeedsService ? 6 : null,
+    serviceFrequencyEvery: defaultNeedsService ? "Month" : "",
     isActive: true,
     active: true,
-    customerId: oldEquipment?.customerId || task?.customerId || "",
-    customerName: oldEquipment?.customerName || task?.customerName || "",
-    serviceLocationId: oldEquipment?.serviceLocationId || task?.serviceLocationId || "",
-    bodyOfWaterId: task?.bodyOfWaterId || oldEquipment?.bodyOfWaterId || "",
+    customerId: context.customerId,
+    customerName: context.customerName,
+    serviceLocationId: context.serviceLocationId,
+    bodyOfWaterId: context.bodyOfWaterId,
     notes: task?.installedEquipmentNotes || "",
-    replacesEquipmentId: oldEquipment?.id || task?.equipmentId || "",
+    replacesEquipmentId: isReplacementTaskType(task?.type) ? oldEquipment?.id || task?.equipmentId || "" : "",
     installedFromJobId: jobId || "",
     installedFromTaskId: sourceTaskId,
     sourceDataBaseItemId: dataBaseItem?.id || resolvedDataBaseItemId || "",
     sourceShoppingListItemId: shoppingItem?.id || task?.shoppingListItemId || "",
     sourcePurchasedItemId: purchasedItem?.id || task?.purchasedItemId || "",
-    source: "replacementTask",
+    source: isReplacementTaskType(task?.type) ? "replacementTask" : "installTask",
     createdAt: completedAt,
   };
 
@@ -300,6 +551,14 @@ const createInstalledEquipmentFromTask = async ({
     installedEquipment,
     { merge: true }
   );
+  await copyUniversalPartsToEquipment({
+    db,
+    companyId,
+    equipmentId: installedEquipmentId,
+    universalEquipmentId: installedEquipment.universalEquipmentId,
+    installedEquipment,
+    completedAt,
+  });
 
   if (shoppingItem?.id) {
     await updateDoc(doc(db, "companies", companyId, "shoppingList", shoppingItem.id), {
@@ -324,6 +583,7 @@ const createInstalledEquipmentFromTask = async ({
   return {
     id: installedEquipmentId,
     status: "Created",
+    installedEquipmentId,
     dataBaseItemId: dataBaseItem?.id || resolvedDataBaseItemId || "",
     shoppingListItemId: shoppingItem?.id || task?.shoppingListItemId || "",
     purchasedItemId: purchasedItem?.id || task?.purchasedItemId || "",
@@ -403,7 +663,49 @@ export const recordEquipmentTaskHistory = async ({
   const type = taskTypeToEquipmentHistoryType(task?.type);
   const equipmentId = task?.equipmentId || "";
 
-  if (!db || !companyId || !type || !equipmentId) return null;
+  if (!db || !companyId || !type) return null;
+
+  const taskType = normalizeTaskType(task?.type);
+  const resolvedJobId = jobIdFor({ task, serviceStop, jobId });
+
+  if (isInstallTaskType(taskType) && !equipmentId) {
+    const createdInstall = await createInstalledEquipmentFromTask({
+      db,
+      companyId,
+      oldEquipment: null,
+      task,
+      jobId: resolvedJobId,
+      serviceStop,
+      completedAt,
+    });
+
+    if (!createdInstall?.id) return null;
+
+    const installHistory = await writeInstallHistoryForEquipment({
+      db,
+      companyId,
+      equipmentId: createdInstall.id,
+      task,
+      jobId: resolvedJobId,
+      completedAt,
+      serviceStop,
+      installedDataBaseItemId: createdInstall.dataBaseItemId || installDataBaseItemIdFor(task),
+      installedShoppingListItemId: createdInstall.shoppingListItemId || task?.shoppingListItemId || "",
+      installedPurchasedItemId: createdInstall.purchasedItemId || task?.purchasedItemId || "",
+    });
+
+    return {
+      ...installHistory,
+      equipmentId: createdInstall.id,
+      installedEquipmentId: createdInstall.id,
+      installedDataBaseItemId: createdInstall.dataBaseItemId || installDataBaseItemIdFor(task),
+      installedShoppingListItemId: createdInstall.shoppingListItemId || task?.shoppingListItemId || "",
+      installedPurchasedItemId: createdInstall.purchasedItemId || task?.purchasedItemId || "",
+      installStatus: createdInstall.status || "Created",
+    };
+  }
+
+  if (!equipmentId) return null;
 
   const equipmentRef = doc(db, "companies", companyId, "equipment", equipmentId);
   const equipmentSnap = await getDoc(equipmentRef);
@@ -411,10 +713,8 @@ export const recordEquipmentTaskHistory = async ({
 
   const equipment = equipmentSnap.data() || {};
 
-  const taskType = normalizeTaskType(task?.type);
   const sourceTaskId = sourceTaskIdFor(task);
   const serviceStopId = serviceStopIdFor({ task, serviceStop });
-  const resolvedJobId = jobIdFor({ task, serviceStop, jobId });
   const techId = task?.workerId || serviceStop?.techId || "";
   const techName = task?.workerName || serviceStop?.tech || "";
   const createdReplacement = await createInstalledEquipmentFromTask({
@@ -423,9 +723,11 @@ export const recordEquipmentTaskHistory = async ({
     oldEquipment: { id: equipmentId, ...equipment },
     task,
     jobId: resolvedJobId,
+    serviceStop,
     completedAt,
   });
   const replacementEquipmentId = replacementEquipmentIdFor(task) || createdReplacement?.id || "";
+  const installedEquipmentId = createdReplacement?.installedEquipmentId || replacementEquipmentId || "";
 
   const history = {
     id: `auto_equ_sh_${cleanId(sourceTaskId)}`,
@@ -449,6 +751,7 @@ export const recordEquipmentTaskHistory = async ({
     sourceTaskType: taskType,
     equipmentId,
     replacementEquipmentId,
+    installedEquipmentId,
     installedDataBaseItemId: createdReplacement?.dataBaseItemId || installDataBaseItemIdFor(task),
     installedShoppingListItemId: createdReplacement?.shoppingListItemId || task?.shoppingListItemId || "",
     installedPurchasedItemId: createdReplacement?.purchasedItemId || task?.purchasedItemId || "",
@@ -468,11 +771,15 @@ export const recordEquipmentTaskHistory = async ({
       equipment.serviceFrequency,
       equipment.serviceFrequencyEvery
     );
-    const statusOnCompletion = equipmentStatusOnCompletionFor(task);
+    const currentMaintenanceStatus = normalizeEquipmentStatusValue(equipment.status);
+    const statusOnCompletion =
+      equipmentStatusOnCompletionFor(task) ||
+      (["needsmaintenance", "maintenance", "needsservice"].includes(currentMaintenanceStatus)
+        ? EQUIPMENT_STATUS.OPERATIONAL
+        : "");
     const maintenanceUpdates = {
       lastServiceDate: completedAt,
       nextServiceDate,
-      needsService: false,
     };
 
     if (statusOnCompletion) {
@@ -480,18 +787,20 @@ export const recordEquipmentTaskHistory = async ({
     }
 
     await updateDoc(equipmentRef, maintenanceUpdates);
-  } else if (isReplacementTaskType(taskType)) {
+  } else if (isReplacementTaskType(taskType) || isRemoveTaskType(taskType)) {
     await updateDoc(
       equipmentRef,
       replacedEquipmentUpdatesFor({
         completedAt,
-        replacementEquipmentId,
+        replacementEquipmentId: isReplacementTaskType(taskType) ? replacementEquipmentId : "",
         task,
         jobId: resolvedJobId,
       })
     );
   } else {
-    const statusOnCompletion = equipmentStatusOnCompletionFor(task);
+    const statusOnCompletion =
+      equipmentStatusOnCompletionFor(task) ||
+      (type === EQUIPMENT_HISTORY_TYPES.REPAIR ? EQUIPMENT_STATUS.OPERATIONAL : "");
 
     if (statusOnCompletion) {
       await updateDoc(equipmentRef, {
@@ -612,6 +921,8 @@ export const syncCompletedServiceStopTaskToJobTask = async ({
   if (replacementEquipmentId) {
     updates.replacementEquipmentId = replacementEquipmentId;
     updates.installedEquipmentId = replacementEquipmentId;
+  } else if (task?.installedEquipmentId) {
+    updates.installedEquipmentId = task.installedEquipmentId;
   }
 
   [
@@ -623,6 +934,7 @@ export const syncCompletedServiceStopTaskToJobTask = async ({
     "dataBaseItemId",
     "purchasedItemId",
     "installedPurchasedItemId",
+    "installedEquipmentId",
   ].forEach((field) => {
     if (task?.[field]) updates[field] = task[field];
   });
@@ -726,11 +1038,18 @@ export const runWorkCompletionEffects = async ({
     completedAt,
   });
 
-  if (effects.equipmentHistory?.replacementEquipmentId) {
+  const completedInstalledEquipmentId =
+    effects.equipmentHistory?.installedEquipmentId ||
+    effects.equipmentHistory?.replacementEquipmentId ||
+    "";
+
+  if (completedInstalledEquipmentId) {
     finishedTask = {
       ...finishedTask,
-      replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
-      installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+      ...(effects.equipmentHistory?.replacementEquipmentId
+        ? { replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId }
+        : {}),
+      installedEquipmentId: completedInstalledEquipmentId,
     };
   }
 

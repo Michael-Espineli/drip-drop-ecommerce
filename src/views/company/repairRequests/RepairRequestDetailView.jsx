@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useContext } from 'react';
+import React, { useEffect, useState, useContext, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
-import { arrayUnion, collection, doc, getDoc, getDocs, query, updateDoc, deleteDoc, where, serverTimestamp, setDoc } from 'firebase/firestore';
+import { arrayUnion, collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, updateDoc, deleteDoc, where, serverTimestamp, setDoc } from 'firebase/firestore';
 import { XMarkIcon } from '@heroicons/react/24/outline';
+import { v4 as uuidv4 } from 'uuid';
 import { db, storage } from '../../../utils/config';
 import {
   REPAIR_REQUEST_STATUS,
@@ -31,9 +32,10 @@ import {
 } from '../../../utils/models/SuggestedWork';
 import { appAlert, appConfirm } from '../../../utils/appDialog';
 import ShareItemButton from '../../components/share/ShareItemButton';
+import PartApprovalCreateModal from '../partApprovals/PartApprovalCreateModal';
 
 const RepairRequestDetailView = () => {
-  const { recentlySelectedCompany } = useContext(Context);
+  const { recentlySelectedCompany, dataBaseUser, user } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
   const { repairRequestId } = useParams();
   const navigate = useNavigate();
@@ -61,12 +63,24 @@ const RepairRequestDetailView = () => {
   const [photoFiles, setPhotoFiles] = useState([]);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [showPartApprovalModal, setShowPartApprovalModal] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [commentsLoading, setCommentsLoading] = useState(true);
+  const [newComment, setNewComment] = useState("");
+  const [addingComment, setAddingComment] = useState(false);
+  const [commentFilter, setCommentFilter] = useState("All");
   const repairRequestJobIdsKey = (repairRequest?.jobIds || []).join("|");
 
   const getRequestRef = (path = sourcePath) => (
     path === "homeowner"
       ? doc(db, 'homeownerRepairRequests', repairRequestId)
       : doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId)
+  );
+
+  const getCommentsRef = (path = sourcePath) => (
+    path === "homeowner"
+      ? collection(db, 'homeownerRepairRequests', repairRequestId, 'comments')
+      : collection(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId, 'comments')
   );
 
   const getConnectedEquipmentRef = () => {
@@ -102,22 +116,99 @@ const RepairRequestDetailView = () => {
     return `${title} - ${description} (${status}, ${dateLabel})`;
   };
 
+  const getUserId = () => user?.uid || dataBaseUser?.id || "";
+
+  const getAuditUserName = () => (
+    `${dataBaseUser?.firstName || ""} ${dataBaseUser?.lastName || ""}`.trim() ||
+    dataBaseUser?.userName ||
+    user?.displayName ||
+    user?.email ||
+    "Unknown"
+  );
+
+  const filteredComments = useMemo(() => {
+    if (commentFilter === "Open") return (comments || []).filter((comment) => !comment.resolved);
+    if (commentFilter === "Resolved") return (comments || []).filter((comment) => !!comment.resolved);
+    return comments || [];
+  }, [commentFilter, comments]);
+
+  const partApprovalCustomer = useMemo(() => {
+    if (!repairRequest?.customerId) return null;
+
+    return {
+      id: repairRequest.customerId,
+      name: repairRequest.customerName || "Customer",
+      displayName: repairRequest.customerName || "Customer",
+      email: repairRequest.customerEmail || repairRequest.email || repairRequest.billingEmail || "",
+      billingEmail: repairRequest.billingEmail || repairRequest.customerEmail || repairRequest.email || "",
+      customerUserId: repairRequest.customerUserId || repairRequest.homeownerId || repairRequest.userId || "",
+    };
+  }, [repairRequest]);
+
+  const partApprovalServiceLocation = useMemo(() => {
+    const serviceLocationId = repairRequest?.serviceLocationId || repairRequest?.locationId || "";
+    if (!serviceLocationId) return null;
+
+    return {
+      id: serviceLocationId,
+      name: repairRequest.serviceLocationName || repairRequest.locationName || "Service Location",
+      nickName: repairRequest.serviceLocationName || repairRequest.locationName || "",
+      streetAddress: repairRequest.serviceLocationAddress || repairRequest.locationAddress || "",
+    };
+  }, [repairRequest]);
+
+  const partApprovalDefaultForm = useMemo(() => ({
+    mode: "manual",
+    description: repairRequest?.description || "",
+    quantity: "1",
+  }), [repairRequest?.description]);
+
+  const partApprovalWorkflowContext = useMemo(() => {
+    if (!repairRequest?.id) return {};
+
+    return {
+      sourceRecordType: "repairRequest",
+      sourceRecordId: repairRequest.id,
+      sourceRecordPath: sourcePath === "homeowner"
+        ? `homeownerRepairRequests/${repairRequest.id}`
+        : `companies/${recentlySelectedCompany}/repairRequests/${repairRequest.id}`,
+      repairRequestId: repairRequest.id,
+      repairRequestSourcePath: sourcePath,
+      repairRequestPath: sourcePath === "homeowner"
+        ? `homeownerRepairRequests/${repairRequest.id}`
+        : `companies/${recentlySelectedCompany}/repairRequests/${repairRequest.id}`,
+      repairRequestDescription: repairRequest.description || "",
+      requestStatus: repairRequest.status || "",
+      serviceLocationAddress: repairRequest.serviceLocationAddress || repairRequest.locationAddress || "",
+    };
+  }, [recentlySelectedCompany, repairRequest, sourcePath]);
+
   useEffect(() => {
     const fetchRepairRequest = async () => {
       if (recentlySelectedCompany && repairRequestId) {
         try {
+          const requestRefForSource = (path) => (
+            path === "homeowner"
+              ? doc(db, 'homeownerRepairRequests', repairRequestId)
+              : doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId)
+          );
           const preferredSourcePath = location.state?.sourcePath || "company";
           const fallbackSourcePath = preferredSourcePath === "homeowner" ? "company" : "homeowner";
-          let docSnap = await getDoc(getRequestRef(preferredSourcePath));
+          let docSnap = await getDoc(requestRefForSource(preferredSourcePath));
           let loadedSourcePath = preferredSourcePath;
 
           if (!docSnap.exists()) {
-            docSnap = await getDoc(getRequestRef(fallbackSourcePath));
+            docSnap = await getDoc(requestRefForSource(fallbackSourcePath));
             loadedSourcePath = fallbackSourcePath;
           }
 
           if (docSnap.exists()) {
-            const req = RepairRequest.fromFirestore(docSnap);
+            const data = docSnap.data();
+            const req = {
+              ...data,
+              ...RepairRequest.fromFirestore(docSnap),
+              id: data.id || docSnap.id,
+            };
             setRepairRequest(req);
             setSourcePath(loadedSourcePath);
             setDescriptionDraft(req.description || "");
@@ -212,6 +303,32 @@ const RepairRequestDetailView = () => {
   }, [repairRequest?.equipmentId, sourcePath, recentlySelectedCompany]);
 
   useEffect(() => {
+    if (!recentlySelectedCompany || !repairRequestId || !sourcePath) return undefined;
+
+    setCommentsLoading(true);
+    const commentsQ = query(getCommentsRef(sourcePath), orderBy("date", "desc"));
+
+    const unsubscribe = onSnapshot(
+      commentsQ,
+      (snapshot) => {
+        setComments(snapshot.docs.map((commentDoc) => ({
+          id: commentDoc.id,
+          ...commentDoc.data(),
+        })));
+        setCommentsLoading(false);
+      },
+      (error) => {
+        console.error("Error loading repair request comments:", error);
+        setCommentsLoading(false);
+        appAlert("Failed to load repair request comments.");
+      }
+    );
+
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentlySelectedCompany, repairRequestId, sourcePath]);
+
+  useEffect(() => {
     if (!selectedPhoto) return undefined;
 
     const handleKeyDown = (event) => {
@@ -238,6 +355,29 @@ const RepairRequestDetailView = () => {
         repairRequestSourcePath: sourcePath,
       },
     });
+  };
+
+  const handlePartApprovalCreated = async (approval) => {
+    if (!approval?.id || !repairRequest?.id) return;
+
+    try {
+      await updateDoc(getRequestRef(), {
+        partApprovalIds: arrayUnion(approval.id),
+        lastPartApprovalId: approval.id,
+        lastPartApprovalStatus: approval.status || approval.approvalStatus || "pending",
+        updatedAt: serverTimestamp(),
+      });
+
+      setRepairRequest((prev) => ({
+        ...prev,
+        partApprovalIds: Array.from(new Set([...(prev?.partApprovalIds || []), approval.id])),
+        lastPartApprovalId: approval.id,
+        lastPartApprovalStatus: approval.status || approval.approvalStatus || "pending",
+      }));
+    } catch (error) {
+      console.error("Error linking part approval to repair request:", error);
+      appAlert("Part approval was created, but it could not be linked back to this repair request.");
+    }
   };
 
   const handleConvertToSuggestedWork = async () => {
@@ -339,6 +479,67 @@ const RepairRequestDetailView = () => {
       appAlert("Failed to convert this repair request to suggested work.");
     } finally {
       setConvertingToSuggestedWork(false);
+    }
+  };
+
+  const addComment = async () => {
+    const trimmedComment = newComment.trim();
+    const userId = getUserId();
+
+    if (!requirePermission("34", "update repair requests")) return;
+    if (!userId) {
+      appAlert("Missing user information. Please sign in again before adding a comment.");
+      return;
+    }
+    if (!trimmedComment) {
+      appAlert("Write a comment first.");
+      return;
+    }
+    if (!recentlySelectedCompany || !repairRequest?.id || addingComment) return;
+
+    try {
+      setAddingComment(true);
+
+      const id = `rep_req_com_${uuidv4()}`;
+      const authorName = getAuditUserName();
+      await setDoc(doc(getCommentsRef(), id), {
+        id,
+        repairRequestId: repairRequest.id,
+        companyId: recentlySelectedCompany,
+        userId,
+        userName: authorName,
+        authorId: userId,
+        authorName,
+        date: serverTimestamp(),
+        dateMillis: Date.now(),
+        comment: trimmedComment,
+        resolved: false,
+        sourcePath,
+      });
+
+      setNewComment("");
+    } catch (error) {
+      console.error("Error adding repair request comment:", error);
+      appAlert("Failed to add comment.");
+    } finally {
+      setAddingComment(false);
+    }
+  };
+
+  const setCommentResolved = async (commentId, resolved) => {
+    if (!requirePermission("34", "update repair requests")) return;
+    if (!recentlySelectedCompany || !repairRequest?.id || !commentId) return;
+
+    try {
+      await updateDoc(doc(getCommentsRef(), commentId), {
+        resolved,
+        resolvedAt: resolved ? serverTimestamp() : null,
+        resolvedByUserId: resolved ? getUserId() : "",
+        resolvedByUserName: resolved ? getAuditUserName() : "",
+      });
+    } catch (error) {
+      console.error("Error updating repair request comment:", error);
+      appAlert("Failed to update comment.");
     }
   };
 
@@ -569,6 +770,9 @@ const RepairRequestDetailView = () => {
   const connectedJobIds = new Set(jobIds);
   const connectableJobs = availableJobs.filter((job) => !connectedJobIds.has(job.id));
   const availableJobsById = new Map(availableJobs.map((job) => [job.id, job]));
+  const partApprovalIds = repairRequest.partApprovalIds || [];
+  const openCommentsCount = comments.filter((comment) => !comment.resolved).length;
+  const commentFilters = ["All", "Open", "Resolved"];
 
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
@@ -720,6 +924,113 @@ const RepairRequestDetailView = () => {
                     <p className="text-gray-700">No connected jobs.</p>
                   )}
                 </div>
+
+                <div>
+                  <h4 className="font-semibold mb-2 text-gray-800">Connected Part Approvals</h4>
+                  {partApprovalIds.length > 0 ? (
+                    <div className="space-y-2">
+                      {partApprovalIds.map((id) => (
+                        <Link
+                          key={id}
+                          to="/company/part-approvals"
+                          className="block text-emerald-700 hover:underline font-medium"
+                        >
+                          {linkedReferenceText("Part Approval", id)}
+                        </Link>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-gray-700">No connected part approvals.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-800">Comments</h3>
+                  <p className="text-xs font-semibold text-slate-500">
+                    {openCommentsCount} open of {comments.length}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-1.5">
+                  {commentFilters.map((filter) => {
+                    const active = filter === commentFilter;
+                    return (
+                      <button
+                        key={filter}
+                        type="button"
+                        onClick={() => setCommentFilter(filter)}
+                        className={[
+                          "rounded-md px-2 py-1 text-xs font-semibold transition",
+                          active ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100",
+                        ].join(" ")}
+                      >
+                        {filter}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {can("34") && (
+                <div className="mt-4 space-y-2">
+                  <textarea
+                    className="min-h-[86px] w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                    placeholder="Write a comment..."
+                    value={newComment}
+                    onChange={(event) => setNewComment(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={addComment}
+                    disabled={addingComment || !newComment.trim()}
+                    className={[
+                      "w-full rounded-md px-3 py-2 text-xs font-semibold transition sm:w-auto",
+                      addingComment || !newComment.trim()
+                        ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+                        : "bg-blue-600 text-white hover:bg-blue-700",
+                    ].join(" ")}
+                  >
+                    {addingComment ? "Adding..." : "Add Comment"}
+                  </button>
+                </div>
+              )}
+
+              <div className="mt-4 max-h-96 space-y-2 overflow-y-auto pr-1">
+                {commentsLoading ? (
+                  <div className="text-xs text-slate-500">Loading comments...</div>
+                ) : filteredComments.length === 0 ? (
+                  <div className="text-xs text-slate-500">No comments in this filter.</div>
+                ) : (
+                  filteredComments.map((comment) => {
+                    const dt = comment.date?.toDate?.() || null;
+                    const when = dt ? format(dt, "MMM d, h:mm a") : "-";
+
+                    return (
+                      <div key={comment.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-xs font-semibold text-slate-800">
+                          {comment.userName || comment.authorName || "Unknown"}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-slate-400">{when}</div>
+                        <div className="mt-2 whitespace-pre-wrap text-xs text-slate-700">
+                          {comment.comment}
+                        </div>
+                        <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-600">
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5"
+                            checked={!!comment.resolved}
+                            disabled={!can("34")}
+                            onChange={(event) => setCommentResolved(comment.id, event.target.checked)}
+                          />
+                          Resolved
+                        </label>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -768,6 +1079,22 @@ const RepairRequestDetailView = () => {
                   className="w-full rounded-md bg-blue-600 px-4 py-3 font-bold text-white transition hover:bg-blue-700"
                 >
                   Create Job from Request
+                </button>
+              )}
+
+              {can("34") && (
+                <button
+                  type="button"
+                  onClick={() => setShowPartApprovalModal(true)}
+                  disabled={!repairRequest.customerId}
+                  className={[
+                    "w-full rounded-md px-4 py-3 font-bold text-white transition",
+                    repairRequest.customerId
+                      ? "bg-emerald-600 hover:bg-emerald-700"
+                      : "bg-gray-100 text-gray-400 cursor-not-allowed",
+                  ].join(" ")}
+                >
+                  {repairRequest.customerId ? "Create Part Approval" : "Add Customer Before Part Approval"}
                 </button>
               )}
 
@@ -948,6 +1275,16 @@ const RepairRequestDetailView = () => {
           />
         </div>
       )}
+
+      <PartApprovalCreateModal
+        open={showPartApprovalModal}
+        onClose={() => setShowPartApprovalModal(false)}
+        fixedCustomer={partApprovalCustomer}
+        fixedServiceLocation={partApprovalServiceLocation}
+        defaultForm={partApprovalDefaultForm}
+        workflowContext={partApprovalWorkflowContext}
+        onCreated={handlePartApprovalCreated}
+      />
     </div>
   );
 };

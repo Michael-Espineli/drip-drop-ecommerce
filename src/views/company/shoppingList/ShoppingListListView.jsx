@@ -9,10 +9,12 @@ import {
     ShoppingCartIcon,
     TrashIcon,
 } from "@heroicons/react/24/outline";
-import { db, storage } from "../../../utils/config";
+import toast from "react-hot-toast";
+import { db, functions, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import { appConfirm } from "../../../utils/appDialog";
+import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import {
     getItemPhotoUrl,
     itemPhotoFieldsFromSource,
@@ -26,21 +28,31 @@ import {
     syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
 import {
+    SHOPPING_LIST_STATUS,
+    SHOPPING_LIST_STATUS_OPTIONS,
+    canonicalShoppingListStatus,
+    shoppingListStatusMatches,
+} from "../../../utils/shoppingListStatus";
+import {
+    createAndSendShoppingItemInstallInvoice,
+    updateLinkedPartApprovalForManualShoppingInvoice,
+} from "../../../utils/sales/shoppingItemInvoiceAutomation";
+import {
     deleteShoppingListItemWithLinks,
     getShoppingItemPartApprovalId,
     isShoppingItemFromPartApproval,
 } from "../../../utils/shoppingListDelete";
 import { compareCompanyUsersByName, getCompanyUserDisplayName } from "../../../utils/companyUsers";
+import { getProductDisplayName } from "../../../utils/productCatalog";
 
-const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed", SHOPPING_LIST_INVOICED_STATUS];
-const recentActiveStatuses = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Purchased"];
+const statusOptions = SHOPPING_LIST_STATUS_OPTIONS;
+const recentActiveStatuses = [SHOPPING_LIST_STATUS.needToPurchase, SHOPPING_LIST_STATUS.purchased];
 const defaultVisibleStatuses = recentActiveStatuses;
 const recentShoppingItemLimit = 60;
 const statusQuickFilters = [
-    { label: "Pending Approval", statuses: ["Needs Customer Approval"], presetValue: "pendingApproval" },
-    { label: "Approved", statuses: ["Ready to Purchase"], presetValue: "approved" },
-    { label: "Purchased", statuses: ["Purchased"], presetValue: "purchased" },
-    { label: "Delivered / Installed", statuses: ["Delivered", "Installed"], presetValue: "deliveredInstalled" },
+    { label: "Need to Purchase", statuses: [SHOPPING_LIST_STATUS.needToPurchase], presetValue: "needToPurchase" },
+    { label: "Purchased", statuses: [SHOPPING_LIST_STATUS.purchased], presetValue: "purchased" },
+    { label: "Installed", statuses: [SHOPPING_LIST_STATUS.installed], presetValue: "installed" },
     { label: "Invoiced", statuses: [SHOPPING_LIST_INVOICED_STATUS], presetValue: "invoiced" },
 ];
 const categoryOptions = ["All", "Personal", "Customer", "Job"];
@@ -56,10 +68,9 @@ const sortOptions = [
 const viewPresetOptions = [
     { value: "recentActive", label: "Recent Active", statuses: recentActiveStatuses, limit: recentShoppingItemLimit },
     { value: "allActive", label: "All Active", statuses: recentActiveStatuses },
-    { value: "pendingApproval", label: "Pending Approval", statuses: ["Needs Customer Approval"] },
-    { value: "approved", label: "Approved", statuses: ["Ready to Purchase"] },
-    { value: "purchased", label: "Purchased", statuses: ["Purchased"] },
-    { value: "deliveredInstalled", label: "Delivered / Installed", statuses: ["Delivered", "Installed"] },
+    { value: "needToPurchase", label: "Need to Purchase", statuses: [SHOPPING_LIST_STATUS.needToPurchase] },
+    { value: "purchased", label: "Purchased", statuses: [SHOPPING_LIST_STATUS.purchased] },
+    { value: "installed", label: "Installed", statuses: [SHOPPING_LIST_STATUS.installed] },
     { value: "invoiced", label: "Invoiced", statuses: [SHOPPING_LIST_INVOICED_STATUS] },
     { value: "allStatuses", label: "All Statuses", statuses: statusOptions },
     { value: "custom", label: "Custom Filters", statuses: null },
@@ -236,7 +247,11 @@ const buildContextLines = (item) => {
 };
 
 const ShoppingListListView = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        shoppingItemInstallInvoiceAutomationEnabled,
+        user,
+    } = useContext(Context);
     const navigate = useNavigate();
     const [shoppingList, setShoppingList] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -246,6 +261,11 @@ const ShoppingListListView = () => {
     const [editingItem, setEditingItem] = useState(null);
     const [editForm, setEditForm] = useState(null);
     const [savingEdit, setSavingEdit] = useState(false);
+    const [statusUpdateItem, setStatusUpdateItem] = useState(null);
+    const [statusUpdateValue, setStatusUpdateValue] = useState("");
+    const [statusUpdateInvoiceNote, setStatusUpdateInvoiceNote] = useState("");
+    const [statusUpdateAutoInvoiceOnInstall, setStatusUpdateAutoInvoiceOnInstall] = useState(false);
+    const [savingStatusUpdate, setSavingStatusUpdate] = useState(false);
     const [photoFile, setPhotoFile] = useState(null);
     const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
     const [photoError, setPhotoError] = useState("");
@@ -327,8 +347,10 @@ const ShoppingListListView = () => {
                     status: data.status || "",
                     purchaserId: data.purchaserId || "",
                     purchaserName: data.purchaserName || "",
-                    genericItemId: data.genericItemId || "",
-                    name: data.name || "",
+                    genericItemId: data.productId || data.genericItemId || "",
+                    productId: data.productId || data.genericItemId || (data.subCategory === "Product" ? data.itemId || "" : ""),
+                    productName: data.productName || data.genericItemName || "",
+                    name: data.name || data.productName || "",
                     description: data.description || "",
                     datePurchased: purchasedDate ? format(purchasedDate, "MM / d / yyyy") : "",
                     datePurchasedInput: purchasedDate ? format(purchasedDate, "yyyy-MM-dd") : "",
@@ -345,14 +367,19 @@ const ShoppingListListView = () => {
                     serviceLocationId: data.serviceLocationId || "",
                     serviceLocationName: data.serviceLocationName || "",
                     serviceLocationAddress: data.serviceLocationAddress || "",
-                    dbItemId: data.dbItemId || data.itemId || "",
-                    dbItemName: data.dbItemName || data.itemName || "",
+                    dbItemId: data.dbItemId || data.dataBaseItemId || (data.subCategory === "Data Base" ? data.itemId || "" : ""),
+                    dbItemName: data.dbItemName || (data.subCategory === "Data Base" ? data.itemName || "" : ""),
                     photoUrl: getItemPhotoUrl(data),
                     imageUrl: data.imageUrl || data.imageURL || "",
                     primaryPhotoUrl: data.primaryPhotoUrl || "",
                     photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
                     purchasedItem: data.purchasedItem || "",
                     invoiced: !!data.invoiced,
+                    invoiceStatus: data.invoiceStatus || "",
+                    manualInvoiceNote: data.manualInvoiceNote || data.invoiceNote || "",
+                    autoInvoiceOnInstall: data.autoInvoiceOnInstall === undefined
+                        ? shoppingItemInstallInvoiceAutomationEnabled === true
+                        : data.autoInvoiceOnInstall === true,
                     customerApprovalRequired: !!data.customerApprovalRequired,
                     customerApprovalStatus: data.customerApprovalStatus || "",
                     partApprovalRequestId: data.partApprovalRequestId || data.approvalRequestId || "",
@@ -400,9 +427,13 @@ const ShoppingListListView = () => {
                 return acc;
             }, {});
 
-            const [jobsById, dbItemsById] = await Promise.all([
+            const productIds = list.map((item) => item.productId || (item.subCategory === "Product" ? item.genericItemId : ""));
+            const vendorItemIds = list.map((item) => item.dbItemId);
+
+            const [jobsById, productsById, dbItemsById] = await Promise.all([
                 fetchCompanyDocsById("workOrders", list.map((item) => item.jobId)),
-                fetchCompanyDocsById(["settings", "dataBase", "dataBase"], list.map((item) => item.dbItemId || item.genericItemId)),
+                fetchCompanyDocsById(["settings", "genericItems", "genericItems"], productIds),
+                fetchCompanyDocsById(["settings", "dataBase", "dataBase"], vendorItemIds),
             ]);
 
             const customerIds = list.flatMap((item) => {
@@ -426,12 +457,20 @@ const ShoppingListListView = () => {
                 const customer = customersById[customerId] || {};
                 const serviceLocation = serviceLocationsById[serviceLocationId] || {};
                 const user = usersById[item.userId] || {};
-                const dbItem = dbItemsById[item.dbItemId || item.genericItemId] || {};
-                const dbItemPhotoFields = itemPhotoFieldsFromSource(dbItem, dbItem.name || item.name || "Shopping item photo");
+                const productId = item.productId || (item.subCategory === "Product" ? item.genericItemId : "");
+                const product = productsById[productId] || {};
+                const dbItem = dbItemsById[item.dbItemId] || {};
+                const productName = product.id ? getProductDisplayName(product) : "";
+                const sourceItem = product.id ? product : dbItem;
+                const dbItemPhotoFields = itemPhotoFieldsFromSource(sourceItem, productName || sourceItem.name || item.productName || item.name || "Shopping item photo");
                 const photoUrl = item.photoUrl || dbItemPhotoFields.photoUrl || "";
 
                 const enrichedItem = {
                     ...item,
+                    genericItemId: productId || item.genericItemId,
+                    productId,
+                    productName: item.productName || productName,
+                    name: item.name || item.productName || productName,
                     jobName: item.jobName || jobDisplayName(job),
                     customerId,
                     customerName:
@@ -469,7 +508,7 @@ const ShoppingListListView = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [recentlySelectedCompany]);
+    }, [recentlySelectedCompany, shoppingItemInstallInvoiceAutomationEnabled]);
 
     useEffect(() => {
         fetchShoppingItems();
@@ -483,28 +522,57 @@ const ShoppingListListView = () => {
         setPhotoError("");
     };
 
+    const resetStatusUpdateState = () => {
+        setStatusUpdateItem(null);
+        setStatusUpdateValue("");
+        setStatusUpdateInvoiceNote("");
+        setStatusUpdateAutoInvoiceOnInstall(false);
+        setSavingStatusUpdate(false);
+    };
+
     const openEditItem = (item) => {
         setEditingItem(item);
         setEditForm({
             id: item.id,
             name: item.name || "",
             description: item.description || "",
-            status: item.status || "Need to Purchase",
+            status: canonicalShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase),
             quantity: item.quantity || "",
             datePurchasedInput: item.datePurchasedInput || "",
             purchaserId: item.purchaserId || "",
             purchaserName: item.purchaserName || "",
             photoUrl: item.photoUrl || "",
+            manualInvoiceNote: item.manualInvoiceNote || item.invoiceNote || "",
+            autoInvoiceOnInstall: item.autoInvoiceOnInstall === undefined
+                ? shoppingItemInstallInvoiceAutomationEnabled === true
+                : item.autoInvoiceOnInstall === true,
         });
         setPhotoFile(null);
         setPhotoPreviewUrl("");
         setPhotoError("");
     };
 
+    const openStatusUpdate = (item) => {
+        closeActionMenu();
+        setStatusUpdateItem(item);
+        setStatusUpdateValue(canonicalShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase));
+        setStatusUpdateInvoiceNote(item.manualInvoiceNote || item.invoiceNote || "");
+        setStatusUpdateAutoInvoiceOnInstall(item.autoInvoiceOnInstall === undefined
+            ? shoppingItemInstallInvoiceAutomationEnabled === true
+            : item.autoInvoiceOnInstall === true
+        );
+    };
+
     const handleEditFormChange = (field, value) => {
         setEditForm((prev) => ({
             ...prev,
             [field]: value,
+            ...(field === "status"
+                ? {
+                    status: canonicalShoppingListStatus(value),
+                    manualInvoiceNote: value === SHOPPING_LIST_INVOICED_STATUS ? prev.manualInvoiceNote || "" : "",
+                }
+                : {}),
         }));
     };
 
@@ -773,11 +841,114 @@ const ShoppingListListView = () => {
             if (item.purchasedItem) {
                 updatePurchasedItemOptionLinks(item.purchasedItem, "", item.id);
             }
+            if (editingItem?.id === item.id) resetEditState();
+            if (statusUpdateItem?.id === item.id) resetStatusUpdateState();
         } catch (error) {
             console.log("Error deleting shopping list item");
             console.log(error);
         } finally {
             setDeletingItemId("");
+        }
+    };
+
+    const saveStatusUpdate = async () => {
+        if (!recentlySelectedCompany || !statusUpdateItem?.id || !statusUpdateValue) return;
+
+        try {
+            setSavingStatusUpdate(true);
+            const nextInvoiced = statusUpdateValue === SHOPPING_LIST_INVOICED_STATUS || !!statusUpdateItem.invoiced;
+            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : canonicalShoppingListStatus(statusUpdateValue);
+            const payload = {
+                status: nextStatus,
+                invoiced: nextInvoiced,
+                invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                manualInvoiceNote: nextInvoiced ? statusUpdateInvoiceNote || "" : "",
+                autoInvoiceOnInstall: nextInvoiced ? false : statusUpdateAutoInvoiceOnInstall === true,
+                needsAction: shoppingItemNeedsAction(nextStatus),
+                updatedAt: Timestamp.now(),
+            };
+
+            await updateDoc(
+                doc(db, "companies", recentlySelectedCompany, "shoppingList", statusUpdateItem.id),
+                payload
+            );
+
+            let syncedShoppingPayload = {};
+            if (statusUpdateItem.purchasedItem) {
+                const { shoppingPayload } = await syncLinkedShoppingPurchase({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    shoppingItemId: statusUpdateItem.id,
+                    purchasedItemId: statusUpdateItem.purchasedItem,
+                    shoppingItemData: {
+                        ...statusUpdateItem,
+                        ...payload,
+                    },
+                    invoiced: nextInvoiced,
+                });
+                syncedShoppingPayload = shoppingPayload || {};
+            }
+
+            let automationShoppingPayload = {};
+            const itemForAutomation = {
+                ...statusUpdateItem,
+                ...payload,
+                ...syncedShoppingPayload,
+                id: statusUpdateItem.id,
+            };
+
+            if (nextInvoiced) {
+                await updateLinkedPartApprovalForManualShoppingInvoice({
+                    db,
+                    shoppingItem: itemForAutomation,
+                    note: statusUpdateInvoiceNote,
+                    user,
+                });
+            } else if (nextStatus === SHOPPING_LIST_STATUS.installed && statusUpdateAutoInvoiceOnInstall) {
+                const invoiceResult = await createAndSendShoppingItemInstallInvoice({
+                    db,
+                    functions,
+                    companyId: recentlySelectedCompany,
+                    shoppingItem: itemForAutomation,
+                    user,
+                    getCallableAuthPayload,
+                });
+                automationShoppingPayload = invoiceResult.shoppingPayload || {};
+
+                if (invoiceResult.status === "sent") {
+                    toast.success("Invoice created and sent.");
+                } else if (invoiceResult.status === "created_email_failed") {
+                    toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_billable_amount") {
+                    toast.error("Installed item saved, but no invoice was created because it has no billable amount.");
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_customer_email") {
+                    toast.error("Installed item saved, but no invoice was created because the customer is missing an email.");
+                }
+            }
+
+            setShoppingList((prev) => prev.map((item) => {
+                if (item.id !== statusUpdateItem.id) return item;
+
+                const nextItem = {
+                    ...item,
+                    ...payload,
+                    ...syncedShoppingPayload,
+                    ...automationShoppingPayload,
+                };
+
+                return {
+                    ...nextItem,
+                    forPrimary: buildForPrimary(nextItem),
+                    contextLines: buildContextLines(nextItem),
+                };
+            }));
+
+            resetStatusUpdateState();
+        } catch (error) {
+            console.log("Error updating shopping item status");
+            console.log(error);
+        } finally {
+            setSavingStatusUpdate(false);
         }
     };
 
@@ -823,7 +994,7 @@ const ShoppingListListView = () => {
                 uploadedPhoto.storagePath
             );
             const nextInvoiced = editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editingItem.invoiced;
-            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : editForm.status || "";
+            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : canonicalShoppingListStatus(editForm.status);
             const purchasedDate = editForm.datePurchasedInput
                 ? new Date(`${editForm.datePurchasedInput}T00:00:00`)
                 : null;
@@ -837,6 +1008,8 @@ const ShoppingListListView = () => {
                 purchaserName: editForm.purchaserName || "",
                 invoiced: nextInvoiced,
                 invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                manualInvoiceNote: nextInvoiced ? editForm.manualInvoiceNote || "" : "",
+                autoInvoiceOnInstall: nextInvoiced ? false : editForm.autoInvoiceOnInstall === true,
                 needsAction: shoppingItemNeedsAction(nextStatus),
                 updatedAt: Timestamp.now(),
                 ...photoFields,
@@ -863,6 +1036,43 @@ const ShoppingListListView = () => {
                 syncedShoppingPayload = shoppingPayload || {};
             }
 
+            let automationShoppingPayload = {};
+            const itemForAutomation = {
+                ...editingItem,
+                ...payload,
+                ...syncedShoppingPayload,
+                id: editingItem.id,
+            };
+
+            if (nextInvoiced) {
+                await updateLinkedPartApprovalForManualShoppingInvoice({
+                    db,
+                    shoppingItem: itemForAutomation,
+                    note: editForm.manualInvoiceNote,
+                    user,
+                });
+            } else if (nextStatus === SHOPPING_LIST_STATUS.installed && editForm.autoInvoiceOnInstall) {
+                const invoiceResult = await createAndSendShoppingItemInstallInvoice({
+                    db,
+                    functions,
+                    companyId: recentlySelectedCompany,
+                    shoppingItem: itemForAutomation,
+                    user,
+                    getCallableAuthPayload,
+                });
+                automationShoppingPayload = invoiceResult.shoppingPayload || {};
+
+                if (invoiceResult.status === "sent") {
+                    toast.success("Invoice created and sent.");
+                } else if (invoiceResult.status === "created_email_failed") {
+                    toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_billable_amount") {
+                    toast.error("Installed item saved, but no invoice was created because it has no billable amount.");
+                } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_customer_email") {
+                    toast.error("Installed item saved, but no invoice was created because the customer is missing an email.");
+                }
+            }
+
             setShoppingList((prev) => prev.map((item) => {
                 if (item.id !== editingItem.id) return item;
 
@@ -870,6 +1080,7 @@ const ShoppingListListView = () => {
                     ...item,
                     ...payload,
                     ...syncedShoppingPayload,
+                    ...automationShoppingPayload,
                     datePurchased: purchasedDate ? format(purchasedDate, "MM / d / yyyy") : "",
                     datePurchasedInput: editForm.datePurchasedInput || "",
                 };
@@ -902,7 +1113,7 @@ const ShoppingListListView = () => {
                 case "recentActivityDesc":
                     return item.activityDateMillis || 0;
                 case "status":
-                    return item.status || "";
+                    return canonicalShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase);
                 case "category":
                     return [item.category, item.subCategory].filter(Boolean).join(" ");
                 case "purchaser":
@@ -935,7 +1146,7 @@ const ShoppingListListView = () => {
                 categoryFilter === "All" || item.category === categoryFilter;
 
             const matchesStatus =
-                selectedStatuses.length > 0 && selectedStatuses.includes(item.status);
+                selectedStatuses.length > 0 && shoppingListStatusMatches(item.status, selectedStatuses);
 
             return matchesSearch && matchesCategory && matchesStatus;
         });
@@ -1109,7 +1320,7 @@ const ShoppingListListView = () => {
                                     <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-slate-700">
                                         <div className="min-w-0">
                                             <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Status</p>
-                                            <p className="truncate font-semibold text-slate-800">{item.status || "—"}</p>
+                                            <p className="truncate font-semibold text-slate-800">{canonicalShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase)}</p>
                                         </div>
                                         <div className="min-w-0">
                                             <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Qty</p>
@@ -1311,23 +1522,111 @@ const ShoppingListListView = () => {
                         </button>
                         <button
                             type="button"
+                            onClick={() => openStatusUpdate(openActionItem)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                        >
+                            <ArrowsRightLeftIcon className="h-4 w-4" />
+                            Update Status
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => openPurchasedItemConnection(openActionItem)}
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
                         >
                             <ShoppingCartIcon className="h-4 w-4" />
                             {openActionItem.purchasedItem ? "Change Purchased Item" : "Connect Purchased Item"}
                         </button>
-                        <button
-                            type="button"
-                            onClick={() => deleteShoppingItem(openActionItem)}
-                            disabled={deletingItemId === openActionItem.id}
-                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
-                        >
-                            <TrashIcon className="h-4 w-4" />
-                            {deletingItemId === openActionItem.id ? "Deleting..." : "Delete"}
-                        </button>
                     </div>
                 </>
+            )}
+
+            {statusUpdateItem && (
+                <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+                    <div className="mx-auto my-16 w-full max-w-md rounded-xl bg-white shadow-2xl">
+                        <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4">
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-900">Update Status</h3>
+                                <p className="mt-1 text-sm text-gray-500">{statusUpdateItem.name || "Shopping item"}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={resetStatusUpdateState}
+                                className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                                disabled={savingStatusUpdate}
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="space-y-4 p-5">
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-600">Status</label>
+                                <select
+                                    value={statusUpdateValue}
+                                    onChange={(event) => setStatusUpdateValue(canonicalShoppingListStatus(event.target.value))}
+                                    className="mt-2 w-full rounded-md border border-gray-300 bg-white p-3"
+                                    disabled={savingStatusUpdate}
+                                >
+                                    {statusOptions.map((status) => (
+                                        <option key={status} value={status}>{status}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+                                Current status: <span className="font-semibold text-gray-900">{canonicalShoppingListStatus(statusUpdateItem.status || SHOPPING_LIST_STATUS.needToPurchase)}</span>
+                            </div>
+
+                            {statusUpdateValue === SHOPPING_LIST_INVOICED_STATUS ? (
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-600">Invoice Note</label>
+                                    <textarea
+                                        value={statusUpdateInvoiceNote}
+                                        onChange={(event) => setStatusUpdateInvoiceNote(event.target.value)}
+                                        className="mt-2 min-h-[96px] w-full rounded-md border border-gray-300 p-3"
+                                        placeholder="Optional note for manually marked invoices"
+                                        disabled={savingStatusUpdate}
+                                    />
+                                </div>
+                            ) : null}
+
+                            {statusUpdateValue === SHOPPING_LIST_STATUS.installed ? (
+                                <label className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                                    <input
+                                        type="checkbox"
+                                        className="mt-1"
+                                        checked={statusUpdateAutoInvoiceOnInstall}
+                                        onChange={(event) => setStatusUpdateAutoInvoiceOnInstall(event.target.checked)}
+                                        disabled={savingStatusUpdate}
+                                    />
+                                    <span>
+                                        <span className="block font-semibold">Create and send invoice</span>
+                                        <span className="block text-xs text-blue-700">Uses this item as the invoice line item after it is marked installed.</span>
+                                    </span>
+                                </label>
+                            ) : null}
+                        </div>
+
+                        <div className="flex flex-wrap justify-end gap-2 border-t border-gray-200 px-5 py-4">
+                            <button
+                                type="button"
+                                onClick={resetStatusUpdateState}
+                                className="rounded-md border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                                disabled={savingStatusUpdate}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={saveStatusUpdate}
+                                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                                disabled={savingStatusUpdate || !statusUpdateValue}
+                            >
+                                {savingStatusUpdate ? "Saving..." : "Update Status"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {purchaseConnectionItem && (
@@ -1500,6 +1799,31 @@ const ShoppingListListView = () => {
                                 </select>
                             </div>
 
+                            {editForm.status === SHOPPING_LIST_INVOICED_STATUS ? (
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-600">Invoice Note</label>
+                                    <textarea
+                                        value={editForm.manualInvoiceNote || ""}
+                                        onChange={(e) => handleEditFormChange("manualInvoiceNote", e.target.value)}
+                                        className="mt-2 min-h-[96px] w-full rounded-md border border-gray-300 p-3"
+                                        placeholder="Optional note for manually marked invoices"
+                                    />
+                                </div>
+                            ) : (
+                                <label className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                                    <input
+                                        type="checkbox"
+                                        className="mt-1"
+                                        checked={!!editForm.autoInvoiceOnInstall}
+                                        onChange={(e) => handleEditFormChange("autoInvoiceOnInstall", e.target.checked)}
+                                    />
+                                    <span>
+                                        <span className="block font-semibold">Auto invoice when installed</span>
+                                        <span className="block text-xs text-blue-700">Creates and sends a sales invoice when this item is marked installed.</span>
+                                    </span>
+                                </label>
+                            )}
+
                             <div>
                                 <label className="block text-sm font-semibold text-gray-600">Quantity</label>
                                 <input
@@ -1552,6 +1876,15 @@ const ShoppingListListView = () => {
                         </div>
 
                         <div className="flex flex-wrap justify-end gap-2 border-t border-gray-200 px-5 py-4">
+                            <button
+                                type="button"
+                                onClick={() => deleteShoppingItem(editingItem)}
+                                className="mr-auto inline-flex items-center gap-2 rounded-md border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+                                disabled={savingEdit || deletingItemId === editingItem.id}
+                            >
+                                <TrashIcon className="h-4 w-4" />
+                                {deletingItemId === editingItem.id ? "Deleting..." : "Delete"}
+                            </button>
                             <button
                                 type="button"
                                 onClick={resetEditState}

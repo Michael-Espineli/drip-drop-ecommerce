@@ -212,8 +212,8 @@ function RecurringContracts() {
             try {
                 const getSubcriptionList = httpsCallable(functions, 'getSubcriptionList');
                 const result = await getSubcriptionList({
-                    customerId: 'cus_RBsy3ZCArWYVkW',
-                    connectedAccount: stripeConnectedAccountId || 'acct_1QIep2PPLD20PPKn',
+                    companyId: recentlySelectedCompany,
+                    connectedAccount: stripeConnectedAccountId,
                     method: 'POST',
                 });
 

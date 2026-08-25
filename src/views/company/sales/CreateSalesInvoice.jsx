@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
 import { collection, onSnapshot, Timestamp } from 'firebase/firestore';
 import toast from 'react-hot-toast';
@@ -181,6 +181,9 @@ const blankCustomLine = () => ({
 
 const CreateSalesInvoice = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const queryCustomerId = searchParams.get('customerId') || '';
+  const queryServiceLocationId = searchParams.get('serviceLocationId') || '';
   const {
     recentlySelectedCompany,
     recentlySelectedCompanyName,
@@ -202,6 +205,7 @@ const CreateSalesInvoice = () => {
   const [selectedCatalogQuantity, setSelectedCatalogQuantity] = useState('1');
   const [customLine, setCustomLine] = useState(blankCustomLine);
   const [lineItems, setLineItems] = useState([]);
+  const [queryPrefillApplied, setQueryPrefillApplied] = useState(false);
   const [form, setForm] = useState({
     invoiceNumber: defaultInvoiceNumber(),
     customerId: '',
@@ -284,6 +288,38 @@ const CreateSalesInvoice = () => {
 
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (queryPrefillApplied) return;
+    if (!queryCustomerId && !queryServiceLocationId) return;
+
+    const queryLocation = queryServiceLocationId
+      ? serviceLocations.find((location) => location.id === queryServiceLocationId)
+      : null;
+    const customerId = queryCustomerId || queryLocation?.customerId || '';
+    if (!customerId) return;
+
+    const customer = customers.find((item) => item.id === customerId);
+    if (!customer) return;
+
+    const serviceLocationIds = queryServiceLocationId && queryLocation?.customerId === customerId
+      ? [queryServiceLocationId]
+      : [];
+
+    setForm((current) => ({
+      ...current,
+      customerId: current.customerId || customerId,
+      email: current.email || customer.email || customer.billingEmail || '',
+      serviceLocationIds: current.serviceLocationIds.length ? current.serviceLocationIds : serviceLocationIds,
+    }));
+    setQueryPrefillApplied(true);
+  }, [
+    customers,
+    queryCustomerId,
+    queryPrefillApplied,
+    queryServiceLocationId,
+    serviceLocations,
+  ]);
 
   const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
   const selectedCustomer = useMemo(

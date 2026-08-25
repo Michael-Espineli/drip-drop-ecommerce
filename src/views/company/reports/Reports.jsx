@@ -1,10 +1,12 @@
-import React, { useContext, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { addDoc, collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, Timestamp, where } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
+import { Link, useSearchParams } from "react-router-dom";
 
 import {
+  ArrowTopRightOnSquareIcon,
   DocumentTextIcon,
   MagnifyingGlassIcon,
   PlusIcon,
@@ -42,7 +44,7 @@ const reportCatalog = [
   { value: "readings", label: "Readings & Dosages Summary", status: "Ready", source: "stopData readings and dosages", category: "operations" },
   { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
   { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by user or customer", category: "performance" },
-  { value: "pnlPerPool", label: "PNL Per Pool", status: "Ready", source: "service agreements, labor, chemicals", category: "performance" },
+  { value: "pnlPerPool", label: "PNL Per Service Location", status: "Ready", source: "service agreements by location, labor, chemicals", category: "performance" },
   { value: "pipeline", label: "Pipeline", status: "Ready", source: "customerPipeline, lead sources, lost and fired reasons", category: "marketing" },
   { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages", category: "operations" },
   { value: "waste", label: "Waste", status: "Ready", source: "linked dosages and purchased items", category: "performance" },
@@ -126,6 +128,14 @@ const dateRangePresets = [
 
 const defaultDateRange = () =>
   dateRangePresets.find((preset) => preset.value === "thisMonth").getRange();
+
+const sanitizeDateRange = (value = {}) => {
+  const fallback = defaultDateRange();
+  return {
+    start: value.start || fallback.start,
+    end: value.end || fallback.end,
+  };
+};
 
 const readingOperatorOptions = [
   { value: "gt", label: "Over" },
@@ -950,11 +960,50 @@ const agreementRevenueCentsForRange = (agreement = {}, startDate, endDate) => {
 };
 
 const agreementServiceLocationIds = (agreement = {}) => {
-  const ids = normalizeIdList(agreement.serviceLocationIds);
-  if (ids.length) return ids;
-
   const snapshots = Array.isArray(agreement.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : [];
-  return normalizeIdList(...snapshots.map((snapshot) => snapshot.id || snapshot.serviceLocationId));
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  const nestedLocations = [
+    ...(Array.isArray(agreement.serviceLocations) ? agreement.serviceLocations : []),
+    ...(Array.isArray(agreement.locations) ? agreement.locations : []),
+  ];
+  const ids = normalizeIdList(
+    agreement.serviceLocationId,
+    agreement.serviceLocationID,
+    agreement.companyServiceLocationId,
+    agreement.locationId,
+    agreement.locationID,
+    agreement.serviceLocationIds,
+    agreement.serviceLocation?.id,
+    agreement.serviceLocation?.serviceLocationId,
+    agreement.location?.id,
+    agreement.location?.serviceLocationId,
+    ...snapshots.map((snapshot) => firstPresent(
+      snapshot.id,
+      snapshot.serviceLocationId,
+      snapshot.companyServiceLocationId,
+      snapshot.locationId
+    )),
+    ...nestedLocations.map((location) => firstPresent(
+      location.id,
+      location.serviceLocationId,
+      location.companyServiceLocationId,
+      location.locationId
+    )),
+    ...lineItems.flatMap((item) => [
+      item.serviceLocationId,
+      item.serviceLocationIds,
+      item.companyServiceLocationId,
+      item.locationId,
+      item.metadata?.serviceLocationId,
+      item.metadata?.companyServiceLocationId,
+      item.metadata?.locationId,
+      item.serviceLocation?.id,
+      item.serviceLocation?.serviceLocationId,
+      item.location?.id,
+      item.location?.serviceLocationId,
+    ])
+  );
+  return ids;
 };
 
 const truthyReportFlag = (value) => (
@@ -1214,6 +1263,8 @@ const getDatabaseItems = async (companyId) => {
   const snap = await getDocs(collection(db, "companies", companyId, "settings", "dataBase", "dataBase"));
   return normalizeDocs(snap);
 };
+
+const customReportDocRef = (companyId, reportId) => doc(db, "companies", companyId, "customReports", reportId);
 
 const safeFilePart = (value) =>
   String(value || "report")
@@ -3806,6 +3857,7 @@ const buildPnlPerPoolReport = ({
   dosageTemplates = [],
   serviceAgreements = [],
   serviceLocations = [],
+  recurringServiceStops = [],
   bodiesOfWater = [],
   customersById = new Map(),
   purchases = [],
@@ -3814,19 +3866,28 @@ const buildPnlPerPoolReport = ({
   dateRangeStart,
   dateRangeEnd,
 }) => {
-  const serviceLocationsById = new Map(serviceLocations.map((location) => [location.id, location]));
+  const serviceLocationsById = new Map();
   const bodiesById = new Map(bodiesOfWater.map((body) => [body.id, body]));
   const bodiesByLocationId = new Map();
   const dosageTemplatesById = templateMap(dosageTemplates, "dosageTemplateId");
   const serviceStopsById = new Map();
+  const recurringStopsById = new Map();
   const stopDataByServiceStopId = new Map();
   const pools = new Map();
   const actualPayServiceStopIds = new Set();
   const serviceStopTypesById = new Map();
   const serviceStopTypesByName = new Map();
+  const agreementLocationAuditRows = [];
 
   const idValue = (value) => String(value || "").trim();
   const keyValue = (value) => idValue(value).toLowerCase();
+
+  serviceLocations.forEach((location) => {
+    ["id", "serviceLocationId", "locationId", "internalId"].forEach((field) => {
+      const value = idValue(location?.[field]);
+      if (value) serviceLocationsById.set(value, location);
+    });
+  });
 
   companyServiceStopTypes.forEach((type) => {
     ["id", "typeId", "serviceStopTypeId"].forEach((field) => {
@@ -3946,6 +4007,10 @@ const buildPnlPerPoolReport = ({
     indexByIds(serviceStopsById, stop, ["id", "serviceStopId", "internalId"]);
   });
 
+  recurringServiceStops.forEach((recurringStop) => {
+    indexByIds(recurringStopsById, recurringStop, ["id", "recurringServiceStopId", "rssId", "internalId"]);
+  });
+
   stopData.forEach((stop, index) => {
     const stopId = String(stop.serviceStopId || stop.id || `stop-data-${index}`);
     if (!stopDataByServiceStopId.has(stopId)) stopDataByServiceStopId.set(stopId, []);
@@ -3957,52 +4022,75 @@ const buildPnlPerPoolReport = ({
     return customerDisplayName(customer) || fallback || customerId || "No Customer";
   };
 
-  const poolDescriptor = ({ bodyOfWaterId = "", serviceLocationId = "", customerId = "", customerName = "" } = {}) => {
+  const bodyOfWaterName = (body = {}) =>
+    body.name ||
+    body.nickName ||
+    body.label ||
+    body.bodyOfWaterName ||
+    "";
+
+  const poolNamesForLocation = (serviceLocationId, fallbackBody = {}) => {
+    const bodies = serviceLocationId ? bodiesByLocationId.get(serviceLocationId) || [] : [];
+    const names = bodies.map(bodyOfWaterName).filter(Boolean);
+    if (!names.length && bodyOfWaterName(fallbackBody)) names.push(bodyOfWaterName(fallbackBody));
+    return Array.from(new Set(names)).join(", ");
+  };
+
+  const serviceLocationSnapshotId = (snapshot = {}) => idValue(firstPresent(
+    snapshot.id,
+    snapshot.serviceLocationId,
+    snapshot.companyServiceLocationId,
+    snapshot.locationId
+  ));
+
+  const serviceLocationSnapshotLabel = (snapshot = {}) => [
+    snapshot.nickName || snapshot.name || snapshot.label,
+    snapshot.streetAddress || snapshot.address?.streetAddress,
+    snapshot.city || snapshot.address?.city,
+    snapshot.state || snapshot.address?.state,
+    snapshot.zip || snapshot.address?.zip,
+  ].filter(Boolean).join(" | ");
+
+  const serviceLocationSnapshotsForAgreement = (agreement = {}) => (
+    Array.isArray(agreement.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : []
+  );
+
+  const serviceLocationSnapshotForId = (agreement = {}, serviceLocationId = "") => (
+    serviceLocationSnapshotsForAgreement(agreement).find((snapshot) => serviceLocationSnapshotId(snapshot) === idValue(serviceLocationId)) || {}
+  );
+
+  const serviceLocationDescriptor = ({ bodyOfWaterId = "", serviceLocationId = "", serviceLocationSnapshot = {}, customerId = "", customerName = "" } = {}) => {
     const body = bodyOfWaterId ? bodiesById.get(bodyOfWaterId) || {} : {};
     const resolvedServiceLocationId = serviceLocationId || body.serviceLocationId || "";
-    const location = resolvedServiceLocationId ? serviceLocationsById.get(resolvedServiceLocationId) || {} : {};
-    const resolvedCustomerId = customerId || body.customerId || location.customerId || "no-customer";
+    const location = resolvedServiceLocationId
+      ? serviceLocationsById.get(resolvedServiceLocationId) || serviceLocationSnapshot || {}
+      : serviceLocationSnapshot || {};
+    const resolvedCustomerId = customerId || location.customerId || location.companyCustomerId || body.customerId || "no-customer";
     const resolvedCustomerName = customerNameFor(resolvedCustomerId, customerName || body.customerName || location.customerName);
-    const locationName = serviceLocationName(location);
-    const poolName =
-      body.name ||
-      body.nickName ||
-      body.label ||
-      location.poolName ||
-      location.nickName ||
-      locationName ||
-      "Pool";
-    const id = body.id
-      ? `body:${body.id}`
-      : `location:${resolvedServiceLocationId || resolvedCustomerId || "unknown"}`;
+    const locationName = resolvedServiceLocationId && serviceLocationsById.has(resolvedServiceLocationId)
+      ? serviceLocationName(location)
+      : serviceLocationSnapshotLabel(location);
+    const poolName = poolNamesForLocation(resolvedServiceLocationId, body) || "-";
+    const id = resolvedServiceLocationId
+      ? `location:${resolvedServiceLocationId}`
+      : `customer:${resolvedCustomerId || "unknown"}`;
 
     return {
       id,
       customerId: resolvedCustomerId,
       customerName: resolvedCustomerName,
       serviceLocationId: resolvedServiceLocationId,
-      serviceLocation: locationName,
+      serviceLocation: locationName || location.nickName || location.name || "Unassigned Service Location",
       bodyOfWaterId: body.id || "",
       pool: poolName,
     };
   };
 
-  const poolDescriptorsForLocation = (serviceLocationId, fallback = {}) => {
-    const bodies = bodiesByLocationId.get(serviceLocationId) || [];
-    if (bodies.length) {
-      return bodies.map((body) =>
-        poolDescriptor({
-          bodyOfWaterId: body.id,
-          serviceLocationId,
-          customerId: fallback.customerId,
-          customerName: fallback.customerName,
-        })
-      );
-    }
-
+  const serviceLocationDescriptorsForLocation = (serviceLocationId, fallback = {}) => {
     return [
-      poolDescriptor({
+      serviceLocationDescriptor({
         serviceLocationId,
+        serviceLocationSnapshot: fallback.serviceLocationSnapshot,
         customerId: fallback.customerId,
         customerName: fallback.customerName,
       }),
@@ -4011,8 +4099,8 @@ const buildPnlPerPoolReport = ({
 
   const fallbackPoolDescriptorsForCustomer = (customerId, customerName) => {
     const locations = serviceLocations.filter((location) => location.customerId === customerId && location.active !== false && location.isActive !== false);
-    if (!locations.length) return [poolDescriptor({ customerId, customerName })];
-    return locations.flatMap((location) => poolDescriptorsForLocation(location.id, { customerId, customerName }));
+    if (!locations.length) return [serviceLocationDescriptor({ customerId, customerName })];
+    return locations.flatMap((location) => serviceLocationDescriptorsForLocation(location.id, { customerId, customerName }));
   };
 
   const uniqueDescriptors = (descriptors) => {
@@ -4121,7 +4209,7 @@ const buildPnlPerPoolReport = ({
   const descriptorsForServiceStop = (serviceStop = {}, fallback = {}) => {
     if (fallback.bodyOfWaterId || serviceStop.bodyOfWaterId) {
       return [
-        poolDescriptor({
+        serviceLocationDescriptor({
           bodyOfWaterId: fallback.bodyOfWaterId || serviceStop.bodyOfWaterId,
           serviceLocationId: fallback.serviceLocationId || serviceStop.serviceLocationId,
           customerId: fallback.customerId || serviceStop.customerId,
@@ -4134,7 +4222,7 @@ const buildPnlPerPoolReport = ({
     if (stopRecords.length) {
       return uniqueDescriptors(
         stopRecords.map((record) =>
-          poolDescriptor({
+          serviceLocationDescriptor({
             bodyOfWaterId: record.bodyOfWaterId,
             serviceLocationId: record.serviceLocationId || serviceStop.serviceLocationId,
             customerId: record.customerId || serviceStop.customerId,
@@ -4146,18 +4234,120 @@ const buildPnlPerPoolReport = ({
 
     const serviceLocationId = fallback.serviceLocationId || serviceStop.serviceLocationId;
     if (serviceLocationId) {
-      return poolDescriptorsForLocation(serviceLocationId, {
+      return serviceLocationDescriptorsForLocation(serviceLocationId, {
         customerId: fallback.customerId || serviceStop.customerId,
         customerName: fallback.customerName || serviceStop.customerName,
       });
     }
 
     return [
-      poolDescriptor({
+      serviceLocationDescriptor({
         customerId: fallback.customerId || serviceStop.customerId,
         customerName: fallback.customerName || serviceStop.customerName,
       }),
     ];
+  };
+
+  const linkedServiceStopIdsForAgreement = (agreement = {}) => normalizeIdList(
+    agreement.serviceStopId,
+    agreement.serviceStopIds,
+    agreement.inspectionServiceStopId,
+    agreement.serviceAgreementEstimateServiceStopId,
+    agreement.estimateServiceStopId,
+    agreement.sourceId,
+    ...(Array.isArray(agreement.lineItems)
+      ? agreement.lineItems.flatMap((item) => [
+        item.serviceStopId,
+        item.serviceStopIds,
+        item.metadata?.serviceStopId,
+        item.metadata?.inspectionServiceStopId,
+      ])
+      : [])
+  );
+
+  const linkedRecurringStopIdsForAgreement = (agreement = {}) => normalizeIdList(
+    agreement.recurringServiceStopId,
+    agreement.recurringStopId,
+    agreement.rssId,
+    agreement.sourceId,
+    ...(Array.isArray(agreement.lineItems)
+      ? agreement.lineItems.flatMap((item) => [
+        item.recurringServiceStopId,
+        item.recurringStopId,
+        item.rssId,
+        item.metadata?.recurringServiceStopId,
+        item.metadata?.recurringStopId,
+        item.metadata?.rssId,
+      ])
+      : [])
+  );
+
+  const serviceLocationResolutionForAgreement = (agreement = {}) => {
+    const explicitIds = agreementServiceLocationIds(agreement);
+    if (explicitIds.length) {
+      return {
+        ids: explicitIds,
+        source: "Agreement serviceLocationIds / snapshots",
+        inferred: false,
+      };
+    }
+
+    const serviceStopIds = linkedServiceStopIdsForAgreement(agreement);
+    const serviceStopLocationIds = normalizeIdList(
+      ...serviceStopIds.flatMap((serviceStopId) => {
+        const serviceStop = serviceStopsById.get(serviceStopId) || {};
+        return [serviceStop.serviceLocationId, serviceStop.locationId, serviceStop.companyServiceLocationId];
+      })
+    );
+    if (serviceStopLocationIds.length) {
+      return {
+        ids: serviceStopLocationIds,
+        source: "Linked service stop",
+        inferred: true,
+      };
+    }
+
+    const recurringStopIds = linkedRecurringStopIdsForAgreement(agreement);
+    const recurringLocationIds = normalizeIdList(
+      ...recurringStopIds.flatMap((recurringStopId) => {
+        const recurringStop = recurringStopsById.get(recurringStopId) || {};
+        return [recurringStop.serviceLocationId, recurringStop.locationId, recurringStop.companyServiceLocationId];
+      })
+    );
+    if (recurringLocationIds.length) {
+      return {
+        ids: recurringLocationIds,
+        source: "Linked recurring service stop",
+        inferred: true,
+      };
+    }
+
+    return {
+      ids: [],
+      source: "Customer fallback",
+      inferred: true,
+    };
+  };
+
+  const auditAgreementLocationResolution = (agreement = {}, resolution = {}) => {
+    const missingLocationIds = (resolution.ids || []).filter((serviceLocationId) => !serviceLocationsById.has(serviceLocationId));
+    if (!resolution.inferred && !missingLocationIds.length) return;
+
+    agreementLocationAuditRows.push({
+      id: agreement.id || `agreement-${agreementLocationAuditRows.length}`,
+      agreement: agreement.title || agreement.id || "Service Agreement",
+      customer: agreement.customerName || customerNameFor(agreement.customerId),
+      resolution: resolution.source,
+      serviceLocations: (resolution.ids || []).length
+        ? resolution.ids.map((serviceLocationId) => {
+          const location = serviceLocationsById.get(serviceLocationId) || serviceLocationSnapshotForId(agreement, serviceLocationId) || {};
+          return serviceLocationName(location) || serviceLocationSnapshotLabel(location) || serviceLocationId;
+        }).join(", ")
+        : "No specific service location id",
+      issue: missingLocationIds.length
+        ? `Location id not found in loaded service locations: ${missingLocationIds.join(", ")}`
+        : "No direct serviceLocationIds on agreement",
+    });
   };
 
   const distributeAmount = (descriptors, amountCents, addValue, rowFactory) => {
@@ -4171,12 +4361,14 @@ const buildPnlPerPoolReport = ({
     const revenueCents = agreementRevenueCentsForRange(agreement, dateRangeStart, dateRangeEnd);
     if (!revenueCents) return;
 
-    const locationIds = agreementServiceLocationIds(agreement);
-    const descriptors = locationIds.length
-      ? locationIds.flatMap((serviceLocationId) =>
-        poolDescriptorsForLocation(serviceLocationId, {
+    const locationResolution = serviceLocationResolutionForAgreement(agreement);
+    auditAgreementLocationResolution(agreement, locationResolution);
+    const descriptors = locationResolution.ids.length
+      ? locationResolution.ids.flatMap((serviceLocationId) =>
+        serviceLocationDescriptorsForLocation(serviceLocationId, {
           customerId: agreement.customerId,
           customerName: agreement.customerName,
+          serviceLocationSnapshot: serviceLocationSnapshotForId(agreement, serviceLocationId),
         })
       )
       : fallbackPoolDescriptorsForCustomer(agreement.customerId, agreement.customerName);
@@ -4191,7 +4383,7 @@ const buildPnlPerPoolReport = ({
 
   stopData.forEach((stop, index) => {
     const serviceStop = serviceStopsById.get(String(stop.serviceStopId || "")) || {};
-    const descriptor = poolDescriptor({
+    const descriptor = serviceLocationDescriptor({
       bodyOfWaterId: stop.bodyOfWaterId || serviceStop.bodyOfWaterId,
       serviceLocationId: stop.serviceLocationId || serviceStop.serviceLocationId,
       customerId: stop.customerId || serviceStop.customerId,
@@ -4201,6 +4393,11 @@ const buildPnlPerPoolReport = ({
     pool.visitIds.add(String(stop.serviceStopId || stop.id || `${descriptor.id}-${index}`));
 
     const dosages = Array.isArray(stop.dosages) ? stop.dosages : [];
+    const detailPoolName =
+      bodyOfWaterName(bodiesById.get(stop.bodyOfWaterId || serviceStop.bodyOfWaterId)) ||
+      stop.bodyOfWaterName ||
+      serviceStop.bodyOfWaterName ||
+      descriptor.pool;
     dosages.forEach((dosage) => {
       const template = dosageTemplateFor(dosage, dosageTemplatesById) || {};
       const costRecord = {
@@ -4225,6 +4422,7 @@ const buildPnlPerPoolReport = ({
         if (chemicalRevenueCents) {
           addChemicalRevenue(descriptor, chemicalRevenueCents, costAgreement, {
             ...dateInfo,
+            pool: detailPoolName,
             source: [
               dosageName,
               dosageValue,
@@ -4248,6 +4446,7 @@ const buildPnlPerPoolReport = ({
 
       addChemical(descriptor, chemicalCostCents, {
         ...dateInfo,
+        pool: detailPoolName,
         source: [
           dosageName,
           dosageValue,
@@ -4360,7 +4559,7 @@ const buildPnlPerPoolReport = ({
   const summaryColumns = [
     { key: "customer", label: "Customer" },
     { key: "serviceLocation", label: "Service Location" },
-    { key: "pool", label: "Pool" },
+    { key: "pool", label: "Pools" },
     { key: "agreements", label: "Agreements", align: "right" },
     { key: "visits", label: "Visits", align: "right" },
     { key: "revenueCents", label: "Agreement Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
@@ -4375,6 +4574,7 @@ const buildPnlPerPoolReport = ({
   const detailColumns = [
     { key: "date", label: "Date" },
     { key: "type", label: "Type" },
+    { key: "pool", label: "Pool" },
     { key: "source", label: "Source" },
     { key: "revenueCents", label: "Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
     { key: "laborCents", label: "Labor", align: "right", render: (row) => moneyFromCents(row.laborCents) },
@@ -4424,7 +4624,7 @@ const buildPnlPerPoolReport = ({
 
   const detailGroups = poolRows.map((row) => ({
     id: row.id,
-    name: `${row.customer} | ${row.pool}`,
+    name: `${row.customer} | ${row.serviceLocation}`,
     metrics: {
       Revenue: moneyFromCents(row.revenueCents),
       Labor: moneyFromCents(row.laborCents),
@@ -4448,9 +4648,9 @@ const buildPnlPerPoolReport = ({
     .slice(0, 20);
 
   return {
-    title: "PNL Per Pool Report",
+    title: "PNL Per Service Location Report",
     stats: [
-      numberMetric("Pools", poolRows.length),
+      numberMetric("Service Locations", poolRows.length),
       moneyMetric("Agreement Revenue", totals.revenueCents),
       moneyMetric("Direct Costs", totals.costCents),
       moneyMetric("Net", totals.netCents),
@@ -4458,11 +4658,25 @@ const buildPnlPerPoolReport = ({
     ],
     columns: mode === "detail" ? detailColumns : summaryColumns,
     summarySections: [
+      ...(agreementLocationAuditRows.length
+        ? [{
+          title: "Agreement Location Check",
+          columns: [
+            { key: "agreement", label: "Agreement" },
+            { key: "customer", label: "Customer" },
+            { key: "resolution", label: "Resolution" },
+            { key: "serviceLocations", label: "Service Locations" },
+            { key: "issue", label: "Issue" },
+          ],
+          rows: agreementLocationAuditRows,
+        }]
+        : []),
       {
         title: "Rate Watchlist",
         columns: [
           { key: "customer", label: "Customer" },
-          { key: "pool", label: "Pool" },
+          { key: "serviceLocation", label: "Service Location" },
+          { key: "pool", label: "Pools" },
           { key: "revenueCents", label: "Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
           { key: "costCents", label: "Direct Cost", align: "right", render: (row) => moneyFromCents(row.costCents) },
           { key: "netCents", label: "Net", align: "right", render: (row) => moneyFromCents(row.netCents) },
@@ -4473,9 +4687,9 @@ const buildPnlPerPoolReport = ({
       },
     ],
     total: {
-      label: "Company Pool Net",
+      label: "Company Service Location Net",
       value: moneyFromCents(totals.netCents),
-      subtitle: `${poolRows.length.toLocaleString()} pool(s) | ${totals.visits.toLocaleString()} visit(s)`,
+      subtitle: `${poolRows.length.toLocaleString()} service location(s) | ${totals.visits.toLocaleString()} visit(s)`,
     },
     groups: mode === "detail" ? detailGroups : customerGroups,
   };
@@ -4723,15 +4937,15 @@ const ReportCatalogCard = ({ report, selected, onSelect }) => (
   <button
     type="button"
     onClick={() => onSelect(report.value)}
-    className={`h-full rounded-lg border p-3 text-left shadow-sm transition ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:border-slate-400"
+    className={`h-full rounded-lg border p-3 text-left shadow-sm transition ${selected ? "border-slate-900 bg-pink-100 text-slate-950 ring-1 ring-slate-900" : "border-pink-100 bg-pink-50 text-slate-900 hover:border-pink-300 hover:bg-pink-100"
       }`}
   >
     <div className="flex items-start justify-between gap-3">
       <div>
         <p className="font-bold">{report.label}</p>
-        <p className={`mt-1 text-xs ${selected ? "text-slate-200" : "text-slate-500"}`}>{report.source}</p>
+        <p className={`mt-1 text-xs ${selected ? "text-slate-600" : "text-pink-700"}`}>{report.source}</p>
       </div>
-      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${selected ? "bg-white text-slate-900" : "bg-slate-100 text-slate-600"}`}>
+      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${selected ? "bg-slate-900 text-white" : "bg-pink-100 text-pink-700"}`}>
         {report.status}
       </span>
     </div>
@@ -5195,6 +5409,10 @@ const Reports = () => {
     isFeatureEnabled,
   } = useContext(Context);
   const { can } = useCompanyPermissions();
+  const [searchParams] = useSearchParams();
+  const customReportId = searchParams.get("customReportId") || "";
+  const appliedCustomReportKeyRef = useRef("");
+  const loadedCustomReportToastRef = useRef("");
   const canViewPayrollInformation = can("420");
   const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
   const [reportType, setReportType] = useState("readings");
@@ -5216,6 +5434,7 @@ const Reports = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [reportSearchDraft, setReportSearchDraft] = useState("");
   const [reportSearchTerm, setReportSearchTerm] = useState("");
+  const [activeCustomReportTitle, setActiveCustomReportTitle] = useState("");
   const [creatingPerformanceNoteGroupId, setCreatingPerformanceNoteGroupId] = useState("");
   const [isCreatingAllPerformanceNotes, setIsCreatingAllPerformanceNotes] = useState(false);
 
@@ -5243,6 +5462,112 @@ const Reports = () => {
     () => getCustomerRegionAccessTags({ userAccess: companyUserAccess, role: companyRole }),
     [companyUserAccess, companyRole]
   );
+
+  const normalizeSavedReadingPerformanceStandards = useCallback((standards = []) => {
+    const templateKeys = new Set(availableReadingTemplates.map(readingTemplateKey));
+    const normalizedStandards = standards
+      .map((standard, index) => withReadingPerformanceStandardId({
+        templateId: String(standard.templateId || ""),
+        operator: standard.operator || "gt",
+        threshold: standard.threshold ?? "",
+      }, index))
+      .filter((standard) => !templateKeys.size || templateKeys.has(String(standard.templateId || "")));
+
+    return normalizedStandards.length
+      ? normalizedStandards
+      : defaultReadingPerformanceStandardsFor(availableReadingTemplates);
+  }, [availableReadingTemplates]);
+
+  const applyCustomReportControls = useCallback((customReport) => {
+    const controls = customReport.controls || {};
+    const savedReportType = controls.reportType || customReport.reportType || "readings";
+    const nextReportType = reportCatalog.some((report) => report.value === savedReportType) ? savedReportType : "readings";
+
+    if (payrollOnlyReportTypes.has(nextReportType) && !canViewPayrollInformation) {
+      toast.error("Payroll reports require payroll information permission.");
+      return false;
+    }
+
+    const savedQuickDateRange = controls.quickDateRange || "thisMonth";
+    const nextQuickDateRange = dateRangePresets.some((preset) => preset.value === savedQuickDateRange)
+      ? savedQuickDateRange
+      : "custom";
+    const nextPreset = dateRangePresets.find((preset) => preset.value === nextQuickDateRange);
+    const nextDateRange = nextPreset?.getRange && nextQuickDateRange !== "custom"
+      ? nextPreset.getRange()
+      : sanitizeDateRange(controls.dateRange);
+    const nextGroupBy = groupOptions.some((option) => option.value === controls.groupBy)
+      ? controls.groupBy
+      : "company";
+
+    setReportType(nextReportType);
+    setMode(controls.mode === "detail" ? "detail" : "summary");
+    setGroupBy(nextGroupBy);
+    setQuickDateRange(nextQuickDateRange);
+    setDateRange(nextDateRange);
+    setSelectedCustomerTags(Array.isArray(controls.selectedCustomerTags) ? controls.selectedCustomerTags : []);
+    setReadingHealthFilters({
+      templateId: controls.readingHealthFilters?.templateId || "",
+      operator: controls.readingHealthFilters?.operator || "gt",
+      threshold: controls.readingHealthFilters?.threshold ?? "",
+    });
+    setReadingPerformanceView(controls.readingPerformanceView === "customers" ? "customers" : "users");
+    setReadingPerformanceStandards(normalizeSavedReadingPerformanceStandards(
+      Array.isArray(controls.readingPerformanceStandards) ? controls.readingPerformanceStandards : []
+    ));
+    setActiveCustomReportTitle(customReport.title || "Custom Report");
+    setReportData(null);
+    return true;
+  }, [canViewPayrollInformation, normalizeSavedReadingPerformanceStandards]);
+
+  useEffect(() => {
+    if (!customReportId) {
+      appliedCustomReportKeyRef.current = "";
+      loadedCustomReportToastRef.current = "";
+      setActiveCustomReportTitle("");
+      return;
+    }
+
+    if (!recentlySelectedCompany) return;
+
+    const readingTemplateSignature = availableReadingTemplates.map(readingTemplateKey).join("|");
+    const applyKey = `${recentlySelectedCompany}:${customReportId}:${readingTemplateSignature}`;
+    if (appliedCustomReportKeyRef.current === applyKey) return;
+
+    let isActive = true;
+
+    const loadCustomReport = async () => {
+      try {
+        const reportSnap = await getDoc(customReportDocRef(recentlySelectedCompany, customReportId));
+        if (!isActive) return;
+
+        if (!reportSnap.exists()) {
+          appliedCustomReportKeyRef.current = applyKey;
+          toast.error("Custom report not found.");
+          return;
+        }
+
+        const customReport = { id: reportSnap.id, ...reportSnap.data() };
+        const applied = applyCustomReportControls(customReport);
+        appliedCustomReportKeyRef.current = applyKey;
+
+        const toastKey = `${recentlySelectedCompany}:${customReportId}`;
+        if (applied && loadedCustomReportToastRef.current !== toastKey) {
+          loadedCustomReportToastRef.current = toastKey;
+          toast.success(`${customReport.title || "Custom report"} controls loaded.`);
+        }
+      } catch (error) {
+        console.error("Failed to load custom report:", error);
+        toast.error(`Could not load custom report: ${error.message}`);
+      }
+    };
+
+    loadCustomReport();
+
+    return () => {
+      isActive = false;
+    };
+  }, [applyCustomReportControls, availableReadingTemplates, customReportId, recentlySelectedCompany]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -5323,6 +5648,8 @@ const Reports = () => {
     }
 
     setReportType(value);
+    setActiveCustomReportTitle("");
+    appliedCustomReportKeyRef.current = "";
   };
 
   const handleReportSearch = (event) => {
@@ -5642,7 +5969,7 @@ const Reports = () => {
       const needsFleet = reportType === "vehicle";
       const needsBodiesOfWater = ["readingHealth", "readingPerformance", "pnlPerPool"].includes(reportType);
       const needsServiceStops = ["users", "readingPerformance", "futurePayroll", "pnlPerPool"].includes(reportType);
-      const needsRecurringServiceStops = reportType === "readingPerformance";
+      const needsRecurringServiceStops = ["readingPerformance", "pnlPerPool"].includes(reportType);
       const needsServiceAgreements = ["pnl", "pnlPerPool"].includes(reportType);
       const needsServiceLocations = reportType === "pnlPerPool";
       const needsSalesInvoices = reportType === "pnl";
@@ -5852,9 +6179,18 @@ const Reports = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-4 sm:px-3 lg:px-4">
       <div className="w-full">
-        <header className="mb-3">
-          <h1 className="text-2xl font-bold text-slate-900">Reports</h1>
-          <p className="mt-1 text-sm text-slate-600">Operations and finance reporting.</p>
+        <header className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Reports</h1>
+            <p className="mt-1 text-sm text-slate-600">Operations and finance reporting.</p>
+          </div>
+          <Link
+            to="/company/reports/custom"
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-500 hover:text-slate-950"
+          >
+            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+            Custom Reports
+          </Link>
         </header>
 
         <div className="grid gap-4 xl:h-[calc(100vh-100px)] xl:grid-cols-[minmax(0,1fr)_340px] xl:overflow-hidden">
@@ -5862,7 +6198,9 @@ const Reports = () => {
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:h-full xl:overflow-y-auto">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Report Controls</h2>
-                <p className="mt-1 text-sm font-semibold text-slate-500">{selectedReport.label}</p>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  {activeCustomReportTitle ? `${activeCustomReportTitle} - ${selectedReport.label}` : selectedReport.label}
+                </p>
               </div>
               <div className="mt-4 space-y-4">
                 <div>

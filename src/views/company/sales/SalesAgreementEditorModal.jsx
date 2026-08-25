@@ -1335,6 +1335,173 @@ const SalesAgreementEditorModal = ({
               </section>
 
               <section>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-950">Services & Products</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Customer-facing pricing rows for this service agreement.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-3">
+                  {editDraft.lineItems.map((item) => {
+                    const quantity = Number(item.quantity) || 0;
+                    const itemTotal = moneyInputToCents(item.unitAmount) * quantity;
+
+                    return (
+                      <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_130px_130px_auto]">
+                          <input
+                            value={item.name}
+                            onChange={(event) => updateEditLineItem(item.id, 'name', event.target.value)}
+                            placeholder="Item name"
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={item.quantity}
+                            onChange={(event) => updateEditLineItem(item.id, 'quantity', event.target.value)}
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.unitAmount}
+                            onChange={(event) => updateEditLineItem(item.id, 'unitAmount', event.target.value)}
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                          <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
+                            {formatCurrency(itemTotal)}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeEditLineItem(item.id)}
+                            className="rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <textarea
+                          value={item.description}
+                          onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
+                          placeholder="Description"
+                          rows={2}
+                          className="mt-3 min-h-[72px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        />
+                      </div>
+                    );
+                  })}
+
+                  {editDraft.lineItems.length === 0 && (
+                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                      Add at least one line item before saving.
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-950">Add Line Item</h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Add pricing from the Service Catalog or create a one-off manual row.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => setShowCatalogItemSelector((current) => !current)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Catalog Item
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addEditLineItem();
+                          setShowCatalogItemSelector(false);
+                        }}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Manual Item
+                      </button>
+                    </div>
+                  </div>
+
+                  {showCatalogItemSelector && (
+                    <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_120px_auto_auto]">
+                      <select
+                        value={selectedCatalogItemId}
+                        onChange={(event) => {
+                          const nextItemId = event.target.value;
+                          const nextItem = catalogItems.find((item) => item.id === nextItemId);
+                          setSelectedCatalogItemId(nextItemId);
+                          setSelectedCatalogQuantity(String(nextItem?.defaultQuantity || 1));
+                        }}
+                        disabled={loadingCatalogItems}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        aria-label="Select sales catalog item"
+                      >
+                        <option value="">
+                          {loadingCatalogItems ? 'Loading catalog...' : catalogItems.length ? 'Select catalog item' : 'No catalog items yet'}
+                        </option>
+                        {catalogItems.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name} - {formatCurrency(item.unitAmountCents)} - {labelize(item.billingBehavior)}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={selectedCatalogQuantity}
+                        onChange={(event) => setSelectedCatalogQuantity(event.target.value)}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        aria-label="Catalog item quantity"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addCatalogLineItem()}
+                        disabled={!selectedEditCatalogItem}
+                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Selected
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCreateCatalogItem(true)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Create Catalog Item
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <div className="w-full max-w-xs rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Subtotal</span>
+                      <span className="font-semibold text-slate-900">{formatCurrency(editTotals.subtotalAmountCents)}</span>
+                    </div>
+                    <div className="mt-2 flex justify-between gap-3 border-t border-slate-200 pt-2">
+                      <span className="text-slate-500">Total</span>
+                      <span className="text-lg font-bold text-slate-950">{formatCurrency(editTotals.totalAmountCents)}</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section>
                 <h3 className="text-base font-bold text-slate-950">Billing</h3>
                 <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
@@ -1550,173 +1717,6 @@ const SalesAgreementEditorModal = ({
                     </label>
                     <div className="rounded-md border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700">
                       Chemical PNL follows billing settings
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 className="text-base font-bold text-slate-950">Services & Products</h3>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Customer-facing pricing rows for this service agreement.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-3 space-y-3">
-                  {editDraft.lineItems.map((item) => {
-                    const quantity = Number(item.quantity) || 0;
-                    const itemTotal = moneyInputToCents(item.unitAmount) * quantity;
-
-                    return (
-                      <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_130px_130px_auto]">
-                          <input
-                            value={item.name}
-                            onChange={(event) => updateEditLineItem(item.id, 'name', event.target.value)}
-                            placeholder="Item name"
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={item.quantity}
-                            onChange={(event) => updateEditLineItem(item.id, 'quantity', event.target.value)}
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={item.unitAmount}
-                            onChange={(event) => updateEditLineItem(item.id, 'unitAmount', event.target.value)}
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
-                            {formatCurrency(itemTotal)}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeEditLineItem(item.id)}
-                            className="rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        <textarea
-                          value={item.description}
-                          onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
-                          placeholder="Description"
-                          rows={2}
-                          className="mt-3 min-h-[72px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        />
-                      </div>
-                    );
-                  })}
-
-                  {editDraft.lineItems.length === 0 && (
-                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                      Add at least one line item before saving.
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <h4 className="text-sm font-bold text-slate-950">Add Line Item</h4>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Add pricing from the Service Catalog or create a one-off manual row.
-                      </p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <button
-                        type="button"
-                        onClick={() => setShowCatalogItemSelector((current) => !current)}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
-                      >
-                        <FaPlus className="text-xs" />
-                        Add Catalog Item
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          addEditLineItem();
-                          setShowCatalogItemSelector(false);
-                        }}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        <FaPlus className="text-xs" />
-                        Add Manual Item
-                      </button>
-                    </div>
-                  </div>
-
-                  {showCatalogItemSelector && (
-                    <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_120px_auto_auto]">
-                      <select
-                        value={selectedCatalogItemId}
-                        onChange={(event) => {
-                          const nextItemId = event.target.value;
-                          const nextItem = catalogItems.find((item) => item.id === nextItemId);
-                          setSelectedCatalogItemId(nextItemId);
-                          setSelectedCatalogQuantity(String(nextItem?.defaultQuantity || 1));
-                        }}
-                        disabled={loadingCatalogItems}
-                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                        aria-label="Select sales catalog item"
-                      >
-                        <option value="">
-                          {loadingCatalogItems ? 'Loading catalog...' : catalogItems.length ? 'Select catalog item' : 'No catalog items yet'}
-                        </option>
-                        {catalogItems.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name} - {formatCurrency(item.unitAmountCents)} - {labelize(item.billingBehavior)}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={selectedCatalogQuantity}
-                        onChange={(event) => setSelectedCatalogQuantity(event.target.value)}
-                        className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        aria-label="Catalog item quantity"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => addCatalogLineItem()}
-                        disabled={!selectedEditCatalogItem}
-                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <FaPlus className="text-xs" />
-                        Add Selected
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowCreateCatalogItem(true)}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
-                      >
-                        <FaPlus className="text-xs" />
-                        Create Catalog Item
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-4 flex justify-end">
-                  <div className="w-full max-w-xs rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">Subtotal</span>
-                      <span className="font-semibold text-slate-900">{formatCurrency(editTotals.subtotalAmountCents)}</span>
-                    </div>
-                    <div className="mt-2 flex justify-between gap-3 border-t border-slate-200 pt-2">
-                      <span className="text-slate-500">Total</span>
-                      <span className="text-lg font-bold text-slate-950">{formatCurrency(editTotals.totalAmountCents)}</span>
                     </div>
                   </div>
                 </div>

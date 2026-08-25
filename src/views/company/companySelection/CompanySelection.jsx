@@ -121,12 +121,14 @@ export default function CompanySelection() {
         try {
             if (await requireVerifiedEmail(company)) return;
 
+            const companyId = company.companyId || company.id || '';
+
             setRecentlySelectedCompanyName(company.companyName);
-            setRecentlySelectedCompany(company.companyId);
+            setRecentlySelectedCompany(companyId);
 
             const userDocRef = doc(db, "users", user.uid);
             await updateDoc(userDocRef, {
-                recentlySelectedCompany: company.companyId,
+                recentlySelectedCompany: companyId,
             });
 
             navigate('/company/dashboard');

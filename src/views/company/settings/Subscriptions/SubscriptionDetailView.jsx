@@ -78,7 +78,8 @@ const SubscriptionDetailView = () => {
             
                     const functionName = httpsCallable(functions, 'getStripeSubscriptionInformation');
                     functionName({ 
-                        subscriptionId: subscriptionData.stripeSubscriptionId
+                        subscriptionId: subscriptionData.stripeSubscriptionId,
+                        companyId: recentlySelectedCompany,
                     })
                     .then((result) => {
                         console.log(result)

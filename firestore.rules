@@ -35,15 +35,36 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(request.auth.uid)/userAccess/$(companyId);
     }
 
+    function companyPath(companyId) {
+      return /databases/$(database)/documents/companies/$(companyId);
+    }
+
+    function isCompanyOwner(companyId) {
+      return signedIn()
+        && companyId is string
+        && exists(companyPath(companyId))
+        && get(companyPath(companyId)).data.ownerId == request.auth.uid;
+    }
+
     function hasCompanyAccess(companyId) {
       return signedIn()
         && companyId is string
-        && exists(userAccessPath(companyId));
+        && (
+          exists(userAccessPath(companyId))
+          || isCompanyOwner(companyId)
+        );
     }
 
     function isCompanyAdmin(companyId) {
-      return hasCompanyAccess(companyId)
-        && get(userAccessPath(companyId)).data.roleName in ["Owner", "Admin", "Manager"];
+      return signedIn()
+        && companyId is string
+        && (
+          isCompanyOwner(companyId)
+          || (
+            exists(userAccessPath(companyId))
+            && get(userAccessPath(companyId)).data.roleName in ["Owner", "Admin", "Manager"]
+          )
+        );
     }
 
     function companyRolePath(companyId) {
@@ -270,7 +291,6 @@ service cloud.firestore {
 
     function chatParticipant(data) {
       return signedIn()
-        && data.participantIds is list
         && request.auth.uid in data.participantIds;
     }
 
@@ -284,7 +304,7 @@ service cloud.firestore {
     }
 
     function canReadChatData(data) {
-      return chatParticipant(data) || companyChatParticipant(data);
+      return companyChatParticipant(data) || chatParticipant(data);
     }
 
     function chatPath(chatId) {
@@ -450,9 +470,9 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      allow list: if isDripDropAdmin();
+      allow list: if isDripDropAdmin() || canReadChatData(resource.data);
       allow create: if isDripDropAdmin() || canReadChatData(request.resource.data);
-      allow read, update, delete: if isDripDropAdmin() || canReadChatData(resource.data);
+      allow get, update, delete: if isDripDropAdmin() || canReadChatData(resource.data);
     }
 
     match /messages/{messageId} {
@@ -478,6 +498,11 @@ service cloud.firestore {
     }
 
     match /homeownerRepairRequests/{requestId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /homeownerRepairRequests/{requestId}/comments/{commentId} {
       allow read, update, delete: if isPersonalOrCompanyData(resource.data);
       allow create: if isPersonalOrCompanyData(request.resource.data);
     }

@@ -26,7 +26,17 @@ import {
     shoppingItemNeedsAction,
     syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
+import {
+    SHOPPING_LIST_STATUS,
+    SHOPPING_LIST_STATUS_OPTIONS,
+    canonicalShoppingListStatus,
+} from "../../../utils/shoppingListStatus";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+    getProductDisplayName,
+    getProductSellPriceCents,
+    productCatalogCollectionRef,
+} from "../../../utils/productCatalog";
 
 const categoryOptions = [
     { value: "Personal", label: "Personal" },
@@ -35,22 +45,13 @@ const categoryOptions = [
 ];
 
 const subCategoryOptions = [
-    { value: "Data Base", label: "Data Base" },
+    { value: "Product", label: "Product" },
     { value: "Chemical", label: "Chemical" },
     { value: "Part", label: "Part" },
     { value: "Custom", label: "Custom" },
 ];
 
-const statusOptions = [
-    { value: "Need to Purchase", label: "Need to Purchase" },
-    { value: "Needs Customer Approval", label: "Needs Customer Approval" },
-    { value: "Ready to Purchase", label: "Ready to Purchase" },
-    { value: "Customer Rejected", label: "Customer Rejected" },
-    { value: "Purchased", label: "Purchased" },
-    { value: "Delivered", label: "Delivered" },
-    { value: "Installed", label: "Installed" },
-    { value: SHOPPING_LIST_INVOICED_STATUS, label: SHOPPING_LIST_INVOICED_STATUS },
-];
+const statusOptions = SHOPPING_LIST_STATUS_OPTIONS.map((status) => ({ value: status, label: status }));
 
 const selectStyles = {
     control: (provided) => ({
@@ -76,7 +77,7 @@ const selectStyles = {
 };
 
 const ShoppingListCreateView = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, shoppingItemInstallInvoiceAutomationEnabled } = useContext(Context);
     const navigate = useNavigate();
 
     const [saving, setSaving] = useState(false);
@@ -99,10 +100,12 @@ const ShoppingListCreateView = () => {
     const [formData, setFormData] = useState({
         category: "Personal",
         subCategory: "Custom",
-        status: "Need to Purchase",
+        status: SHOPPING_LIST_STATUS.needToPurchase,
         purchaserId: "",
         purchaserName: "",
         genericItemId: "",
+        productId: "",
+        productName: "",
         name: "",
         description: "",
         datePurchased: "",
@@ -120,6 +123,7 @@ const ShoppingListCreateView = () => {
         userName: "",
 
         dbItemId: "",
+        dbItemName: "",
         photoUrl: "",
         imageUrl: "",
         primaryPhotoUrl: "",
@@ -127,7 +131,16 @@ const ShoppingListCreateView = () => {
 
         purchasedItem: "",
         invoiced: false,
+        manualInvoiceNote: "",
+        autoInvoiceOnInstall: false,
     });
+
+    useEffect(() => {
+        setFormData((prev) => ({
+            ...prev,
+            autoInvoiceOnInstall: shoppingItemInstallInvoiceAutomationEnabled === true,
+        }));
+    }, [shoppingItemInstallInvoiceAutomationEnabled]);
 
     useEffect(() => {
         fetchSelectorData();
@@ -169,15 +182,8 @@ const ShoppingListCreateView = () => {
 
             const itemsPromise = getDocs(
                 query(
-                    collection(
-                        db,
-                        "companies",
-                        recentlySelectedCompany,
-                        "settings",
-                        "dataBase",
-                        "dataBase"
-                    ),
-                    orderBy("name")
+                    productCatalogCollectionRef(db, recentlySelectedCompany),
+                    orderBy("commonName")
                 )
             );
 
@@ -247,23 +253,28 @@ const ShoppingListCreateView = () => {
 
             const items = itemsSnap.docs.map((docSnap) => {
                 const data = docSnap.data();
-                const name = data.name || "Unnamed Item";
+                const productId = data.id || docSnap.id;
+                const name = getProductDisplayName({ ...data, id: productId });
+                const sellPrice = getProductSellPriceCents(data);
 
                 return {
-                    id: data.id || docSnap.id,
+                    ...data,
+                    id: productId,
                     name,
                     description: data.description || "",
-                    genericItemId: data.genericItemId || "",
-                    dbItemId: data.id || docSnap.id,
+                    genericItemId: productId,
+                    productId,
+                    productName: name,
+                    dbItemId: "",
                     rate: Number(data.rate || 0),
-                    sellPrice: Number(data.sellPrice || 0),
+                    sellPrice,
                     cost: Number(data.cost || data.rate || 0),
                     photoUrl: getItemPhotoUrl(data),
                     imageUrl: data.imageUrl || data.imageURL || "",
                     primaryPhotoUrl: data.primaryPhotoUrl || "",
                     photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
                     label: name,
-                    value: data.id || docSnap.id,
+                    value: productId,
                 };
             });
 
@@ -288,12 +299,13 @@ const ShoppingListCreateView = () => {
                     status: value
                         ? SHOPPING_LIST_INVOICED_STATUS
                         : prev.status === SHOPPING_LIST_INVOICED_STATUS
-                            ? "Purchased"
+                            ? SHOPPING_LIST_STATUS.purchased
                             : prev.status,
                 }
                 : {}),
             ...(field === "status"
                 ? {
+                    status: canonicalShoppingListStatus(value),
                     invoiced: value === SHOPPING_LIST_INVOICED_STATUS
                         ? true
                         : prev.status === SHOPPING_LIST_INVOICED_STATUS
@@ -345,12 +357,15 @@ const ShoppingListCreateView = () => {
             subCategory: value,
         };
 
-        if (value === "Data Base") {
+        if (value === "Product" || value === "Data Base") {
             nextData.name = "";
             nextData.description = "";
         } else {
             nextData.dbItemId = "";
+            nextData.dbItemName = "";
             nextData.genericItemId = "";
+            nextData.productId = "";
+            nextData.productName = "";
             nextData.photoUrl = "";
             nextData.imageUrl = "";
             nextData.primaryPhotoUrl = "";
@@ -406,8 +421,11 @@ const ShoppingListCreateView = () => {
         const photoFields = option ? itemPhotoFieldsFromSource(option, option.name || "Shopping item photo") : itemPhotoFieldsFromUrl("");
         setFormData((prev) => ({
             ...prev,
-            dbItemId: option?.id || "",
-            genericItemId: option?.genericItemId || "",
+            dbItemId: "",
+            dbItemName: "",
+            genericItemId: option?.productId || option?.genericItemId || option?.id || "",
+            productId: option?.productId || option?.id || "",
+            productName: option?.name || "",
             name: option?.name || "",
             description: option?.description || "",
             ...photoFields,
@@ -417,13 +435,13 @@ const ShoppingListCreateView = () => {
         setPhotoError("");
     };
 
-    const requiresDbItem = formData.subCategory === "Data Base";
+    const requiresDbItem = formData.subCategory === "Product" || formData.subCategory === "Data Base";
     const requiresManualDetails = !requiresDbItem;
 
     const canSave = useMemo(() => {
         const hasPurchaser = formData.purchaserName.trim() !== "";
         const hasName = requiresDbItem
-            ? formData.dbItemId.trim() !== ""
+            ? (formData.productId || formData.genericItemId).trim() !== ""
             : formData.name.trim() !== "";
 
         const hasCategoryTarget =
@@ -470,7 +488,7 @@ const ShoppingListCreateView = () => {
                 ? itemPhotoFieldsFromUrl(uploadedPhoto.photoUrl, formData.name || "Shopping item photo", uploadedPhoto.storagePath)
                 : itemPhotoFieldsFromUrl(formData.photoUrl, formData.name || "Shopping item photo");
             const nextInvoiced = formData.status === SHOPPING_LIST_INVOICED_STATUS || !!formData.invoiced;
-            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : formData.status;
+            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : canonicalShoppingListStatus(formData.status);
             const prepKeys = Array.from(
                 new Set(
                     [
@@ -489,7 +507,9 @@ const ShoppingListCreateView = () => {
                 status: nextStatus,
                 purchaserId: formData.purchaserId || "",
                 purchaserName: formData.purchaserName || "",
-                genericItemId: formData.genericItemId || "",
+                genericItemId: requiresDbItem ? formData.productId || formData.genericItemId || "" : formData.genericItemId || "",
+                productId: requiresDbItem ? formData.productId || formData.genericItemId || "" : "",
+                productName: requiresDbItem ? selectedDbItem?.name || formData.productName || formData.name || "" : "",
                 name: requiresDbItem ? selectedDbItem?.name || formData.name || "" : formData.name || "",
                 description: formData.description || "",
                 datePurchased: formData.datePurchased
@@ -503,22 +523,25 @@ const ShoppingListCreateView = () => {
                 userId: formData.category === "Personal" ? formData.userId || "" : "",
                 userName:
                     formData.category === "Personal" ? formData.userName || "" : "",
-                dbItemId: requiresDbItem ? formData.dbItemId || "" : "",
-                dbItemName: requiresDbItem ? selectedDbItem?.name || formData.name || "" : "",
+                dbItemId: "",
+                dbItemName: "",
                 purchasedItem: formData.purchasedItem || "",
                 invoiced: nextInvoiced,
                 invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                manualInvoiceNote: nextInvoiced ? formData.manualInvoiceNote || "" : "",
                 serviceLocationId: formData.serviceLocationId || "",
                 serviceLocationName: formData.serviceLocationName || "",
                 prepKeys,
                 needsAction: shoppingItemNeedsAction(nextStatus),
+                autoInvoiceOnInstall: nextInvoiced ? false : formData.autoInvoiceOnInstall === true,
+                autoInvoiceOnInstallDefaultedFromCompany: shoppingItemInstallInvoiceAutomationEnabled === true,
                 actionDate: Timestamp.now(),
                 assignedTechIds: [],
                 plannedUnitCostCents,
                 plannedUnitPriceCents,
                 plannedTotalCostCents,
                 plannedTotalPriceCents,
-                itemId: requiresDbItem ? formData.dbItemId || "" : "",
+                itemId: requiresDbItem ? formData.productId || formData.genericItemId || "" : "",
                 itemType: formData.subCategory,
                 cost: plannedUnitCostCents,
                 price: plannedUnitPriceCents,
@@ -654,14 +677,14 @@ const ShoppingListCreateView = () => {
 
                                 <div>
                                     <label className="block text-sm font-semibold text-gray-500 mb-2">
-                                        Generic Item ID
+                                        Product ID
                                     </label>
                                     <input
                                         type="text"
                                         value={formData.genericItemId}
                                         onChange={(e) => handleChange("genericItemId", e.target.value)}
                                         className="w-full p-3 border border-gray-300 rounded-lg"
-                                        placeholder="Generic item id"
+                                        placeholder="Product id"
                                         disabled={requiresDbItem}
                                     />
                                 </div>
@@ -670,7 +693,7 @@ const ShoppingListCreateView = () => {
                             {requiresDbItem && (
                                 <div className="mt-4">
                                     <label className="block text-sm font-semibold text-gray-500 mb-2">
-                                        Data Base Item
+                                        Product
                                     </label>
                                     <Select
                                         value={selectedDbItem}
@@ -678,7 +701,7 @@ const ShoppingListCreateView = () => {
                                         onChange={handleDbItemChange}
                                         isSearchable
                                         isClearable
-                                        placeholder="Select a database item"
+                                        placeholder="Select a Product"
                                         styles={selectStyles}
                                     />
                                 </div>
@@ -870,6 +893,36 @@ const ShoppingListCreateView = () => {
                                         <span>Marked as invoiced</span>
                                     </label>
                                 </div>
+
+                                {formData.invoiced || formData.status === SHOPPING_LIST_INVOICED_STATUS ? (
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-500 mb-2">
+                                            Invoice Note
+                                        </label>
+                                        <textarea
+                                            value={formData.manualInvoiceNote}
+                                            onChange={(e) => handleChange("manualInvoiceNote", e.target.value)}
+                                            className="min-h-[88px] w-full rounded-lg border border-gray-300 p-3"
+                                            placeholder="Optional note for manually marked invoices"
+                                        />
+                                    </div>
+                                ) : null}
+
+                                <div>
+                                    <label className="flex items-start gap-2 text-gray-700">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-1"
+                                            checked={!!formData.autoInvoiceOnInstall}
+                                            onChange={(e) => handleChange("autoInvoiceOnInstall", e.target.checked)}
+                                            disabled={formData.invoiced || formData.status === SHOPPING_LIST_INVOICED_STATUS}
+                                        />
+                                        <span>
+                                            <span className="block font-semibold">Auto invoice when installed</span>
+                                            <span className="block text-xs text-gray-500">Creates and sends a sales invoice when this item is marked installed.</span>
+                                        </span>
+                                    </label>
+                                </div>
                             </div>
                         </div>
 
@@ -927,6 +980,10 @@ const ShoppingListCreateView = () => {
                                 <div className="flex justify-between">
                                     <span>Invoiced:</span>
                                     <span>{formData.invoiced ? "Yes" : "No"}</span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span>Auto invoice:</span>
+                                    <span className="text-right">{formData.autoInvoiceOnInstall ? "When installed" : "Off"}</span>
                                 </div>
                             </div>
                         </div>

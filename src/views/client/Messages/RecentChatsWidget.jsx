@@ -28,7 +28,7 @@ const RecentChatsWidget = () => {
             db,
             userId: user.uid,
             onChange: (visibleChats) => {
-                setRecentChats(visibleChats.slice(0, 3));
+                setRecentChats(visibleChats.slice(0, 5));
                 setUnreadCount(visibleChats.filter((chat) => isChatUnreadFor(chat, user.uid)).length);
                 setLoading(false);
             },
@@ -62,18 +62,18 @@ const RecentChatsWidget = () => {
 
     if (loading) {
         return (
-            <div className="bg-white p-6 rounded-lg shadow-md">
-                <h3 className="text-lg font-semibold text-gray-800 mb-4">Recent Conversations</h3>
+            <div className="flex min-h-[430px] flex-col rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+                <h3 className="mb-4 text-xl font-bold text-slate-950">Messages</h3>
                 {renderSkeleton()}
             </div>
         );
     }
 
     return (
-        <div className="bg-white p-6 rounded-lg shadow-md flex flex-col h-full">
+        <div className="flex h-full min-h-[430px] flex-col rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center">
-                    <h3 className="text-lg font-semibold text-gray-800">Recent Conversations</h3>
+                    <h3 className="text-xl font-bold text-slate-950">Messages</h3>
                     {unreadCount > 0 && (
                         <span className="ml-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
                             {unreadCount}
@@ -83,7 +83,7 @@ const RecentChatsWidget = () => {
             </div>
             <div className="flex-grow">
                 {recentChats.length > 0 ? (
-                    <div className="space-y-4">
+                    <div className="divide-y divide-slate-100">
                         {recentChats.map(chat => (
                             <RecentChatRow
                                 key={chat.id}
@@ -94,14 +94,14 @@ const RecentChatsWidget = () => {
                         ))}
                     </div>
                 ) : (
-                    <div className="flex-grow flex items-center justify-center h-full">
-                        <p className="text-center text-gray-500 py-4">No recent conversations.</p>
+                    <div className="flex h-full flex-grow items-center justify-center rounded-md border border-dashed border-slate-200">
+                        <p className="px-4 py-8 text-center text-sm font-semibold text-slate-500">No recent conversations.</p>
                     </div>
                 )}
             </div>
-            <div className="mt-6 text-center">
-                <Link to="/client/chat">
-                    <button className="w-full bg-gray-100 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-200 transition-colors duration-300">
+            <div className="mt-6">
+                <Link to="/client/chat" className="block">
+                    <button className="w-full rounded-md bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 transition-colors duration-300 hover:bg-slate-200">
                         View All Chats
                     </button>
                 </Link>
@@ -117,7 +117,7 @@ const RecentChatRow = ({ chat, userId, onClick }) => {
 
     return (
         <div
-            className="flex items-start gap-4 cursor-pointer hover:bg-gray-50 p-2 rounded-md transition-colors duration-200"
+            className="flex cursor-pointer items-start gap-4 rounded-md py-4 transition-colors duration-200 hover:bg-slate-50"
             onClick={onClick}
         >
             <div className="shrink-0 relative">
@@ -129,12 +129,12 @@ const RecentChatRow = ({ chat, userId, onClick }) => {
                 )}
             </div>
             <div className="flex-1 min-w-0">
-                <p className="font-semibold text-gray-900 truncate">{title}</p>
-                <p className={`text-sm text-gray-500 truncate ${unread ? 'font-bold' : ''}`}>
+                <p className="truncate font-semibold text-slate-900">{title}</p>
+                <p className={`line-clamp-2 text-sm text-slate-500 ${unread ? 'font-bold' : ''}`}>
                     {getChatPreview(chat)}
                 </p>
             </div>
-            <p className="text-xs text-gray-400 whitespace-nowrap">{timeSince(chat.mostRecentChat)}</p>
+            <p className="whitespace-nowrap text-xs text-slate-400">{timeSince(chat.mostRecentChat)}</p>
         </div>
     );
 };

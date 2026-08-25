@@ -12,6 +12,7 @@ import {
     arrayUnion,
     Timestamp,
     serverTimestamp,
+    orderBy,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
@@ -19,7 +20,14 @@ import { v4 as uuidv4 } from "uuid";
 import Select from "react-select";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
-import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
+import {
+    canonicalJobTaskType,
+    isInstallOrReplaceTaskType,
+    jobTaskTypeOptionsFromDocs,
+    taskTypeRequiresBodyOfWater,
+    taskTypeRequiresEquipment,
+    taskTypeRequiresInstallItem,
+} from "../../../utils/jobTaskTypes";
 import {
     SUGGESTED_WORK_STATUS,
 } from "../../../utils/models/SuggestedWork";
@@ -35,9 +43,24 @@ import {
     normalizeIssuePriority,
     normalizeJobPlanTier,
 } from "../../../utils/models/JobPlan";
+import {
+    SalesCatalogBillingBehavior,
+    SalesCatalogItemType,
+    SalesCatalogSourceType,
+} from "../../../utils/models/Sales";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
 import { itemPhotoFieldsFromSource } from "../../../utils/itemPhotos";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import {
+    EQUIPMENT_DATABASE_CATEGORY,
+    databaseEquipmentMappingFromItem,
+    databaseEquipmentMappingPatch,
+    emptyDatabaseEquipmentMapping,
+    equipmentDatabaseItemLabel,
+    hasDatabaseEquipmentMapping,
+    isEquipmentDatabaseItem,
+} from "../../../utils/databaseEquipmentItems";
 
 const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     const toneClass =
@@ -66,13 +89,45 @@ const SectionCard = ({ title, subtitle, children, action }) => (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-3">
             <div>
-                <h3 className="text-xl font-bold text-slate-950">{title}</h3>
+                <h3 className="text-base font-semibold text-slate-950">{title}</h3>
                 {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
             </div>
             {action}
         </div>
-        <div className="mt-6">{children}</div>
+        <div className="mt-4">{children}</div>
     </section>
+);
+
+const buildEquipmentDatabaseItemOption = (data = {}, docId = "") => {
+    const id = data.id || docId;
+    return {
+        id,
+        value: id,
+        label: equipmentDatabaseItemLabel({ ...data, id }),
+        name: data.name || "Equipment item",
+        category: data.category || "",
+        dbItemId: id,
+        itemId: id,
+        ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(data)),
+    };
+};
+
+const templateContextValues = (item = {}) => [
+    item.name,
+    item.title,
+    item.type,
+    item.jobType,
+    item.taskType,
+    item.taskTypeName,
+    item.catalogItemName,
+].filter(Boolean);
+
+const itemRequiresEquipmentContext = (item = {}) => (
+    templateContextValues(item).some((value) => taskTypeRequiresEquipment(value))
+);
+
+const itemRequiresBodyOfWaterContext = (item = {}) => (
+    templateContextValues(item).some((value) => taskTypeRequiresBodyOfWater(value))
 );
 
 const getTaskBillingLaborPriceCents = (task = {}) => {
@@ -90,6 +145,77 @@ const getTaskBillingLaborPriceCents = (task = {}) => {
 
     return Number(task.contractedRate || 0);
 };
+
+const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriority(
+    template.defaultIssuePriorityLevel ??
+    template.issuePriorityLevel ??
+    template.priorityLevel ??
+    template.solutionTier ??
+    DEFAULT_ISSUE_PRIORITY
+);
+
+const laborLineIdValue = (value) => {
+    if (!value) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number") return String(value);
+    return value.id || value.value || value.docId || "";
+};
+
+const splitTemplateIdList = (value = "") => String(value || "")
+    .split(",")
+    .map((idValue) => idValue.trim())
+    .filter(Boolean);
+
+const laborLineIdArray = (value) => (
+    Array.isArray(value)
+        ? value.map(laborLineIdValue).filter(Boolean)
+        : laborLineIdValue(value)
+            ? splitTemplateIdList(laborLineIdValue(value))
+            : []
+);
+
+const getLaborLineTaskIds = (line = {}) => laborLineIdArray(
+    line.taskTemplateIds?.length
+        ? line.taskTemplateIds
+        : line.taskIds?.length
+            ? line.taskIds
+            : line.laborLineTaskIds
+);
+
+const laborLineQuantityNumber = (value) => {
+    const amount = Number(value || 1);
+    return Number.isFinite(amount) && amount > 0 ? amount : 1;
+};
+
+const laborLineTotalPriceCents = (line = {}) => {
+    const quantity = laborLineQuantityNumber(line.quantity || line.defaultQuantity || 1);
+    const explicitTotal = line.totalPriceCents ?? line.totalAmountCents ?? line.amount ?? line.price;
+    if (explicitTotal !== undefined && explicitTotal !== null && explicitTotal !== "") return Number(explicitTotal || 0);
+    return Math.round(Number(line.unitPriceCents ?? line.unitAmountCents ?? line.rateAmountCents ?? line.rate ?? 0) * quantity);
+};
+
+const laborLineUnitPriceCents = (line = {}) => {
+    const quantity = laborLineQuantityNumber(line.quantity || line.defaultQuantity || 1);
+    const explicitUnit = line.unitPriceCents ?? line.unitAmountCents ?? line.rateAmountCents;
+    if (explicitUnit !== undefined && explicitUnit !== null && explicitUnit !== "") return Number(explicitUnit || 0);
+    return quantity ? Math.round(laborLineTotalPriceCents(line) / quantity) : laborLineTotalPriceCents(line);
+};
+
+const laborLineInternalCostCents = (line = {}) => Number(
+    line.internalCostCents ??
+    line.internalLaborCostCents ??
+    line.laborCostCents ??
+    line.unitCostCents ??
+    line.cost ??
+    0
+);
+
+const laborLineCatalogItemId = (line = {}) => (
+    line.salesCatalogItemId ||
+    line.catalogItemId ||
+    line.sourceCatalogItemId ||
+    ""
+);
 
 const CreateNewJob = () => {
     const navigate = useNavigate();
@@ -118,6 +244,7 @@ const CreateNewJob = () => {
         location.state?.jobTemplate ||
         location.state?.template ||
         null;
+    const startingTemplateIdFromState = location.state?.templateId || "";
 
     const loggedInUser = currentUser || user || {};
     const createdByUserId = dataBaseUser?.id || loggedInUser?.uid || loggedInUser?.id || "";
@@ -139,6 +266,7 @@ const CreateNewJob = () => {
     const [serviceLocationList, setServiceLocationList] = useState([]);
     const [bodyOfWaterList, setBodyOfWaterList] = useState([]);
     const [equipmentList, setEquipmentList] = useState([]);
+    const [equipmentDatabaseItems, setEquipmentDatabaseItems] = useState([]);
 
     const [jobTemplateList, setJobTemplateList] = useState([]);
     const [selectedTemplate, setSelectedTemplate] = useState(null);
@@ -166,16 +294,20 @@ const CreateNewJob = () => {
     const [taskList, setTaskList] = useState([]);
     const [plannedServiceStops, setPlannedServiceStops] = useState([]);
     const [shoppingList, setShoppingList] = useState([]);
+    const [laborLineItems, setLaborLineItems] = useState([]);
 
     const [selectedTaskType, setSelectedTaskType] = useState(null);
+    const [selectedTaskBodyOfWater, setSelectedTaskBodyOfWater] = useState(null);
+    const [selectedTaskEquipment, setSelectedTaskEquipment] = useState(null);
     const [taskDescription, setTaskDescription] = useState("");
     const [taskLaborCost, setTaskLaborCost] = useState("");
     const [taskBillingLaborPrice, setTaskBillingLaborPrice] = useState("");
     const [estimatedTime, setEstimatedTime] = useState("");
+    const [selectedTaskDbItemId, setSelectedTaskDbItemId] = useState("");
+    const [selectedTaskDbItemEquipmentMapping, setSelectedTaskDbItemEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
 
-    const [activeStep, setActiveStep] = useState("Info");
-
-    const steps = ["Info", "Template", "Tasks", "Materials", "Schedule", "Review"];
+    const createJobSections = ["Info", "Template", "Tasks", "Materials", "Schedule", "Review"];
+    const [activeCreateSection, setActiveCreateSection] = useState("Info");
 
     const moneyFromCents = (value) =>
         new Intl.NumberFormat("en-US", {
@@ -188,6 +320,26 @@ const CreateNewJob = () => {
         if (!Number.isFinite(n)) return 0;
         return Math.round(n * 100);
     };
+
+    const equipmentDatabaseItemById = useMemo(() => (
+        new Map(equipmentDatabaseItems.map((item) => [item.id, item]))
+    ), [equipmentDatabaseItems]);
+    const selectedTaskTypeValue = canonicalJobTaskType(selectedTaskType?.value || selectedTaskType?.name || "");
+    const taskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(selectedTaskTypeValue);
+    const taskNeedsEquipment = taskTypeRequiresEquipment(selectedTaskTypeValue);
+    const taskNeedsInstallItem = taskTypeRequiresInstallItem(selectedTaskTypeValue);
+    const taskNeedsEquipmentDatabaseItem = isInstallOrReplaceTaskType(selectedTaskTypeValue);
+    const selectedTaskDbItem = selectedTaskDbItemId
+        ? equipmentDatabaseItemById.get(selectedTaskDbItemId) || null
+        : null;
+    const taskBodyOfWaterOptions = bodyOfWaterList;
+    const taskEquipmentOptions = equipmentList;
+    const bodyOfWaterById = useMemo(() => (
+        new Map(bodyOfWaterList.map((item) => [item.id, item]))
+    ), [bodyOfWaterList]);
+    const equipmentById = useMemo(() => (
+        new Map(equipmentList.map((item) => [item.id, item]))
+    ), [equipmentList]);
 
     const rateCents = useMemo(() => dollarsToCents(rate), [rate]);
     const laborCostCents = useMemo(() => dollarsToCents(laborCost), [laborCost]);
@@ -213,9 +365,23 @@ const CreateNewJob = () => {
         );
     }, [taskList]);
 
+    const plannedLaborLinePriceCents = useMemo(() => {
+        return laborLineItems.reduce(
+            (total, line) => total + laborLineTotalPriceCents(line),
+            0
+        );
+    }, [laborLineItems]);
+
+    const plannedLaborLineCostCents = useMemo(() => {
+        return laborLineItems.reduce(
+            (total, line) => total + laborLineInternalCostCents(line),
+            0
+        );
+    }, [laborLineItems]);
+
     const plannedTotalLaborCents = useMemo(() => {
-        return plannedStopLaborCents + plannedTaskLaborCents;
-    }, [plannedStopLaborCents, plannedTaskLaborCents]);
+        return laborLineItems.length ? plannedLaborLineCostCents : plannedStopLaborCents + plannedTaskLaborCents;
+    }, [laborLineItems.length, plannedLaborLineCostCents, plannedStopLaborCents, plannedTaskLaborCents]);
 
     const plannedMaterialCostCents = useMemo(() => {
         return shoppingList.reduce(
@@ -232,9 +398,19 @@ const CreateNewJob = () => {
     }, [shoppingList]);
 
     const calculatedPlanPriceCents = useMemo(() => {
-        const calculated = plannedStopLaborCents + plannedTaskBillingLaborCents + plannedMaterialPriceCents;
+        const laborPrice = laborLineItems.length
+            ? plannedLaborLinePriceCents
+            : plannedStopLaborCents + plannedTaskBillingLaborCents;
+        const calculated = laborPrice + plannedMaterialPriceCents;
         return calculated || rateCents;
-    }, [plannedStopLaborCents, plannedTaskBillingLaborCents, plannedMaterialPriceCents, rateCents]);
+    }, [
+        laborLineItems.length,
+        plannedLaborLinePriceCents,
+        plannedStopLaborCents,
+        plannedTaskBillingLaborCents,
+        plannedMaterialPriceCents,
+        rateCents,
+    ]);
 
     const calculatedPlanInternalCostCents = useMemo(() => {
         return plannedTotalLaborCents + plannedMaterialCostCents;
@@ -244,11 +420,33 @@ const CreateNewJob = () => {
         return calculatedPlanPriceCents - calculatedPlanInternalCostCents;
     }, [calculatedPlanPriceCents, calculatedPlanInternalCostCents]);
 
+    const selectedTemplateRequiresEquipment = useMemo(() => {
+        if (!selectedTemplate) return false;
+        return (
+            itemRequiresEquipmentContext(selectedTemplate) ||
+            taskList.some(itemRequiresEquipmentContext) ||
+            laborLineItems.some(itemRequiresEquipmentContext)
+        );
+    }, [laborLineItems, selectedTemplate, taskList]);
+
+    const selectedTemplateRequiresBodyOfWater = useMemo(() => {
+        if (!selectedTemplate) return false;
+        return (
+            itemRequiresBodyOfWaterContext(selectedTemplate) ||
+            taskList.some(itemRequiresBodyOfWaterContext) ||
+            laborLineItems.some(itemRequiresBodyOfWaterContext)
+        );
+    }, [laborLineItems, selectedTemplate, taskList]);
+
+    const resolvedBodyOfWaterId = selectedBodyOfWater?.id || selectedEquipment?.bodyOfWaterId || "";
+
     const canCreateJob =
         !!recentlySelectedCompany &&
         !!selectedAdmin?.id &&
         !!selectedCustomer?.id &&
-        !!selectedServiceLocation?.id;
+        !!selectedServiceLocation?.id &&
+        (!selectedTemplateRequiresEquipment || !!selectedEquipment?.id) &&
+        (!selectedTemplateRequiresBodyOfWater || !!resolvedBodyOfWaterId);
 
     const missingJobInfo = useMemo(() => {
         const missing = [];
@@ -269,8 +467,72 @@ const CreateNewJob = () => {
             missing.push("Service Location");
         }
 
+        if (selectedTemplateRequiresEquipment && !selectedEquipment?.id) {
+            missing.push("Equipment");
+        }
+
+        if (selectedTemplateRequiresBodyOfWater && !resolvedBodyOfWaterId) {
+            missing.push("Body Of Water");
+        }
+
         return missing;
-    }, [recentlySelectedCompany, selectedAdmin, selectedCustomer, selectedServiceLocation]);
+    }, [
+        recentlySelectedCompany,
+        resolvedBodyOfWaterId,
+        selectedAdmin,
+        selectedCustomer,
+        selectedEquipment,
+        selectedServiceLocation,
+        selectedTemplateRequiresBodyOfWater,
+        selectedTemplateRequiresEquipment,
+    ]);
+
+    const createJobSectionDetails = {
+        Info: {
+            label: "Job Info",
+            helper: "Assignment, customer, location, asset context, and pricing",
+            count: missingJobInfo.length ? String(missingJobInfo.length) : "Ready",
+        },
+        Template: {
+            label: "Template",
+            helper: "Reusable job scope, services, tasks, and planned products",
+            count: selectedTemplate ? "1" : "",
+        },
+        Tasks: {
+            label: "Tasks",
+            helper: "Labor tasks and task-specific pool or equipment context",
+            count: String(taskList.length),
+        },
+        Materials: {
+            label: "Materials",
+            helper: "Planned shopping list items and material pricing",
+            count: String(shoppingList.length),
+        },
+        Schedule: {
+            label: "Schedule",
+            helper: "Planned service stops copied or staged for this job",
+            count: String(plannedServiceStops.length),
+        },
+        Review: {
+            label: "Review",
+            helper: "Confirm the job before creating it",
+            count: canCreateJob ? "Ready" : String(missingJobInfo.length),
+        },
+    };
+    const createJobSectionMeta = createJobSections.map((sectionName) => ({
+        id: sectionName,
+        ...createJobSectionDetails[sectionName],
+    }));
+    const activeCreateSectionMeta =
+        createJobSectionMeta.find((section) => section.id === activeCreateSection) ||
+        createJobSectionMeta[0];
+    const activeCreateSectionIndex = createJobSections.indexOf(activeCreateSection);
+    const previousCreateSection =
+        activeCreateSectionIndex > 0 ? createJobSections[activeCreateSectionIndex - 1] : "";
+    const nextCreateSection =
+        activeCreateSectionIndex >= 0 && activeCreateSectionIndex < createJobSections.length - 1
+            ? createJobSections[activeCreateSectionIndex + 1]
+            : "";
 
     const selectStyles = {
         control: (provided, state) => ({
@@ -313,7 +575,7 @@ const CreateNewJob = () => {
         return {
             id: task.id || `comp_job_task_${uuidv4()}`,
             name: task.name || task.description || "",
-            type: task.type || "",
+            type: canonicalJobTaskType(task.type || ""),
             contractedRate: Number(task.contractedRate || 0),
             billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
             estimatedTime: Number(task.estimatedTime || 0),
@@ -351,7 +613,7 @@ const CreateNewJob = () => {
 
             category: "Job",
             subCategory: item.subCategory || "Custom",
-            status: "Needs Customer Approval",
+            status: "Need to Purchase",
             purchaserId: item.purchaserId || createdByUserId || "",
             purchaserName: item.purchaserName || createdByUserName || "",
 
@@ -446,48 +708,92 @@ const CreateNewJob = () => {
         return Math.round(Number(item.plannedUnitPriceCents || item.price || 0) * quantityNumber(item.quantity));
     };
 
-    const buildStarterPlanLineItems = ({ planId, normalizedTasks, normalizedPlannedStops, normalizedShoppingItems }) => ([
-        ...normalizedPlannedStops.map((stop) => {
-            const amount = Number(stop.plannedLaborCostCents || 0);
-            return {
-                id: `${planId}_${stop.id || "planned_stop"}`,
-                sourceType: "serviceStopType",
-                sourceId: stop.serviceStopTypeId || stop.id || "",
-                salesItemType: "service",
-                billingBehavior: "oneTime",
-                type: "Planned Stop",
-                name: stop.name || stop.serviceStopTypeName || "Planned Service Stop",
-                description: stop.description || stop.plannedLaborNotes || "",
-                quantity: 1,
-                unitAmountCents: amount,
-                totalAmountCents: amount,
-                amount,
-                taxable: false,
-                displayAmount: moneyFromCents(amount),
-            };
-        }),
-        ...normalizedTasks.map((task) => {
-            const amount = getTaskBillingLaborPriceCents(task);
-            const internalLaborCostCents = Number(task.contractedRate || 0);
-            return {
-                id: `${planId}_${task.id || "task"}`,
-                sourceType: "task",
-                sourceId: task.id || "",
-                salesItemType: "labor",
-                billingBehavior: "oneTime",
-                type: "Task",
-                name: task.name || task.description || task.type || "Task",
-                description: task.type || "",
-                quantity: 1,
-                unitAmountCents: amount,
-                totalAmountCents: amount,
-                amount,
-                billingLaborPriceCents: amount,
-                internalLaborCostCents,
-                taxable: false,
-                displayAmount: moneyFromCents(amount),
-            };
-        }),
+    const buildStarterPlanLineItems = ({
+        planId,
+        normalizedTasks,
+        normalizedPlannedStops,
+        normalizedShoppingItems,
+        normalizedLaborLineItems = [],
+    }) => ([
+        ...(normalizedLaborLineItems.length
+            ? normalizedLaborLineItems.map((line, index) => {
+                const amount = Number(line.totalPriceCents || 0);
+                const quantity = Number(line.quantity || 1) || 1;
+                const catalogItemId = laborLineCatalogItemId(line);
+                const salesItemType = line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor);
+                const lineType = salesItemType === SalesCatalogItemType.labor ? "Labor" : "Service";
+                return {
+                    id: `${planId}_${line.id || "labor_line"}`,
+                    catalogItemId,
+                    salesCatalogItemId: catalogItemId,
+                    sourceType: line.sourceType || SalesCatalogSourceType.manual,
+                    sourceId: line.sourceId || catalogItemId || line.id || "",
+                    salesItemType,
+                    billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+                    type: line.type || lineType,
+                    name: line.name || `Service ${index + 1}`,
+                    description: [
+                        line.description || "",
+                        line.taskIds?.length ? `${line.taskIds.length} task${line.taskIds.length === 1 ? "" : "s"}` : "",
+                    ].filter(Boolean).join(" - "),
+                    quantity,
+                    unitAmountCents: Number(line.unitPriceCents || 0),
+                    totalAmountCents: amount,
+                    amount,
+                    billingLaborPriceCents: amount,
+                    internalLaborCostCents: Number(line.internalCostCents || 0),
+                    taskIds: line.taskIds || [],
+                    plannedServiceStopIds: [],
+                    taxable: Boolean(line.taxable),
+                    stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+                    stripeProductId: line.stripeProductId || "",
+                    stripePriceId: line.stripePriceId || "",
+                    displayAmount: moneyFromCents(amount),
+                };
+            })
+            : [
+                ...normalizedPlannedStops.map((stop) => {
+                    const amount = Number(stop.plannedLaborCostCents || 0);
+                    return {
+                        id: `${planId}_${stop.id || "planned_stop"}`,
+                        sourceType: SalesCatalogSourceType.serviceStopType,
+                        sourceId: stop.serviceStopTypeId || stop.id || "",
+                        salesItemType: SalesCatalogItemType.service,
+                        billingBehavior: SalesCatalogBillingBehavior.oneTime,
+                        type: "Planned Stop",
+                        name: stop.name || stop.serviceStopTypeName || "Planned Service Stop",
+                        description: stop.description || stop.plannedLaborNotes || "",
+                        quantity: 1,
+                        unitAmountCents: amount,
+                        totalAmountCents: amount,
+                        amount,
+                        taxable: false,
+                        displayAmount: moneyFromCents(amount),
+                    };
+                }),
+                ...normalizedTasks.map((task) => {
+                    const amount = getTaskBillingLaborPriceCents(task);
+                    const internalLaborCostCents = Number(task.contractedRate || 0);
+                    return {
+                        id: `${planId}_${task.id || "task"}`,
+                        sourceType: SalesCatalogSourceType.task,
+                        sourceId: task.id || "",
+                        salesItemType: SalesCatalogItemType.labor,
+                        billingBehavior: SalesCatalogBillingBehavior.oneTime,
+                        type: "Task",
+                        name: task.name || task.description || task.type || "Task",
+                        description: task.type || "",
+                        quantity: 1,
+                        unitAmountCents: amount,
+                        totalAmountCents: amount,
+                        amount,
+                        billingLaborPriceCents: amount,
+                        internalLaborCostCents,
+                        taxable: false,
+                        displayAmount: moneyFromCents(amount),
+                    };
+                }),
+            ]),
         ...normalizedShoppingItems.map((item) => {
             const quantity = quantityNumber(item.quantity) || 1;
             const amount = plannedMaterialTotalPriceCents(item);
@@ -522,6 +828,7 @@ const CreateNewJob = () => {
         normalizedTasks,
         normalizedPlannedStops,
         normalizedShoppingItems,
+        normalizedLaborLineItems = [],
         nowTimestamp,
         nowMillis,
     }) => {
@@ -530,12 +837,21 @@ const CreateNewJob = () => {
             normalizedTasks,
             normalizedPlannedStops,
             normalizedShoppingItems,
+            normalizedLaborLineItems,
         });
         const subtotalAmountCents = lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
         const totalAmountCents = subtotalAmountCents || rateCents;
+        const planLaborCostCents = normalizedLaborLineItems.length
+            ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.internalCostCents || 0), 0)
+            : normalizedTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0)
+                + normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+        const planLaborPriceCents = normalizedLaborLineItems.length
+            ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.totalPriceCents || 0), 0)
+            : normalizedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0)
+                + normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
         const materialCostCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalCostCents(item), 0);
         const materialPriceCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalPriceCents(item), 0);
-        const internalCostCents = plannedTotalLaborCents + materialCostCents;
+        const internalCostCents = planLaborCostCents + materialCostCents;
         const projectedProfitCents = totalAmountCents - internalCostCents;
         const profitMarginPercent = totalAmountCents > 0
             ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
@@ -555,8 +871,8 @@ const CreateNewJob = () => {
             customerName,
             serviceLocationId: selectedServiceLocation.id,
             serviceLocationName: selectedServiceLocation.label || "",
-            bodyOfWaterId: selectedBodyOfWater?.id || "",
-            bodyOfWaterName: selectedBodyOfWater?.label || "",
+            bodyOfWaterId: resolvedBodyOfWaterId,
+            bodyOfWaterName: selectedBodyOfWater?.label || selectedBodyOfWater?.name || selectedEquipment?.bodyOfWaterName || "",
             equipmentId: selectedEquipment?.id || "",
             equipmentName: selectedEquipment?.label || "",
             sourceType: selectedTemplate?.id ? "template" : "initialJobPlan",
@@ -580,8 +896,9 @@ const CreateNewJob = () => {
             rateAmountCents: totalAmountCents,
             totalAmountCents,
             subtotalAmountCents,
-            laborCostCents: plannedTotalLaborCents || laborCostCents,
-            plannedLaborCostCents: plannedTotalLaborCents,
+            laborCostCents: planLaborCostCents || laborCostCents,
+            plannedLaborCostCents: planLaborCostCents,
+            plannedLaborPriceCents: planLaborPriceCents,
             materialCostCents,
             materialPriceCents,
             internalCostCents,
@@ -610,6 +927,19 @@ const CreateNewJob = () => {
                     plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
                     taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
                 })),
+                laborLineSummaries: normalizedLaborLineItems.map((line, index) => ({
+                    id: line.id || "",
+                    sortOrder: Number(line.sortOrder ?? index),
+                    name: line.name || `Service ${index + 1}`,
+                    description: line.description || "",
+                    quantity: Number(line.quantity || 1),
+                    unitPriceCents: Number(line.unitPriceCents || 0),
+                    totalPriceCents: Number(line.totalPriceCents || 0),
+                    internalCostCents: Number(line.internalCostCents || 0),
+                    catalogItemId: laborLineCatalogItemId(line),
+                    taskIds: Array.isArray(line.taskIds) ? line.taskIds : [],
+                    plannedServiceStopIds: [],
+                })),
                 materialSummaries: normalizedShoppingItems.map((item, index) => ({
                     id: item.id || "",
                     sortOrder: Number(item.sortOrder ?? index),
@@ -623,11 +953,13 @@ const CreateNewJob = () => {
                     tasks: normalizedTasks.length,
                     plannedServiceStops: normalizedPlannedStops.length,
                     shoppingItems: normalizedShoppingItems.length,
+                    laborLineItems: normalizedLaborLineItems.length,
                     lineItems: lineItems.length,
                 },
             },
             costSummary: {
-                plannedLaborCostCents: plannedTotalLaborCents,
+                plannedLaborCostCents: planLaborCostCents,
+                plannedLaborPriceCents: planLaborPriceCents,
                 plannedTaskLaborCents,
                 plannedTaskBillingLaborCents,
                 plannedServiceStopLaborCostCents: plannedStopLaborCents,
@@ -640,6 +972,7 @@ const CreateNewJob = () => {
                 lineItemCount: lineItems.length,
                 subtotalAmountCents,
                 totalAmountCents,
+                plannedLaborPriceCents: planLaborPriceCents,
                 plannedTaskBillingLaborCents,
                 projectedProfitCents,
                 profitMarginPercent,
@@ -663,11 +996,24 @@ const CreateNewJob = () => {
                 sourcePlanId: planId,
                 sourceSolutionId: planId,
             })),
+            laborLineItems: normalizedLaborLineItems.map((line, index) => ({
+                ...line,
+                sortOrder: Number(line.sortOrder ?? index),
+                sourcePlanId: planId,
+                sourceSolutionId: planId,
+            })),
+            estimateLaborLineItems: normalizedLaborLineItems.map((line, index) => ({
+                ...line,
+                sortOrder: Number(line.sortOrder ?? index),
+                sourcePlanId: planId,
+                sourceSolutionId: planId,
+            })),
             lineItems,
             estimateLineItems: lineItems,
             taskCount: normalizedTasks.length,
             plannedStopCount: normalizedPlannedStops.length,
             materialCount: normalizedShoppingItems.length,
+            laborLineCount: normalizedLaborLineItems.length,
             createdAt: nowTimestamp,
             createdAtMillis: nowMillis,
             createdByUserId,
@@ -787,7 +1133,7 @@ const CreateNewJob = () => {
                 const startingTemplateId =
                     startingTemplateFromState?.id ||
                     templateIdParam ||
-                    location.state?.templateId ||
+                    startingTemplateIdFromState ||
                     "";
 
                 if (startingTemplateId) {
@@ -812,7 +1158,91 @@ const CreateNewJob = () => {
         };
 
         fetchData();
-    }, [recentlySelectedCompany, templateIdParam]);
+    }, [recentlySelectedCompany, startingTemplateFromState, startingTemplateIdFromState, templateIdParam]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany) {
+            setEquipmentDatabaseItems([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadEquipmentDatabaseItems = async () => {
+            try {
+                const itemSnap = await getDocs(
+                    query(
+                        collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"),
+                        orderBy("name")
+                    )
+                );
+
+                if (cancelled) return;
+                setEquipmentDatabaseItems(
+                    itemSnap.docs
+                        .map((itemDoc) => buildEquipmentDatabaseItemOption(itemDoc.data(), itemDoc.id))
+                        .filter(isEquipmentDatabaseItem)
+                );
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Failed to load equipment database items:", error);
+                    setEquipmentDatabaseItems([]);
+                }
+            }
+        };
+
+        loadEquipmentDatabaseItems();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        if (!taskNeedsInstallItem) {
+            if (selectedTaskDbItemId) setSelectedTaskDbItemId("");
+            setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
+            return;
+        }
+
+        setSelectedTaskDbItemEquipmentMapping(
+            selectedTaskDbItem
+                ? databaseEquipmentMappingFromItem(selectedTaskDbItem)
+                : emptyDatabaseEquipmentMapping()
+        );
+    }, [selectedTaskDbItem, selectedTaskDbItemId, taskNeedsInstallItem]);
+
+    useEffect(() => {
+        if (!taskNeedsBodyOfWater) setSelectedTaskBodyOfWater(null);
+        if (!taskNeedsEquipment) setSelectedTaskEquipment(null);
+    }, [taskNeedsBodyOfWater, taskNeedsEquipment]);
+
+    useEffect(() => {
+        if (!taskNeedsBodyOfWater || selectedTaskBodyOfWater?.id || !selectedBodyOfWater?.id) return;
+        setSelectedTaskBodyOfWater(selectedBodyOfWater);
+    }, [selectedBodyOfWater, selectedTaskBodyOfWater?.id, taskNeedsBodyOfWater]);
+
+    useEffect(() => {
+        setSelectedTaskBodyOfWater(null);
+        setSelectedTaskEquipment(null);
+    }, [selectedServiceLocation?.id]);
+
+    useEffect(() => {
+        if (!taskNeedsEquipment || selectedTaskEquipment?.id || !selectedEquipment?.id) return;
+        setSelectedTaskEquipment(selectedEquipment);
+    }, [selectedEquipment, selectedTaskEquipment?.id, taskNeedsEquipment]);
+
+    useEffect(() => {
+        if (!taskNeedsBodyOfWater || selectedTaskBodyOfWater?.id || !selectedTaskEquipment?.bodyOfWaterId) return;
+
+        const matchedBody = bodyOfWaterList.find((item) => item.id === selectedTaskEquipment.bodyOfWaterId);
+        if (matchedBody) setSelectedTaskBodyOfWater(matchedBody);
+    }, [
+        bodyOfWaterList,
+        selectedTaskBodyOfWater?.id,
+        selectedTaskEquipment,
+        taskNeedsBodyOfWater,
+    ]);
 
     useEffect(() => {
         if (!customerList.length) return;
@@ -905,8 +1335,8 @@ const CreateNewJob = () => {
                     }
                 }
 
-                if (locations.length > 0 && !selectedServiceLocation) {
-                    setSelectedServiceLocation(locations[0]);
+                if (locations.length > 0) {
+                    setSelectedServiceLocation((currentLocation) => currentLocation || locations[0]);
                 }
             } catch (error) {
                 console.error("Error fetching service locations:", error);
@@ -991,6 +1421,14 @@ const CreateNewJob = () => {
     }, [selectedServiceLocation, recentlySelectedCompany, repairRequest, suggestedWork, equipmentContext]);
 
     useEffect(() => {
+        if (!selectedEquipment?.bodyOfWaterId || !bodyOfWaterList.length) return;
+        const matchedBody = bodyOfWaterList.find((item) => item.id === selectedEquipment.bodyOfWaterId);
+        if (matchedBody && selectedBodyOfWater?.id !== matchedBody.id) {
+            setSelectedBodyOfWater(matchedBody);
+        }
+    }, [bodyOfWaterList, selectedBodyOfWater?.id, selectedEquipment]);
+
+    useEffect(() => {
         if (!selectedTemplate || templateApplied) return;
 
         applyTemplate(selectedTemplate);
@@ -1005,7 +1443,7 @@ const CreateNewJob = () => {
 
             const templateId = template.id;
 
-            const [tasksSnap, plannedStopsSnap, shoppingSnap] = await Promise.all([
+            const [tasksSnap, plannedStopsSnap, shoppingSnap, laborLinesSnap] = await Promise.all([
                 getDocs(
                     collection(
                         db,
@@ -1034,6 +1472,16 @@ const CreateNewJob = () => {
                         "jobTemplates",
                         templateId,
                         "shoppingItems"
+                    )
+                ),
+                getDocs(
+                    collection(
+                        db,
+                        "companies",
+                        recentlySelectedCompany,
+                        "jobTemplates",
+                        templateId,
+                        "laborLineItems"
                     )
                 ),
             ]);
@@ -1073,6 +1521,53 @@ const CreateNewJob = () => {
                     taskIdMap
                 )
             );
+            const copiedLaborLines = laborLinesSnap.docs
+                .map((docSnap) => ({
+                    ...docSnap.data(),
+                    id: docSnap.data().id || docSnap.id,
+                }))
+                .map((line, index) => {
+                    const quantity = laborLineQuantityNumber(line.quantity || line.defaultQuantity || 1);
+                    const sourceTaskIds = getLaborLineTaskIds(line);
+                    const taskIds = sourceTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean);
+                    const catalogItemId = laborLineCatalogItemId(line);
+                    const laborLineId = `comp_job_labor_line_${uuidv4()}`;
+
+                    return {
+                        id: laborLineId,
+                        laborLineId,
+                        companyId: recentlySelectedCompany,
+                        jobId,
+                        sourceTemplateId: templateId,
+                        sourceTemplateLaborLineId: line.id || "",
+                        name: line.name || line.title || `Service ${index + 1}`,
+                        description: line.description || "",
+                        quantity,
+                        unitPriceCents: laborLineUnitPriceCents(line),
+                        totalPriceCents: laborLineTotalPriceCents(line),
+                        internalCostCents: laborLineInternalCostCents(line),
+                        unitCostCents: laborLineInternalCostCents(line),
+                        taskIds,
+                        laborLineTaskIds: taskIds,
+                        plannedServiceStopIds: [],
+                        laborLinePlannedServiceStopIds: [],
+                        sourceTemplateTaskIds: sourceTaskIds,
+                        sourceTemplatePlannedServiceStopIds: [],
+                        salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
+                        billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+                        sourceType: line.sourceType || SalesCatalogSourceType.manual,
+                        sourceId: line.sourceId || catalogItemId || "",
+                        catalogItemId,
+                        salesCatalogItemId: catalogItemId,
+                        sourceCatalogItemId: line.sourceCatalogItemId || catalogItemId,
+                        catalogItemName: line.catalogItemName || line.sourceCatalogItemName || line.name || "",
+                        stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+                        stripeProductId: line.stripeProductId || "",
+                        stripePriceId: line.stripePriceId || "",
+                        taxable: Boolean(line.taxable),
+                        sortOrder: Number(line.sortOrder ?? index),
+                    };
+                });
 
             const copiedShopping = shoppingSnap.docs.map((docSnap) =>
                 normalizeShoppingItemForJob({
@@ -1084,10 +1579,12 @@ const CreateNewJob = () => {
             setTaskList(copiedTasks);
             setPlannedServiceStops(copiedStops);
             setShoppingList(copiedShopping);
+            setLaborLineItems(copiedLaborLines);
 
             setDescription(template.description || "");
             setRate(((Number(template.defaultRateCents || 0) / 100) || 0).toFixed(2));
             setLaborCost(((Number(template.defaultLaborCostCents || 0) / 100) || 0).toFixed(2));
+            setIssuePriorityLevel(getTemplateDefaultIssuePriority(template));
 
             setTemplateApplied(true);
         } catch (error) {
@@ -1110,13 +1607,14 @@ const CreateNewJob = () => {
         setSelectedTemplate(template);
         setTemplateApplied(false);
 
-        if (!template) {
-            setTaskList([]);
-            setPlannedServiceStops([]);
-            setShoppingList([]);
-            setDescription("");
-            setRate("0");
-            setLaborCost("0");
+            if (!template) {
+                setTaskList([]);
+                setPlannedServiceStops([]);
+                setShoppingList([]);
+                setLaborLineItems([]);
+                setDescription("");
+                setRate("0");
+                setLaborCost("0");
             return;
         }
 
@@ -1178,6 +1676,36 @@ const CreateNewJob = () => {
         }
     };
 
+    const saveEquipmentMappingForDatabaseItem = async (dbItem, mapping) => {
+        if (!dbItem?.id) return null;
+
+        if (!hasDatabaseEquipmentMapping(mapping)) {
+            await appAlert("Connect this database item to equipment type, make, and model.");
+            return null;
+        }
+
+        const patch = {
+            ...databaseEquipmentMappingPatch(mapping),
+            category: EQUIPMENT_DATABASE_CATEGORY,
+            dateUpdated: serverTimestamp(),
+        };
+        const nextItem = {
+            ...dbItem,
+            ...patch,
+            label: equipmentDatabaseItemLabel({ ...dbItem, ...patch }),
+        };
+
+        await updateDoc(
+            doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", dbItem.id),
+            patch
+        );
+        setEquipmentDatabaseItems((current) =>
+            current.map((item) => (item.id === dbItem.id ? nextItem : item))
+        );
+
+        return nextItem;
+    };
+
     const handleAddTask = async () => {
         if (!taskDescription.trim()) {
             await appAlert("Add a task description.");
@@ -1196,16 +1724,56 @@ const CreateNewJob = () => {
             return;
         }
 
+        const resolvedTaskBodyOfWaterId =
+            selectedTaskBodyOfWater?.id ||
+            selectedTaskEquipment?.bodyOfWaterId ||
+            selectedBodyOfWater?.id ||
+            selectedEquipment?.bodyOfWaterId ||
+            "";
+
+        if (taskNeedsBodyOfWater && !resolvedTaskBodyOfWaterId) {
+            await appAlert("Select a body of water for this task.");
+            return;
+        }
+
+        if (taskNeedsEquipment && !selectedTaskEquipment?.id) {
+            await appAlert("Select equipment for this task.");
+            return;
+        }
+
+        let taskDbItem = selectedTaskDbItem;
+        let equipmentMapping = selectedTaskDbItemEquipmentMapping;
+
+        if (taskNeedsEquipmentDatabaseItem) {
+            if (!taskDbItem || !isEquipmentDatabaseItem(taskDbItem)) {
+                await appAlert("Select an equipment database item for this task.");
+                return;
+            }
+
+            if (!hasDatabaseEquipmentMapping(equipmentMapping)) {
+                equipmentMapping = databaseEquipmentMappingFromItem(taskDbItem);
+            }
+
+            if (!hasDatabaseEquipmentMapping(equipmentMapping)) {
+                await appAlert("Connect this database item to equipment type, make, and model.");
+                return;
+            }
+
+            taskDbItem = await saveEquipmentMappingForDatabaseItem(taskDbItem, equipmentMapping);
+            if (!taskDbItem) return;
+        }
+
         const techLaborCents = dollarsToCents(taskLaborCost);
         const billingLaborPriceCents = taskBillingLaborPrice === ""
             ? techLaborCents
             : dollarsToCents(taskBillingLaborPrice);
+        const newTaskType = canonicalJobTaskType(selectedTaskType.value || selectedTaskType.name);
 
         const newTask = normalizeJobTask(
             {
                 id: `comp_job_task_${uuidv4()}`,
                 name: taskDescription.trim(),
-                type: selectedTaskType.value || selectedTaskType.name,
+                type: newTaskType,
                 contractedRate: techLaborCents,
                 billingLaborPriceCents,
                 estimatedTime: Number(estimatedTime || 0),
@@ -1222,9 +1790,10 @@ const CreateNewJob = () => {
                     id: "",
                     internalId: "",
                 },
-                equipmentId: selectedEquipment?.id || "",
+                equipmentId: taskNeedsEquipment ? selectedTaskEquipment?.id || "" : "",
                 serviceLocationId: selectedServiceLocation?.id || "",
-                bodyOfWaterId: selectedBodyOfWater?.id || "",
+                bodyOfWaterId: taskNeedsBodyOfWater ? resolvedTaskBodyOfWaterId : "",
+                dataBaseItemId: taskNeedsInstallItem ? taskDbItem?.id || selectedTaskDbItemId || "" : "",
             }
         );
 
@@ -1235,6 +1804,10 @@ const CreateNewJob = () => {
         setTaskLaborCost("");
         setTaskBillingLaborPrice("");
         setEstimatedTime("");
+        setSelectedTaskBodyOfWater(null);
+        setSelectedTaskEquipment(null);
+        setSelectedTaskDbItemId("");
+        setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
     };
 
     const removeTask = (taskId) => {
@@ -1307,7 +1880,7 @@ const CreateNewJob = () => {
                     companyId: recentlySelectedCompany,
                     jobId,
                     serviceLocationId: task.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: task.bodyOfWaterId || selectedBodyOfWater?.id || "",
+                    bodyOfWaterId: task.bodyOfWaterId || resolvedBodyOfWaterId,
                     equipmentId: task.equipmentId || selectedEquipment?.id || "",
                     sourcePlanId: starterPlanId,
                     sourceSolutionId: starterPlanId,
@@ -1321,13 +1894,55 @@ const CreateNewJob = () => {
                     customerName,
                     purchaserId: item.purchaserId || createdByUserId || "",
                     purchaserName: item.purchaserName || createdByUserName || "",
-                    status: "Needs Customer Approval",
+                    status: "Need to Purchase",
                     planId: starterPlanId,
                     sourcePlanId: starterPlanId,
                     solutionId: starterPlanId,
                     sourceSolutionId: starterPlanId,
                 })
             );
+            const normalizedLaborLineItems = laborLineItems.map((line, index) => {
+                const catalogItemId = laborLineCatalogItemId(line);
+                const laborLineId = line.id || line.laborLineId || `comp_job_labor_line_${uuidv4()}`;
+                return {
+                    ...line,
+                    id: laborLineId,
+                    laborLineId,
+                    companyId: recentlySelectedCompany,
+                    jobId,
+                    sourcePlanId: starterPlanId,
+                    sourceSolutionId: starterPlanId,
+                    sourceTemplateId: line.sourceTemplateId || selectedTemplate?.id || "",
+                    quantity: laborLineQuantityNumber(line.quantity || line.defaultQuantity || 1),
+                    unitPriceCents: laborLineUnitPriceCents(line),
+                    totalPriceCents: laborLineTotalPriceCents(line),
+                    internalCostCents: laborLineInternalCostCents(line),
+                    unitCostCents: laborLineInternalCostCents(line),
+                    taskIds: getLaborLineTaskIds(line),
+                    laborLineTaskIds: getLaborLineTaskIds(line),
+                    plannedServiceStopIds: [],
+                    laborLinePlannedServiceStopIds: [],
+                    salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
+                    billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+                    sourceType: line.sourceType || SalesCatalogSourceType.manual,
+                    sourceId: line.sourceId || catalogItemId || "",
+                    catalogItemId,
+                    salesCatalogItemId: catalogItemId,
+                    sourceCatalogItemId: line.sourceCatalogItemId || catalogItemId,
+                    catalogItemName: line.catalogItemName || line.sourceCatalogItemName || line.name || "",
+                    stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+                    stripeProductId: line.stripeProductId || "",
+                    stripePriceId: line.stripePriceId || "",
+                    taxable: Boolean(line.taxable),
+                    sortOrder: Number(line.sortOrder ?? index),
+                    createdAt: line.createdAt || nowTimestamp,
+                    createdAtMillis: line.createdAtMillis || nowMillis,
+                    createdByUserId: line.createdByUserId || createdByUserId || "",
+                    createdByUserName: line.createdByUserName || createdByUserName || "",
+                    updatedAt: nowTimestamp,
+                    updatedAtMillis: nowMillis,
+                };
+            });
             const starterPlanRecord = buildStarterPlanRecord({
                 planId: starterPlanId,
                 nextInternalId,
@@ -1339,6 +1954,7 @@ const CreateNewJob = () => {
                 normalizedTasks,
                 normalizedPlannedStops,
                 normalizedShoppingItems,
+                normalizedLaborLineItems,
                 nowTimestamp,
                 nowMillis,
             });
@@ -1388,6 +2004,18 @@ const CreateNewJob = () => {
 
                 rate: starterPlanRecord.totalAmountCents || rateCents,
                 laborCost: starterPlanRecord.plannedLaborCostCents || laborCostCents,
+                plannedLaborPriceCents: starterPlanRecord.plannedLaborPriceCents || 0,
+                plannedMaterialCostCents: starterPlanRecord.materialCostCents || 0,
+                plannedMaterialPriceCents: starterPlanRecord.materialPriceCents || 0,
+                estimateSubtotalCents: starterPlanRecord.subtotalAmountCents || 0,
+                estimateTotalCents: starterPlanRecord.totalAmountCents || rateCents,
+                estimateLineItems: starterPlanRecord.estimateLineItems || [],
+                laborLineItems: normalizedLaborLineItems,
+                estimateLaborLineItems: normalizedLaborLineItems,
+                laborLineCount: normalizedLaborLineItems.length,
+                taskCount: normalizedTasks.length,
+                plannedStopCount: normalizedPlannedStops.length,
+                materialCount: normalizedShoppingItems.length,
 
                 otherCompany: false,
                 receivedLaborContractId: "",
@@ -1405,8 +2033,8 @@ const CreateNewJob = () => {
                 invoiceNotes: "",
 
                 // Legacy / web convenience fields
-                bodyOfWaterId: selectedBodyOfWater?.id || "",
-                bodyOfWaterName: selectedBodyOfWater?.label || "",
+                bodyOfWaterId: resolvedBodyOfWaterId,
+                bodyOfWaterName: selectedBodyOfWater?.label || selectedBodyOfWater?.name || selectedEquipment?.bodyOfWaterName || "",
                 equipmentId: selectedEquipment?.id || "",
                 equipmentName: selectedEquipment?.label || "",
                 repairRequestId: repairRequest?.id || "",
@@ -1460,6 +2088,21 @@ const CreateNewJob = () => {
                         taskData.id
                     ),
                     taskData
+                );
+            }
+
+            for (const lineData of normalizedLaborLineItems) {
+                await setDoc(
+                    doc(
+                        db,
+                        "companies",
+                        recentlySelectedCompany,
+                        "workOrders",
+                        jobId,
+                        "laborLineItems",
+                        lineData.id
+                    ),
+                    lineData
                 );
             }
 
@@ -1543,6 +2186,7 @@ const CreateNewJob = () => {
                         { field: "starterPlan", label: "Starter Plan Recommendation Rank", before: "—", after: getJobPlanRecommendationDisplay(normalizedStarterPlanTier) },
                         { field: "rate", label: "Calculated Customer Price", before: "—", after: `$${(Number(starterPlanRecord.totalAmountCents || 0) / 100).toFixed(2)}` },
                         { field: "tasks", label: "Tasks", before: "—", after: String(normalizedTasks.length) },
+                        { field: "laborLineItems", label: "Service Lines", before: "—", after: String(normalizedLaborLineItems.length) },
                         { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(normalizedPlannedStops.length) },
                         { field: "shoppingItems", label: "Planned Materials", before: "—", after: String(normalizedShoppingItems.length) },
                     ],
@@ -1575,18 +2219,6 @@ const CreateNewJob = () => {
         }
     };
 
-    const goNext = () => {
-        const currentIndex = steps.indexOf(activeStep);
-        const next = steps[Math.min(currentIndex + 1, steps.length - 1)];
-        setActiveStep(next);
-    };
-
-    const goBackStep = () => {
-        const currentIndex = steps.indexOf(activeStep);
-        const previous = steps[Math.max(currentIndex - 1, 0)];
-        setActiveStep(previous);
-    };
-
     const emptyState = (title, message) => (
         <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center">
             <p className="font-semibold text-gray-700">{title}</p>
@@ -1608,8 +2240,8 @@ const CreateNewJob = () => {
         );
     }
 
-    const renderStepContent = () => {
-        switch (activeStep) {
+    const renderStepContent = (sectionName) => {
+        switch (sectionName) {
             case "Info":
                 return (
                     <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
@@ -1632,13 +2264,18 @@ const CreateNewJob = () => {
 
                                     <div>
                                         <label className={fieldLabelClasses}>Customer</label>
-                                        <Select
-                                            options={customerList}
-                                            value={selectedCustomer}
-                                            onChange={setSelectedCustomer}
-                                            placeholder="Select Customer"
-                                            styles={selectStyles}
-                                            isDisabled={!!customerIdParam || !!repairRequest?.customerId}
+	                                        <Select
+	                                            options={customerList}
+	                                            value={selectedCustomer}
+	                                            onChange={(option) => {
+                                                    setSelectedCustomer(option);
+                                                    setSelectedServiceLocation(null);
+                                                    setSelectedBodyOfWater(null);
+                                                    setSelectedEquipment(null);
+                                                }}
+	                                            placeholder="Select Customer"
+	                                            styles={selectStyles}
+	                                            isDisabled={!!customerIdParam || !!repairRequest?.customerId}
                                         />
                                     </div>
                                 </div>
@@ -1651,12 +2288,16 @@ const CreateNewJob = () => {
                                 <div className="grid gap-4 lg:grid-cols-3">
                                     <div>
                                         <label className={fieldLabelClasses}>Service Location</label>
-                                        <Select
-                                            options={serviceLocationList}
-                                            value={selectedServiceLocation}
-                                            onChange={setSelectedServiceLocation}
-                                            placeholder="Select Service Location"
-                                            styles={selectStyles}
+	                                        <Select
+	                                            options={serviceLocationList}
+	                                            value={selectedServiceLocation}
+	                                            onChange={(option) => {
+                                                    setSelectedServiceLocation(option);
+                                                    setSelectedBodyOfWater(null);
+                                                    setSelectedEquipment(null);
+                                                }}
+	                                            placeholder="Select Service Location"
+	                                            styles={selectStyles}
                                             isDisabled={
                                                 !selectedCustomer ||
                                                 !!locationIdParam ||
@@ -1667,32 +2308,44 @@ const CreateNewJob = () => {
                                     </div>
 
                                     <div>
-                                        <label className={fieldLabelClasses}>Body Of Water</label>
-                                        <Select
-                                            options={bodyOfWaterList}
-                                            value={selectedBodyOfWater}
-                                            onChange={setSelectedBodyOfWater}
-                                            placeholder="Select Body Of Water"
-                                            styles={selectStyles}
-                                            isDisabled={!selectedServiceLocation}
-                                            isClearable
-                                        />
-                                    </div>
+	                                        <label className={fieldLabelClasses}>
+                                                Body Of Water {selectedTemplateRequiresBodyOfWater ? <span className="text-rose-600">*</span> : null}
+                                            </label>
+	                                        <Select
+	                                            options={bodyOfWaterList}
+	                                            value={selectedBodyOfWater}
+	                                            onChange={setSelectedBodyOfWater}
+	                                            placeholder="Select Body Of Water"
+	                                            styles={selectStyles}
+	                                            isDisabled={!selectedServiceLocation}
+	                                            isClearable={!selectedTemplateRequiresBodyOfWater}
+	                                        />
+	                                    </div>
 
-                                    <div>
-                                        <label className={fieldLabelClasses}>Equipment</label>
-                                        <Select
-                                            options={equipmentList}
-                                            value={selectedEquipment}
-                                            onChange={setSelectedEquipment}
-                                            placeholder="Select Equipment"
-                                            styles={selectStyles}
-                                            isDisabled={!selectedServiceLocation}
-                                            isClearable
-                                        />
-                                    </div>
-                                </div>
-                            </SectionCard>
+	                                    <div>
+	                                        <label className={fieldLabelClasses}>
+                                                Equipment {selectedTemplateRequiresEquipment ? <span className="text-rose-600">*</span> : null}
+                                            </label>
+	                                        <Select
+	                                            options={equipmentList}
+	                                            value={selectedEquipment}
+	                                            onChange={setSelectedEquipment}
+	                                            placeholder="Select Equipment"
+	                                            styles={selectStyles}
+	                                            isDisabled={!selectedServiceLocation}
+	                                            isClearable={!selectedTemplateRequiresEquipment}
+	                                        />
+	                                    </div>
+	                                </div>
+                                    {selectedTemplate && (selectedTemplateRequiresEquipment || selectedTemplateRequiresBodyOfWater) && (
+                                        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                            This template needs {[
+                                                selectedTemplateRequiresEquipment ? "equipment" : "",
+                                                selectedTemplateRequiresBodyOfWater ? "body of water" : "",
+                                            ].filter(Boolean).join(" and ")} before it can be created.
+                                        </p>
+                                    )}
+	                            </SectionCard>
 
                             <SectionCard
                                 title="Plan Pricing"
@@ -1831,7 +2484,7 @@ const CreateNewJob = () => {
                                     Template Applied: {selectedTemplate.name}
                                 </p>
                                 <p className="text-sm text-blue-700 mt-1">
-                                    Tasks, planned stops, materials, and calculated plan pricing were copied into this new job.
+                                    Service lines, tasks, planned stops, materials, and calculated plan pricing were copied into this new job.
                                 </p>
                             </div>
                         ) : (
@@ -1925,34 +2578,47 @@ const CreateNewJob = () => {
 
                         {taskList.length > 0 ? (
                             <div className="divide-y divide-gray-200 mb-6">
-                                {taskList.map((task) => (
-                                    <div key={task.id} className="flex justify-between items-center py-3 gap-4">
-                                        <div>
-                                            <p className="font-semibold text-gray-800">{task.name}</p>
-                                            <p className="text-sm text-gray-600">
-                                                {task.type} • Est. Time: {task.estimatedTime || 0} min
-                                            </p>
-                                            <p className="text-xs text-gray-500">
-                                                Status: {task.status || "Draft"} • Worker: {task.workerType || "Not Assigned"}
-                                            </p>
-                                        </div>
+                                {taskList.map((task) => {
+                                    const taskEquipment = equipmentById.get(task.equipmentId) || null;
+                                    const taskBodyOfWater = bodyOfWaterById.get(task.bodyOfWaterId) || null;
 
-                                        <div className="text-right">
-                                            <p className="text-sm font-semibold text-slate-800">
-                                                Tech: {moneyFromCents(task.contractedRate)}
-                                            </p>
-                                            <p className="text-sm font-semibold text-blue-700">
-                                                Billing: {moneyFromCents(getTaskBillingLaborPriceCents(task))}
-                                            </p>
-                                            <button
-                                                onClick={() => removeTask(task.id)}
-                                                className="text-red-600 hover:text-red-800 text-sm font-semibold"
-                                            >
-                                                Remove
-                                            </button>
+                                    return (
+                                        <div key={task.id} className="flex justify-between items-center py-3 gap-4">
+                                            <div>
+                                                <p className="font-semibold text-gray-800">{task.name}</p>
+                                                <p className="text-sm text-gray-600">
+                                                    {task.type} • Est. Time: {task.estimatedTime || 0} min
+                                                </p>
+                                                <p className="text-xs text-gray-500">
+                                                    Status: {task.status || "Draft"} • Worker: {task.workerType || "Not Assigned"}
+                                                </p>
+                                                {(taskEquipment || taskBodyOfWater) && (
+                                                    <p className="text-xs text-slate-500">
+                                                        {[taskBodyOfWater?.label || taskBodyOfWater?.name, taskEquipment?.label || taskEquipment?.name]
+                                                            .filter(Boolean)
+                                                            .join(" • ")}
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            <div className="text-right">
+                                                <p className="text-sm font-semibold text-slate-800">
+                                                    Tech: {moneyFromCents(task.contractedRate)}
+                                                </p>
+                                                <p className="text-sm font-semibold text-blue-700">
+                                                    Billing: {moneyFromCents(getTaskBillingLaborPriceCents(task))}
+                                                </p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removeTask(task.id)}
+                                                    className="text-red-600 hover:text-red-800 text-sm font-semibold"
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         ) : (
                             <div className="mb-6">
@@ -1960,58 +2626,151 @@ const CreateNewJob = () => {
                             </div>
                         )}
 
-                        <div className="grid grid-cols-1 gap-4 border-t pt-4 md:grid-cols-5">
-                            <input
-                                value={taskDescription}
-                                onChange={(e) => setTaskDescription(e.target.value)}
-                                placeholder="Task Description"
-                                className="w-full p-3 border border-gray-300 rounded-lg"
-                            />
+                        <div className="border-t pt-4">
+                            <div className="rounded-md border border-blue-200 bg-blue-50/60 p-3">
+                                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                                    <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                        Description
+                                        <input
+                                            value={taskDescription}
+                                            onChange={(e) => setTaskDescription(e.target.value)}
+                                            placeholder="Task description"
+                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
 
-                            <Select
-                                options={taskTypeList}
-                                value={selectedTaskType}
-                                onChange={setSelectedTaskType}
-                                placeholder="Task Type"
-                                styles={selectStyles}
-                            />
+                                    <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                        Type
+                                        <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                                            <Select
+                                                options={taskTypeList}
+                                                value={selectedTaskType}
+                                                onChange={(option) => {
+                                                    setSelectedTaskType(option);
+                                                    if (!taskTypeRequiresInstallItem(option?.value || option?.name || "")) {
+                                                        setSelectedTaskDbItemId("");
+                                                        setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
+                                                    }
+                                                }}
+                                                placeholder="Select a task type"
+                                                styles={selectStyles}
+                                                isSearchable
+                                            />
+                                        </div>
+                                    </div>
 
-                            <input
-                                value={taskLaborCost}
-                                onChange={(e) => setTaskLaborCost(e.target.value)}
-                                placeholder="Tech Labor Cost"
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                className="w-full p-3 border border-gray-300 rounded-lg"
-                            />
+                                    {taskNeedsBodyOfWater && (
+                                        <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                            Body of Water
+                                            <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                                                <Select
+                                                    options={taskBodyOfWaterOptions}
+                                                    value={selectedTaskBodyOfWater}
+                                                    onChange={setSelectedTaskBodyOfWater}
+                                                    placeholder="Select body of water"
+                                                    styles={selectStyles}
+                                                    isSearchable
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
 
-                            <input
-                                value={taskBillingLaborPrice}
-                                onChange={(e) => setTaskBillingLaborPrice(e.target.value)}
-                                placeholder="Billing Labor Price"
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                className="w-full p-3 border border-gray-300 rounded-lg"
-                            />
+                                    {taskNeedsEquipment && (
+                                        <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                            Equipment
+                                            <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                                                <Select
+                                                    options={taskEquipmentOptions}
+                                                    value={selectedTaskEquipment}
+                                                    onChange={setSelectedTaskEquipment}
+                                                    placeholder="Select equipment"
+                                                    styles={selectStyles}
+                                                    isSearchable
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
 
-                            <input
-                                value={estimatedTime}
-                                onChange={(e) => setEstimatedTime(e.target.value)}
-                                placeholder="Estimated Time Min"
-                                type="number"
-                                min="0"
-                                className="w-full p-3 border border-gray-300 rounded-lg"
-                            />
+                                    {taskNeedsInstallItem && (
+                                        <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                            {taskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
+                                            <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                                                <Select
+                                                    options={equipmentDatabaseItems}
+                                                    value={selectedTaskDbItem}
+                                                    onChange={(option) => setSelectedTaskDbItemId(option?.id || option?.value || "")}
+                                                    placeholder={taskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
+                                                    styles={selectStyles}
+                                                    isSearchable
+                                                    isClearable
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                        Tech Labor Cost
+                                        <input
+                                            value={taskLaborCost}
+                                            onChange={(e) => setTaskLaborCost(e.target.value)}
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
+
+                                    <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                        Billing Labor
+                                        <input
+                                            value={taskBillingLaborPrice}
+                                            onChange={(e) => setTaskBillingLaborPrice(e.target.value)}
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
+
+                                    <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                        Estimated Time
+                                        <input
+                                            value={estimatedTime}
+                                            onChange={(e) => setEstimatedTime(e.target.value)}
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
+                                </div>
+
+                                {taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && (
+                                    <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+                                        <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
+                                            Equipment Mapping
+                                        </p>
+                                        <EquipmentCatalogPicker
+                                            value={selectedTaskDbItemEquipmentMapping}
+                                            onChange={setSelectedTaskDbItemEquipmentMapping}
+                                            preferCustom
+                                            inputClassName="w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                                            labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+                                            gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+                                            labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+                                        />
+                                    </div>
+                                )}
+
+                                <button
+                                    type="button"
+                                    onClick={handleAddTask}
+                                    className="mt-4 w-full rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                                >
+                                    Add Task
+                                </button>
+                            </div>
                         </div>
-
-                        <button
-                            onClick={handleAddTask}
-                            className="mt-4 w-full py-3 px-4 bg-blue-100 text-blue-800 font-semibold rounded-lg hover:bg-blue-200 transition"
-                        >
-                            Add Task
-                        </button>
                     </SectionCard>
                 );
 
@@ -2111,7 +2870,9 @@ const CreateNewJob = () => {
                             <StatCard
                                 title="Planned Total Labor"
                                 value={moneyFromCents(plannedTotalLaborCents)}
-                                subtitle={`${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tech tasks • ${moneyFromCents(plannedTaskBillingLaborCents)} billable tasks`}
+                                subtitle={laborLineItems.length
+                                    ? `${laborLineItems.length} service line${laborLineItems.length === 1 ? "" : "s"} • ${moneyFromCents(plannedLaborLinePriceCents)} billable`
+                                    : `${moneyFromCents(plannedStopLaborCents)} stops - ${moneyFromCents(plannedTaskLaborCents)} tech tasks - ${moneyFromCents(plannedTaskBillingLaborCents)} billable tasks`}
                                 tone="amber"
                             />
 
@@ -2184,92 +2945,38 @@ const CreateNewJob = () => {
     };
 
     return (
-        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-            <div className="w-full space-y-6">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-950 sm:px-3 lg:px-4">
+            <div className="w-full space-y-5">
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
                             <Link
                                 to="/company/jobs"
                                 className="app-back-link"
                             >
                                 &larr; Back to Jobs
                             </Link>
-                            <h2 className="mt-2 text-3xl font-bold text-slate-950">Create New Job</h2>
-
-                            <p className="mt-1 text-sm text-slate-600">
+                            <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Company Operations</p>
+                            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-950">Create New Job</h1>
+                            <p className="mt-1 max-w-3xl text-sm text-slate-500">
                                 {selectedTemplate
                                     ? `Started from template: ${selectedTemplate.name}`
                                     : "Build the job scope, materials, pricing, and review before submitting."}
                             </p>
                         </div>
 
-                        <button
-                            type="button"
-                            onClick={createNewJob}
-                            disabled={creating}
-                            aria-disabled={!canCreateJob || creating}
-                            className={[
-                                "rounded-md px-4 py-2 text-sm font-bold shadow-sm transition",
-                                canCreateJob && !creating
-                                    ? "bg-blue-600 text-white hover:bg-blue-700"
-                                    : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
-                            ].join(" ")}
-                        >
-                            {creating ? "Creating..." : "Create Job"}
-                        </button>
-                    </div>
-                </section>
-
-                <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex flex-wrap gap-2">
-                        {steps.map((step) => {
-                            const active = step === activeStep;
-                            const completed = steps.indexOf(step) < steps.indexOf(activeStep);
-
-                            return (
-                                <button
-                                    key={step}
-                                    type="button"
-                                    onClick={() => setActiveStep(step)}
-                                    className={[
-                                        "rounded-md border px-4 py-2 text-sm font-semibold transition",
-                                        active
-                                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-                                            : completed
-                                                ? "bg-green-50 text-green-700 border-green-200"
-                                                : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50",
-                                    ].join(" ")}
-                                >
-                                    {completed ? "✓ " : ""}
-                                    {step}
-                                </button>
-                            );
-                        })}
-                    </div>
-                </section>
-
-                {renderStepContent()}
-
-                <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex items-center justify-between gap-3">
-                        <button
-                            type="button"
-                            onClick={goBackStep}
-                            disabled={activeStep === steps[0]}
-                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                        >
-                            Back
-                        </button>
-
-                        {activeStep === "Review" ? (
+                        <div className="flex flex-col gap-2 sm:items-end">
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-right shadow-sm">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Estimated Price</p>
+                                <p className="mt-1 text-2xl font-bold text-slate-950">{moneyFromCents(calculatedPlanPriceCents)}</p>
+                            </div>
                             <button
                                 type="button"
                                 onClick={createNewJob}
                                 disabled={creating}
                                 aria-disabled={!canCreateJob || creating}
                                 className={[
-                                    "rounded-md px-4 py-2 text-sm font-bold shadow-sm transition",
+                                    "w-full rounded-md px-4 py-2.5 text-sm font-semibold shadow-sm transition sm:w-auto",
                                     canCreateJob && !creating
                                         ? "bg-blue-600 text-white hover:bg-blue-700"
                                         : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
@@ -2277,15 +2984,148 @@ const CreateNewJob = () => {
                             >
                                 {creating ? "Creating..." : "Create Job"}
                             </button>
-                        ) : (
+                        </div>
+                    </div>
+                </section>
+
+                <section className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
+                    <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+                        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
+                            <div className="mt-3 space-y-2">
+                                {createJobSectionMeta.map((sectionOption) => {
+                                    const active = sectionOption.id === activeCreateSection;
+                                    return (
+                                        <button
+                                            key={sectionOption.id}
+                                            type="button"
+                                            onClick={() => setActiveCreateSection(sectionOption.id)}
+                                            className={[
+                                                "w-full rounded-md border px-3 py-2 text-left transition",
+                                                active
+                                                    ? "border-blue-200 bg-blue-50 text-blue-800"
+                                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                                            ].join(" ")}
+                                        >
+                                            <span className="flex items-center justify-between gap-3">
+                                                <span className="text-sm font-semibold">{sectionOption.label}</span>
+                                                <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                                    {sectionOption.count}
+                                                </span>
+                                            </span>
+                                            <span className="mt-1 block text-xs text-slate-500">{sectionOption.helper}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
+                            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Job Snapshot</h2>
+                            <dl className="mt-3 space-y-3">
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Admin</dt>
+                                    <dd className="mt-0.5 font-semibold text-slate-800">{getAdminNameForJob(selectedAdmin) || "Not set"}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Customer</dt>
+                                    <dd className="mt-0.5 font-semibold text-slate-800">{getCustomerDisplayName(selectedCustomer) || "Not set"}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Site</dt>
+                                    <dd className="mt-0.5 font-semibold text-slate-800">{selectedServiceLocation?.label || "Not set"}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Template</dt>
+                                    <dd className="mt-0.5 font-semibold text-slate-800">{selectedTemplate?.name || "None"}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Price</dt>
+                                    <dd className="mt-0.5 text-lg font-bold text-slate-950">{moneyFromCents(calculatedPlanPriceCents)}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Projected Profit</dt>
+                                    <dd className={projectedProfitCents < 0 ? "mt-0.5 font-bold text-rose-700" : "mt-0.5 font-bold text-emerald-700"}>
+                                        {moneyFromCents(projectedProfitCents)}
+                                    </dd>
+                                </div>
+                            </dl>
+                        </div>
+
+                        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                             <button
                                 type="button"
-                                onClick={goNext}
-                                className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                                onClick={createNewJob}
+                                disabled={creating}
+                                aria-disabled={!canCreateJob || creating}
+                                className={[
+                                    "w-full rounded-md px-4 py-2.5 text-sm font-semibold shadow-sm transition",
+                                    canCreateJob && !creating
+                                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                                        : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
+                                ].join(" ")}
                             >
-                                Next
+                                {creating ? "Creating..." : "Create Job"}
                             </button>
-                        )}
+                            <Link
+                                to="/company/jobs"
+                                className="mt-2 block w-full rounded-md border border-slate-200 bg-white px-4 py-2.5 text-center text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                            >
+                                Cancel
+                            </Link>
+                        </section>
+                    </aside>
+
+                    <div className="min-w-0 space-y-4">
+                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <h2 className="text-sm font-bold text-slate-900">
+                                            {activeCreateSectionMeta?.label || "Job Info"}
+                                        </h2>
+                                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                                            New Job
+                                        </span>
+                                    </div>
+                                    <p className="mt-0.5 text-xs text-slate-500">{activeCreateSectionMeta?.helper}</p>
+                                </div>
+
+                                <div className="flex flex-wrap gap-2">
+                                    {previousCreateSection && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setActiveCreateSection(previousCreateSection)}
+                                            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                            Previous
+                                        </button>
+                                    )}
+                                    {nextCreateSection ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setActiveCreateSection(nextCreateSection)}
+                                            className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+                                        >
+                                            Next
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            onClick={createNewJob}
+                                            disabled={creating}
+                                            className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {creating ? "Creating..." : "Create Job"}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id={`create-job-${activeCreateSection.toLowerCase()}`}>
+                            {renderStepContent(activeCreateSection)}
+                        </div>
                     </div>
                 </section>
             </div>
@@ -2319,7 +3159,7 @@ const CreateNewJob = () => {
                                 type="button"
                                 onClick={() => {
                                     setShowMissingJobInfoModal(false);
-                                    setActiveStep("Info");
+                                    window.scrollTo({ top: 0, behavior: "smooth" });
                                 }}
                                 className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
                             >

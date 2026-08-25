@@ -305,6 +305,7 @@ const CompanyAccountingWorkspace = () => {
   const [reconcilingPaymentId, setReconcilingPaymentId] = useState("");
   const [stripeReadiness, setStripeReadiness] = useState(null);
   const [stripeReadinessLoading, setStripeReadinessLoading] = useState(false);
+  const payoutDelayDays = stripeReadiness?.payoutsSchedule?.delayDays;
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -1035,7 +1036,7 @@ const CompanyAccountingWorkspace = () => {
                   value={stripeReadiness?.payoutsSchedule?.interval
                     ? labelize(stripeReadiness.payoutsSchedule.interval)
                     : "Not returned"}
-                  status={stripeReadiness?.payoutsSchedule?.delayDays !== "" ? `${stripeReadiness.payoutsSchedule.delayDays} day delay` : ""}
+                  status={payoutDelayDays !== undefined && payoutDelayDays !== null && payoutDelayDays !== "" ? `${payoutDelayDays} day delay` : ""}
                 />
               </dl>
 

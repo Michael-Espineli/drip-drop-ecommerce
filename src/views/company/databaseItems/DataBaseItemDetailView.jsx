@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from "react";
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   collection,
   doc,
@@ -35,6 +35,13 @@ import {
   uploadItemPhoto,
   validateItemPhotoFile,
 } from "../../../utils/itemPhotos";
+import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import {
+  databaseEquipmentMappingFromItem,
+  databaseEquipmentMappingPatch,
+  emptyDatabaseEquipmentMapping,
+  isEquipmentDatabaseCategory,
+} from "../../../utils/databaseEquipmentItems";
 
 const formatCurrency = (number, locale = "en-US", currency = "USD") =>
   new Intl.NumberFormat(locale, {
@@ -53,6 +60,10 @@ const DataBaseItemDetailView = () => {
   const { recentlySelectedCompany } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
   const navigate = useNavigate();
+  const location = useLocation();
+  const vendorItemsBasePath = location.pathname.toLowerCase().startsWith("/company/settings")
+    ? "/company/settings/vendor-items"
+    : "/company/items";
   const { id } = useParams();
 
   const [purchase, setPurchase] = useState({});
@@ -76,6 +87,7 @@ const DataBaseItemDetailView = () => {
   const [dosages, setDosages] = useState([]);
   const [linkedDosageIds, setLinkedDosageIds] = useState([]);
   const [dosageSearchTerm, setDosageSearchTerm] = useState("");
+  const [equipmentMapping, setEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
 
   useEffect(() => {
     (async () => {
@@ -118,6 +130,7 @@ const DataBaseItemDetailView = () => {
             imageUrl: itemData.imageUrl || itemData.imageURL || "",
             primaryPhotoUrl: itemData.primaryPhotoUrl || "",
             photoUrls: Array.isArray(itemData.photoUrls) ? itemData.photoUrls : [],
+            ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(itemData)),
           });
         } else {
           console.log("No such document!");
@@ -181,7 +194,7 @@ const DataBaseItemDetailView = () => {
 
   async function editItem(e) {
     e.preventDefault();
-    if (!requirePermission("854", "update products")) return;
+    if (!requirePermission("854", "update vendor items")) return;
 
     try {
       setRate(purchase.rate ?? "");
@@ -201,6 +214,7 @@ const DataBaseItemDetailView = () => {
       setTracking(purchase.tracking || "");
       setBillable(Boolean(purchase.billable));
       setLinkedDosageIds(currentLinkedDosageIds);
+      setEquipmentMapping(databaseEquipmentMappingFromItem(purchase));
       setEdit(true);
     } catch (error) {
       console.log(error);
@@ -209,7 +223,7 @@ const DataBaseItemDetailView = () => {
 
   async function deleteItem(e) {
     e.preventDefault();
-    if (!requirePermission("856", "delete products")) return;
+    if (!requirePermission("856", "delete vendor items")) return;
 
     try {
       const batch = writeBatch(db);
@@ -221,7 +235,7 @@ const DataBaseItemDetailView = () => {
       });
       batch.delete(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id));
       await batch.commit();
-      navigate("/company/items");
+      navigate(vendorItemsBasePath);
     } catch (error) {
       console.log(error);
     }
@@ -254,7 +268,7 @@ const DataBaseItemDetailView = () => {
 
   async function saveEdit(e) {
     e.preventDefault();
-    if (!requirePermission("854", "update products")) return;
+    if (!requirePermission("854", "update vendor items")) return;
 
     try {
       const rateCents = Math.round(Number(rate || 0) * 100);
@@ -276,9 +290,21 @@ const DataBaseItemDetailView = () => {
 
       const photoFields = itemPhotoFieldsFromUrl(
         uploadedPhoto.photoUrl,
-        itemName || purchase.name || "Product photo",
+        itemName || purchase.name || "Vendor item photo",
         uploadedPhoto.storagePath
       );
+      const allowsEquipmentMapping = isEquipmentDatabaseCategory(category);
+      if (
+        allowsEquipmentMapping &&
+        (!equipmentMapping.type || !equipmentMapping.make || !equipmentMapping.model)
+      ) {
+        toast.error("Connect this equipment item to universal equipment or enter custom type, make, and model.");
+        return;
+      }
+
+      const equipmentFields = allowsEquipmentMapping
+        ? databaseEquipmentMappingPatch(equipmentMapping)
+        : {};
       const updatedItem = {
         UOM: uom,
         billable: Boolean(billable),
@@ -294,6 +320,7 @@ const DataBaseItemDetailView = () => {
         sellPrice: sellPriceCents,
         billingRate: sellPriceCents,
         tracking,
+        ...equipmentFields,
         ...photoFields,
       };
 
@@ -321,16 +348,17 @@ const DataBaseItemDetailView = () => {
         billingRate: formatCurrency(Number(sellPrice || 0)),
         billingRateRaw: Number(sellPrice || 0),
         dateUpdated: format(updatedItem.dateUpdated, "MM / d / yyyy"),
+        ...equipmentFields,
         ...photoFields,
       }));
       setPhotoFile(null);
       setPhotoPreviewUrl("");
       setPhotoUrl(photoFields.photoUrl || "");
       setEdit(false);
-      toast.success("Product updated.");
+      toast.success("Vendor item updated.");
     } catch (error) {
       console.log(error);
-      toast.error("Could not update product.");
+      toast.error("Could not update vendor item.");
     }
   }
 
@@ -354,6 +382,10 @@ const DataBaseItemDetailView = () => {
   const labelClass = "block text-sm font-semibold text-slate-700";
   const currentBillable = edit ? billable : Boolean(purchase.billable);
   const displayPhotoUrl = edit ? photoPreviewUrl || photoUrl : purchase.photoUrl;
+  const currentAllowsEquipmentMapping = edit
+    ? isEquipmentDatabaseCategory(category)
+    : isEquipmentDatabaseCategory(purchase.category);
+  const displayEquipmentMapping = databaseEquipmentMappingFromItem(edit ? equipmentMapping : purchase);
   const billableBadgeClass = currentBillable
     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
     : "border-slate-200 bg-slate-100 text-slate-600";
@@ -364,12 +396,12 @@ const DataBaseItemDetailView = () => {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <Link to="/company/items" className="app-back-link">
-                &larr; Back to Products
+              <Link to={vendorItemsBasePath} className="app-back-link">
+                &larr; Back to Vendor Items
               </Link>
-              <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Database Product</p>
+              <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Vendor Item</p>
               <h1 className="mt-1 break-words text-3xl font-bold text-slate-950">
-                {edit ? "Edit Product" : purchase.name || "Database Product"}
+                {edit ? "Edit Vendor Item" : purchase.name || "Vendor Item"}
               </h1>
               <div className="mt-3 flex flex-wrap gap-2">
                 <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700">
@@ -422,14 +454,14 @@ const DataBaseItemDetailView = () => {
         {edit ? (
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
-              <h2 className="text-lg font-bold text-slate-950">Catalog Details</h2>
-              <p className="mt-1 text-sm text-slate-500">Edit product pricing, classification, tracking, and billing defaults.</p>
+              <h2 className="text-lg font-bold text-slate-950">Vendor Item Details</h2>
+              <p className="mt-1 text-sm text-slate-500">Edit supplier-specific pricing, classification, tracking, and billing defaults.</p>
             </div>
 
-            <div className="grid gap-4 p-5 lg:grid-cols-2">
+              <div className="grid gap-4 p-5 lg:grid-cols-2">
               <div className="lg:col-span-2">
-                <label className={labelClass}>Product Name</label>
-                <input className={inputClass} onChange={(e) => setItemName(e.target.value)} type="text" placeholder="Product Name" value={itemName} />
+                <label className={labelClass}>Vendor Item Name</label>
+                <input className={inputClass} onChange={(e) => setItemName(e.target.value)} type="text" placeholder="Vendor Item Name" value={itemName} />
               </div>
 
               <div className="lg:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -446,7 +478,7 @@ const DataBaseItemDetailView = () => {
 
                   <div className="min-w-0 flex-1 space-y-3">
                     <div>
-                      <label className={labelClass}>Product Photo</label>
+                      <label className={labelClass}>Vendor Item Photo</label>
                       <input
                         className="mt-2 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
                         type="file"
@@ -499,7 +531,7 @@ const DataBaseItemDetailView = () => {
                 />
                 <span>
                   <span className="block font-bold text-slate-900">Billable</span>
-                  <span className="mt-1 block text-slate-500">Use this product as billable by default when it is selected for jobs, purchases, or customer-facing product rows.</span>
+                  <span className="mt-1 block text-slate-500">Use this vendor item as billable by default when it is selected from receipts or purchasing workflows.</span>
                 </span>
               </label>
 
@@ -567,6 +599,24 @@ const DataBaseItemDetailView = () => {
                 <label className={labelClass}>Description</label>
                 <textarea className={`${inputClass} min-h-[110px]`} onChange={(e) => setDescription(e.target.value)} placeholder="Description" value={description} />
               </div>
+
+              {currentAllowsEquipmentMapping && (
+                <div className="lg:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-4">
+                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Equipment Mapping</h3>
+                    <p className="mt-1 text-sm text-slate-500">Connect this product to universal equipment or custom equipment details.</p>
+                  </div>
+                  <EquipmentCatalogPicker
+                    value={equipmentMapping}
+                    onChange={setEquipmentMapping}
+                    preferCustom
+                    inputClassName={inputClass}
+                    labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+                    gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+                    labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+                  />
+                </div>
+              )}
             </div>
 
             {allowsLinkedDosages && (
@@ -660,6 +710,27 @@ const DataBaseItemDetailView = () => {
                 <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{purchase.description || "--"}</p>
               </div>
 
+              {currentAllowsEquipmentMapping && (
+                <div className="border-t border-slate-200 p-5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Equipment Mapping</p>
+                  <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <DetailField label="Equipment Type" value={displayEquipmentMapping.type} />
+                    <DetailField label="Make" value={displayEquipmentMapping.make} />
+                    <DetailField label="Model" value={displayEquipmentMapping.model} />
+                  </div>
+                  {displayEquipmentMapping.manualPdfLink ? (
+                    <a
+                      href={displayEquipmentMapping.manualPdfLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-4 inline-flex rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white transition hover:bg-blue-700"
+                    >
+                      View Manual
+                    </a>
+                  ) : null}
+                </div>
+              )}
+
               <div className="border-t border-slate-200 p-5">
                 <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Linked Dosages</p>
                 {linkedDosages.length ? (
@@ -690,7 +761,7 @@ const DataBaseItemDetailView = () => {
                   </div>
                 )}
               </div>
-              <h2 className="text-lg font-bold text-slate-950">Product Summary</h2>
+              <h2 className="text-lg font-bold text-slate-950">Vendor Item Summary</h2>
               <div className="mt-4 space-y-3 text-sm text-slate-700">
                 <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
                   <span className="font-semibold text-slate-500">Updated</span>

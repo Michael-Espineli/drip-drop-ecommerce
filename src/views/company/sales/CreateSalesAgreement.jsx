@@ -517,7 +517,9 @@ const CreateSalesAgreement = () => {
   const [dosageTemplates, setDosageTemplates] = useState([]);
   const [termsTemplates, setTermsTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingTermsTemplates, setLoadingTermsTemplates] = useState(false);
   const [termsLoading, setTermsLoading] = useState(false);
+  const [applyingTermsTemplate, setApplyingTermsTemplate] = useState(false);
   const [loadingDosageTemplates, setLoadingDosageTemplates] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedCatalogItemId, setSelectedCatalogItemId] = useState('');
@@ -743,13 +745,17 @@ const CreateSalesAgreement = () => {
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setTermsTemplates([]);
+      setLoadingTermsTemplates(false);
       return undefined;
     }
+
+    setLoadingTermsTemplates(true);
 
     return listenTermsTemplates(
       recentlySelectedCompany,
       (templates) => {
         setTermsTemplates(templates);
+        setLoadingTermsTemplates(false);
         setForm((current) => {
           const nextTemplateId = current.termsTemplateId || templates[0]?.id || '';
           const nextTemplate = templates.find((template) => template.id === nextTemplateId) || null;
@@ -774,6 +780,7 @@ const CreateSalesAgreement = () => {
       (error) => {
         console.error('Unable to load terms templates for agreement', error);
         toast.error('Failed to load terms templates.');
+        setLoadingTermsTemplates(false);
       }
     );
   }, [recentlySelectedCompany]);
@@ -882,7 +889,7 @@ const CreateSalesAgreement = () => {
     }));
   };
 
-  const applyTermsTemplateToForm = (templateId) => {
+  const applyTermsTemplateToForm = async (templateId) => {
     const template = termsTemplates.find((item) => item.id === templateId) || null;
 
     if (!templateId) {
@@ -902,19 +909,29 @@ const CreateSalesAgreement = () => {
       return;
     }
 
-    setForm((current) => (
-      applyTermsTemplateAgreementDefaults(
-        {
-          ...current,
-          termsTemplateId: templateId,
-          termsTemplateName: template.name || '',
-          termsTemplateDescription: template.description || '',
-          terms: template.content || '',
-          termsList: [],
-        },
-        template
-      )
-    ));
+    setApplyingTermsTemplate(true);
+
+    try {
+      const templateTerms = recentlySelectedCompany ? await getTerms(recentlySelectedCompany, template.id) : [];
+      setForm((current) => (
+        applyTermsTemplateAgreementDefaults(
+          {
+            ...current,
+            termsTemplateId: templateId,
+            termsTemplateName: template.name || '',
+            termsTemplateDescription: template.description || '',
+            terms: template.content || '',
+            termsList: normalizeAgreementTerms(templateTerms),
+          },
+          template
+        )
+      ));
+    } catch (error) {
+      console.error('Unable to apply terms template to new agreement', error);
+      toast.error('Failed to apply selected agreement template.');
+    } finally {
+      setApplyingTermsTemplate(false);
+    }
   };
 
   const updateChemicalBillingMode = (value) => {
@@ -1232,7 +1249,7 @@ const CreateSalesAgreement = () => {
           <main className="space-y-6 lg:order-2">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-slate-950">Customer</h2>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div className="mt-4">
                 <div>
                   <label htmlFor="customerId" className="block text-sm font-semibold text-slate-700">
                     Customer
@@ -1262,21 +1279,6 @@ const CreateSalesAgreement = () => {
                         .join(' | ')}
                     </p>
                   )}
-                </div>
-
-                <div>
-                  <label htmlFor="email" className="block text-sm font-semibold text-slate-700">
-                    Billing Email
-                    <span className="ml-1 font-normal text-slate-500">(optional until send)</span>
-                  </label>
-                  <input
-                    id="email"
-                    type="email"
-                    value={form.email}
-                    onChange={(event) => handleFieldChange('email', event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="customer@example.com"
-                  />
                 </div>
               </div>
 
@@ -1316,8 +1318,8 @@ const CreateSalesAgreement = () => {
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-slate-950">Agreement Details</h2>
-              <div className="mt-4 space-y-4">
-                <div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
                   <label htmlFor="termsTemplateId" className="block text-sm font-semibold text-slate-700">
                     Service Agreement Template
                   </label>
@@ -1325,21 +1327,27 @@ const CreateSalesAgreement = () => {
                     id="termsTemplateId"
                     value={form.termsTemplateId}
                     onChange={(event) => applyTermsTemplateToForm(event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    disabled={loadingTermsTemplates || applyingTermsTemplate}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                   >
-                    <option value="">No template selected</option>
+                    <option value="">
+                      {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
+                    </option>
                     {termsTemplates.map((template) => (
                       <option key={template.id} value={template.id}>{template.name}</option>
                     ))}
                   </select>
+                  {applyingTermsTemplate && (
+                    <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
+                  )}
                   {form.termsTemplateId && selectedTemplate?.description && (
                     <p className="mt-2 text-xs text-slate-500">{selectedTemplate.description}</p>
                   )}
                 </div>
 
-                <div>
+                <div className="sm:col-span-2">
                   <label htmlFor="title" className="block text-sm font-semibold text-slate-700">
-                    Agreement Title
+                    Title
                   </label>
                   <input
                     id="title"
@@ -1352,6 +1360,54 @@ const CreateSalesAgreement = () => {
                 </div>
 
                 <div>
+                  <label htmlFor="email" className="block text-sm font-semibold text-slate-700">
+                    Customer Email
+                    <span className="ml-1 font-normal text-slate-500">(optional until send)</span>
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    value={form.email}
+                    onChange={(event) => handleFieldChange('email', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    placeholder="customer@example.com"
+                  />
+                </div>
+
+                <div>
+                  <span className="block text-sm font-semibold text-slate-700">Status After Save</span>
+                  <div className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900">
+                    Draft
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="startDate" className="block text-sm font-semibold text-slate-700">
+                    Start Date
+                  </label>
+                  <input
+                    id="startDate"
+                    type="date"
+                    value={form.startDate}
+                    onChange={(event) => handleFieldChange('startDate', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="expiresAt" className="block text-sm font-semibold text-slate-700">
+                    Review By
+                  </label>
+                  <input
+                    id="expiresAt"
+                    type="date"
+                    value={form.expiresAt}
+                    onChange={(event) => handleFieldChange('expiresAt', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
                   <label htmlFor="description" className="block text-sm font-semibold text-slate-700">
                     Description
                   </label>
@@ -1364,270 +1420,40 @@ const CreateSalesAgreement = () => {
                     placeholder="Short customer-facing summary"
                   />
                 </div>
+              </div>
+            </section>
 
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-bold text-slate-950">Service</h2>
+              <div className="mt-3 grid gap-4 sm:grid-cols-2">
                 <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Service Schedule</h3>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="serviceCadence" className="block text-sm font-semibold text-slate-700">
-                        Service Frequency
-                      </label>
-                      <select
-                        id="serviceCadence"
-                        value={form.serviceCadence}
-                        onChange={(event) => handleFieldChange('serviceCadence', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      >
-                        {serviceFrequencyOptions.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="serviceCadenceCount" className="block text-sm font-semibold text-slate-700">
-                        Service Count
-                      </label>
-                      <input
-                        id="serviceCadenceCount"
-                        type="number"
-                        min="1"
-                        value={form.serviceCadenceCount}
-                        onChange={(event) => handleFieldChange('serviceCadenceCount', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      />
-                    </div>
-                  </div>
+                  <label htmlFor="serviceCadence" className="block text-sm font-semibold text-slate-700">
+                    Service Frequency
+                  </label>
+                  <select
+                    id="serviceCadence"
+                    value={form.serviceCadence}
+                    onChange={(event) => handleFieldChange('serviceCadence', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  >
+                    {serviceFrequencyOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Billing Schedule</h3>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-                    <div>
-                      <label htmlFor="billingFrequency" className="block text-sm font-semibold text-slate-700">
-                        Billing Frequency
-                      </label>
-                      <select
-                        id="billingFrequency"
-                        value={form.billingFrequency}
-                        onChange={(event) => handleFieldChange('billingFrequency', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      >
-                        {billingFrequencyOptions.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="billingFrequencyCount" className="block text-sm font-semibold text-slate-700">
-                        Billing Count
-                      </label>
-                      <input
-                        id="billingFrequencyCount"
-                        type="number"
-                        min="1"
-                        value={form.billingFrequencyCount}
-                        onChange={(event) => handleFieldChange('billingFrequencyCount', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      />
-                    </div>
-
-                    <div>
-                      <label htmlFor="rateType" className="block text-sm font-semibold text-slate-700">
-                        Rate Type
-                      </label>
-                      <select
-                        id="rateType"
-                        value={form.rateType}
-                        onChange={(event) => handleFieldChange('rateType', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      >
-                        {rateTypeOptions.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="firstInvoiceSendAt" className="block text-sm font-semibold text-slate-700">
-                        First Invoice Send
-                      </label>
-                      <input
-                        id="firstInvoiceSendAt"
-                        type="date"
-                        value={form.firstInvoiceSendAt}
-                        onChange={(event) => handleFieldChange('firstInvoiceSendAt', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      />
-                    </div>
-
-                    <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 lg:self-end">
-                      <input
-                        type="checkbox"
-                        checked={form.manualBillingAutoSendEnabled}
-                        onChange={(event) => handleFieldChange('manualBillingAutoSendEnabled', event.target.checked)}
-                      />
-                      Email invoices automatically
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Chemical Billing</h3>
-                    <Link
-                      to="/company/readingsAndDosages"
-                      className="text-sm font-semibold text-blue-700 hover:text-blue-800"
-                    >
-                      Manage Dosages
-                    </Link>
-                  </div>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="chemicalBillingMode" className="block text-sm font-semibold text-slate-700">
-                        Billing Treatment
-                      </label>
-                      <select
-                        id="chemicalBillingMode"
-                        value={form.chemicalBillingMode}
-                        onChange={(event) => updateChemicalBillingMode(event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      >
-                        {chemicalBillingModeOptions.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="chemicalBillingNotes" className="block text-sm font-semibold text-slate-700">
-                        Chemical Billing Notes
-                      </label>
-                      <input
-                        id="chemicalBillingNotes"
-                        type="text"
-                        value={form.chemicalBillingNotes}
-                        onChange={(event) => handleFieldChange('chemicalBillingNotes', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        placeholder="tabs supplied by customer, phosphate billed separately"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.includedAll && (
-                      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                        All dosage templates are included in service. No dosage selections are needed.
-                      </div>
-                    )}
-
-                    {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.billAllSeparately && (
-                      <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
-                        All dosage templates are billed separately. No dosage selections are needed.
-                      </div>
-                    )}
-
-                    {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
-                      <div className="grid gap-3 lg:grid-cols-2">
-                        <div className="rounded-md border border-slate-200 bg-white p-3">
-                          <label htmlFor="chemicalBillingMixedSelectionMode" className="block text-sm font-semibold text-slate-700">
-                            Mixed Billing Selection
-                          </label>
-                          <select
-                            id="chemicalBillingMixedSelectionMode"
-                            value={form.chemicalBillingMixedSelectionMode}
-                            onChange={(event) => updateChemicalBillingMixedSelectionMode(event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          >
-                            {mixedChemicalBillingSelectionOptions.map((option) => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {form.chemicalBillingMixedSelectionMode === ChemicalBillingMixedSelectionMode.included ? (
-                          <ChemicalDosagePicker
-                            id="includedChemicalIds"
-                            label="Included Dosages"
-                            selectedIds={form.includedChemicalIds}
-                            dosageTemplates={dosageTemplates}
-                            loading={loadingDosageTemplates}
-                            onChange={(nextIds) => handleFieldChange('includedChemicalIds', nextIds)}
-                          />
-                        ) : (
-                          <ChemicalDosagePicker
-                            id="separatelyBilledChemicalIds"
-                            label="Excluded / Separately Billed Dosages"
-                            selectedIds={form.separatelyBilledChemicalIds}
-                            dosageTemplates={dosageTemplates}
-                            loading={loadingDosageTemplates}
-                            onChange={(nextIds) => handleFieldChange('separatelyBilledChemicalIds', nextIds)}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <div>
-                    <label htmlFor="startDate" className="block text-sm font-semibold text-slate-700">
-                      Start Date
-                    </label>
-                    <input
-                      id="startDate"
-                      type="date"
-                      value={form.startDate}
-                      onChange={(event) => handleFieldChange('startDate', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="expiresAt" className="block text-sm font-semibold text-slate-700">
-                      Review By
-                    </label>
-                    <input
-                      id="expiresAt"
-                      type="date"
-                      value={form.expiresAt}
-                      onChange={(event) => handleFieldChange('expiresAt', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="paymentTerms" className="block text-sm font-semibold text-slate-700">
-                      Payment Terms
-                    </label>
-                    <select
-                      id="paymentTerms"
-                      value={form.paymentTerms}
-                      onChange={(event) => handleFieldChange('paymentTerms', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                      {paymentTermsOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label htmlFor="invoiceDeliveryMethod" className="block text-sm font-semibold text-slate-700">
-                      Invoice Delivery
-                    </label>
-                    <select
-                      id="invoiceDeliveryMethod"
-                      value={form.invoiceDeliveryMethod}
-                      onChange={(event) => handleFieldChange('invoiceDeliveryMethod', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                      {Object.values(SalesInvoiceDeliveryMethod).map((method) => (
-                        <option key={method} value={method}>{method.replace(/([A-Z])/g, ' $1').replace(/^./, (char) => char.toUpperCase())}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <label htmlFor="serviceCadenceCount" className="block text-sm font-semibold text-slate-700">
+                    Service Count
+                  </label>
+                  <input
+                    id="serviceCadenceCount"
+                    type="number"
+                    min="1"
+                    value={form.serviceCadenceCount}
+                    onChange={(event) => handleFieldChange('serviceCadenceCount', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
                 </div>
               </div>
             </section>
@@ -1778,6 +1604,209 @@ const CreateSalesAgreement = () => {
             </section>
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-bold text-slate-950">Billing</h2>
+              <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <label htmlFor="billingFrequency" className="block text-sm font-semibold text-slate-700">
+                    Billing Frequency
+                  </label>
+                  <select
+                    id="billingFrequency"
+                    value={form.billingFrequency}
+                    onChange={(event) => handleFieldChange('billingFrequency', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  >
+                    {billingFrequencyOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="billingFrequencyCount" className="block text-sm font-semibold text-slate-700">
+                    Billing Count
+                  </label>
+                  <input
+                    id="billingFrequencyCount"
+                    type="number"
+                    min="1"
+                    value={form.billingFrequencyCount}
+                    onChange={(event) => handleFieldChange('billingFrequencyCount', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="rateType" className="block text-sm font-semibold text-slate-700">
+                    Rate Type
+                  </label>
+                  <select
+                    id="rateType"
+                    value={form.rateType}
+                    onChange={(event) => handleFieldChange('rateType', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  >
+                    {rateTypeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="paymentTerms" className="block text-sm font-semibold text-slate-700">
+                    Payment Terms
+                  </label>
+                  <select
+                    id="paymentTerms"
+                    value={form.paymentTerms}
+                    onChange={(event) => handleFieldChange('paymentTerms', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  >
+                    {paymentTermsOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="invoiceDeliveryMethod" className="block text-sm font-semibold text-slate-700">
+                    Invoice Delivery
+                  </label>
+                  <select
+                    id="invoiceDeliveryMethod"
+                    value={form.invoiceDeliveryMethod}
+                    onChange={(event) => handleFieldChange('invoiceDeliveryMethod', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  >
+                    {Object.values(SalesInvoiceDeliveryMethod).map((method) => (
+                      <option key={method} value={method}>{labelize(method)}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="firstInvoiceSendAt" className="block text-sm font-semibold text-slate-700">
+                    First Invoice Send
+                  </label>
+                  <input
+                    id="firstInvoiceSendAt"
+                    type="date"
+                    value={form.firstInvoiceSendAt}
+                    onChange={(event) => handleFieldChange('firstInvoiceSendAt', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+
+                <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 lg:self-end">
+                  <input
+                    type="checkbox"
+                    checked={form.manualBillingAutoSendEnabled}
+                    onChange={(event) => handleFieldChange('manualBillingAutoSendEnabled', event.target.checked)}
+                  />
+                  Email invoices automatically
+                </label>
+              </div>
+
+              <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <h3 className="text-sm font-bold text-slate-950">Chemical Billing</h3>
+                  <Link
+                    to="/company/readingsAndDosages"
+                    className="text-sm font-semibold text-blue-700 hover:text-blue-800"
+                  >
+                    Manage Dosages
+                  </Link>
+                </div>
+
+                <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="chemicalBillingMode" className="block text-sm font-semibold text-slate-700">
+                      Billing Treatment
+                    </label>
+                    <select
+                      id="chemicalBillingMode"
+                      value={form.chemicalBillingMode}
+                      onChange={(event) => updateChemicalBillingMode(event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {chemicalBillingModeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="chemicalBillingNotes" className="block text-sm font-semibold text-slate-700">
+                      Chemical Billing Notes
+                    </label>
+                    <input
+                      id="chemicalBillingNotes"
+                      type="text"
+                      value={form.chemicalBillingNotes}
+                      onChange={(event) => handleFieldChange('chemicalBillingNotes', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      placeholder="tabs supplied by customer, phosphate billed separately"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.includedAll && (
+                    <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                      All dosage templates are included in service. No chemical selections are needed.
+                    </div>
+                  )}
+
+                  {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.billAllSeparately && (
+                    <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                      All dosage templates are billed separately. No chemical selections are needed.
+                    </div>
+                  )}
+
+                  {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-md border border-slate-200 bg-white p-3">
+                        <label htmlFor="chemicalBillingMixedSelectionMode" className="block text-sm font-semibold text-slate-700">
+                          Mixed Billing Selection
+                        </label>
+                        <select
+                          id="chemicalBillingMixedSelectionMode"
+                          value={form.chemicalBillingMixedSelectionMode}
+                          onChange={(event) => updateChemicalBillingMixedSelectionMode(event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        >
+                          {mixedChemicalBillingSelectionOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {form.chemicalBillingMixedSelectionMode === ChemicalBillingMixedSelectionMode.included ? (
+                        <ChemicalDosagePicker
+                          id="includedChemicalIds"
+                          label="Included Dosages"
+                          selectedIds={form.includedChemicalIds}
+                          dosageTemplates={dosageTemplates}
+                          loading={loadingDosageTemplates}
+                          onChange={(nextIds) => handleFieldChange('includedChemicalIds', nextIds)}
+                        />
+                      ) : (
+                        <ChemicalDosagePicker
+                          id="separatelyBilledChemicalIds"
+                          label="Excluded / Separately Billed Dosages"
+                          selectedIds={form.separatelyBilledChemicalIds}
+                          dosageTemplates={dosageTemplates}
+                          loading={loadingDosageTemplates}
+                          onChange={(nextIds) => handleFieldChange('separatelyBilledChemicalIds', nextIds)}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex items-center gap-2">
@@ -1904,11 +1933,11 @@ const CreateSalesAgreement = () => {
 
               <button
                 type="submit"
-                disabled={!canSave || saving}
+                disabled={!canSave || saving || applyingTermsTemplate}
                 className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FaSave className="text-xs" />
-                {saving ? 'Saving Draft...' : 'Save Agreement Draft'}
+                {saving ? 'Saving Draft...' : applyingTermsTemplate ? 'Applying...' : 'Save Agreement Draft'}
               </button>
             </section>
           </aside>

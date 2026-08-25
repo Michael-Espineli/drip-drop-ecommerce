@@ -96,7 +96,10 @@ export default function Subscriptions() {
         if (!subscriptionId) return;
         try {
             const getUpcomingInvoice = httpsCallable(functions, 'getUpcomingInvoice');
-            const result = await getUpcomingInvoice({ subscriptionId });
+            const result = await getUpcomingInvoice({
+                subscriptionId,
+                companyId: recentlySelectedCompany,
+            });
             if (result.data.upcomingInvoice) {
                 setUpcomingInvoice(result.data.upcomingInvoice);
             }
@@ -145,7 +148,10 @@ export default function Subscriptions() {
         const toastId = toast.loading('Canceling subscription...');
 
         try {
-            await cancelStripeSubscription({ subscriptionId: activeSubscription.stripeSubscriptionId });
+            await cancelStripeSubscription({
+                subscriptionId: activeSubscription.stripeSubscriptionId,
+                companyId: recentlySelectedCompany,
+            });
             toast.success('Subscription canceled. Your plan remains active until the end of the billing period.', { id: toastId, duration: 6000 });
             // Refetch data to show the updated status
             fetchActiveSubscription().then(subscription => {
@@ -173,6 +179,7 @@ export default function Subscriptions() {
             const createStripePortalSession = httpsCallable(functions, 'createStripePortalSession');
             const result = await createStripePortalSession({
                 stripeCustomerId,
+                companyId: recentlySelectedCompany,
                 returnUrl: window.location.href,
             });
             if (result.data.url) {

@@ -3045,8 +3045,8 @@ const DailyRoutePulse = ({ summary, followUpItems, onOpenStop, onSelectRoute }) 
     };
 
     return (
-        <section className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <section className="mb-4 grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="self-start rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Daily Route Pulse</p>
@@ -3103,16 +3103,16 @@ const DailyRoutePulse = ({ summary, followUpItems, onOpenStop, onSelectRoute }) 
                 </div>
             </div>
 
-            <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <aside className="flex max-h-[360px] min-h-0 flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-4">
                 <div className="flex items-start justify-between gap-3">
                     <div>
                         <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Follow-up Queue</p>
-                        <h2 className="mt-1 text-xl font-bold text-slate-950">Needs attention</h2>
+                        <h2 className="mt-1 text-lg font-bold text-slate-950">Needs attention</h2>
                     </div>
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{followUpItems.length}</span>
                 </div>
 
-                <div className="mt-4 space-y-2">
+                <div className="mt-3 min-h-0 space-y-2 overflow-y-auto pr-1">
                     {followUpItems.length ? followUpItems.map((item) => {
                         const clickable = item.stopId || item.routeId;
                         const handleClick = () => {
@@ -3144,7 +3144,7 @@ const DailyRoutePulse = ({ summary, followUpItems, onOpenStop, onSelectRoute }) 
                             </button>
                         );
                     }) : (
-                        <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm font-semibold text-slate-500">
+                        <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-sm font-semibold text-slate-500">
                             No follow-up items for this date.
                         </div>
                     )}
@@ -3166,19 +3166,47 @@ const getRouteStatusClass = (status) => {
 };
 
 const RouteSummaryDatum = ({ label, value, helper, compact = false }) => (
-    <div className={`min-w-0 ${compact ? 'leading-tight' : ''}`}>
+    <div className={`min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 ${compact ? 'leading-tight' : ''}`}>
         <p className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-bold uppercase tracking-wide text-gray-500`}>{label}</p>
         <p className={`truncate ${compact ? 'text-xs' : 'text-sm'} font-bold text-gray-900`}>{value}</p>
         {helper && <p className={`truncate ${compact ? 'text-[11px]' : 'text-xs'} text-gray-500`}>{helper}</p>}
     </div>
 );
 
-const RouteCompactStat = ({ label, value, helper }) => (
-    <span className="inline-flex min-w-0 items-center gap-1 rounded-md bg-gray-50 px-2 py-1 text-xs font-semibold text-gray-700 ring-1 ring-gray-100">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{label}</span>
-        <span className="font-bold text-gray-900">{value}</span>
-        {helper && <span className="hidden truncate text-[11px] font-medium text-gray-500 sm:inline">{helper}</span>}
-    </span>
+const RouteCardMetric = ({ label, value, helper, tone = 'slate' }) => {
+    const toneClasses = {
+        slate: 'border-slate-200 bg-slate-50 text-slate-900',
+        blue: 'border-blue-100 bg-blue-50 text-blue-900',
+        emerald: 'border-emerald-100 bg-emerald-50 text-emerald-900',
+        amber: 'border-amber-100 bg-amber-50 text-amber-900',
+    };
+
+    return (
+        <div className={`min-w-0 rounded-lg border px-3 py-2 ${toneClasses[tone] || toneClasses.slate}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wide opacity-65">{label}</p>
+            <p className="mt-0.5 truncate text-base font-bold leading-none">{value}</p>
+            {helper && <p className="mt-1 truncate text-[11px] font-semibold opacity-70">{helper}</p>}
+        </div>
+    );
+};
+
+const RouteProgressBar = ({ finishedCount, inProgressCount, totalCount }) => (
+    <div className="mt-3">
+        <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-slate-500">
+            <span>{finishedCount}/{totalCount} finished</span>
+            <span>{inProgressCount} active</span>
+        </div>
+        <div className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-slate-100">
+            <span
+                className="bg-emerald-500"
+                style={{ width: totalCount ? `${(finishedCount / totalCount) * 100}%` : '0%' }}
+            />
+            <span
+                className="bg-blue-500"
+                style={{ width: totalCount ? `${(inProgressCount / totalCount) * 100}%` : '0%' }}
+            />
+        </div>
+    </div>
 );
 
 const RouteTechnicianSummary = ({
@@ -3207,9 +3235,9 @@ const RouteTechnicianSummary = ({
             : 'N/A';
 
     return (
-        <div className="mt-2 grid gap-2 border-t border-gray-200 pt-2 sm:grid-cols-2 xl:grid-cols-[minmax(180px,1.35fr)_repeat(3,minmax(0,0.8fr))]">
-            <div className="min-w-0 sm:col-span-2 xl:col-span-1">
-                <div className="mb-0.5 flex items-center justify-between gap-2">
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="min-w-0">
+                <div className="mb-1 flex items-center justify-between gap-2">
                     <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Vehicle</p>
                     <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200">
                         {routeVehicleSourceLabel(route)}
@@ -3219,7 +3247,7 @@ const RouteTechnicianSummary = ({
                     value={routeVehicleSelectionValue(route)}
                     onChange={(event) => onVehicleChange(route, event.target.value)}
                     disabled={isVehicleUpdating}
-                    className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs font-semibold text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                 >
                     {vehicleOptions.map(option => (
                         <option key={option.value} value={option.value}>
@@ -3227,23 +3255,26 @@ const RouteTechnicianSummary = ({
                         </option>
                     ))}
                 </select>
-                <p className="mt-0.5 truncate text-[11px] leading-tight text-gray-500">
+                <p className="mt-1 truncate text-[11px] leading-tight text-gray-500">
                     {routeVehicleSummary(route, fleetVehicles, technicians)}
                 </p>
             </div>
-            <RouteSummaryDatum label="Mileage" value={mileageText} compact />
-            <RouteSummaryDatum
-                label={activeStart ? 'Timer' : 'Duration'}
-                value={durationText}
-                helper={activeStart ? `Started ${formatTimeValue(activeStart)}` : ''}
-                compact
-            />
-            <RouteSummaryDatum
-                label="Active Stop"
-                value={activeStop?.customerName || 'None'}
-                helper={activeStop?.address?.streetAddress || ''}
-                compact
-            />
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                <RouteSummaryDatum label="Mileage" value={mileageText} compact />
+                <RouteSummaryDatum
+                    label={activeStart ? 'Timer' : 'Duration'}
+                    value={durationText}
+                    helper={activeStart ? `Started ${formatTimeValue(activeStart)}` : ''}
+                    compact
+                />
+                <RouteSummaryDatum
+                    label="Active Stop"
+                    value={activeStop?.customerName || 'None'}
+                    helper={activeStop?.address?.streetAddress || ''}
+                    compact
+                />
+            </div>
         </div>
     );
 };
@@ -3319,8 +3350,8 @@ const RouteWorkloadBoard = ({
                 </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-                <div className="space-y-2">
+            <div className="grid gap-4 xl:grid-cols-[minmax(440px,0.95fr)_minmax(500px,1.05fr)]">
+                <div className="space-y-3">
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Active Routes</h3>
@@ -3332,92 +3363,96 @@ const RouteWorkloadBoard = ({
                     </div>
 
                     {routeGroups.length ? routeGroups.map(group => {
-                    const finishedCount = group.stops.filter(stop => getStopTiming(stop).end).length;
-                    const inProgressCount = group.stops.filter(stop => {
-                        const { start, end } = getStopTiming(stop);
-                        return start && !end;
-                    }).length;
-                    const openCount = group.stops.length - finishedCount - inProgressCount;
-                    const selectedInRoute = group.stops.filter(stop => selectedStopIds.includes(stop.id)).length;
-                    const isFocused = group.route && selectedRouteId === group.route.id;
+                        const finishedCount = group.stops.filter(stop => getStopTiming(stop).end).length;
+                        const inProgressCount = group.stops.filter(stop => {
+                            const { start, end } = getStopTiming(stop);
+                            return start && !end;
+                        }).length;
+                        const openCount = group.stops.length - finishedCount - inProgressCount;
+                        const selectedInRoute = group.stops.filter(stop => selectedStopIds.includes(stop.id)).length;
+                        const isFocused = group.route && selectedRouteId === group.route.id;
 
-                    return (
-                        <article
-                            key={group.id}
-                            className={`overflow-hidden rounded-lg border-l-4 bg-white shadow-sm transition ${isFocused ? 'border-y-blue-300 border-r-blue-300 ring-2 ring-blue-100' : 'border-y-gray-200 border-r-gray-200 hover:border-y-gray-300 hover:border-r-gray-300'}`}
-                            style={{ borderLeftColor: group.routeColor }}
-                        >
-                            <div className="px-3 py-2">
-                                <div className="flex items-center justify-between gap-3">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                        <span
-                                            className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                            style={{ backgroundColor: group.routeColor }}
-                                            aria-hidden="true"
-                                        />
-                                        <div className="min-w-0 leading-tight">
-                                            <p className="truncate text-sm font-semibold text-gray-900">
-                                                {group.route?.name || group.techName}
-                                            </p>
-                                            <p className="truncate text-xs text-gray-500">
-                                                {group.techName} · {finishedCount}/{group.stops.length} finished
+                        return (
+                            <article
+                                key={group.id}
+                                className={`overflow-hidden rounded-xl border bg-white shadow-sm transition ${isFocused ? 'border-blue-300 ring-2 ring-blue-100' : 'border-gray-200 hover:border-gray-300'}`}
+                            >
+                                <div className="h-1.5" style={{ backgroundColor: group.routeColor }} />
+                                <div className="p-4">
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                        <div className="min-w-0">
+                                            <div className="flex min-w-0 items-center gap-2">
+                                                <span
+                                                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                                    style={{ backgroundColor: group.routeColor }}
+                                                    aria-hidden="true"
+                                                />
+                                                <p className="truncate text-base font-bold text-gray-900">
+                                                    {group.route?.name || group.techName}
+                                                </p>
+                                            </div>
+                                            <p className="mt-1 truncate text-sm text-gray-500">
+                                                Technician: <span className="font-semibold text-gray-700">{group.techName}</span>
                                             </p>
                                         </div>
+                                        <span className={`w-fit shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${getRouteStatusClass(group.route?.status)}`}>
+                                            {group.route?.status || 'Unassigned'}
+                                        </span>
                                     </div>
-                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${getRouteStatusClass(group.route?.status)}`}>
-                                        {group.route?.status || 'Unassigned'}
-                                    </span>
-                                </div>
 
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                    <RouteCompactStat label="Stops" value={`${finishedCount}/${group.stops.length}`} helper="finished" />
-                                    <RouteCompactStat label="Open" value={openCount} helper={`${inProgressCount} active`} />
-                                    <RouteCompactStat label="Selected" value={selectedInRoute} helper="move queue" />
-                                </div>
-
-                                {group.route && (
-                                    <RouteTechnicianSummary
-                                        route={group.route}
-                                        stops={group.stops}
-                                        now={now}
-                                        technicians={technicians}
-                                        fleetVehicles={fleetVehicles}
-                                        onVehicleChange={onVehicleChange}
-                                        isVehicleUpdating={vehicleUpdatingRouteId === group.route.id}
+                                    <RouteProgressBar
+                                        finishedCount={finishedCount}
+                                        inProgressCount={inProgressCount}
+                                        totalCount={group.stops.length}
                                     />
-                                )}
 
-                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                        <RouteCardMetric label="Stops" value={group.stops.length} helper={`${finishedCount} done`} tone="emerald" />
+                                        <RouteCardMetric label="Open" value={openCount} helper={`${inProgressCount} active`} tone={openCount ? 'amber' : 'emerald'} />
+                                        <RouteCardMetric label="Selected" value={selectedInRoute} helper="move list" tone={selectedInRoute ? 'blue' : 'slate'} />
+                                    </div>
+
                                     {group.route && (
-                                        <button
-                                            type="button"
-                                            onClick={() => onSelectRoute(group.route.id)}
-                                            className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition ${isFocused
-                                                    ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
-                                                    : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
-                                                }`}
-                                        >
-                                            {isFocused ? 'Selected' : 'View Stops'}
-                                        </button>
+                                        <RouteTechnicianSummary
+                                            route={group.route}
+                                            stops={group.stops}
+                                            now={now}
+                                            technicians={technicians}
+                                            fleetVehicles={fleetVehicles}
+                                            onVehicleChange={onVehicleChange}
+                                            isVehicleUpdating={vehicleUpdatingRouteId === group.route.id}
+                                        />
                                     )}
+
                                     {group.route && (
-                                        <button
-                                            type="button"
-                                            onClick={() => onSelectRouteStops(group.route)}
-                                            className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                                        >
-                                            {selectedInRoute ? `${selectedInRoute} selected` : 'Select unfinished'}
-                                        </button>
+                                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => onSelectRoute(group.route.id)}
+                                                className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${isFocused
+                                                        ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
+                                                        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
+                                                    }`}
+                                            >
+                                                {isFocused ? 'Selected Route' : 'View Stops'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => onSelectRouteStops(group.route)}
+                                                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                                            >
+                                                {selectedInRoute ? `${selectedInRoute} Selected` : 'Select Open Stops'}
+                                            </button>
+                                        </div>
                                     )}
                                 </div>
-                            </div>
-                        </article>
-                    );
-                }) : (
-                    <div className="rounded-lg border border-gray-200 px-4 py-6 text-sm text-gray-500">
-                        No service stops loaded for this date.
-                    </div>
-                )}
+                            </article>
+                        );
+                    }) : (
+                        <div className="rounded-lg border border-gray-200 px-4 py-6 text-sm text-gray-500">
+                            No service stops loaded for this date.
+                        </div>
+                    )}
                 </div>
 
                 <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">

@@ -240,6 +240,8 @@ const PublicServiceAgreementLanding = () => {
       });
 
       toast.success('Service agreement accepted.');
+      const billingSkipped = result.data?.billingSkipped === true;
+      const billingSkippedReason = result.data?.billingSkippedReason || '';
       setAgreement((current) => ({
         ...(current || agreement),
         status: SalesAgreementStatus.accepted,
@@ -252,7 +254,15 @@ const PublicServiceAgreementLanding = () => {
         totalAmountCents: displayTotalAmountCents,
         lineItems: displayLineItems,
         billingSubscriptionId: result.data?.billingSubscriptionId || current?.billingSubscriptionId || '',
-        billingFlowStatus: result.data?.nextAction ? 'pendingPaymentMethod' : current?.billingFlowStatus,
+        billingFlowStatus: billingSkipped
+          ? billingSkippedReason === 'oneTimeAgreement'
+            ? 'billingNotApplicable'
+            : billingSkippedReason === 'acceptanceBillingSkipped'
+              ? 'notStarted'
+              : 'billingDisabled'
+          : result.data?.nextAction
+            ? 'pendingPaymentMethod'
+            : current?.billingFlowStatus,
         billingFlowNextAction: result.data?.nextAction || current?.billingFlowNextAction,
         customerCanPayImmediately: result.data?.customerCanPayImmediately === true,
       }));
@@ -522,7 +532,7 @@ const PublicServiceAgreementLanding = () => {
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-slate-950">Acceptance</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Accepting records your approval and creates the billing setup record for this agreement.
+                Accepting records your approval. Payment setup appears only when the company has online billing turned on.
               </p>
 
               <dl className="mt-5 space-y-4">

@@ -8,6 +8,8 @@ import {
   displayEquipmentStatus,
   equipmentDefaultsToNeedsService,
   isFilterEquipment,
+  isFinalInactiveEquipmentStatus,
+  normalizeEquipmentStatus,
 } from "../../../utils/models/Equipment";
 import { MaintenanceHistory } from "../../../utils/models/MaintenanceHistory";
 import { RepairHistory } from "../../../utils/models/RepairHistory";
@@ -1493,7 +1495,7 @@ const EquipmentDetail = () => {
         dateUninstalled,
         needsService: false,
         nextServiceDate: null,
-        status: EQUIPMENT_STATUS.REPLACED,
+        status: EQUIPMENT_STATUS.UNINSTALLED,
       };
 
       await updateDoc(docRef, updates);
@@ -1503,7 +1505,7 @@ const EquipmentDetail = () => {
         ...updates,
       }));
       setIsActive(false);
-      setStatus(EQUIPMENT_STATUS.REPLACED);
+      setStatus(EQUIPMENT_STATUS.UNINSTALLED);
       setShowReplaceModal(false);
       toast.success("Equipment marked as replaced");
 
@@ -1583,16 +1585,22 @@ const EquipmentDetail = () => {
       // ✅ compute next based on maintenance date + current schedule
       const next = computeNextServiceDate(maintenanceDateValue, serviceFrequency, serviceFrequencyEvery);
 
-      await updateDoc(docRef, {
+      const maintenanceUpdates = {
         lastServiceDate: maintenanceDateValue,
         nextServiceDate: next,
-      });
+      };
+      const currentMaintenanceStatus = normalizeEquipmentStatus(equipment?.status || status);
+      if (["needsmaintenance", "maintenance", "needsservice"].includes(currentMaintenanceStatus)) {
+        maintenanceUpdates.status = EQUIPMENT_STATUS.OPERATIONAL;
+      }
+
+      await updateDoc(docRef, maintenanceUpdates);
 
       setEquipment((prev) => ({
         ...prev,
-        lastServiceDate: maintenanceDateValue,
-        nextServiceDate: next,
+        ...maintenanceUpdates,
       }));
+      if (maintenanceUpdates.status) setStatus(maintenanceUpdates.status);
 
       toast.success("Maintenance Record saved");
       // keep edit-form in sync too
@@ -1672,6 +1680,14 @@ const EquipmentDetail = () => {
       };
 
       await setDoc(serviceHistoryDoc, newRepairRecord);
+      await updateDoc(docRef, {
+        status: EQUIPMENT_STATUS.OPERATIONAL,
+      });
+      setEquipment((prev) => ({
+        ...prev,
+        status: EQUIPMENT_STATUS.OPERATIONAL,
+      }));
+      setStatus(EQUIPMENT_STATUS.OPERATIONAL);
 
       setShowRepairHistoryModal(false);
       setRepairName("");
@@ -2349,8 +2365,8 @@ const EquipmentDetail = () => {
 
                 <Field label="Status">
                   <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputBase}>
-                    {status === EQUIPMENT_STATUS.REPLACED && (
-                      <option value={EQUIPMENT_STATUS.REPLACED}>{EQUIPMENT_STATUS.REPLACED}</option>
+                    {isFinalInactiveEquipmentStatus(status) && (
+                      <option value={status}>{displayEquipmentStatus(status)}</option>
                     )}
                     {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
                       <option key={statusOption} value={statusOption}>
@@ -2718,15 +2734,15 @@ const EquipmentDetail = () => {
                 {isReplacingEquipment
                   ? "Saving..."
                   : addReplacementAfterSave
-                    ? "Mark Replaced and Add New"
-                    : "Mark Replaced"}
+                    ? "Mark Uninstalled and Add New"
+                    : "Mark Uninstalled"}
               </button>
             </div>
           }
         >
           <div className="space-y-4">
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              This will mark {equipmentDisplayName(equipment)} as inactive and set its status to Replaced.
+              This will mark {equipmentDisplayName(equipment)} as inactive and set its status to Uninstalled.
             </div>
 
             <Field label="Date Uninstalled">

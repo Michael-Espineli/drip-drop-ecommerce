@@ -3,6 +3,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const functions = require("firebase-functions");
 const {getFirestore} = require("firebase-admin/firestore");
 const { defineSecret } = require('firebase-functions/params');
+const { v4: uuidv4 } = require('uuid');
 
 const admin = require("firebase-admin");
 const db = admin.firestore();
@@ -32,6 +33,28 @@ const normalizeStripeAccountId = (value) => {
     return id.startsWith('acct_') ? id : '';
 };
 
+const normalizeStripeSubscriptionId = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    return id.startsWith('sub_') ? id : '';
+};
+
+const normalizeStripePriceId = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    return id.startsWith('price_') ? id : '';
+};
+
+const normalizeCurrency = (value) => {
+    const currency = String(value || 'usd').trim().toLowerCase();
+    return /^[a-z]{3}$/.test(currency) ? currency : 'usd';
+};
+
+const getStripePublishableKey = () => (
+    process.env.STRIPE_PUBLISHABLE_KEY ||
+    process.env.PUBLISHABLE_STRIPE_KEY ||
+    process.env.stripe_publishable_key ||
+    ''
+).trim();
+
 const getCompanyConnectedAccountId = (companyData = {}) => (
     normalizeStripeAccountId(companyData.stripeConnectedAccountId) ||
     normalizeStripeAccountId(companyData.stripeConnectAccountId)
@@ -55,6 +78,190 @@ const buildStripeRedirectUrl = (value, fallbackPath) => {
     } catch (error) {
         return fallbackUrl;
     }
+};
+
+const isDripDropAdmin = async ({ uid, token = {} }) => {
+    if (!uid) return false;
+    if (uid === 'yRV5Ie18rrUSxT6UkWctPc99lMJ2') return true;
+    if (token.admin === true) return true;
+
+    const userSnap = await db.collection('users').doc(uid).get();
+    const accountType = String(userSnap.data()?.accountType || '').toLowerCase();
+    return accountType === 'admin';
+};
+
+const getCompanyBillingAccess = async ({ uid, companyId }) => {
+    if (!uid || !companyId) return { allowed: false };
+
+    const companyRef = db.collection('companies').doc(companyId);
+    const accessRef = db.collection('users').doc(uid).collection('userAccess').doc(companyId);
+    const [companySnap, accessSnap] = await Promise.all([
+        companyRef.get(),
+        accessRef.get(),
+    ]);
+
+    if (!companySnap.exists) {
+        throw new HttpsError('not-found', 'Company not found.');
+    }
+
+    const companyData = companySnap.data() || {};
+    if (companyData.ownerId === uid) {
+        return { allowed: true, companyRef, companyData, accessData: null };
+    }
+
+    if (!accessSnap.exists) {
+        return { allowed: false, companyRef, companyData, accessData: null };
+    }
+
+    const accessData = accessSnap.data() || {};
+    const roleName = String(accessData.roleName || '').trim().toLowerCase();
+    if (['owner', 'admin', 'manager'].includes(roleName)) {
+        return { allowed: true, companyRef, companyData, accessData };
+    }
+
+    if (accessData.roleId) {
+        const roleSnap = await companyRef.collection('roles').doc(String(accessData.roleId)).get();
+        const permissionIdList = roleSnap.data()?.permissionIdList;
+        if (Array.isArray(permissionIdList) && permissionIdList.includes('400')) {
+            return { allowed: true, companyRef, companyData, accessData };
+        }
+    }
+
+    return { allowed: false, companyRef, companyData, accessData };
+};
+
+const requireCompanyBillingManager = async ({ uid, companyId }) => {
+    const access = await getCompanyBillingAccess({ uid, companyId });
+    if (!access.allowed) {
+        throw new HttpsError('permission-denied', 'You do not have permission to manage billing for this company.');
+    }
+
+    return access;
+};
+
+const companyIdFromCompanySubscriptionRef = (subscriptionRef) => (
+    subscriptionRef?.parent?.parent?.id || ''
+);
+
+const findManagedCompanySubscriptionByStripeId = async ({ uid, stripeSubscriptionId, companyId = '' }) => {
+    const normalizedSubscriptionId = normalizeStripeSubscriptionId(stripeSubscriptionId);
+    if (!normalizedSubscriptionId) {
+        throw new HttpsError('invalid-argument', 'A valid Stripe subscription id is required.');
+    }
+
+    const candidates = [];
+
+    if (companyId) {
+        const access = await requireCompanyBillingManager({ uid, companyId });
+        const snapshot = await access.companyRef
+            .collection('subscriptions')
+            .where('stripeSubscriptionId', '==', normalizedSubscriptionId)
+            .limit(1)
+            .get();
+
+        snapshot.docs.forEach((docSnap) => candidates.push(docSnap));
+    } else {
+        const snapshot = await db
+            .collectionGroup('subscriptions')
+            .where('stripeSubscriptionId', '==', normalizedSubscriptionId)
+            .limit(20)
+            .get();
+
+        for (const docSnap of snapshot.docs) {
+            const candidateCompanyId = companyIdFromCompanySubscriptionRef(docSnap.ref);
+            if (!candidateCompanyId) continue;
+
+            const access = await getCompanyBillingAccess({ uid, companyId: candidateCompanyId });
+            if (access.allowed) {
+                candidates.push(docSnap);
+                break;
+            }
+        }
+    }
+
+    if (candidates.length === 0) {
+        throw new HttpsError('permission-denied', 'This Stripe subscription is not linked to a company you can manage.');
+    }
+
+    const subscriptionSnap = candidates[0];
+    const resolvedCompanyId = companyIdFromCompanySubscriptionRef(subscriptionSnap.ref) || companyId;
+
+    return {
+        subscriptionRef: subscriptionSnap.ref,
+        subscription: { id: subscriptionSnap.id, ...subscriptionSnap.data() },
+        companyId: resolvedCompanyId,
+    };
+};
+
+const findManagedCompanyByStripeCustomerId = async ({ uid, stripeCustomerId, companyId = '' }) => {
+    const customerId = normalizeStripeCustomerId(stripeCustomerId);
+    if (!customerId) {
+        throw new HttpsError('invalid-argument', 'A valid Stripe customer id is required.');
+    }
+
+    const candidateCompanyIds = new Set();
+
+    if (companyId) {
+        candidateCompanyIds.add(companyId);
+    } else {
+        const [companyCustomerSnap, companyLegacySnap, subscriptionSnap] = await Promise.all([
+            db.collection('companies').where('stripeCustomerId', '==', customerId).limit(10).get(),
+            db.collection('companies').where('stripeId', '==', customerId).limit(10).get(),
+            db.collectionGroup('subscriptions').where('stripeCustomerId', '==', customerId).limit(20).get(),
+        ]);
+
+        companyCustomerSnap.docs.forEach((docSnap) => candidateCompanyIds.add(docSnap.id));
+        companyLegacySnap.docs.forEach((docSnap) => candidateCompanyIds.add(docSnap.id));
+        subscriptionSnap.docs.forEach((docSnap) => {
+            const subscriptionCompanyId = companyIdFromCompanySubscriptionRef(docSnap.ref);
+            if (subscriptionCompanyId) candidateCompanyIds.add(subscriptionCompanyId);
+        });
+    }
+
+    for (const candidateCompanyId of candidateCompanyIds) {
+        const access = await getCompanyBillingAccess({ uid, companyId: candidateCompanyId });
+        if (!access.allowed) continue;
+
+        const companyCustomerId = getCompanyStripeCustomerId(access.companyData);
+        if (companyCustomerId === customerId) {
+            return { ...access, companyId: candidateCompanyId, stripeCustomerId: customerId };
+        }
+
+        const subscriptionSnap = await access.companyRef
+            .collection('subscriptions')
+            .where('stripeCustomerId', '==', customerId)
+            .limit(1)
+            .get();
+
+        if (!subscriptionSnap.empty) {
+            return { ...access, companyId: candidateCompanyId, stripeCustomerId: customerId };
+        }
+    }
+
+    throw new HttpsError('permission-denied', 'This Stripe customer is not linked to a company you can manage.');
+};
+
+const requireActiveDripDropPlanByPriceId = async (priceId) => {
+    const stripePriceId = normalizeStripePriceId(priceId);
+    if (!stripePriceId) {
+        throw new HttpsError('invalid-argument', 'A valid Stripe price id is required.');
+    }
+
+    const snapshot = await db
+        .collection('subscriptions')
+        .where('stripePriceId', '==', stripePriceId)
+        .limit(5)
+        .get();
+
+    const activePlanDoc = snapshot.docs.find((docSnap) => docSnap.data()?.active === true);
+    if (!activePlanDoc) {
+        throw new HttpsError('failed-precondition', 'The selected Drip Drop subscription plan is not active.');
+    }
+
+    return {
+        id: activePlanDoc.id,
+        ...activePlanDoc.data(),
+    };
 };
 
 const accountHasOpenRequirements = (account = {}) => {
@@ -228,16 +435,8 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
         throw new HttpsError('permission-denied', 'You can only start checkout for your own user account.');
     }
 
-    const userAccessSnap = await db
-        .collection('users')
-        .doc(request.auth.uid)
-        .collection('userAccess')
-        .doc(companyId)
-        .get();
-
-    if (!userAccessSnap.exists) {
-        throw new HttpsError('permission-denied', 'You do not have access to this company.');
-    }
+    await requireCompanyBillingManager({ uid: request.auth.uid, companyId });
+    await requireActiveDripDropPlanByPriceId(stripePriceId);
 
     try {
         const resolvedStripeCustomerId = await resolveOrCreateStripeCustomer({
@@ -262,8 +461,8 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
                 companyId: companyId,
             },
             // Use the URLs passed from the frontend client
-            success_url: successUrl,
-            cancel_url: cancelUrl,
+            success_url: buildStripeRedirectUrl(successUrl, '/company/settings/subscriptions?success=true'),
+            cancel_url: buildStripeRedirectUrl(cancelUrl, '/company/settings/subscriptions/picker?canceled=true'),
         });
 
         return { url: session.url };
@@ -329,6 +528,150 @@ exports.createStripeCustomer = functions.https.onCall(async(data, context) => {
       throw new functions.https.HttpsError('internal', 'Unable to create Stripe customer.', error.message);
     }
   });
+
+exports.createStripeSubscription = functions.https.onCall(async(data, context) => {
+    const auth = await requireCallableAuth(data, context);
+    const receivedData = getCallableData(data);
+
+    if (!(await isDripDropAdmin(auth))) {
+      throw new functions.https.HttpsError('permission-denied', 'Only Drip Drop admins can create subscription catalog plans.');
+    }
+
+    const name = String(receivedData.name || '').trim();
+    const description = String(receivedData.description || '').trim();
+    const priceCents = Math.round(Number(receivedData.price || receivedData.amountCents || 0));
+    const currency = normalizeCurrency(receivedData.currency);
+    const interval = ['day', 'week', 'month', 'year'].includes(String(receivedData.interval || '').toLowerCase())
+      ? String(receivedData.interval).toLowerCase()
+      : 'month';
+    const intervalCount = Math.max(Number(receivedData.intervalCount || 1), 1);
+
+    if (!name) {
+      throw new functions.https.HttpsError('invalid-argument', 'Plan name is required.');
+    }
+
+    if (!Number.isFinite(priceCents) || priceCents < 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'Plan price must be zero or greater.');
+    }
+
+    try {
+      const product = await stripe.products.create({
+        name,
+        description: description || undefined,
+        metadata: {
+          source: 'dripDropSubscriptionCatalog',
+          createdByUserId: auth.uid,
+        },
+      });
+      const price = await stripe.prices.create({
+        product: product.id,
+        currency,
+        unit_amount: priceCents,
+        recurring: {
+          interval,
+          interval_count: intervalCount,
+        },
+        metadata: {
+          source: 'dripDropSubscriptionCatalog',
+          createdByUserId: auth.uid,
+        },
+      });
+      const subscriptionId = String(receivedData.id || `sub_${uuidv4()}`);
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      const subscriptionRecord = {
+        id: subscriptionId,
+        stripeProductId: product.id,
+        stripePriceId: price.id,
+        price: priceCents,
+        currency,
+        interval,
+        intervalCount,
+        name,
+        description,
+        internalNotes: String(receivedData.internalNotes || ''),
+        active: receivedData.active === undefined ? true : receivedData.active === true,
+        dateCreated: now,
+        lastUpdated: now,
+        createdByUserId: auth.uid,
+        updatedByUserId: auth.uid,
+      };
+
+      await db.collection('subscriptions').doc(subscriptionId).set(subscriptionRecord, { merge: true });
+
+      return {
+        status: 200,
+        product,
+        price,
+        subscription: subscriptionRecord,
+      };
+    } catch(error) {
+      console.error('Unable to create Drip Drop subscription catalog plan', error);
+      throw new functions.https.HttpsError('internal', 'Unable to create subscription plan.', error.message);
+    }
+  });
+
+exports.getStripeSubscriptionInformation = onCall(async (request) => {
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
+    }
+
+    const { subscriptionId, companyId } = request.data || {};
+    const managedSubscription = await findManagedCompanySubscriptionByStripeId({
+        uid: request.auth.uid,
+        stripeSubscriptionId: subscriptionId,
+        companyId,
+    });
+
+    try {
+        const subscription = await stripe.subscriptions.retrieve(
+            managedSubscription.subscription.stripeSubscriptionId,
+            { expand: ['items.data.price.product', 'latest_invoice', 'default_payment_method'] }
+        );
+
+        return { status: 'success', subscription };
+    } catch (error) {
+        console.error('Unable to retrieve Stripe subscription information', error);
+        throw new HttpsError('internal', 'Unable to retrieve Stripe subscription information.', error.message);
+    }
+});
+
+exports.getstripeSubscriptions = onCall(async (request) => {
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
+    }
+
+    const { companyId, stripeCustomerId } = request.data || {};
+    let resolvedStripeCustomerId = normalizeStripeCustomerId(stripeCustomerId);
+
+    if (!resolvedStripeCustomerId && companyId) {
+        const access = await requireCompanyBillingManager({ uid: request.auth.uid, companyId });
+        resolvedStripeCustomerId = getCompanyStripeCustomerId(access.companyData);
+    }
+
+    if (!resolvedStripeCustomerId) {
+        return { status: 'success', subscriptions: { data: [] } };
+    }
+
+    const customerAccess = await findManagedCompanyByStripeCustomerId({
+        uid: request.auth.uid,
+        stripeCustomerId: resolvedStripeCustomerId,
+        companyId,
+    });
+
+    try {
+        const subscriptions = await stripe.subscriptions.list({
+            customer: customerAccess.stripeCustomerId,
+            limit: 20,
+        });
+
+        return { status: 'success', subscriptions };
+    } catch (error) {
+        console.error('Unable to list Stripe subscriptions', error);
+        throw new HttpsError('internal', 'Unable to list Stripe subscriptions.', error.message);
+    }
+});
+
+exports.createSubscriptionCheckoutSessionNewCustomer = exports.createSubscriptionCheckoutSession;
  
 exports.createStripeAccountLink = functions.https.onCall(async(data,context) => {
     const auth = await requireCallableAuth(data, context);
@@ -466,31 +809,83 @@ exports.createStripeAccountLink = functions.https.onCall(async(data,context) => 
   });
   
 exports.createSubscriptionPaymentIntent = functions.https.onCall(async(data,context) => {
+    const auth = await requireCallableAuth(data, context);
+    const receivedData = getCallableData(data);
+    const stripePriceId = normalizeStripePriceId(receivedData.priceId || receivedData.stripePriceId);
+    const providedCustomerId = normalizeStripeCustomerId(
+      receivedData.customerId ||
+      receivedData.stripeCustomerId ||
+      receivedData.stripeId
+    );
+
+    if (!stripePriceId) {
+      throw new functions.https.HttpsError('invalid-argument', 'A valid Stripe price id is required.');
+    }
+
+    const publishableKey = getStripePublishableKey();
+    if (!publishableKey) {
+      throw new functions.https.HttpsError('failed-precondition', 'Stripe publishable key is not configured for mobile subscription checkout.');
+    }
+
+    const activePlan = await requireActiveDripDropPlanByPriceId(stripePriceId);
+    const resolvedCompanyAccess = receivedData.companyId
+      ? await requireCompanyBillingManager({ uid: auth.uid, companyId: receivedData.companyId })
+      : providedCustomerId
+        ? await findManagedCompanyByStripeCustomerId({ uid: auth.uid, stripeCustomerId: providedCustomerId })
+        : null;
+
+    if (!resolvedCompanyAccess?.companyId && !receivedData.companyId) {
+      throw new functions.https.HttpsError('invalid-argument', 'companyId or a saved company Stripe customer id is required.');
+    }
+
+    const companyId = receivedData.companyId || resolvedCompanyAccess.companyId;
+
     try {
-      let receivedData = data.data
+      const resolvedStripeCustomerId = await resolveOrCreateStripeCustomer({
+        providedCustomerId,
+        companyId,
+        userId: auth.uid,
+        authEmail: auth.token?.email,
+      });
+
       const subscription = await stripe.subscriptions.create({
-        customer: receivedData.customerId,
+        customer: resolvedStripeCustomerId,
         items: [{
-          price: receivedData.priceId,
+          price: stripePriceId,
         }],
         payment_behavior: 'default_incomplete',
         payment_settings: { save_default_payment_method: 'on_subscription' },
+        metadata: {
+          userId: auth.uid,
+          companyId,
+          dripDropSubscriptionId: activePlan.id || '',
+        },
         expand: ['latest_invoice.confirmation_secret'],
       });
+      const requestedStripeVersion = String(receivedData.stripeVersion || '').trim();
+      const ephemeralKey = await stripe.ephemeralKeys.create(
+        { customer: resolvedStripeCustomerId },
+        requestedStripeVersion ? { apiVersion: requestedStripeVersion } : undefined
+      );
+
       return {
         status: 200,
         subscriptionId: subscription.id,
+        customerId: resolvedStripeCustomerId,
+        ephemeralKey: ephemeralKey.secret,
+        publishableKey,
         clientSecret: subscription.latest_invoice.confirmation_secret.client_secret,
       };
     } catch (error) {
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+
       console.error(
         "An error occurred when calling the Stripe API:",
         error
       );
-      return {
-        status: 500,
-        error: error.message
-      };
+      throw new functions.https.HttpsError('internal', 'Unable to create subscription payment intent.', error.message);
     }
   });
 
@@ -499,16 +894,37 @@ exports.cancelStripeSubscription = onCall(async (request) => {
         throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
-    const { subscriptionId } = request.data;
+    const { subscriptionId, companyId } = request.data || {};
     if (!subscriptionId) {
         throw new HttpsError('invalid-argument', 'The function must be called with a "subscriptionId" argument.');
     }
 
     try {
-        const canceledSubscription = await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
+        const managedSubscription = await findManagedCompanySubscriptionByStripeId({
+            uid: request.auth.uid,
+            stripeSubscriptionId: subscriptionId,
+            companyId,
+        });
+        const canceledSubscription = await stripe.subscriptions.update(
+            managedSubscription.subscription.stripeSubscriptionId,
+            { cancel_at_period_end: true }
+        );
+
+        await managedSubscription.subscriptionRef.set({
+            status: canceledSubscription.cancel_at_period_end ? 'pending_cancellation' : canceledSubscription.status,
+            cancel_at: canceledSubscription.cancel_at
+                ? admin.firestore.Timestamp.fromMillis(canceledSubscription.cancel_at * 1000)
+                : null,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+
         return { status: "success", subscription: canceledSubscription };
 
     } catch (error) {
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
         console.error("Stripe Subscription Cancellation Error:", error);
         throw new HttpsError('internal', 'Unable to cancel Stripe subscription.', error.message);
     }
@@ -519,14 +935,20 @@ exports.getSubscriptionUpdatePreview = onCall(async (request) => {
         throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
-    const { subscriptionId, newPriceId } = request.data;
+    const { subscriptionId, newPriceId, companyId } = request.data || {};
     if (!subscriptionId || !newPriceId) {
         throw new HttpsError('invalid-argument', 'The function must be called with "subscriptionId" and "newPriceId" arguments.');
     }
 
     try {
+        await requireActiveDripDropPlanByPriceId(newPriceId);
+        const managedSubscription = await findManagedCompanySubscriptionByStripeId({
+            uid: request.auth.uid,
+            stripeSubscriptionId: subscriptionId,
+            companyId,
+        });
         // Retrieve the subscription to get customer and item details
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        const subscription = await stripe.subscriptions.retrieve(managedSubscription.subscription.stripeSubscriptionId);
         const currentItemId = subscription.items.data[0].id;
 
         // Generate an invoice preview for the upcoming period with the new price
@@ -543,6 +965,10 @@ exports.getSubscriptionUpdatePreview = onCall(async (request) => {
         return { status: "success", invoice: invoice };
 
     } catch (error) {
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
         console.error("Stripe Subscription Preview Error:", error);
         throw new HttpsError('internal', 'Unable to generate subscription update preview.', error.message);
     }
@@ -553,16 +979,22 @@ exports.updateStripeSubscription = onCall(async (request) => {
         throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
-    const { subscriptionId, newPriceId } = request.data;
+    const { subscriptionId, newPriceId, companyId } = request.data || {};
     if (!subscriptionId || !newPriceId) {
         throw new HttpsError('invalid-argument', 'The function must be called with "subscriptionId" and "newPriceId" arguments.');
     }
 
     try {
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        await requireActiveDripDropPlanByPriceId(newPriceId);
+        const managedSubscription = await findManagedCompanySubscriptionByStripeId({
+            uid: request.auth.uid,
+            stripeSubscriptionId: subscriptionId,
+            companyId,
+        });
+        const subscription = await stripe.subscriptions.retrieve(managedSubscription.subscription.stripeSubscriptionId);
         const currentItemId = subscription.items.data[0].id;
 
-        const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
+        const updatedSubscription = await stripe.subscriptions.update(managedSubscription.subscription.stripeSubscriptionId, {
             items: [{
                 id: currentItemId,
                 price: newPriceId,
@@ -570,9 +1002,22 @@ exports.updateStripeSubscription = onCall(async (request) => {
             proration_behavior: 'create_prorations',
         });
 
+        await managedSubscription.subscriptionRef.set({
+            stripePriceId: updatedSubscription.items.data[0]?.price?.id || newPriceId,
+            stripeProductId: typeof updatedSubscription.items.data[0]?.price?.product === 'string'
+                ? updatedSubscription.items.data[0].price.product
+                : updatedSubscription.items.data[0]?.price?.product?.id || managedSubscription.subscription.stripeProductId || '',
+            status: updatedSubscription.cancel_at_period_end ? 'pending_cancellation' : updatedSubscription.status,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+
         return { status: "success", subscription: updatedSubscription };
 
     } catch (error) {
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
         console.error("Stripe Subscription Update Error:", error);
         throw new HttpsError('internal', 'Unable to update Stripe subscription.', error.message);
     }
@@ -586,14 +1031,33 @@ exports.getStripePaymentHistory = onCall(async (request) => {
     const { stripeCustomerId, companyId } = request.data || {};
     let resolvedStripeCustomerId = normalizeStripeCustomerId(stripeCustomerId);
 
+    if (resolvedStripeCustomerId) {
+        await findManagedCompanyByStripeCustomerId({
+            uid: request.auth.uid,
+            stripeCustomerId: resolvedStripeCustomerId,
+            companyId,
+        });
+    }
+
     if (!resolvedStripeCustomerId) {
-        const userSnap = await db.collection('users').doc(request.auth.uid).get();
-        resolvedStripeCustomerId = getUserStripeCustomerId(userSnap.data());
+        if (!companyId) {
+            return { status: "success", invoices: [] };
+        }
+
+        const access = await requireCompanyBillingManager({ uid: request.auth.uid, companyId });
+        resolvedStripeCustomerId = getCompanyStripeCustomerId(access.companyData);
     }
 
     if (!resolvedStripeCustomerId && companyId) {
-        const companySnap = await db.collection('companies').doc(companyId).get();
-        resolvedStripeCustomerId = getCompanyStripeCustomerId(companySnap.data());
+        const subscriptionsSnap = await db
+            .collection('companies')
+            .doc(companyId)
+            .collection('subscriptions')
+            .where('status', 'in', ['active', 'trialing', 'pending_cancellation'])
+            .limit(1)
+            .get();
+
+        resolvedStripeCustomerId = normalizeStripeCustomerId(subscriptionsSnap.docs[0]?.data()?.stripeCustomerId);
     }
 
     if (!resolvedStripeCustomerId) {
@@ -607,6 +1071,10 @@ exports.getStripePaymentHistory = onCall(async (request) => {
         });
         return { status: "success", invoices: invoices.data };
     } catch (error) {
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
         if (error.code === 'resource_missing') {
             return { status: "success", invoices: [] };
         }
@@ -621,18 +1089,27 @@ exports.createStripePortalSession = onCall(async (request) => {
         throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
-    const { stripeCustomerId, returnUrl } = request.data;
+    const { stripeCustomerId, returnUrl, companyId } = request.data || {};
     if (!stripeCustomerId || !returnUrl) {
         throw new HttpsError('invalid-argument', 'The function must be called with "stripeCustomerId" and "returnUrl" arguments.');
     }
 
     try {
+        await findManagedCompanyByStripeCustomerId({
+            uid: request.auth.uid,
+            stripeCustomerId,
+            companyId,
+        });
         const session = await stripe.billingPortal.sessions.create({
             customer: stripeCustomerId,
-            return_url: returnUrl,
+            return_url: buildStripeRedirectUrl(returnUrl, '/company/settings/subscriptions'),
         });
         return { status: "success", url: session.url };
     } catch (error) {
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
         console.error("Stripe Portal Session Error:", error);
         throw new HttpsError('internal', 'Unable to create customer portal session.', error.message);
     }
@@ -643,17 +1120,26 @@ exports.getUpcomingInvoice = onCall(async (request) => {
         throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
-    const { subscriptionId } = request.data;
+    const { subscriptionId, companyId } = request.data || {};
     if (!subscriptionId) {
         throw new HttpsError('invalid-argument', 'The function must be called with a "subscriptionId" argument.');
     }
 
     try {
+        const managedSubscription = await findManagedCompanySubscriptionByStripeId({
+            uid: request.auth.uid,
+            stripeSubscriptionId: subscriptionId,
+            companyId,
+        });
         const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
-            subscription: subscriptionId,
+            subscription: managedSubscription.subscription.stripeSubscriptionId,
         });
         return { status: "success", upcomingInvoice: upcomingInvoice };
     } catch (error) {
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
         // Stripe throws an error if there is no upcoming invoice (e.g., for a canceled sub)
         // We can check the error type and return a null invoice instead of throwing.
         if (error.code === 'invoice_upcoming_none') {

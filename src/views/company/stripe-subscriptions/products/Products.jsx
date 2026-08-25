@@ -9,7 +9,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 const functions = getFunctions();
 
 const Products = () => {
-    const {stripeConnectedAccountId, user} = useContext(Context);
+    const {stripeConnectedAccountId, recentlySelectedCompany, user} = useContext(Context);
 
     const [name, setName] = useState('MS175');
     const [description, setDescription] = useState('Monthly Service');
@@ -26,6 +26,7 @@ const Products = () => {
         const getProductList = httpsCallable(functions, 'getProductList');
         getProductList({ 
             active: true,
+            companyId: recentlySelectedCompany,
             connectedAccount:stripeConnectedAccountId,
             method: "POST",
         })
@@ -49,6 +50,7 @@ const Products = () => {
         const getProductList = httpsCallable(functions, 'getProductList');
         getProductList({ 
             active: true,
+            companyId: recentlySelectedCompany,
             connectedAccount:stripeConnectedAccountId,
             method: "POST",
         })

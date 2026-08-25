@@ -8,7 +8,7 @@ const functions = getFunctions();
 
 
 const CreateNewProduct = () => {
-    const {stripeConnectedAccountId, user} = useContext(Context);
+    const {stripeConnectedAccountId, recentlySelectedCompany, user} = useContext(Context);
 
     const [name, setName] = useState('MS175');
     const [description, setDescription] = useState('Monthly Service');
@@ -41,6 +41,8 @@ const CreateNewProduct = () => {
         createNewProduct({ 
             name: name,
             description: description,
+            companyId: recentlySelectedCompany,
+            unitAmountCents: Math.round(Number(price || 0) * 100),
             active: active,
             connectedAccount:stripeConnectedAccountId,
             method: "POST",

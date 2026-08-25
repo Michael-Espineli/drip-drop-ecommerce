@@ -555,8 +555,8 @@ const defaultServiceStopCategoryEmailSettings = (companyName = "your pool compan
 const DEFAULT_COMPANY_PAY_TYPES = [
   {
     id: "system_recurring_service_stop",
-    name: "Route",
-    iconName: "figure.pool.swim",
+    name: "Residential",
+    iconName: "house",
     category: "route",
     serviceStopCategory: "Route",
     bucketId: "route",
@@ -567,21 +567,47 @@ const DEFAULT_COMPANY_PAY_TYPES = [
     defaultStackBehavior: "stackable",
   },
   {
+    id: "system_recurring_commercial_pay_type",
+    name: "Commercial",
+    iconName: "building.2",
+    category: "commercial",
+    serviceStopCategory: "Route",
+    bucketId: "route",
+    bucketLabel: "Routes",
+    stopPayBucketId: "route",
+    stopPayBucketLabel: "Routes",
+    defaultRateType: "flatPerStop",
+    defaultStackBehavior: "stackable",
+  },
+  {
     id: "system_job_service_stop",
-    name: "Job Visit",
-    iconName: "briefcase",
-    category: "serviceCall",
+    name: "Filter Cleaning",
+    iconName: "sparkles",
+    category: "cleaning",
     serviceStopCategory: "Job",
     bucketId: "job",
     bucketLabel: "Jobs",
     stopPayBucketId: "job",
     stopPayBucketLabel: "Jobs",
-    defaultRateType: "flatPerStop",
+    defaultRateType: "flatPerTask",
+    defaultStackBehavior: "stackable",
+  },
+  {
+    id: "system_job_salt_cell_cleaning_pay_type",
+    name: "Salt Cell Cleaning",
+    iconName: "drop",
+    category: "cleaning",
+    serviceStopCategory: "Job",
+    bucketId: "job",
+    bucketLabel: "Jobs",
+    stopPayBucketId: "job",
+    stopPayBucketLabel: "Jobs",
+    defaultRateType: "flatPerTask",
     defaultStackBehavior: "stackable",
   },
   {
     id: "system_job_estimate_service_stop",
-    name: "Job Estimate",
+    name: "Estimate",
     iconName: "doc.text.magnifyingglass",
     category: "serviceCall",
     serviceStopCategory: "Job Estimate",
@@ -594,7 +620,7 @@ const DEFAULT_COMPANY_PAY_TYPES = [
   },
   {
     id: "system_service_agreement_estimate_service_stop",
-    name: "Service Agreement Estimate",
+    name: "Estimate",
     iconName: "list.clipboard",
     category: "startup",
     serviceStopCategory: "Service Agreement Estimate",
@@ -607,9 +633,9 @@ const DEFAULT_COMPANY_PAY_TYPES = [
   },
   {
     id: "system_customer_relationship_service_stop",
-    name: "Customer Relationship",
-    iconName: "person.wave.2",
-    category: "custom",
+    name: "Service Call",
+    iconName: "phone",
+    category: "serviceCall",
     serviceStopCategory: "Customer Relationship",
     bucketId: "customerRelationship",
     bucketLabel: "Customer Relationships",
@@ -906,7 +932,7 @@ const copyUniversalReadingAndDosageTemplatesToCompany = async (companyId) => {
 };
 
 //Live
-// const publishableStripeKey = defineSecret('pk_live_51SR0FQAarMCMczenzad9KHz2dWM4tcMlSN1aquZVdN83md983TatYFy02H3usQAWeWldDMmlnPbVw5PvmhdjsXbn00sJx5TPCF');
+// const publishableStripeKey = defineSecret('STRIPE_PUBLISHABLE_KEY');
 //Test
 
 const {
@@ -1843,8 +1869,9 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
   let rssData = null;
 
   try {
-    companyId = data?.data?.companyId;
-    rssData = data?.data?.recurringServiceStop;
+    const receivedData = data?.data || data || {};
+    companyId = receivedData.companyId;
+    rssData = receivedData.recurringServiceStop;
 
     if (!companyId) throw new Error("Missing Company Id");
     if (!rssData?.id) throw new Error("Missing Recurring Service Stop Id");
@@ -2158,6 +2185,9 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
         type: recurringServiceStopTypeFields.type,
         typeId: recurringServiceStopTypeFields.typeId,
         typeImage: recurringServiceStopTypeFields.typeImage,
+        payTypeId: rssData.payTypeId || recurringServiceStopTypeFields.typeId,
+        payTypeName: rssData.payTypeName || recurringServiceStopTypeFields.type,
+        defaultWorkTypeIds: Array.isArray(rssData.defaultWorkTypeIds) ? rssData.defaultWorkTypeIds : [],
         category: recurringServiceStopTypeFields.category,
 
         jobId: "",
@@ -2361,6 +2391,14 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
         break;
 
       case "Weekly":
+        lastCreated = await seedWeekly();
+        break;
+
+      case "Twice Weekly":
+        lastCreated = await seedWeekly();
+        break;
+
+      case "Three Times Weekly":
         lastCreated = await seedWeekly();
         break;
 
@@ -3574,6 +3612,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     //Payroll Settings
     const CompanyPaySettings = {
       companyId: companyId,
+      payrollEnabled: true,
       payMode: "productionOnly",
       routePaySource: "serviceStopAndCompletedTasks",
       taskPaySource: "technicianRateThenTaskContractedRate",
@@ -3590,6 +3629,23 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       recalculateUnapprovedPayWhenRatesChange: true
     }
     await getFirestore().collection("companies").doc(companyId).collection("paySettings").doc("main").set(CompanyPaySettings);
+    await getFirestore().collection("companies").doc(companyId).collection("settings").doc("companyWide").set({
+      payrollEnabled: true,
+      customerBillingEnabled: false,
+      salesCreateBillingSubscriptionOnAcceptanceDefault: true,
+      workOffersGoLiveByDefault: true,
+      workOffersRequireApprovalBeforePosting: false,
+      workOffersAutoAssignOnAcceptance: true,
+      workOffersRequireApprovalBeforeAssignment: false,
+      technicianCanOfferFullRoutes: true,
+      technicianCanOfferPartialRoutes: true,
+      technicianCanOfferOneOffJobs: true,
+      technicianCanOfferRecurringWork: false,
+      managementCanOfferAnyWork: true,
+      workOfferIncentivesCreatePayrollLines: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
     const payTypesRef = getFirestore().collection("companies").doc(companyId).collection("companyPayTypes");
     await Promise.all(DEFAULT_COMPANY_PAY_TYPES.map((payType, index) =>
       payTypesRef.doc(payType.id).set({
@@ -4171,6 +4227,34 @@ const serializeCallableDate = (value) => {
   return value;
 };
 
+const normalizeAdminListAccountType = (accountType) => {
+  const normalizedKey = String(accountType || "").trim().toLowerCase();
+  const aliases = {
+    admin: "Admin",
+    administrator: "Admin",
+    company: "Company",
+    seller: "Company",
+    technician: "Company",
+    tech: "Company",
+    employee: "Company",
+    contractor: "Company",
+    client: "Client",
+    homeowner: "Client",
+    customer: "Client",
+  };
+
+  return aliases[normalizedKey] || "Unknown";
+};
+
+const getAdminListUserName = (user = {}) => {
+  const fullName = [user.firstName, user.lastName]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return String(user.name || user.displayName || user.userName || fullName || user.email || "").trim();
+};
+
 const ADMIN_CALLABLE_CORS_ORIGINS = [
   "https://dripdrop-poolapp.com",
   "https://www.dripdrop-poolapp.com",
@@ -4587,6 +4671,16 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
   const approvalId = String(payload.approvalId || "").trim();
   const action = String(payload.action || "").trim().toLowerCase();
   const responseNote = String(payload.responseNote || "").trim().slice(0, 2000);
+  const normalizedPaymentPreference = String(
+    payload.paymentPreference ||
+    payload.paymentCollectionPreference ||
+    "sendInvoice"
+  ).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  const paymentPreference = normalizedPaymentPreference === "paynow"
+    ? "payNow"
+    : normalizedPaymentPreference === "payoncedelivered"
+      ? "payOnceDelivered"
+      : "sendInvoice";
 
   if (!approvalId) {
     throw new HttpsError("invalid-argument", "approvalId is required.");
@@ -4611,16 +4705,24 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
 
   const companyId = approval.companyId || "";
   const existingShoppingListItemId = approval.shoppingListItemId || approval.shoppingItemId || "";
+  const shouldHaveShoppingItem = action === "approved";
   const generatedShoppingListItemId =
-    action === "approved" && companyId && !existingShoppingListItemId
+    shouldHaveShoppingItem && companyId && !existingShoppingListItemId
       ? `comp_shop_${uuidv4()}`
       : "";
-  const shoppingListItemId = existingShoppingListItemId || generatedShoppingListItemId;
+  const shoppingListItemId = shouldHaveShoppingItem
+    ? existingShoppingListItemId || generatedShoppingListItemId
+    : "";
   const jobId = approval.jobId || "";
   const linkedTaskId = approval.linkedTaskId || "";
   const now = admin.firestore.FieldValue.serverTimestamp();
   const customerName = verifiedAuth.token?.name || approval.customerName || verifiedAuth.token?.email || "Customer";
-  const nextShoppingStatus = action === "approved" ? "Ready to Purchase" : "Customer Rejected";
+  const companySnap = companyId
+    ? await firestore.collection("companies").doc(companyId).get()
+    : null;
+  const companyData = companySnap?.exists ? companySnap.data() || {} : {};
+  const autoInvoiceOnInstall = companyData.shoppingItemInstallInvoiceAutomationEnabled === true;
+  const nextShoppingStatus = "Need to Purchase";
   const nextApprovalStatus = action;
   const responseHistoryItem = {
     id: `cpa_hist_${uuidv4()}`,
@@ -4689,6 +4791,10 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     shoppingListItemId,
     shoppingListPath: shoppingListItemId && companyId ? `companies/${companyId}/shoppingList/${shoppingListItemId}` : "",
     shoppingListGeneratedAt: generatedShoppingListItemId ? now : approval.shoppingListGeneratedAt || null,
+    paymentPreference,
+    paymentCollectionPreference: paymentPreference,
+    paymentPreferenceSelectedAt: action === "approved" ? now : approval.paymentPreferenceSelectedAt || null,
+    autoInvoiceOnInstall: action === "approved" ? autoInvoiceOnInstall : approval.autoInvoiceOnInstall || false,
     responseSource: "customerApp",
     responseSourceLabel: "Customer through app",
     respondedOnBehalfOfCustomer: false,
@@ -4769,6 +4875,9 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
       customerApprovalRequired: true,
       customerApprovalStatus: nextApprovalStatus,
       customerApprovalResponse: action,
+      paymentPreference,
+      paymentCollectionPreference: paymentPreference,
+      autoInvoiceOnInstall,
       customerApprovalResponseNote: responseNote,
       customerApprovalRespondedAt: now,
       customerApprovalRespondedByUserId: verifiedAuth.uid,
@@ -4787,6 +4896,14 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     }
 
     batch.set(shoppingRef, shoppingPayload, { merge: true });
+  } else if (companyId && existingShoppingListItemId && action === "rejected") {
+    const existingShoppingRef = firestore
+      .collection("companies")
+      .doc(companyId)
+      .collection("shoppingList")
+      .doc(existingShoppingListItemId);
+
+    batch.delete(existingShoppingRef);
   }
 
   if (companyId && jobId && linkedTaskId) {
@@ -4806,6 +4923,10 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
       ...(shoppingListItemId ? {
         shoppingListItemId,
         shoppingListItemIds: admin.firestore.FieldValue.arrayUnion(shoppingListItemId),
+      } : {}),
+      ...(action === "rejected" && existingShoppingListItemId ? {
+        shoppingListItemId: "",
+        shoppingListItemIds: admin.firestore.FieldValue.arrayRemove(existingShoppingListItemId),
       } : {}),
       updatedAt: now,
     }, { merge: true });
@@ -4926,6 +5047,80 @@ exports.getAdminCompanyListStats = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS },
   return {
     status: 200,
     companies,
+    summary,
+  };
+});
+
+exports.getAdminUserListStats = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS }, async (request) => {
+  const payload = request.data ?? {};
+  const verifiedAuth = await getVerifiedCallableAuth(payload, { auth: request.auth });
+  const authUserId = verifiedAuth?.uid;
+
+  if (!authUserId) {
+    throw new HttpsError("unauthenticated", "You must be signed in.");
+  }
+
+  const firestore = getFirestore();
+  const adminUserData = await getAdminUserData(firestore, authUserId);
+
+  if (!adminUserData) {
+    throw new HttpsError("permission-denied", "Only platform admins can view users.");
+  }
+
+  const usersSnap = await firestore.collection("users").get();
+  const users = usersSnap.docs.map((userDoc) => {
+    const user = userDoc.data() || {};
+    const accountType = normalizeAdminListAccountType(user.accountType);
+
+    return {
+      id: userDoc.id,
+      profileId: user.id || "",
+      accountType,
+      rawAccountType: user.accountType || "",
+      name: getAdminListUserName(user),
+      firstName: user.firstName || "",
+      lastName: user.lastName || "",
+      email: user.email || "",
+      phoneNumber: user.phoneNumber || user.phone || "",
+      recentlySelectedCompany: user.recentlySelectedCompany || "",
+      photoUrl: user.photoUrl || "",
+      dateCreated: serializeCallableDate(user.dateCreated || user.createdAt),
+      lastLoginAt: serializeCallableDate(user.lastLoginAt || user.lastLogin || user.lastSignInAt),
+      hasStripeCustomer: Boolean(user.stripeCustomerId || user.stripeId),
+    };
+  });
+
+  const summary = users.reduce((acc, user) => {
+    acc.totalUsers += 1;
+    acc.adminUsers += user.accountType === "Admin" ? 1 : 0;
+    acc.companyUsers += user.accountType === "Company" ? 1 : 0;
+    acc.homeowners += user.accountType === "Client" ? 1 : 0;
+    acc.unknownUsers += user.accountType === "Unknown" ? 1 : 0;
+    return acc;
+  }, {
+    totalUsers: 0,
+    adminUsers: 0,
+    companyUsers: 0,
+    homeowners: 0,
+    unknownUsers: 0,
+  });
+
+  const accountTypeOrder = {
+    Admin: 0,
+    Company: 1,
+    Client: 2,
+    Unknown: 3,
+  };
+
+  users.sort((a, b) => {
+    const typeSort = (accountTypeOrder[a.accountType] ?? 99) - (accountTypeOrder[b.accountType] ?? 99);
+    if (typeSort !== 0) return typeSort;
+    return String(a.name || a.email || a.id).localeCompare(String(b.name || b.email || b.id));
+  });
+
+  return {
+    status: 200,
+    users,
     summary,
   };
 });
@@ -7149,7 +7344,7 @@ exports.endRecurringServiceStop = functions.https.onCall(async (data, context) =
 exports.updateRecurringServiceStop = functions.https.onCall(async (data, context) => {
   const db = getFirestore();
 
-  let receivedData = data.data;
+  let receivedData = data?.data || data || {};
 
   const companyId = receivedData.companyId;
   const recurringServiceStop = receivedData.recurringServiceStop;
@@ -7276,6 +7471,9 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       type: serviceStopTypeFields.type,
       typeId: serviceStopTypeFields.typeId,
       typeImage: serviceStopTypeFields.typeImage,
+      payTypeId: rss.payTypeId || serviceStopTypeFields.typeId,
+      payTypeName: rss.payTypeName || serviceStopTypeFields.type,
+      defaultWorkTypeIds: Array.isArray(rss.defaultWorkTypeIds) ? rss.defaultWorkTypeIds : undefined,
       category: serviceStopTypeFields.category,
       serviceStopTypeUseCaseRawValue: rss.serviceStopTypeUseCaseRawValue,
       customerName: rss.customerName,
@@ -7338,6 +7536,29 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
 
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function endOfDay(value) {
+    const parsed = parseDate(value);
+    if (!parsed) return null;
+
+    const date = new Date(parsed);
+    date.setHours(23, 59, 59, 999);
+    return date;
+  }
+
+  function isFinishedServiceStop(serviceStop) {
+    return String(serviceStop?.operationStatus || "").toLowerCase() === "finished";
+  }
+
+  function shouldDeleteFutureServiceStopForEndDate(rss, serviceStop) {
+    if (rss.noEndDate) return false;
+    if (isFinishedServiceStop(serviceStop)) return false;
+
+    const rssEndDate = endOfDay(rss.endDate);
+    const serviceDate = parseDate(serviceStop?.serviceDate);
+
+    return Boolean(rssEndDate && serviceDate && serviceDate.getTime() > rssEndDate.getTime());
   }
 
   function dateForDayOnOrAfter(date, targetDayIndex) {
@@ -7432,6 +7653,9 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       type: serviceStopTypeFields.type,
       typeId: serviceStopTypeFields.typeId,
       typeImage: serviceStopTypeFields.typeImage,
+      payTypeId: rss.payTypeId || serviceStopTypeFields.typeId,
+      payTypeName: rss.payTypeName || serviceStopTypeFields.type,
+      defaultWorkTypeIds: Array.isArray(rss.defaultWorkTypeIds) ? rss.defaultWorkTypeIds : undefined,
       category: serviceStopTypeFields.category,
       serviceStopTypeUseCaseRawValue: rss.serviceStopTypeUseCaseRawValue,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -7505,6 +7729,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       .get();
 
     const writeOperations = [];
+    const futureServiceStopDeleteRefs = [];
     const serviceScheduleUpdate = serviceScheduleUpdateFromRSS({
       ...previousRSS,
       ...normalizedRecurringServiceStop
@@ -7531,13 +7756,20 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     });
 
     futureServiceStopsSnapshot.docs.forEach((serviceStopDoc) => {
+      const serviceStopData = serviceStopDoc.data() || {};
+
+      if (shouldDeleteFutureServiceStopForEndDate(recurringServiceStop, serviceStopData)) {
+        futureServiceStopDeleteRefs.push(serviceStopDoc.ref);
+        return;
+      }
+
       writeOperations.push({
         type: "update",
         ref: serviceStopDoc.ref,
         data: buildServiceStopPatch(
           recurringServiceStop,
           previousRSS,
-          serviceStopDoc.data() || {}
+          serviceStopData
         )
       });
     });
@@ -7567,6 +7799,16 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     }
 
     const committedWrites = await commitInBatches(writeOperations);
+    let deletedFutureServiceStopCount = 0;
+
+    for (const serviceStopRef of futureServiceStopDeleteRefs) {
+      if (typeof db.recursiveDelete === "function") {
+        await db.recursiveDelete(serviceStopRef);
+      } else {
+        await serviceStopRef.delete();
+      }
+      deletedFutureServiceStopCount += 1;
+    }
 
     const recurringRouteResult = syncRoute
       ? await updateRecurringRouteOrderForRSS({
@@ -7583,7 +7825,8 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     return {
       success: true,
       recurringServiceStopId: recurringServiceStop.id,
-      updatedServiceStopCount: futureServiceStopsSnapshot.size,
+      updatedServiceStopCount: futureServiceStopsSnapshot.size - deletedFutureServiceStopCount,
+      deletedFutureServiceStopCount,
       committedWrites: committedWrites,
       recurringRouteResult: recurringRouteResult
     };

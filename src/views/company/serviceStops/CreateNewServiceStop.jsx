@@ -20,7 +20,7 @@ import {
     resolveServiceStopTypeFields,
     SERVICE_STOP_TYPE_USE_CASES,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
-import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
+import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
 import { appAlert } from "../../../utils/appDialog";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
@@ -280,7 +280,6 @@ const CreateNewServiceStop = () => {
     const queryCategory = searchParams.get("category") || "";
     const isJobScheduler = Boolean(jobId);
 
-    const [activeTab, setActiveTab] = useState('site-info');
     const [job, setJob] = useState(null);
     const [customerList, setCustomerList] = useState([]);
     const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -789,7 +788,7 @@ const CreateNewServiceStop = () => {
         name: task.name || task.description || "New Task",
         description: task.description || "",
         typeId: task.typeId || task.taskTypeId || "",
-        type: task.type || task.taskType || selectedTaskType?.value || selectedTaskType?.name || "Task",
+        type: canonicalJobTaskType(task.type || task.taskType || selectedTaskType?.value || selectedTaskType?.name || "Task"),
         contractedRate: Number(task.contractedRate || task.rate || task.laborCostCents || 0),
         estimatedTime: Number(task.estimatedTime || task.estimatedMinutes || 0),
         status: task.status || "Unassigned",
@@ -878,7 +877,7 @@ const CreateNewServiceStop = () => {
                     name: taskDescription.trim(),
                     description: taskDescription.trim(),
                     typeId: selectedTaskType.id || "",
-                    type: selectedTaskType.value || selectedTaskType.name,
+                    type: canonicalJobTaskType(selectedTaskType.value || selectedTaskType.name),
                     contractedRate: dollarsToCents(taskLaborCost),
                     estimatedTime: Number(taskEstimatedTime || 0),
                     status: "Unassigned",
@@ -941,6 +940,7 @@ const CreateNewServiceStop = () => {
             const tasksToSave = groupTasks.map((task) => ({
                 ...task,
                 id: jobId ? `comp_wo_tas_${uuidv4()}` : `comp_ss_tas_${uuidv4()}`,
+                type: canonicalJobTaskType(task.type || task.taskType || ""),
                 status: "Unassigned",
                 workerId: "",
                 workerType: "Not Assigned",
@@ -1319,145 +1319,237 @@ const CreateNewServiceStop = () => {
 
     const cancelPath = jobId ? `/company/jobs/detail/${jobId}` : "/company/serviceStops";
 
-    const renderTabContent = () => {
-        switch (activeTab) {
-            case 'site-info': return (
-                <SiteInfoTab
-                    isJobScheduler={isJobScheduler}
-                    job={job}
-                    location={serviceLocation}
-                    description={description}
-                    setDescription={setDescription}
-                    plannedServiceStops={plannedServiceStops}
-                    selectedPlannedStop={selectedPlannedStop}
-                    setSelectedPlannedStop={setSelectedPlannedStop}
-                    taskList={taskList}
-                    setSelectedTasks={setSelectedTasks}
-                    selectedPlannedStopPayRange={selectedPlannedStopPayRange}
-                    moneyFromCents={moneyFromCents}
-                    categoryOptions={categoryOptionsForScheduler}
-                    selectedCategory={selectedCategory}
-                    setSelectedCategory={handleCategoryChange}
-                    customerOptions={customerList}
-                    selectedCustomer={selectedCustomer}
-                    setSelectedCustomer={handleCustomerChange}
-                    serviceLocationOptions={serviceLocationList}
-                    selectedServiceLocation={serviceLocation}
-                    setSelectedServiceLocation={setServiceLocation}
-                    leadContext={leadContext}
-                    serviceStopTypeOptions={serviceStopTypeOptions}
-                    selectedServiceStopType={selectedServiceStopType}
-                    selectedManualServiceStopType={selectedManualServiceStopType}
-                    setSelectedManualServiceStopType={setSelectedManualServiceStopType}
-                />
-            );
-            case 'assign-tech': return (
-                <AssignTechTab
-                    users={userList}
-                    selectedUser={selectedUser}
-                    setSelectedUser={setSelectedUser}
-                    date={serviceDate}
-                    setDate={setServiceDate}
-                    estimatedDuration={estimatedDuration}
-                    setEstimatedDuration={setEstimatedDuration}
-                    workTypeOptions={workTypeOptions}
-                    selectedPayWorkType={selectedPayWorkType}
-                    setSelectedPayWorkType={setSelectedPayWorkType}
-                    selectedPaySummary={effectivePaySummary}
-                    automaticPaySummary={selectedPaySummary}
-                    manualPayOverrideEnabled={manualPayOverrideEnabled}
-                    setManualPayOverrideEnabled={setManualPayOverrideEnabled}
-                    manualPayOverrideAmount={manualPayOverrideAmount}
-                    setManualPayOverrideAmount={setManualPayOverrideAmount}
-                    manualPayOverrideNotes={manualPayOverrideNotes}
-                    setManualPayOverrideNotes={setManualPayOverrideNotes}
-                    moneyFromCents={moneyFromCents}
-                />
-            );
-            case 'select-tasks': return (
-                <TasksTab
-                    isJobScheduler={isJobScheduler}
-                    requiresTasksForSchedule={requiresTasksForSchedule}
-                    tasks={taskList}
-                    selectedTasks={selectedTasks}
-                    toggleTask={toggleTaskSelection}
-                    estimatedDuration={estimatedDuration}
-                    taskTypeList={taskTypeList}
-                    selectedTaskType={selectedTaskType}
-                    setSelectedTaskType={setSelectedTaskType}
-                    taskDescription={taskDescription}
-                    setTaskDescription={setTaskDescription}
-                    taskLaborCost={taskLaborCost}
-                    setTaskLaborCost={setTaskLaborCost}
-                    taskEstimatedTime={taskEstimatedTime}
-                    setTaskEstimatedTime={setTaskEstimatedTime}
-                    addInlineTask={addInlineTask}
-                    addingTask={addingTask}
-                    taskGroupList={taskGroupList}
-                    selectedTaskGroup={selectedTaskGroup}
-                    applyTaskGroupToJob={applyTaskGroupToJob}
-                    applyingTaskGroup={applyingTaskGroup}
-                />
-            );
-            case 'review': return (
-                <ReviewTab
-                    isJobScheduler={isJobScheduler}
-                    job={job}
-                    customer={activeCustomer}
-                    location={serviceLocation}
-                    selectedCategory={selectedCategory}
-                    description={description}
-                    tech={selectedUser?.userName}
-                    date={serviceDate}
-                    tasks={selectedTasks}
-                    duration={estimatedDuration}
-                    selectedServiceStopType={selectedServiceStopType}
-                    selectedPayWorkType={selectedPayWorkType}
-                    selectedPaySummary={effectivePaySummary}
-                    manualPayOverrideEnabled={manualPayOverrideEnabled}
-                    moneyFromCents={moneyFromCents}
-                />
-            );
-            default: return null;
-        }
-    };
+    const pageTitle = jobId
+        ? selectedCategory.id === "jobEstimate"
+            ? "Create Job Estimate Visit"
+            : "Schedule Job Service Stop"
+        : "Create New Service Stop";
+    const pageSubtitle = jobId
+        ? [
+            job?.internalId || "Job",
+            job?.customerName ? `for ${job.customerName}` : "",
+            selectedCategory?.label ? `as ${selectedCategory.label}` : "",
+        ].filter(Boolean).join(" ")
+        : "Schedule the visit, location, technician, tasks, and pay from one page.";
+    const missingScheduleInfo = [
+        !selectedUser ? "Technician" : "",
+        !activeCustomer?.id ? "Customer" : "",
+        !serviceLocation?.id ? "Service Location" : "",
+        requiresTasksForSchedule && selectedTasks.length === 0 ? "At least one task" : "",
+    ].filter(Boolean);
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-screen-xl mx-auto bg-white shadow-lg rounded-xl p-6">
-                <h2 className="text-3xl font-bold text-gray-800 mb-6">Create New Service Stop</h2>
-                <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
-                <div className="py-6">{renderTabContent()}</div>
-                <div className="flex justify-between items-center pt-4 border-t">
-                    <button onClick={() => navigate(cancelPath)} className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                    <button
-                        onClick={createServiceStop}
-                        className="py-2 px-6 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:opacity-50"
-                        disabled={!canSchedule}
-                    >
-                        Schedule Service Stop
-                    </button>
+        <div className="min-h-screen bg-slate-50 px-3 py-3 text-slate-950 sm:px-4 lg:px-5">
+            <div className="mx-auto max-w-screen-2xl space-y-4">
+                <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <button
+                            type="button"
+                            onClick={() => navigate(cancelPath)}
+                            className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+                        >
+                            Back
+                        </button>
+                        <h1 className="mt-1 text-xl font-bold sm:text-2xl">{pageTitle}</h1>
+                        <p className="mt-1 text-sm text-slate-500">{pageSubtitle}</p>
+                    </div>
+
+                    <div className="flex flex-col gap-2 sm:items-end">
+                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-right shadow-sm lg:hidden">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Expected Pay
+                            </p>
+                            <p className="text-xl font-bold text-slate-950">
+                                {moneyFromCents(effectivePaySummary.totalAmountCents)}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={createServiceStop}
+                            className={[
+                                "w-full rounded-lg px-4 py-2.5 text-sm font-semibold shadow-sm transition sm:w-auto",
+                                canSchedule
+                                    ? "bg-blue-600 text-white hover:bg-blue-700"
+                                    : "bg-slate-200 text-slate-500 disabled:cursor-not-allowed disabled:opacity-70",
+                            ].join(" ")}
+                            disabled={!canSchedule}
+                        >
+                            Schedule Service Stop
+                        </button>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
+                    <div className="space-y-4">
+                        <ServiceStopSection
+                            title="Site & Stop"
+                            subtitle="Category, customer, location, planned stop, and visit notes."
+                        >
+                            <SiteInfoTab
+                                isJobScheduler={isJobScheduler}
+                                job={job}
+                                location={serviceLocation}
+                                description={description}
+                                setDescription={setDescription}
+                                plannedServiceStops={plannedServiceStops}
+                                selectedPlannedStop={selectedPlannedStop}
+                                setSelectedPlannedStop={setSelectedPlannedStop}
+                                taskList={taskList}
+                                setSelectedTasks={setSelectedTasks}
+                                selectedPlannedStopPayRange={selectedPlannedStopPayRange}
+                                moneyFromCents={moneyFromCents}
+                                categoryOptions={categoryOptionsForScheduler}
+                                selectedCategory={selectedCategory}
+                                setSelectedCategory={handleCategoryChange}
+                                customerOptions={customerList}
+                                selectedCustomer={selectedCustomer}
+                                setSelectedCustomer={handleCustomerChange}
+                                serviceLocationOptions={serviceLocationList}
+                                selectedServiceLocation={serviceLocation}
+                                setSelectedServiceLocation={setServiceLocation}
+                                leadContext={leadContext}
+                                serviceStopTypeOptions={serviceStopTypeOptions}
+                                selectedServiceStopType={selectedServiceStopType}
+                                selectedManualServiceStopType={selectedManualServiceStopType}
+                                setSelectedManualServiceStopType={setSelectedManualServiceStopType}
+                            />
+                        </ServiceStopSection>
+
+                        <ServiceStopSection
+                            title="Technician & Pay"
+                            subtitle="Who is doing the visit, when it happens, and the calculated technician pay."
+                        >
+                            <AssignTechTab
+                                users={userList}
+                                selectedUser={selectedUser}
+                                setSelectedUser={setSelectedUser}
+                                date={serviceDate}
+                                setDate={setServiceDate}
+                                estimatedDuration={estimatedDuration}
+                                setEstimatedDuration={setEstimatedDuration}
+                                workTypeOptions={workTypeOptions}
+                                selectedPayWorkType={selectedPayWorkType}
+                                setSelectedPayWorkType={setSelectedPayWorkType}
+                                selectedPaySummary={effectivePaySummary}
+                                automaticPaySummary={selectedPaySummary}
+                                manualPayOverrideEnabled={manualPayOverrideEnabled}
+                                setManualPayOverrideEnabled={setManualPayOverrideEnabled}
+                                manualPayOverrideAmount={manualPayOverrideAmount}
+                                setManualPayOverrideAmount={setManualPayOverrideAmount}
+                                manualPayOverrideNotes={manualPayOverrideNotes}
+                                setManualPayOverrideNotes={setManualPayOverrideNotes}
+                                moneyFromCents={moneyFromCents}
+                            />
+                        </ServiceStopSection>
+
+                        <ServiceStopSection
+                            title="Tasks"
+                            subtitle="Select existing job tasks, add a task group, or create a new task for this stop."
+                        >
+                            <TasksTab
+                                isJobScheduler={isJobScheduler}
+                                requiresTasksForSchedule={requiresTasksForSchedule}
+                                tasks={taskList}
+                                selectedTasks={selectedTasks}
+                                toggleTask={toggleTaskSelection}
+                                estimatedDuration={estimatedDuration}
+                                taskTypeList={taskTypeList}
+                                selectedTaskType={selectedTaskType}
+                                setSelectedTaskType={setSelectedTaskType}
+                                taskDescription={taskDescription}
+                                setTaskDescription={setTaskDescription}
+                                taskLaborCost={taskLaborCost}
+                                setTaskLaborCost={setTaskLaborCost}
+                                taskEstimatedTime={taskEstimatedTime}
+                                setTaskEstimatedTime={setTaskEstimatedTime}
+                                addInlineTask={addInlineTask}
+                                addingTask={addingTask}
+                                taskGroupList={taskGroupList}
+                                selectedTaskGroup={selectedTaskGroup}
+                                applyTaskGroupToJob={applyTaskGroupToJob}
+                                applyingTaskGroup={applyingTaskGroup}
+                            />
+                        </ServiceStopSection>
+                    </div>
+
+                    <aside className="space-y-4 lg:sticky lg:top-4 lg:self-start">
+                        <ReviewTab
+                            isJobScheduler={isJobScheduler}
+                            job={job}
+                            customer={activeCustomer}
+                            location={serviceLocation}
+                            selectedCategory={selectedCategory}
+                            description={description}
+                            tech={selectedUser?.userName}
+                            date={serviceDate}
+                            tasks={selectedTasks}
+                            duration={estimatedDuration}
+                            selectedServiceStopType={selectedServiceStopType}
+                            selectedPayWorkType={selectedPayWorkType}
+                            selectedPaySummary={effectivePaySummary}
+                            manualPayOverrideEnabled={manualPayOverrideEnabled}
+                            moneyFromCents={moneyFromCents}
+                            showPaySummary={false}
+                        />
+
+                        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                            {missingScheduleInfo.length > 0 && (
+                                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                    <p className="font-semibold">Needed before scheduling</p>
+                                    <ul className="mt-2 space-y-1">
+                                        {missingScheduleInfo.map((item) => (
+                                            <li key={item}>- {item}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Expected Pay
+                                </p>
+                                <p className="mt-1 text-2xl font-bold text-slate-950">
+                                    {moneyFromCents(effectivePaySummary.totalAmountCents)}
+                                </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={createServiceStop}
+                                className={[
+                                    "mt-4 w-full rounded-lg px-4 py-2.5 text-sm font-semibold shadow-sm transition",
+                                    canSchedule
+                                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                                        : "bg-slate-200 text-slate-500 disabled:cursor-not-allowed disabled:opacity-70",
+                                ].join(" ")}
+                                disabled={!canSchedule}
+                            >
+                                Schedule Service Stop
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => navigate(cancelPath)}
+                                className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                            >
+                                Cancel
+                            </button>
+                        </section>
+                    </aside>
                 </div>
             </div>
         </div>
     );
 };
 
-const TabNavigation = ({ activeTab, setActiveTab }) => (
-    <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-            {[
-                { id: 'site-info', name: 'Site & Stop Info' },
-                { id: 'assign-tech', name: 'Assign Tech & Date' },
-                { id: 'select-tasks', name: 'Select Tasks' },
-                { id: 'review', name: 'Review & Schedule' },
-            ].map(tab => (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${activeTab === tab.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
-                    {tab.name}
-                </button>
-            ))}
-        </nav>
-    </div>
+const ServiceStopSection = ({ title, subtitle, children }) => (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3">
+            <h2 className="text-base font-semibold text-slate-950">{title}</h2>
+            {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
+        </div>
+        {children}
+    </section>
 );
 
 const SiteInfoTab = ({
@@ -1524,15 +1616,15 @@ const SiteInfoTab = ({
         : null;
 
     return (
-    <div className="space-y-4">
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-            <div className="mb-3">
-                <h3 className="text-base font-bold text-gray-900">Service Stop Category</h3>
-                <p className="mt-1 text-sm text-gray-600">
+    <div className="space-y-3">
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <h3 className="text-sm font-bold text-gray-900">Service Stop Category</h3>
+                <p className="text-sm text-gray-600">
                     {selectedCategory.helper}
                 </p>
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 2xl:grid-cols-4">
                 {categoryOptions.map((option) => {
                     const selected = selectedCategory.id === option.id;
                     return (
@@ -1541,7 +1633,7 @@ const SiteInfoTab = ({
                             type="button"
                             onClick={() => setSelectedCategory(option)}
                             className={[
-                                "rounded-lg border p-4 text-left transition",
+                                "rounded-lg border p-3 text-left transition",
                                 selected
                                     ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100"
                                     : "border-gray-200 bg-white hover:border-blue-200 hover:bg-blue-50/40",
@@ -1568,8 +1660,8 @@ const SiteInfoTab = ({
         )}
 
         {!isJobScheduler && (
-            <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
                         Customer
                     </label>
@@ -1586,7 +1678,7 @@ const SiteInfoTab = ({
                     </p>
                 </div>
 
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
                         Service Location
                     </label>
@@ -1615,7 +1707,7 @@ const SiteInfoTab = ({
             data={location ? { Name: serviceLocationName, Address: locationAddress } : {}}
         />
 
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
             <label className="block text-sm font-semibold text-gray-700 mb-1">
                 Pay Type
             </label>
@@ -1637,7 +1729,7 @@ const SiteInfoTab = ({
             )}
         </div>
         {isJobScheduler && plannedServiceStops.length > 0 && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                     Planned Service Stop
                 </label>
@@ -1651,18 +1743,18 @@ const SiteInfoTab = ({
                 />
 
                 {selectedPlannedStop && (
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-                        <div className="rounded-lg bg-white border border-gray-200 p-3">
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                        <div className="rounded-lg bg-white border border-gray-200 p-2.5">
                             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</p>
                             <p className="mt-1 font-semibold text-gray-800">
                                 {selectedPlannedStop.serviceStopTypeName || "Service Stop"}
                             </p>
                         </div>
-                        <div className="rounded-lg bg-white border border-gray-200 p-3">
+                        <div className="rounded-lg bg-white border border-gray-200 p-2.5">
                             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Pay Range</p>
                             <p className="mt-1 font-semibold text-gray-800">{rangeLabel}</p>
                         </div>
-                        <div className="rounded-lg bg-white border border-gray-200 p-3">
+                        <div className="rounded-lg bg-white border border-gray-200 p-2.5">
                             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Cost Planning</p>
                             <p className="mt-1 font-semibold text-gray-800">
                                 {moneyFromCents(selectedPlannedStopPayRange?.maxAmountCents || 0)}
@@ -1675,15 +1767,15 @@ const SiteInfoTab = ({
         )}
         <div>
             <label className="block text-sm font-medium text-gray-700">Planned Work / Visit Notes</label>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1 w-full p-2 border border-gray-300 rounded-lg" rows="3" />
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 p-2" rows="2" />
         </div>
     </div>
     );
 };
 
 const InfoCard = ({ title, data }) => (
-    <div className="p-4 border rounded-lg">
-        <h4 className="font-bold text-lg mb-2">{title}</h4>
+    <div className="rounded-lg border border-gray-200 bg-white p-3 text-sm">
+        <h4 className="mb-1 font-bold text-gray-900">{title}</h4>
         {Object.entries(data || {})
             .filter(([, value]) => value !== undefined && value !== null && value !== "")
             .map(([key, value]) => <p key={key}><strong>{key}:</strong> {value}</p>)}
@@ -1694,7 +1786,7 @@ const InfoCard = ({ title, data }) => (
 );
 
 const PaySummaryCard = ({ selectedPaySummary, moneyFromCents }) => (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 md:col-span-full">
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 md:col-span-full">
         <div className="flex items-start justify-between gap-3">
             <div>
                 <p className="text-sm font-semibold text-gray-800">Expected Technician Pay</p>
@@ -1713,12 +1805,12 @@ const PaySummaryCard = ({ selectedPaySummary, moneyFromCents }) => (
             </p>
         )}
 
-        <div className="mt-4 space-y-2">
+        <div className="mt-3 space-y-2">
             {!selectedPaySummary.lines.length ? (
                 <p className="text-sm text-gray-500">Select a technician and tasks to calculate expected pay.</p>
             ) : (
                 selectedPaySummary.lines.map((line) => (
-                    <div key={line.id} className="rounded-lg border border-gray-200 bg-white p-3">
+                    <div key={line.id} className="rounded-lg border border-gray-200 bg-white p-2.5">
                         <div className="flex items-start justify-between gap-3">
                             <div>
                                 <p className="text-sm font-semibold text-gray-800">{line.title}</p>
@@ -1759,7 +1851,7 @@ const AssignTechTab = ({
     setManualPayOverrideNotes,
     moneyFromCents,
 }) => (
-    <div className="grid md:grid-cols-4 gap-6">
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Assign Technician</label>
             <Select options={users} value={selectedUser} onChange={setSelectedUser} placeholder="Select a technician..." styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }} />
@@ -1794,7 +1886,7 @@ const AssignTechTab = ({
                 Overrides which pay type is used for the automatic preview.
             </p>
         </div>
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 md:col-span-full">
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 md:col-span-full">
             <label className="flex items-start gap-3">
                 <input
                     type="checkbox"
@@ -1811,7 +1903,7 @@ const AssignTechTab = ({
             </label>
 
             {manualPayOverrideEnabled && (
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
                         <input
@@ -1867,14 +1959,15 @@ const TasksTab = ({
     applyingTaskGroup,
 }) => {
     const [showAllTasks, setShowAllTasks] = useState(false);
-    const visibleTasks = showAllTasks ? tasks : tasks.slice(0, 5);
-    const hiddenTaskCount = Math.max(tasks.length - 5, 0);
+    const visibleTaskLimit = 8;
+    const visibleTasks = showAllTasks ? tasks : tasks.slice(0, visibleTaskLimit);
+    const hiddenTaskCount = Math.max(tasks.length - visibleTaskLimit, 0);
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                    <h3 className="text-xl font-semibold">
+                    <h3 className="text-base font-semibold">
                         {isJobScheduler ? "Select Job Tasks for this Stop" : "Tasks for this Stop"}
                     </h3>
                     <p className="mt-1 text-sm text-gray-600">
@@ -1895,7 +1988,7 @@ const TasksTab = ({
                 </div>
             </div>
 
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                 <label className="mb-1 block text-sm font-semibold text-gray-700">
                     Add Task Group
                 </label>
@@ -1913,8 +2006,8 @@ const TasksTab = ({
                 </p>
             </div>
 
-            <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
                     <div>
                         <h4 className="font-semibold text-gray-800">Add New Task</h4>
                         <p className="text-xs text-gray-500">
@@ -1923,7 +2016,7 @@ const TasksTab = ({
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)_120px_120px_auto]">
+                <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)_120px_120px_auto]">
                     <input
                         value={taskDescription}
                         onChange={(e) => setTaskDescription(e.target.value)}
@@ -1962,7 +2055,7 @@ const TasksTab = ({
                         type="button"
                         onClick={addInlineTask}
                         disabled={addingTask}
-                        className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         {addingTask ? "Adding..." : "Add & Select"}
                     </button>
@@ -1970,7 +2063,7 @@ const TasksTab = ({
             </div>
 
             <div className="overflow-hidden rounded-lg border border-gray-200">
-                <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
+                <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-3 py-2">
                     <div>
                         <p className="text-sm font-semibold text-gray-800">
                             {isJobScheduler ? "Job Tasks" : "Service Stop Tasks"}
@@ -1986,11 +2079,11 @@ const TasksTab = ({
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-white">
                             <tr>
-                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Task</th>
-                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Type</th>
-                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Status</th>
-                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Est. Time</th>
-                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Selected</th>
+                                <th className="p-2 text-left text-xs font-medium uppercase text-gray-500">Task</th>
+                                <th className="p-2 text-left text-xs font-medium uppercase text-gray-500">Type</th>
+                                <th className="p-2 text-left text-xs font-medium uppercase text-gray-500">Status</th>
+                                <th className="p-2 text-left text-xs font-medium uppercase text-gray-500">Est. Time</th>
+                                <th className="p-2 text-left text-xs font-medium uppercase text-gray-500">Selected</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -2007,15 +2100,15 @@ const TasksTab = ({
                                             selected ? "bg-blue-50" : "hover:bg-gray-50",
                                         ].join(" ")}
                                     >
-                                        <td className="p-3 font-medium text-gray-900">{task.name}</td>
-                                        <td className="p-3 text-sm text-gray-700">{task.type || "—"}</td>
-                                        <td className="p-3 whitespace-nowrap">
+                                        <td className="p-2 font-medium text-gray-900">{task.name}</td>
+                                        <td className="p-2 text-sm text-gray-700">{task.type || "—"}</td>
+                                        <td className="p-2 whitespace-nowrap">
                                             <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold text-gray-800">
                                                 {task.status || "—"}
                                             </span>
                                         </td>
-                                        <td className="p-3 text-sm text-gray-700">{task.estimatedTime || 0} mins</td>
-                                        <td className="p-3 text-sm font-semibold text-gray-700">
+                                        <td className="p-2 text-sm text-gray-700">{task.estimatedTime || 0} mins</td>
+                                        <td className="p-2 text-sm font-semibold text-gray-700">
                                             {selected ? "Yes" : "No"}
                                         </td>
                                     </tr>
@@ -2038,13 +2131,13 @@ const TasksTab = ({
                 </div>
 
                 {hiddenTaskCount > 0 && (
-                    <div className="border-t border-gray-200 bg-white px-4 py-3 text-center">
+                    <div className="border-t border-gray-200 bg-white px-4 py-2 text-center">
                         <button
                             type="button"
                             onClick={() => setShowAllTasks((prev) => !prev)}
                             className="text-sm font-semibold text-blue-700 hover:text-blue-900"
                         >
-                            {showAllTasks ? "Show first 5 tasks" : `Show ${hiddenTaskCount} more task${hiddenTaskCount === 1 ? "" : "s"}`}
+                            {showAllTasks ? `Show first ${visibleTaskLimit} tasks` : `Show ${hiddenTaskCount} more task${hiddenTaskCount === 1 ? "" : "s"}`}
                         </button>
                     </div>
                 )}
@@ -2069,14 +2162,15 @@ const ReviewTab = ({
     selectedPaySummary,
     manualPayOverrideEnabled,
     moneyFromCents,
+    showPaySummary = true,
 }) => {
     const locationAddress = addressLine(location?.address || {});
     const customerName = customer?.label || customer?.customerName || customer?.displayName || job?.customerName || "Not selected";
 
     return (
-        <div className="space-y-4">
-            <h3 className="text-xl font-semibold">Review & Confirm</h3>
-            <div className="p-4 border rounded-lg space-y-2">
+        <div className="space-y-3">
+            <h3 className="text-base font-semibold">Review & Confirm</h3>
+            <div className="space-y-1.5 rounded-lg border border-gray-200 bg-white p-3 text-sm">
                 <p><strong>Category:</strong> {selectedCategory?.label || "Service Stop"}</p>
                 {isJobScheduler && <p><strong>Job:</strong> {job?.internalId || "Job"} for {job?.customerName}</p>}
                 <p><strong>Customer:</strong> {customerName}</p>
@@ -2089,9 +2183,9 @@ const ReviewTab = ({
                 <p><strong>{manualPayOverrideEnabled ? "Manual Pay" : "Expected Pay"}:</strong> {moneyFromCents(selectedPaySummary.totalAmountCents)}</p>
                 {description && <p><strong>Planned Work:</strong> {description}</p>}
                 <div>
-                    <h4 className="font-bold mt-2">Selected Tasks:</h4>
+                    <h4 className="mt-2 font-bold">Selected Tasks:</h4>
                     {tasks.length ? (
-                        <ul className="list-disc list-inside pl-4">
+                        <ul className="list-inside list-disc pl-2 text-sm">
                             {tasks.map(t => <li key={t.id}>{t.name || t.description || "Task"}</li>)}
                         </ul>
                     ) : (
@@ -2099,7 +2193,9 @@ const ReviewTab = ({
                     )}
                 </div>
             </div>
-            <PaySummaryCard selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />
+            {showPaySummary && (
+                <PaySummaryCard selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />
+            )}
         </div>
     );
 };

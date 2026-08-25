@@ -65,7 +65,7 @@ const JobHistoryView = () => {
 
                             <p>-> Admin: Michael Espineli </p>
                             <p>-> Customer: Ron Palace </p>
-                            <p>-> Tasks: Clean Filter </p>
+                            <p>-> Tasks: Maintenance </p>
                             <p>-> Add De </p>
                             <p>-> Brush Pool</p>
 

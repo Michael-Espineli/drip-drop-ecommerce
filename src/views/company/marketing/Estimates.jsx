@@ -420,7 +420,7 @@ function Estimates() {
   });
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('job');
   const [cadenceFilter, setCadenceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -574,7 +574,7 @@ function Estimates() {
               </div>
               <h1 className="mt-3 text-3xl font-bold text-slate-950">Estimates</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Review service agreements and job estimates from the same queue.
+                Review job estimates by default, or switch filters to include service agreements.
               </p>
             </div>
 

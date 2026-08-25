@@ -1,5 +1,5 @@
 import React, { useState, useContext } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import { db } from "../../../utils/config";
 import { setDoc, doc } from "firebase/firestore";
@@ -9,6 +9,10 @@ import { Context } from "../../../context/AuthContext";
 const DataBaseItemBulkUpload = () => {
   const { recentlySelectedCompany } = useContext(Context);
   const navigate = useNavigate();
+  const location = useLocation();
+  const vendorItemsBasePath = location.pathname.toLowerCase().startsWith("/company/settings")
+    ? "/company/settings/vendor-items"
+    : "/company/items";
 
   const [file, setFile] = useState(null);
   const [error, setError] = useState("");
@@ -156,11 +160,11 @@ const DataBaseItemBulkUpload = () => {
           );
         }
 
-        setSuccess("Products uploaded successfully!");
+        setSuccess("Vendor items uploaded successfully!");
         setIsLoading(false);
 
         setTimeout(() => {
-          navigate("/company/settings"); // change to the right route for your app
+          navigate(vendorItemsBasePath);
         }, 1500);
       } catch (err) {
         console.error(err);
@@ -240,7 +244,7 @@ const DataBaseItemBulkUpload = () => {
         );
       }
 
-      setSuccess("Test products uploaded successfully!");
+      setSuccess("Test vendor items uploaded successfully!");
       setIsLoading(false);
     } catch (err) {
       console.error(err);
@@ -251,7 +255,7 @@ const DataBaseItemBulkUpload = () => {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Bulk Upload Products</h1>
+      <h1 className="text-2xl font-bold mb-4">Bulk Upload Vendor Items</h1>
 
       <div className="mb-4">
         <input
@@ -355,10 +359,10 @@ const DataBaseItemBulkUpload = () => {
       {process.env.NODE_ENV === "development" && (
         <div className="p-4 my-4 bg-yellow-900 border-2 border-yellow-500 rounded-lg">
           <h3 className="text-xl font-bold text-yellow-400">
-            🚧 Development Only: Random Product Upload 🚧
+            Development Only: Random Vendor Item Upload
           </h3>
           <p className="text-yellow-300">
-            This feature is for testing and will not be in the final product.
+            This feature is for testing and will not be in the final vendor item workflow.
           </p>
 
           <div className="flex items-center gap-3 mt-3">

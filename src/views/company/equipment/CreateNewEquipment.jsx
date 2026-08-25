@@ -480,7 +480,7 @@ const CreateNewEquipment = () => {
                         dateUninstalled: getDateFromReplacementContext(replacementContext.dateUninstalled),
                         needsService: false,
                         nextServiceDate: null,
-                        status: EQUIPMENT_STATUS.REPLACED,
+                        status: EQUIPMENT_STATUS.UNINSTALLED,
                         replacedByEquipmentId: equipmentId,
                         replacementJobId: '',
                         replacementTaskId: '',

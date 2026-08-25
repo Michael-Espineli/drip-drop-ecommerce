@@ -1,3 +1,6 @@
+import { normalizeWorkOfferIncentive } from "../workOffers";
+import { isPayrollEnabled } from "../companyWorkSettings";
+
 const cents = (value) => {
   const n = Number(value || 0);
   return Number.isFinite(n) ? Math.round(n) : 0;
@@ -49,6 +52,7 @@ const normalizeSettings = (settings = {}) => {
   const safeSettings = settings || {};
 
   return {
+    payrollEnabled: isPayrollEnabled(safeSettings),
     payMode: safeSettings.payMode || "productionOnly",
     routePaySource: safeSettings.routePaySource || "serviceStopAndCompletedTasks",
     taskPaySource: safeSettings.taskPaySource || "technicianRateThenTaskContractedRate",
@@ -90,9 +94,11 @@ const workTypeSuggestedPayBasis = (workType) => {
 
   switch (workType.category) {
     case "route":
+    case "maintenance":
     case "serviceCall":
     case "commercial":
     case "startup":
+    case "estimate":
       return "serviceStop";
     case "repair":
     case "installation":
@@ -128,6 +134,7 @@ const normalizedCategory = (value = "") =>
 const payrollSourceIdForCategory = (category = "") => {
   switch (normalizedCategory(category)) {
     case "route":
+    case "maintenance":
     case "recurringroute":
     case "recurringservicestop":
       return payrollSourceIds.recurringServiceStop;
@@ -465,6 +472,53 @@ const manualPayOverrideLine = ({ serviceStop, workTypesById }) => {
 export const totalPayCents = (lines = []) =>
   lines.reduce((total, line) => total + cents(line.totalAmountCents), 0);
 
+const workOfferIncentiveLine = ({ serviceStop, basePayCents }) => {
+  const offerLike = serviceStop?.workOfferIncentive
+    ? { incentive: serviceStop.workOfferIncentive }
+    : serviceStop;
+  const incentive = normalizeWorkOfferIncentive(offerLike);
+  const amountCents =
+    incentive.type === "flat"
+      ? incentive.amountCents
+      : incentive.type === "percentage"
+        ? Math.round(cents(basePayCents) * (incentive.percentage / 100))
+        : 0;
+
+  if (amountCents <= 0) return null;
+
+  return {
+    id: `estimate_work_offer_incentive_${serviceStop?.workOfferId || serviceStop?.id || "stop"}`,
+    source: "workOfferIncentive",
+    sourceTaskId: null,
+    payTypeId: null,
+    payTypeName: null,
+    workTypeId: null,
+    workTypeName: null,
+    title: "Work Offer Incentive",
+    rateAmountCents: amountCents,
+    rateType: "manual",
+    payBasis: "manualAdjustment",
+    quantity: 1,
+    quantityUnit: "each",
+    totalAmountCents: amountCents,
+    calculationStatus: "calculated",
+    notes:
+      incentive.notes ||
+      (incentive.type === "percentage"
+        ? `${incentive.percentage}% work offer incentive.`
+        : "Flat-rate work offer incentive."),
+  };
+};
+
+const withWorkOfferIncentiveLines = ({ serviceStop, lines }) => {
+  const incentiveLine = workOfferIncentiveLine({
+    serviceStop,
+    basePayCents: totalPayCents(lines),
+  });
+
+  return incentiveLine ? [...lines, incentiveLine] : lines;
+};
+
 export const estimateServiceStopPay = ({
   companyId,
   settings,
@@ -483,8 +537,15 @@ export const estimateServiceStopPay = ({
   const workTypesById = Object.fromEntries((workTypes || []).map((type) => [type.id, type]));
   const lines = [];
 
+  if (!effectiveSettings.payrollEnabled) {
+    return [];
+  }
+
   if (hasManualPayOverride(serviceStop)) {
-    return [manualPayOverrideLine({ serviceStop, workTypesById })];
+    return withWorkOfferIncentiveLines({
+      serviceStop,
+      lines: [manualPayOverrideLine({ serviceStop, workTypesById })],
+    });
   }
 
   if (effectiveSettings.payMode === "hourlyOnly") {
@@ -711,7 +772,7 @@ export const estimateServiceStopPay = ({
     });
   }
 
-  return lines;
+  return withWorkOfferIncentiveLines({ serviceStop, lines });
 };
 
 export const estimateServiceStopPaySummary = (args) => {

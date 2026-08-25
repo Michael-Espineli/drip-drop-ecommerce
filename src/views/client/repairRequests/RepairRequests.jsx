@@ -39,21 +39,21 @@ const RepairRequests = () => {
 
     if (loading) {
         return (
-            <div className="p-8">
-                <h1 className="text-3xl font-bold text-gray-900 mb-8">Repair Requests</h1>
+            <div className="p-6 sm:p-8">
+                <h1 className="mb-8 text-2xl font-bold text-gray-900 sm:text-3xl">Repair Requests</h1>
                 <p>Loading repair requests...</p>
             </div>
         );
     }
 
     return (
-        <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
+        <div className="px-4 py-6 bg-gray-50 min-h-screen md:px-8">
             <div className="max-w-7xl mx-auto">
-                <div className="flex justify-between items-center mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">Repair Requests</h1>
+                <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Repair Requests</h1>
                     <Link
                         to="/client/repair-requests/new"
-                        className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700"
+                        className="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-white shadow-md hover:bg-blue-700 sm:py-2"
                     >
                         <PlusIcon className="w-5 h-5" />
                         <span>New Request</span>
@@ -71,7 +71,7 @@ const RepairRequests = () => {
 };
 
 const NoRepairRequests = () => (
-    <div className="text-center bg-white p-12 rounded-lg shadow-md">
+    <div className="text-center bg-white p-6 rounded-lg shadow-md sm:p-12">
         <TruckIcon className="mx-auto h-12 w-12 text-gray-400" />
         <h3 className="mt-2 text-xl font-medium text-gray-900">No repair requests found</h3>
         <p className="mt-1 text-sm text-gray-500">Get started by creating a new repair request.</p>
@@ -96,9 +96,9 @@ const RepairRequestList = ({ requests }) => (
                     <li key={req.id}>
                         <Link to={`/client/repair-requests/${req.id}`} className="block hover:bg-gray-50">
                             <div className="px-4 py-4 sm:px-6">
-                                <div className="flex items-center justify-between">
-                                    <p className="text-md font-medium text-blue-600 truncate">{req.description || "No description"}</p>
-                                    <div className="ml-2 flex-shrink-0 flex">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                    <p className="text-md break-words font-medium text-blue-600">{req.description || "No description"}</p>
+                                    <div className="flex flex-shrink-0">
                                         <p className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${repairRequestStatusClass(req.status)}`}>
                                             {displayRepairRequestStatus(req.status)}
                                         </p>

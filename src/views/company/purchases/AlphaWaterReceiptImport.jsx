@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "react-select";
-import { collection, doc, getDocs, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
+import { arrayUnion, collection, doc, getDocs, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
@@ -9,6 +9,16 @@ import * as pdfjsLib from "pdfjs-dist/webpack";
 import { FaCheckCircle, FaReceipt, FaSpinner } from "react-icons/fa";
 import { Context } from "../../../context/AuthContext";
 import { db, storage } from "../../../utils/config";
+import {
+  buildProductFromVendorItem,
+  buildVendorItemProductPatch,
+  findSuggestedProductForVendorItem,
+  getProductDisplayName,
+  getProductSellPriceCents,
+  productCatalogCollectionRef,
+  productCatalogDocRef,
+  productOptionSearchText,
+} from "../../../utils/productCatalog";
 import { fetchCompanyVendors } from "../../../utils/vendors";
 
 const MURDOCK_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
@@ -41,6 +51,11 @@ const blankDatabaseItemForm = {
   rate: "",
   billable: false,
   billingRate: "",
+  matchedProductId: "",
+  createProduct: true,
+  productName: "",
+  productSellPrice: "",
+  shareProductSellPrice: true,
 };
 
 const money = (value) =>
@@ -245,6 +260,18 @@ const billingRateFromDatabaseItem = (item) => {
   return billingRateCents ? formatDollarsFromCents(billingRateCents) : "";
 };
 
+const vendorItemProductLink = (vendorItem, products = []) => {
+  if (!vendorItem) return { productId: "", productName: "" };
+
+  const suggestedProduct = findSuggestedProductForVendorItem(vendorItem, products);
+  const productId = suggestedProduct?.id || vendorItem.productId || vendorItem.genericItemId || "";
+  const productName = suggestedProduct
+    ? getProductDisplayName(suggestedProduct)
+    : vendorItem.productName || vendorItem.genericItemName || "";
+
+  return { productId, productName };
+};
+
 const numericInputValue = (value) => {
   const number = Number(String(value || "").replace(/[$,]/g, ""));
   return Number.isFinite(number) ? number : 0;
@@ -373,6 +400,9 @@ const buildParsedLine = ({ rowNumber, sku, description, quantity, uom, lotSerial
     category: inferCategory(`${sku} ${name}`),
     matchedItemId: "",
     createDatabaseItem: true,
+    matchedProductId: "",
+    createProduct: true,
+    productName: name,
   };
 };
 
@@ -666,6 +696,7 @@ const AlphaWaterReceiptImport = () => {
   const [vendors, setVendors] = useState([]);
   const [companyUsers, setCompanyUsers] = useState([]);
   const [databaseItems, setDatabaseItems] = useState([]);
+  const [products, setProducts] = useState([]);
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [selectedTechId, setSelectedTechId] = useState("");
   const [sourceFile, setSourceFile] = useState(null);
@@ -733,14 +764,16 @@ const AlphaWaterReceiptImport = () => {
 
       setLoading(true);
       try {
-        const [vendorList, usersSnap, databaseSnap] = await Promise.all([
+        const [vendorList, usersSnap, databaseSnap, productSnap] = await Promise.all([
           fetchCompanyVendors(db, recentlySelectedCompany),
           getDocs(query(collection(db, "companies", recentlySelectedCompany, "companyUsers"))),
           getDocs(query(collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"), orderBy("name"))),
+          getDocs(query(productCatalogCollectionRef(db, recentlySelectedCompany), orderBy("commonName"))),
         ]);
 
         const users = usersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
         const items = databaseSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        const productItems = productSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
         const alphaVendor =
           vendorList.find((vendor) => normalizeKey(vendor.name).includes("alphawatersystems")) ||
           vendorList.find((vendor) => normalizeKey(vendor.name).includes("alpha")) ||
@@ -751,6 +784,7 @@ const AlphaWaterReceiptImport = () => {
         setVendors(vendorList);
         setCompanyUsers(users);
         setDatabaseItems(items);
+        setProducts(productItems);
         setSelectedVendorId(alphaVendor?.id || "");
         setSelectedTechId((currentTechId) => currentTechId || getCompanyUserId(defaultTech));
       } catch (error) {
@@ -792,14 +826,22 @@ const AlphaWaterReceiptImport = () => {
     () => lines.filter((line) => !line.matchedItemId && line.createDatabaseItem).length,
     [lines]
   );
+  const newProductCount = useMemo(
+    () => lines.filter((line) => !line.matchedProductId && line.createProduct && (line.matchedItemId || line.createDatabaseItem)).length,
+    [lines]
+  );
   const databaseItemsById = useMemo(
     () => new Map(databaseItems.map((item) => [item.id, item])),
     [databaseItems]
   );
+  const productsById = useMemo(
+    () => new Map(products.map((product) => [product.id, product])),
+    [products]
+  );
   const databaseItemOptions = useMemo(
     () =>
       databaseItems.map((item) => {
-        const name = item.name || item.description || item.sku || "Database Item";
+        const name = item.name || item.description || item.sku || "Vendor Item";
         const sku = item.sku || "";
         const category = item.category || "";
         const subCategory = item.subCategory || "";
@@ -826,6 +868,28 @@ const AlphaWaterReceiptImport = () => {
     () => new Map(databaseItemOptions.map((option) => [option.value, option])),
     [databaseItemOptions]
   );
+  const productOptions = useMemo(
+    () =>
+      products.map((product) => {
+        const name = getProductDisplayName(product);
+        const sellPriceCents = getProductSellPriceCents(product);
+
+        return {
+          value: product.id,
+          label: name,
+          name,
+          category: product.category || "",
+          uom: product.UOM || product.uom || "",
+          sellPriceCents,
+          searchText: productOptionSearchText(product),
+        };
+      }),
+    [products]
+  );
+  const productOptionsById = useMemo(
+    () => new Map(productOptions.map((option) => [option.value, option])),
+    [productOptions]
+  );
   const selectMenuPortalTarget = typeof document !== "undefined" ? document.body : null;
 
   const formatDatabaseItemOption = (option, meta) => {
@@ -847,6 +911,29 @@ const AlphaWaterReceiptImport = () => {
           ]
             .filter(Boolean)
             .join(" | ") || "No item details saved"}
+        </p>
+      </div>
+    );
+  };
+
+  const formatProductOption = (option, meta) => {
+    if (meta.context === "value") {
+      return option.name;
+    }
+
+    const isSelected = meta.selectValue?.some((selected) => selected.value === option.value);
+
+    return (
+      <div>
+        <p className={`font-semibold ${isSelected ? "text-white" : "text-slate-900"}`}>{option.name}</p>
+        <p className={`text-xs ${isSelected ? "text-blue-100" : "text-slate-500"}`}>
+          {[
+            option.sellPriceCents ? `Sell: ${moneyFromCents(option.sellPriceCents)}` : "",
+            option.category,
+            option.uom ? `UOM: ${option.uom}` : "",
+          ]
+            .filter(Boolean)
+            .join(" | ") || "No product details saved"}
         </p>
       </div>
     );
@@ -884,6 +971,7 @@ const AlphaWaterReceiptImport = () => {
     const parsedTechMatch = findMatchingCompanyUser(parsed.parsedTechnicianName, companyUsers);
     const parsedTechName = String(parsed.parsedTechnicianName || "").trim();
     const itemsForMatching = parseContext.databaseItems || databaseItems;
+    const productsForMatching = parseContext.products || products;
     let parsedNotes = "";
     parsedNotes = appendNote(parsedNotes, parsed.poNumber ? `Alpha Water PO #: ${parsed.poNumber}` : "");
     parsedNotes = appendNote(
@@ -892,10 +980,14 @@ const AlphaWaterReceiptImport = () => {
     );
     const hydratedLines = (parsed.lines || []).map((line) => {
       const match = findMatchingItem(line, itemsForMatching);
+      const productLink = vendorItemProductLink(match || line, productsForMatching);
       return {
         ...line,
         matchedItemId: match?.id || "",
         createDatabaseItem: !match,
+        matchedProductId: productLink.productId,
+        createProduct: !productLink.productId,
+        productName: productLink.productName || getProductDisplayName(line),
         billable: Boolean(match?.billable),
         billingRate: match?.billingRate ? String(Number(match.billingRate) / 100) : "",
         category: match?.category || line.category,
@@ -1013,12 +1105,26 @@ const AlphaWaterReceiptImport = () => {
         if (updates.matchedItemId !== undefined) {
           const match = databaseItemsById.get(updates.matchedItemId);
           if (match) {
-            return hydrateLineFromDatabaseItem(nextLine, match);
+            const productLink = vendorItemProductLink(match, products);
+            return {
+              ...hydrateLineFromDatabaseItem(nextLine, match),
+              matchedProductId: productLink.productId,
+              createProduct: !productLink.productId,
+              productName: productLink.productName || getProductDisplayName(match),
+            };
           }
 
           nextLine.createDatabaseItem = updates.createDatabaseItem !== undefined ? updates.createDatabaseItem : true;
           nextLine.billable = updates.billable !== undefined ? updates.billable : false;
           nextLine.billingRate = updates.billingRate !== undefined ? updates.billingRate : "";
+          nextLine.matchedProductId = "";
+          nextLine.createProduct = true;
+          nextLine.productName = nextLine.name || "";
+        }
+        if (updates.matchedProductId !== undefined) {
+          const product = productsById.get(updates.matchedProductId);
+          nextLine.createProduct = product ? false : updates.createProduct !== undefined ? updates.createProduct : true;
+          nextLine.productName = product ? getProductDisplayName(product) : nextLine.productName || nextLine.name || "";
         }
         if (
           updates.amount === undefined &&
@@ -1055,11 +1161,16 @@ const AlphaWaterReceiptImport = () => {
         category: "Misc",
         matchedItemId: "",
         createDatabaseItem: true,
+        matchedProductId: "",
+        createProduct: true,
+        productName: "",
       },
     ]);
   };
 
   const openCreateItemModal = (line) => {
+    const selectedProduct = productsById.get(line.matchedProductId) || null;
+    const defaultBillingRate = line.billingRate || line.unitPrice || "";
     setDatabaseItemForm({
       lineId: line.id,
       name: line.name || line.sku || "Alpha Water Item",
@@ -1072,7 +1183,12 @@ const AlphaWaterReceiptImport = () => {
       color: "",
       rate: line.unitPrice || "",
       billable: Boolean(line.billable),
-      billingRate: line.billingRate || line.unitPrice || "",
+      billingRate: defaultBillingRate,
+      matchedProductId: selectedProduct?.id || "",
+      createProduct: !selectedProduct && line.createProduct !== false,
+      productName: getProductDisplayName(selectedProduct || line),
+      productSellPrice: defaultBillingRate,
+      shareProductSellPrice: true,
     });
     setCreateItemModalOpen(true);
   };
@@ -1089,7 +1205,20 @@ const AlphaWaterReceiptImport = () => {
   };
 
   const updateDatabaseItemForm = (updates) => {
-    setDatabaseItemForm((prev) => ({ ...prev, ...updates }));
+    setDatabaseItemForm((prev) => {
+      const next = { ...prev, ...updates };
+      const shareProductSellPrice = updates.shareProductSellPrice ?? prev.shareProductSellPrice;
+
+      if (updates.billingRate !== undefined && shareProductSellPrice) {
+        next.productSellPrice = updates.billingRate;
+      }
+
+      if (updates.shareProductSellPrice === true) {
+        next.productSellPrice = next.billingRate;
+      }
+
+      return next;
+    });
   };
 
   const createDatabaseItemFromModal = async () => {
@@ -1105,13 +1234,15 @@ const AlphaWaterReceiptImport = () => {
     setCreatingDatabaseItem(true);
     try {
       const itemId = "com_sett_db_" + uuidv4();
-      const item = {
+      let linkedProduct = productsById.get(databaseItemForm.matchedProductId) || null;
+      const now = new Date();
+      let item = {
         UOM: normalizedDatabaseUom(databaseItemForm.uom),
         id: itemId,
         billable: Boolean(databaseItemForm.billable),
         category: databaseItemForm.category || "Misc",
         color: databaseItemForm.color || "",
-        dateUpdated: new Date(),
+        dateUpdated: now,
         description: databaseItemForm.description || databaseItemForm.name,
         name: databaseItemForm.name.trim(),
         rate: centsFromDollars(databaseItemForm.rate),
@@ -1127,19 +1258,61 @@ const AlphaWaterReceiptImport = () => {
         tracking: "",
       };
 
+      const productSellPrice = databaseItemForm.shareProductSellPrice
+        ? databaseItemForm.billingRate
+        : databaseItemForm.productSellPrice;
+
+      if (!linkedProduct && databaseItemForm.createProduct) {
+        const productId = "com_prod_" + uuidv4();
+        linkedProduct = buildProductFromVendorItem({
+          productId,
+          vendorItem: item,
+          overrides: {
+            name: databaseItemForm.productName || databaseItemForm.name,
+            sellPrice: centsFromDollars(productSellPrice || databaseItemForm.billingRate),
+          },
+          source: "alphaWaterReceiptModal",
+          now,
+        });
+        await setDoc(productCatalogDocRef(db, recentlySelectedCompany, productId), linkedProduct);
+        setProducts((prev) => [...prev, linkedProduct].sort((a, b) => getProductDisplayName(a).localeCompare(getProductDisplayName(b))));
+      } else if (linkedProduct) {
+        await updateDoc(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), {
+          storeItems: arrayUnion(item.name),
+          storeItemsIds: arrayUnion(itemId),
+          vendorItemIds: arrayUnion(itemId),
+          dateUpdated: now,
+          updatedAt: now,
+        });
+      }
+
+      if (linkedProduct) {
+        item = {
+          ...item,
+          ...buildVendorItemProductPatch(linkedProduct, now),
+        };
+      }
+
       await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId), item);
 
       setDatabaseItems((prev) => [...prev, item].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))));
       setLines((prev) =>
         prev.map((line) =>
-          line.id === databaseItemForm.lineId ? hydrateLineFromDatabaseItem(line, item) : line
+          line.id === databaseItemForm.lineId
+            ? {
+              ...hydrateLineFromDatabaseItem(line, item),
+              matchedProductId: linkedProduct?.id || "",
+              createProduct: false,
+              productName: linkedProduct ? getProductDisplayName(linkedProduct) : line.productName || item.name,
+            }
+            : line
         )
       );
-      toast.success("Database item created and row updated");
+      toast.success("Vendor item created and row updated");
       resetCreateItemModal();
     } catch (error) {
-      console.error("Error creating database item from receipt import:", error);
-      toast.error("Could not create database item");
+      console.error("Error creating vendor item from receipt import:", error);
+      toast.error("Could not create vendor item");
     } finally {
       setCreatingDatabaseItem(false);
     }
@@ -1157,7 +1330,7 @@ const AlphaWaterReceiptImport = () => {
     const priceChange = getLinePriceChange(line, databaseItem);
 
     if (!recentlySelectedCompany || !databaseItem || !priceChange) {
-      toast.error("No database item price update is available for this line.");
+      toast.error("No vendor item price update is available for this line.");
       return;
     }
 
@@ -1176,10 +1349,10 @@ const AlphaWaterReceiptImport = () => {
       setDatabaseItems((prev) =>
         prev.map((item) => (item.id === databaseItem.id ? { ...item, ...updates } : item))
       );
-      toast.success("Database item cost updated");
+      toast.success("Vendor item cost updated");
     } catch (error) {
-      console.error("Error updating database item cost from receipt import:", error);
-      toast.error("Could not update database item cost");
+      console.error("Error updating vendor item cost from receipt import:", error);
+      toast.error("Could not update vendor item cost");
     } finally {
       setDatabaseItemCostUpdating(line.id, false);
     }
@@ -1205,7 +1378,12 @@ const AlphaWaterReceiptImport = () => {
     setDatabaseItemForm(blankDatabaseItemForm);
   };
 
-  const parseQueuedSourceFile = async (nextIndex, queue = bulkQueue, nextDatabaseItems = databaseItems) => {
+  const parseQueuedSourceFile = async (
+    nextIndex,
+    queue = bulkQueue,
+    nextDatabaseItems = databaseItems,
+    nextProducts = products
+  ) => {
     const nextQueueItem = queue[nextIndex];
     if (!nextQueueItem) return false;
 
@@ -1214,6 +1392,7 @@ const AlphaWaterReceiptImport = () => {
       index: nextIndex,
       total: queue.length,
       databaseItems: nextDatabaseItems,
+      products: nextProducts,
     });
     return true;
   };
@@ -1271,7 +1450,9 @@ const AlphaWaterReceiptImport = () => {
       const purchasedItemIds = [];
       const pdfUrlList = [];
       const createdDatabaseItems = [];
+      const createdProducts = [];
       let databaseItemsForNextReceipt = databaseItems;
+      let productsForNextReceipt = products;
       const receiptNoteParts = String(receipt.notes || "")
         .split(/\r?\n/)
         .map((note) => note.trim())
@@ -1290,6 +1471,8 @@ const AlphaWaterReceiptImport = () => {
       for (const line of lines) {
         let databaseItem = databaseItems.find((item) => item.id === line.matchedItemId) || null;
         let itemId = databaseItem?.id || "";
+        let databaseItemWasCreated = false;
+        const now = new Date();
 
         if (!databaseItem && line.createDatabaseItem) {
           itemId = "com_sett_db_" + uuidv4();
@@ -1314,13 +1497,63 @@ const AlphaWaterReceiptImport = () => {
             sellPrice: centsFromDollars(line.billingRate || line.unitPrice),
             tracking: "",
           };
+          databaseItemWasCreated = true;
+        }
 
+        const existingProductId = line.matchedProductId || databaseItem?.productId || databaseItem?.genericItemId || "";
+        let linkedProduct = productsForNextReceipt.find((product) => product.id === existingProductId) || null;
+
+        if (!linkedProduct && line.createProduct && databaseItem && itemId) {
+          const productId = "com_prod_" + uuidv4();
+          linkedProduct = buildProductFromVendorItem({
+            productId,
+            vendorItem: { ...databaseItem, id: itemId },
+            overrides: {
+              name: line.productName || databaseItem.name || line.name,
+              sellPrice: centsFromDollars(line.billingRate || line.unitPrice || ""),
+            },
+            source: "alphaWaterEmailImport",
+            now,
+          });
+
+          await setDoc(
+            productCatalogDocRef(db, recentlySelectedCompany, productId),
+            linkedProduct
+          );
+          createdProducts.push(linkedProduct);
+          productsForNextReceipt = [...productsForNextReceipt, linkedProduct];
+        } else if (linkedProduct && itemId) {
+          await updateDoc(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), {
+            storeItems: arrayUnion(databaseItem?.name || line.name || itemId),
+            storeItemsIds: arrayUnion(itemId),
+            vendorItemIds: arrayUnion(itemId),
+            dateUpdated: now,
+            updatedAt: now,
+          });
+        }
+
+        const vendorItemAlreadyLinkedToProduct =
+          linkedProduct && (databaseItem?.productId === linkedProduct.id || databaseItem?.genericItemId === linkedProduct.id);
+
+        if (linkedProduct && databaseItem) {
+          databaseItem = {
+            ...databaseItem,
+            ...buildVendorItemProductPatch(linkedProduct, now),
+          };
+        }
+
+        if (databaseItemWasCreated && databaseItem) {
           await setDoc(
             doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId),
             databaseItem
           );
           createdDatabaseItems.push(databaseItem);
           databaseItemsForNextReceipt = [...databaseItemsForNextReceipt, databaseItem];
+        } else if (linkedProduct && itemId && !vendorItemAlreadyLinkedToProduct) {
+          await updateDoc(
+            doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId),
+            buildVendorItemProductPatch(linkedProduct, now)
+          );
         }
 
         const purchaseId = "comp_pi_" + uuidv4();
@@ -1344,6 +1577,10 @@ const AlphaWaterReceiptImport = () => {
           quantityString: String(line.quantity || "1"),
           date: receiptDate,
           billable: Boolean(line.billable),
+          productId: linkedProduct?.id || "",
+          productName: linkedProduct ? getProductDisplayName(linkedProduct) : "",
+          genericItemId: linkedProduct?.id || "",
+          genericItemName: linkedProduct ? getProductDisplayName(linkedProduct) : "",
           invoiced: false,
           returned: false,
           status: line.billable ? "Needs invoice" : "Non-billable",
@@ -1410,6 +1647,17 @@ const AlphaWaterReceiptImport = () => {
         });
       }
 
+      if (createdProducts.length) {
+        setProducts((prev) => {
+          const existingIds = new Set(prev.map((product) => product.id));
+          const mergedProducts = [
+            ...prev,
+            ...createdProducts.filter((product) => !existingIds.has(product.id)),
+          ];
+          return mergedProducts.sort((a, b) => getProductDisplayName(a).localeCompare(getProductDisplayName(b)));
+        });
+      }
+
       if (isBulkImport) {
         const nextSavedCount = bulkSavedCount + 1;
         const nextIndex = bulkIndex + 1;
@@ -1417,7 +1665,7 @@ const AlphaWaterReceiptImport = () => {
 
         if (nextIndex < bulkQueue.length) {
           toast.success(`Receipt saved. Loading ${nextIndex + 1} of ${bulkQueue.length}.`);
-          await parseQueuedSourceFile(nextIndex, bulkQueue, databaseItemsForNextReceipt);
+          await parseQueuedSourceFile(nextIndex, bulkQueue, databaseItemsForNextReceipt, productsForNextReceipt);
         } else {
           toast.success(`Bulk import complete. ${nextSavedCount} receipt${nextSavedCount === 1 ? "" : "s"} created.`);
           resetImportForm();
@@ -1730,7 +1978,7 @@ const AlphaWaterReceiptImport = () => {
             </div>
 
             <div className="mt-5 overflow-x-auto">
-              <table className="min-w-[1320px] w-full border-separate border-spacing-y-2">
+              <table className="min-w-[1360px] w-full border-separate border-spacing-y-2">
                 <thead>
                   <tr className="text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                     <th className="px-2 py-1">SKU</th>
@@ -1741,7 +1989,7 @@ const AlphaWaterReceiptImport = () => {
                     <th className="px-2 py-1">Unit</th>
                     <th className="px-2 py-1">Amount</th>
                     <th className="px-2 py-1">Tax</th>
-                    <th className="px-2 py-1">Database Item</th>
+                    <th className="px-2 py-1">Vendor Item</th>
                     <th className="px-2 py-1">Category</th>
                     <th className="px-2 py-1">Billable</th>
                     <th className="px-2 py-1">Billing Rate</th>
@@ -1751,6 +1999,14 @@ const AlphaWaterReceiptImport = () => {
                 <tbody>
                   {lines.map((line) => {
                     const matchedDatabaseItem = databaseItemsById.get(line.matchedItemId) || null;
+                    const linkedProductId =
+                      line.matchedProductId ||
+                      matchedDatabaseItem?.productId ||
+                      matchedDatabaseItem?.genericItemId ||
+                      "";
+                    const linkedProduct = productsById.get(linkedProductId) || null;
+                    const linkedProductName =
+                      linkedProduct ? getProductDisplayName(linkedProduct) : line.productName || matchedDatabaseItem?.productName || matchedDatabaseItem?.genericItemName || "";
                     const priceChange = getLinePriceChange(line, matchedDatabaseItem);
                     const isUpdatingDatabaseItemCost = Boolean(updatingDatabaseItemCostIds[line.id]);
 
@@ -1826,8 +2082,8 @@ const AlphaWaterReceiptImport = () => {
                               options={databaseItemOptions}
                               isClearable
                               isSearchable
-                              placeholder="Search database items"
-                              noOptionsMessage={() => "No database items found"}
+                              placeholder="Search vendor items"
+                              noOptionsMessage={() => "No vendor items found"}
                               formatOptionLabel={formatDatabaseItemOption}
                               filterOption={(option, inputValue) =>
                                 option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
@@ -1844,7 +2100,7 @@ const AlphaWaterReceiptImport = () => {
                               disabled={Boolean(line.matchedItemId)}
                               onChange={(event) => updateLine(line.id, { createDatabaseItem: event.target.checked })}
                             />
-                            New database item
+                            New vendor item
                           </label>
                           {line.createDatabaseItem ? (
                             <button
@@ -1852,8 +2108,21 @@ const AlphaWaterReceiptImport = () => {
                               onClick={() => openCreateItemModal(line)}
                               className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
                             >
-                              Create New Item
+                              Create Vendor Item
                             </button>
+                          ) : null}
+                          {linkedProductId ? (
+                            <p className="mt-2 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-800">
+                              Product link inherited{linkedProductName ? `: ${linkedProductName}` : ""}
+                            </p>
+                          ) : line.matchedItemId ? (
+                            <p className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
+                              Product link will be created from this vendor item.
+                            </p>
+                          ) : line.createDatabaseItem ? (
+                            <p className="mt-2 text-xs text-gray-500">
+                              Product setup happens when the vendor item is created.
+                            </p>
                           ) : null}
                           {priceChange ? (
                             <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
@@ -1866,7 +2135,7 @@ const AlphaWaterReceiptImport = () => {
                                 disabled={isUpdatingDatabaseItemCost}
                                 className="mt-2 rounded-md bg-amber-600 px-2 py-1 font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
                               >
-                                {isUpdatingDatabaseItemCost ? "Updating..." : "Update Database Cost"}
+                                {isUpdatingDatabaseItemCost ? "Updating..." : "Update Vendor Cost"}
                               </button>
                             </div>
                           ) : null}
@@ -2024,7 +2293,8 @@ const AlphaWaterReceiptImport = () => {
                 <FaCheckCircle className="mt-0.5 shrink-0" />
                 <p>
                   This will create {lines.length} purchased item{lines.length === 1 ? "" : "s"}
-                  {newDatabaseItemCount ? ` and ${newDatabaseItemCount} new database item${newDatabaseItemCount === 1 ? "" : "s"}` : ""}.
+                  {newDatabaseItemCount ? `, ${newDatabaseItemCount} new vendor item${newDatabaseItemCount === 1 ? "" : "s"}` : ""}
+                  {newProductCount ? `, and ${newProductCount} new product${newProductCount === 1 ? "" : "s"}` : ""}.
                 </p>
               </div>
             </div>
@@ -2061,8 +2331,8 @@ const AlphaWaterReceiptImport = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl">
             <div className="border-b border-gray-200 px-5 py-4">
-              <h2 className="text-lg font-bold text-gray-900">Create New Item</h2>
-              <p className="mt-1 text-sm text-gray-500">Review the parsed line item before adding it to the database.</p>
+              <h2 className="text-lg font-bold text-gray-900">Create Vendor Item</h2>
+              <p className="mt-1 text-sm text-gray-500">Review the parsed line item and connect it to the Product Catalog.</p>
             </div>
 
             <div className="grid gap-4 p-5 sm:grid-cols-2">
@@ -2092,6 +2362,20 @@ const AlphaWaterReceiptImport = () => {
                 />
               </label>
               <label className="text-sm font-semibold text-gray-700">
+                Category
+                <select
+                  value={databaseItemForm.category}
+                  onChange={(event) => updateDatabaseItemForm({ category: event.target.value })}
+                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                >
+                  {categoryOptions.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-gray-700">
                 UOM
                 <select
                   value={databaseItemForm.uom}
@@ -2106,18 +2390,12 @@ const AlphaWaterReceiptImport = () => {
                 </select>
               </label>
               <label className="text-sm font-semibold text-gray-700">
-                Category
-                <select
-                  value={databaseItemForm.category}
-                  onChange={(event) => updateDatabaseItemForm({ category: event.target.value })}
+                Size
+                <input
+                  value={databaseItemForm.size}
+                  onChange={(event) => updateDatabaseItemForm({ size: event.target.value })}
                   className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                >
-                  {categoryOptions.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label className="text-sm font-semibold text-gray-700">
                 Subcategory
@@ -2143,14 +2421,84 @@ const AlphaWaterReceiptImport = () => {
                   className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                 />
               </label>
-              <label className="text-sm font-semibold text-gray-700">
-                Size
-                <input
-                  value={databaseItemForm.size}
-                  onChange={(event) => updateDatabaseItemForm({ size: event.target.value })}
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                />
-              </label>
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 sm:col-span-2">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-blue-950">Product Catalog</p>
+                    <p className="mt-1 text-xs leading-5 text-blue-800">
+                      Link this vendor-specific item to the product that will be used on jobs and invoices.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs font-bold text-blue-900">
+                    <input
+                      type="checkbox"
+                      checked={databaseItemForm.createProduct}
+                      disabled={Boolean(databaseItemForm.matchedProductId)}
+                      onChange={(event) => updateDatabaseItemForm({ createProduct: event.target.checked })}
+                    />
+                    New product
+                  </label>
+                </div>
+                <div className="mt-3">
+                  <Select
+                    value={productOptionsById.get(databaseItemForm.matchedProductId) || null}
+                    onChange={(option) =>
+                      updateDatabaseItemForm({
+                        matchedProductId: option?.value || "",
+                        createProduct: option ? false : true,
+                        productName: option?.name || databaseItemForm.productName,
+                      })
+                    }
+                    options={productOptions}
+                    isClearable
+                    isSearchable
+                    placeholder="Connect to an existing product"
+                    noOptionsMessage={() => "No products found"}
+                    formatOptionLabel={formatProductOption}
+                    filterOption={(option, inputValue) =>
+                      option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                    }
+                    theme={selectTheme}
+                    styles={selectStyles}
+                    menuPortalTarget={selectMenuPortalTarget || undefined}
+                  />
+                </div>
+                {databaseItemForm.createProduct && !databaseItemForm.matchedProductId ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="text-sm font-semibold text-blue-950">
+                      Product Name
+                      <input
+                        value={databaseItemForm.productName}
+                        onChange={(event) => updateDatabaseItemForm({ productName: event.target.value })}
+                        className="mt-1 w-full rounded-lg border border-blue-200 px-3 py-2 font-normal text-slate-900"
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm font-semibold text-blue-950">
+                      <input
+                        type="checkbox"
+                        checked={databaseItemForm.shareProductSellPrice}
+                        onChange={(event) => updateDatabaseItemForm({ shareProductSellPrice: event.target.checked })}
+                      />
+                      Use billing rate as product sell price
+                    </label>
+                    <label className="text-sm font-semibold text-blue-950">
+                      Product Sell Price
+                      <input
+                        value={databaseItemForm.productSellPrice}
+                        onChange={(event) => updateDatabaseItemForm({ productSellPrice: event.target.value.replace(/[^\d.]/g, "") })}
+                        disabled={databaseItemForm.shareProductSellPrice}
+                        className="mt-1 w-full rounded-lg border border-blue-200 px-3 py-2 font-normal text-slate-900"
+                        placeholder="0.00"
+                      />
+                      {databaseItemForm.shareProductSellPrice ? (
+                        <span className="mt-1 block text-xs font-semibold text-blue-700">
+                          Matches Billing Rate above.
+                        </span>
+                      ) : null}
+                    </label>
+                  </div>
+                ) : null}
+              </div>
               <label className="text-sm font-semibold text-gray-700">
                 Color
                 <input
@@ -2184,7 +2532,7 @@ const AlphaWaterReceiptImport = () => {
                 disabled={creatingDatabaseItem}
                 className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
               >
-                {creatingDatabaseItem ? "Creating..." : "Create New Item"}
+                {creatingDatabaseItem ? "Creating..." : "Create Vendor Item"}
               </button>
             </div>
           </div>

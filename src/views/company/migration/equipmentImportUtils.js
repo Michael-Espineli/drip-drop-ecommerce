@@ -67,6 +67,7 @@ const statusLabels = {
   nonOperational: "Non-Operational",
   needsMaintenance: "Needs Maintenance",
   replaced: "Replaced",
+  uninstalled: "Uninstalled",
 };
 
 const equipmentTypeLabels = {
@@ -232,20 +233,25 @@ const parseFrequencyUnit = (value) => {
 
 const normalizeStatus = ({ status, dateRemoved, overdue }) => {
   const statusKey = normalizeText(status);
-  if (dateRemoved) return statusLabels.replaced;
+  if (dateRemoved) return statusLabels.uninstalled;
   if (toBoolean(overdue)) return statusLabels.needsMaintenance;
   if (!statusKey) return "";
   if (statusKey.includes("repair")) return statusLabels.needsRepair;
   if (statusKey.includes("maintenance") || statusKey.includes("service")) return statusLabels.needsMaintenance;
   if (statusKey.includes("non") || statusKey.includes("down")) return statusLabels.nonOperational;
-  if (statusKey.includes("removed") || statusKey.includes("replaced")) return statusLabels.replaced;
+  if (statusKey.includes("removed") || statusKey.includes("uninstalled")) return statusLabels.uninstalled;
+  if (statusKey.includes("replaced")) return statusLabels.replaced;
   if (statusKey.includes("operational") || statusKey.includes("active")) return statusLabels.operational;
   return cleanString(status);
 };
 
 const statusIsInactive = (status) => {
   const statusKey = normalizeText(status);
-  return statusKey === normalizeText(statusLabels.nonOperational) || statusKey === normalizeText(statusLabels.replaced);
+  return (
+    statusKey === normalizeText(statusLabels.nonOperational) ||
+    statusKey === normalizeText(statusLabels.replaced) ||
+    statusKey === normalizeText(statusLabels.uninstalled)
+  );
 };
 
 const buildSourceNotes = (record) =>

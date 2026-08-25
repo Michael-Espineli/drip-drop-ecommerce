@@ -88,6 +88,7 @@ const SubscriptionPicker = () => {
             await updateStripeSubscription({
                 subscriptionId: activeSubscription.stripeSubscriptionId,
                 newPriceId: selectedPlanForPreview.stripePriceId,
+                companyId: recentlySelectedCompany,
             });
 
             toast.success('Subscription updated successfully!', { id: toastId });
@@ -118,6 +119,7 @@ const SubscriptionPicker = () => {
                 const result = await getSubscriptionUpdatePreview({
                     subscriptionId: activeSubscription.stripeSubscriptionId,
                     newPriceId: selectedPlan.stripePriceId,
+                    companyId: recentlySelectedCompany,
                 });
 
                 if (result.data.invoice) {

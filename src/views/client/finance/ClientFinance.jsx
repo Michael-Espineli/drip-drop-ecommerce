@@ -120,7 +120,7 @@ const StatusBadge = ({ status }) => {
   const tone = statusTone[key] || statusTone.pending;
 
   return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
+    <span className={`inline-flex shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
       {labelize(status)}
     </span>
   );
@@ -131,7 +131,7 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
     <div className="flex items-start justify-between gap-3">
       <div>
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+        <p className="mt-2 break-words text-xl font-bold text-slate-950 sm:text-2xl">{value}</p>
       </div>
       <span className="rounded-md bg-slate-100 p-2 text-slate-600">
         <Icon className="h-5 w-5" />
@@ -154,6 +154,33 @@ const SectionHeader = ({ title, count, helper }) => (
     <p className="font-semibold text-slate-900">{title}</p>
     <p className="mt-1 text-sm text-slate-500">{count} record{count === 1 ? '' : 's'} - {helper}</p>
   </div>
+);
+
+const MobileRecordCard = ({ title, description, status, fields, to, actionLabel }) => (
+  <Link to={to} className="block p-4 text-left transition hover:bg-slate-50">
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="break-words font-semibold text-slate-950">{title}</p>
+          {description && <p className="mt-1 line-clamp-2 text-sm text-slate-500">{description}</p>}
+        </div>
+        <StatusBadge status={status} />
+      </div>
+
+      <div className="grid gap-2 text-sm sm:grid-cols-2">
+        {fields.map((field) => (
+          <div key={field.label} className="rounded-md bg-slate-50 p-3">
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{field.label}</p>
+            <p className="mt-1 break-words font-semibold text-slate-800">{field.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <span className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white sm:w-auto sm:self-start">
+        {actionLabel}
+      </span>
+    </div>
+  </Link>
 );
 
 const ClientFinance = () => {
@@ -359,7 +386,7 @@ const ClientFinance = () => {
       <div className="w-full space-y-6">
         <section className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-slate-950">Finance</h1>
+            <h1 className="text-2xl font-bold text-slate-950 sm:text-3xl">Finance</h1>
             <p className="mt-2 text-sm text-slate-600">
               Review part approvals, service agreements, invoices, payments, and recurring billing in one place.
             </p>
@@ -398,9 +425,9 @@ const ClientFinance = () => {
           ) : (
             <div className="divide-y divide-slate-100">
               {actionItems.map((item) => (
-                <Link key={item.id} to={item.to} className="flex items-start justify-between gap-3 p-4 transition hover:bg-slate-50">
+                <Link key={item.id} to={item.to} className="flex flex-col gap-3 p-4 transition hover:bg-slate-50 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
-                    <p className="truncate font-semibold text-slate-950">{item.title}</p>
+                    <p className="break-words font-semibold text-slate-950">{item.title}</p>
                     <p className="mt-1 text-sm text-slate-500">{item.meta}</p>
                   </div>
                   <StatusBadge status={item.status} />
@@ -413,17 +440,34 @@ const ClientFinance = () => {
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
           <main className="space-y-6">
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-              <SectionHeader title="Service Agreements" count={filteredAgreements.length} helper={formatCurrency(summary.agreementValueCents)} />
+              <SectionHeader title="Estimates & Agreements" count={filteredAgreements.length} helper={formatCurrency(summary.agreementValueCents)} />
               {loading ? (
-                <div className="p-8 text-center text-sm text-slate-500">Loading service agreements...</div>
+                <div className="p-8 text-center text-sm text-slate-500">Loading estimates...</div>
               ) : filteredAgreements.length === 0 ? (
-                <EmptyState title="No service agreements found." body="When a company sends one to this account, it will show here." />
+                <EmptyState title="No estimates found." body="When a company sends an estimate or agreement to this account, it will show here." />
               ) : (
-                <div className="overflow-x-auto">
+                <>
+                <div className="divide-y divide-slate-100 md:hidden">
+                  {filteredAgreements.map((agreement) => (
+                    <MobileRecordCard
+                      key={agreement.id}
+                      title={agreement.title || 'Service Agreement'}
+                      description={formatDate(agreement.updatedAt || agreement.sentAt || agreement.createdAt)}
+                      status={agreement.status || SalesAgreementStatus.draft}
+                      to={`/client/service-agreements/${agreement.id}`}
+                      actionLabel="Review"
+                      fields={[
+                        { label: 'Company', value: agreement.companyName || 'Pool company' },
+                        { label: 'Amount', value: formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents) },
+                      ]}
+                    />
+                  ))}
+                </div>
+                <div className="hidden overflow-x-auto md:block">
                   <table className="min-w-full divide-y divide-slate-200 text-sm">
                     <thead className="bg-slate-50">
                       <tr>
-                        <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Agreement</th>
+                        <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Estimate</th>
                         <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Company</th>
                         <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Amount</th>
                         <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Status</th>
@@ -450,6 +494,7 @@ const ClientFinance = () => {
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
             </section>
 
@@ -460,7 +505,24 @@ const ClientFinance = () => {
               ) : filteredApprovals.length === 0 ? (
                 <EmptyState title="No part approvals found." body="Requested pool parts will show here before purchase or installation." />
               ) : (
-                <div className="overflow-x-auto">
+                <>
+                <div className="divide-y divide-slate-100 md:hidden">
+                  {filteredApprovals.map((approval) => (
+                    <MobileRecordCard
+                      key={approval.id}
+                      title={approval.itemName || approval.name || 'Pool Part'}
+                      description={approval.description || approval.jobInternalId || 'Part approval'}
+                      status={approval.status || approval.approvalStatus}
+                      to={`/client/part-approvals/${approval.id}`}
+                      actionLabel="Review"
+                      fields={[
+                        { label: 'Company', value: approval.companyName || 'Pool company' },
+                        { label: 'Amount', value: formatCurrency(approval.plannedTotalPriceCents || approval.totalPriceCents) },
+                      ]}
+                    />
+                  ))}
+                </div>
+                <div className="hidden overflow-x-auto md:block">
                   <table className="min-w-full divide-y divide-slate-200 text-sm">
                     <thead className="bg-slate-50">
                       <tr>
@@ -491,6 +553,7 @@ const ClientFinance = () => {
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
             </section>
 
@@ -501,7 +564,25 @@ const ClientFinance = () => {
               ) : filteredInvoices.length === 0 ? (
                 <EmptyState title="No invoices found." body="Invoices from your pool service companies will show here." />
               ) : (
-                <div className="overflow-x-auto">
+                <>
+                <div className="divide-y divide-slate-100 md:hidden">
+                  {filteredInvoices.map((invoice) => (
+                    <MobileRecordCard
+                      key={invoice.id}
+                      title={invoice.invoiceNumber || 'Invoice'}
+                      description={`Due ${formatDate(invoice.dueDate)}`}
+                      status={invoice.status || SalesInvoiceStatus.draft}
+                      to={`/client/billing/invoices/${invoice.id}`}
+                      actionLabel="View"
+                      fields={[
+                        { label: 'Company', value: invoice.companyName || 'Pool company' },
+                        { label: 'Total', value: formatCurrency(invoice.totalAmountCents) },
+                        { label: 'Balance', value: formatCurrency(invoiceBalanceCents(invoice)) },
+                      ]}
+                    />
+                  ))}
+                </div>
+                <div className="hidden overflow-x-auto md:block">
                   <table className="min-w-full divide-y divide-slate-200 text-sm">
                     <thead className="bg-slate-50">
                       <tr>
@@ -534,6 +615,7 @@ const ClientFinance = () => {
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
             </section>
           </main>
@@ -551,8 +633,8 @@ const ClientFinance = () => {
 
                   return (
                     <div key={subscription.id} className="p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
                           <p className="font-semibold text-slate-900">{subscription.companyName || subscription.customerName || 'Pool service'}</p>
                           <p className="mt-1 text-xs text-slate-500">
                             {formatCurrency(subscription.amountCents)} every {subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}{subscription.interval || 'month'}
@@ -597,8 +679,8 @@ const ClientFinance = () => {
                   <div className="p-4 text-sm text-slate-500">No payments posted yet.</div>
                 ) : payments.map((payment) => (
                   <div key={payment.id} className="p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
                         <p className="font-semibold text-slate-900">{formatCurrency(payment.amountCents)}</p>
                         <p className="mt-1 text-xs text-slate-500">{labelize(payment.method)} - {formatDate(payment.receivedAt || payment.createdAt)}</p>
                       </div>
