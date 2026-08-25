@@ -388,7 +388,7 @@ const CompanyUsers = () => {
             <div className="mx-auto">
                 <header className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-800">User Dashboard</h1>
+                        <h1 className="text-3xl font-bold text-gray-800">Users</h1>
                         <p className="text-gray-600 mt-1">Manage company users, roles, payroll, and recent activity.</p>
                     </div>
 

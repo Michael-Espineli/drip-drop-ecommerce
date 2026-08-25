@@ -1041,23 +1041,23 @@ const ShoppingPurchaseReconciliation = () => {
                         </EmptySideAction>
                       ) : null}
 
-                      {!row.purchase && row.shopping ? (
+                      {row.shopping && row.status !== "connected" ? (
                         <EmptySideAction
                           icon={ShoppingBagIcon}
                           onClick={() => openPurchasePicker(row.shopping)}
                           disabled={isUpdating}
                         >
-                          Pick Purchase
+                          {row.purchase ? "Change Purchase" : "Pick Purchase"}
                         </EmptySideAction>
                       ) : null}
 
-                      {!row.shopping && row.purchase ? (
+                      {row.purchase && row.status !== "connected" ? (
                         <EmptySideAction
                           icon={ShoppingCartIcon}
                           onClick={() => openShoppingPicker(row.purchase)}
                           disabled={isUpdating}
                         >
-                          Pick Shopping
+                          {row.shopping ? "Change Shopping" : "Pick Shopping"}
                         </EmptySideAction>
                       ) : null}
 
@@ -1077,7 +1077,17 @@ const ShoppingPurchaseReconciliation = () => {
                           onClick={() => openPurchasePicker(row.shopping)}
                           disabled={isUpdating}
                         >
-                          Change
+                          Change Purchase
+                        </EmptySideAction>
+                      ) : null}
+
+                      {row.shopping && row.purchase && row.status === "connected" ? (
+                        <EmptySideAction
+                          icon={ShoppingCartIcon}
+                          onClick={() => openShoppingPicker(row.purchase)}
+                          disabled={isUpdating}
+                        >
+                          Change Shopping
                         </EmptySideAction>
                       ) : null}
                     </div>

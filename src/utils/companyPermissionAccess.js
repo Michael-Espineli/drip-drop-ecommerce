@@ -41,7 +41,6 @@ const routePermissionRules = [
 
   [/^\/company\/companyusers\/createnew/i, "262"],
   [/^\/company\/companyusers/i, "260"],
-  [/^\/company\/user-dashboard/i, "260"],
   [/^\/company\/invites/i, "262"],
 
   [/^\/company\/roles/i, "860"],

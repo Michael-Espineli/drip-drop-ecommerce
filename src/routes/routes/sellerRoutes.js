@@ -4,7 +4,6 @@ import { Navigate } from "react-router-dom";
 const Home = lazy(() => import("../../views/Home"))
 const ProfilePage = lazy(() => import("../../views/company/ProfilePage"))
 const CompanyDashboardWrapper = lazy(() => import("../../views/company/CompanyDashboardWrapper"))
-const CompanyUserDashboard = lazy(() => import("../../views/company/CompanyUserDashboard"))
 const CompanySelection = lazy(() => import("../../views/company/companySelection/CompanySelection"))
 const OperationsDashboard = lazy(() => import("../../views/company/dashboard/OperationsDashboard"));
 
@@ -105,6 +104,7 @@ const EquipmentServiceHistory = lazy(() => import("../../views/company/equipment
 const CreateNewEquipment = lazy(() => import("../../views/company/equipment/CreateNewEquipment"))
 const UniversalEquipmentSuggestions = lazy(() => import("../../views/company/equipment/UniversalEquipmentSuggestions"))
 const FleetList = lazy(() => import("../../views/company/fleet/FleetList"))
+const FleetVehicleDetail = lazy(() => import("../../views/company/fleet/FleetVehicleDetail"))
 const FleetTripDetail = lazy(() => import("../../views/company/fleet/FleetTripDetail"))
 
 const Roles = lazy(() => import("../../views/company/roles/Roles"))
@@ -366,6 +366,13 @@ export const sellerRoutes = [
     {
         path: '/company/fleet',
         element: <FleetList />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/fleet/:vehicleId',
+        element: <FleetVehicleDetail />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
@@ -1501,12 +1508,6 @@ export const sellerRoutes = [
         path: '/company/reviews/detail/:reviewId',
         element: <Sales />,
         role: 'Company',
-    },
-    {
-        path: '/company/user-dashboard',
-        element: <CompanyUserDashboard />,
-        role: 'Company',
-        permissionId: '260',
     },
     {
         path: '/company/invites/pending',

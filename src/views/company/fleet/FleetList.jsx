@@ -17,7 +17,7 @@ import { format } from "date-fns";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
-import { FaCarSide, FaPlus, FaRegCalendarAlt, FaSearch, FaShuttleVan, FaTruck } from "react-icons/fa";
+import { FaCarSide, FaExternalLinkAlt, FaPlus, FaRegCalendarAlt, FaSearch, FaShuttleVan, FaTruck } from "react-icons/fa";
 import { MdEdit, MdLocalGasStation } from "react-icons/md";
 import { FiTrash2 } from "react-icons/fi";
 import { Context } from "../../../context/AuthContext";
@@ -28,11 +28,6 @@ import { appConfirm } from "../../../utils/appDialog";
 const VEHICLE_TYPES = ["Car", "Truck", "Van"];
 const VEHICLE_STATUSES = ["Active", "Retired"];
 const RECENT_TRIP_LIMIT = 5;
-const HISTORY_TRIP_LIMIT = 100;
-const TRIP_HISTORY_MODES = {
-  recent: "recent",
-  history: "history",
-};
 
 const emptyForm = {
   nickName: "",
@@ -57,27 +52,6 @@ const toDate = (value) => {
 const dateInputValue = (value) => {
   const date = toDate(value);
   return date ? format(date, "yyyy-MM-dd") : "";
-};
-
-const dateInputFromDate = (date) => format(date, "yyyy-MM-dd");
-
-const defaultHistoryStartDate = () => {
-  const date = new Date();
-  date.setDate(date.getDate() - 30);
-  return dateInputFromDate(date);
-};
-
-const todayDateInput = () => dateInputFromDate(new Date());
-
-const dateInputToLocalDate = (value, endOfDay = false) => {
-  if (!value) return null;
-
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return null;
-
-  return endOfDay
-    ? new Date(year, month - 1, day, 23, 59, 59, 999)
-    : new Date(year, month - 1, day, 0, 0, 0, 0);
 };
 
 const formatDate = (value) => {
@@ -140,6 +114,7 @@ const routeWorkerName = (route) => (
 );
 
 const tripDetailPath = (route) => `/company/fleet/trips/${route.id}`;
+const vehicleDetailPath = (vehicle) => `/company/fleet/${vehicle.id}`;
 
 const routeStatusTone = (status) => (
   status === "Complete" || status === "Finished" ? "green" : "blue"
@@ -167,7 +142,7 @@ const Pill = ({ children, tone = "gray" }) => {
   );
 };
 
-const FleetFormModal = ({ form, isEditing, onChange, onClose, onSubmit, saving }) => (
+const FleetFormModal = ({ form, isEditing, onChange, onClose, onSubmit, onDelete, saving, canDelete }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
     <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white shadow-xl">
       <div className="flex items-start justify-between border-b border-gray-200 px-6 py-4">
@@ -296,6 +271,26 @@ const FleetFormModal = ({ form, isEditing, onChange, onClose, onSubmit, saving }
           </label>
         </div>
 
+        {isEditing && canDelete && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-bold text-red-900">Delete vehicle</p>
+                <p className="mt-1 text-sm text-red-700">Trip history on active routes will stay available.</p>
+              </div>
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={saving}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <FiTrash2 className="h-4 w-4" />
+                {saving ? "Deleting..." : "Delete Vehicle"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-end gap-3 border-t border-gray-100 pt-5">
           <button
             type="button"
@@ -325,17 +320,9 @@ export default function FleetList() {
   const [recentRoutes, setRecentRoutes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [routesLoading, setRoutesLoading] = useState(false);
-  const [tripHistoryMode, setTripHistoryMode] = useState(TRIP_HISTORY_MODES.recent);
-  const [historyStartDate, setHistoryStartDate] = useState(defaultHistoryStartDate);
-  const [historyEndDate, setHistoryEndDate] = useState(todayDateInput);
-  const [historyRequest, setHistoryRequest] = useState(() => ({
-    startDate: defaultHistoryStartDate(),
-    endDate: todayDateInput(),
-  }));
   const [routeFilterError, setRouteFilterError] = useState("");
-  const [loadedHistoryLabel, setLoadedHistoryLabel] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("Active");
   const [typeFilter, setTypeFilter] = useState("All");
   const [showModal, setShowModal] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState(null);
@@ -385,7 +372,6 @@ export default function FleetList() {
     if (!recentlySelectedCompany || !selectedVehicle?.id) {
       setRecentRoutes([]);
       setRouteFilterError("");
-      setLoadedHistoryLabel("");
       return;
     }
 
@@ -393,41 +379,12 @@ export default function FleetList() {
     setRouteFilterError("");
     try {
       const routesRef = collection(db, "companies", recentlySelectedCompany, "activeRoutes");
-      const isHistoryMode = tripHistoryMode === TRIP_HISTORY_MODES.history;
-      const startDate = dateInputToLocalDate(historyRequest.startDate);
-      const endDate = dateInputToLocalDate(historyRequest.endDate, true);
-
-      if (isHistoryMode && (!startDate || !endDate)) {
-        setRecentRoutes([]);
-        setLoadedHistoryLabel("");
-        setRouteFilterError("Choose a start and end date before loading all trip history.");
-        return;
-      }
-
-      if (isHistoryMode && startDate > endDate) {
-        setRecentRoutes([]);
-        setLoadedHistoryLabel("");
-        setRouteFilterError("Start date must be before the end date.");
-        return;
-      }
-
-      const buildRouteQuery = (vehicleField) => {
-        const constraints = [where(vehicleField, "==", selectedVehicle.id)];
-
-        if (isHistoryMode) {
-          constraints.push(
-            where("date", ">=", Timestamp.fromDate(startDate)),
-            where("date", "<=", Timestamp.fromDate(endDate))
-          );
-        }
-
-        constraints.push(
-          orderBy("date", "desc"),
-          limit(isHistoryMode ? HISTORY_TRIP_LIMIT : RECENT_TRIP_LIMIT)
-        );
-
-        return query(routesRef, ...constraints);
-      };
+      const buildRouteQuery = (vehicleField) => query(
+        routesRef,
+        where(vehicleField, "==", selectedVehicle.id),
+        orderBy("date", "desc"),
+        limit(RECENT_TRIP_LIMIT)
+      );
 
       const [legacySnapshot, vehicleSnapshot] = await Promise.all([
         getDocs(buildRouteQuery("vehicalId")),
@@ -445,22 +402,17 @@ export default function FleetList() {
           const bDate = getRouteDate(b)?.getTime() || 0;
           return bDate - aDate;
         })
-        .slice(0, isHistoryMode ? HISTORY_TRIP_LIMIT : RECENT_TRIP_LIMIT);
+        .slice(0, RECENT_TRIP_LIMIT);
 
       setRecentRoutes(routes);
-      setLoadedHistoryLabel(
-        isHistoryMode
-          ? `${formatDate(startDate)} - ${formatDate(endDate)}`
-          : ""
-      );
     } catch (error) {
       console.error("Error loading vehicle routes:", error);
       toast.error("Failed to load recent vehicle routes.");
-      setRouteFilterError("Could not load trips. Try a smaller date range or check the route indexes.");
+      setRouteFilterError("Could not load recent trips. Check the route indexes.");
     } finally {
       setRoutesLoading(false);
     }
-  }, [historyRequest.endDate, historyRequest.startDate, recentlySelectedCompany, selectedVehicle?.id, tripHistoryMode]);
+  }, [recentlySelectedCompany, selectedVehicle?.id]);
 
   useEffect(() => {
     fetchRecentRoutes();
@@ -615,6 +567,7 @@ export default function FleetList() {
         if (current !== vehicle.id) return current;
         return vehicles.find((item) => item.id !== vehicle.id)?.id || "";
       });
+      setShowModal(false);
       toast.success("Vehicle deleted.");
     } catch (error) {
       console.error("Error deleting vehicle:", error);
@@ -622,38 +575,6 @@ export default function FleetList() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const loadHistoryRoutes = () => {
-    const startDate = dateInputToLocalDate(historyStartDate);
-    const endDate = dateInputToLocalDate(historyEndDate, true);
-
-    if (!startDate || !endDate) {
-      setRouteFilterError("Choose a start and end date before loading all trip history.");
-      setRecentRoutes([]);
-      setLoadedHistoryLabel("");
-      return;
-    }
-
-    if (startDate > endDate) {
-      setRouteFilterError("Start date must be before the end date.");
-      setRecentRoutes([]);
-      setLoadedHistoryLabel("");
-      return;
-    }
-
-    setRouteFilterError("");
-    setTripHistoryMode(TRIP_HISTORY_MODES.history);
-    setHistoryRequest({
-      startDate: historyStartDate,
-      endDate: historyEndDate,
-    });
-  };
-
-  const showRecentTripHistory = () => {
-    setTripHistoryMode(TRIP_HISTORY_MODES.recent);
-    setRouteFilterError("");
-    setLoadedHistoryLabel("");
   };
 
   return (
@@ -794,17 +715,13 @@ export default function FleetList() {
                           Edit
                         </button>
                       )}
-                      {can("296") && (
-                        <button
-                          type="button"
-                          onClick={() => deleteVehicle(selectedVehicle)}
-                          disabled={saving}
-                          className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <FiTrash2 className="h-4 w-4" />
-                          Delete
-                        </button>
-                      )}
+                      <Link
+                        to={vehicleDetailPath(selectedVehicle)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                      >
+                        <FaExternalLinkAlt className="h-4 w-4" />
+                        Details
+                      </Link>
                     </div>
                   </div>
 
@@ -843,7 +760,7 @@ export default function FleetList() {
 
                   <div className="mt-5 grid grid-cols-3 gap-3 border-t border-gray-100 pt-5 text-sm">
                     <div>
-                      <p className="font-semibold text-gray-500">Trips</p>
+                      <p className="font-semibold text-gray-500">Recent Trips</p>
                       <p className="mt-1 text-lg font-bold text-gray-900">{selectedRouteStats.tripCount}</p>
                     </div>
                     <div>
@@ -864,71 +781,21 @@ export default function FleetList() {
             <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h2 className="text-lg font-bold text-gray-900">
-                    {tripHistoryMode === TRIP_HISTORY_MODES.history ? "All Trip History" : "Recent Trip History"}
-                  </h2>
-                  <p className="text-xs text-gray-500">
-                    {tripHistoryMode === TRIP_HISTORY_MODES.history
-                      ? `Date-filtered vehicle trips${loadedHistoryLabel ? ` for ${loadedHistoryLabel}` : ""}.`
-                      : "Latest vehicle trips from active routes."}
-                  </p>
+                  <h2 className="text-lg font-bold text-gray-900">Recent Trip History</h2>
+                  <p className="text-xs text-gray-500">Latest vehicle trips from active routes.</p>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
                   {selectedVehicle && <span className="text-xs font-semibold text-gray-500">{recentRoutes.length} trips</span>}
-                  {tripHistoryMode === TRIP_HISTORY_MODES.history ? (
-                    <button
-                      type="button"
-                      onClick={showRecentTripHistory}
-                      className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                  {selectedVehicle && (
+                    <Link
+                      to={vehicleDetailPath(selectedVehicle)}
+                      className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
                     >
-                      Recent trips
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={loadHistoryRoutes}
-                      disabled={!selectedVehicle}
-                      className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      View all trip history
-                    </button>
+                      All trip history
+                    </Link>
                   )}
                 </div>
               </div>
-
-              {tripHistoryMode === TRIP_HISTORY_MODES.history && (
-                <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-3">
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
-                    <label className="space-y-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Start Date</span>
-                      <input
-                        type="date"
-                        value={historyStartDate}
-                        onChange={(event) => setHistoryStartDate(event.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                      />
-                    </label>
-                    <label className="space-y-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">End Date</span>
-                      <input
-                        type="date"
-                        value={historyEndDate}
-                        onChange={(event) => setHistoryEndDate(event.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={loadHistoryRoutes}
-                      disabled={routesLoading || !selectedVehicle}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Load trips
-                    </button>
-                  </div>
-                  <p className="mt-2 text-xs text-gray-500">Date filters are required. Results are capped at {HISTORY_TRIP_LIMIT} trips per load.</p>
-                </div>
-              )}
 
               {routeFilterError && (
                 <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
@@ -939,11 +806,7 @@ export default function FleetList() {
               {routesLoading ? (
                 <div className="py-6 text-sm text-gray-500">Loading trips...</div>
               ) : recentRoutes.length === 0 ? (
-                <div className="py-6 text-sm text-gray-500">
-                  {tripHistoryMode === TRIP_HISTORY_MODES.history
-                    ? "No trips found for this date range."
-                    : "No recent active route trip history found for this vehicle."}
-                </div>
+                <div className="py-6 text-sm text-gray-500">No recent active route trip history found for this vehicle.</div>
               ) : (
                 <div className="mt-4 max-h-[520px] space-y-3 overflow-y-auto pr-1">
                   {recentRoutes.map((route) => (
@@ -984,7 +847,9 @@ export default function FleetList() {
           onChange={updateFormField}
           onClose={() => setShowModal(false)}
           onSubmit={saveVehicle}
+          onDelete={() => deleteVehicle(editingVehicle)}
           saving={saving}
+          canDelete={can("296")}
         />
       )}
     </div>

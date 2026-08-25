@@ -9,6 +9,7 @@ const AddressAutocomplete = ({
   inputId,
   customClasses,
   iconClasses,
+  disabled = false,
 }) => {
   const autocompleteRef = useRef(null);
   const [inputValue, setInputValue] = useState(initialValue || '');
@@ -98,6 +99,7 @@ const AddressAutocomplete = ({
           type="text"
           placeholder={placeholder || "Enter Address"}
           value={inputValue}
+          disabled={disabled}
           onChange={(e) => {
             setInputValue(e.target.value);
             onInputChange?.(e.target.value);

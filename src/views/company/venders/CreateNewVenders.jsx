@@ -4,12 +4,14 @@ import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import toast from "react-hot-toast";
 import {
     FaArrowLeft,
+    FaEdit,
     FaEnvelope,
     FaMapMarkerAlt,
     FaPhone,
     FaSave,
     FaStickyNote,
     FaStore,
+    FaTimes,
 } from "react-icons/fa";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "../../../utils/config";
@@ -40,6 +42,7 @@ const formatAddress = (form) => [
 ].filter(Boolean).join(", ");
 
 const fieldClass = "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+const readOnlyFieldClass = "disabled:cursor-default disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-700 disabled:shadow-none";
 
 const InfoRow = ({ icon: Icon, label, value }) => (
     <div className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -55,20 +58,28 @@ const CreateNewVendor = () => {
     const { vendorId } = useParams();
     const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const navigate = useNavigate();
-    const isEditing = Boolean(vendorId);
+    const isDetail = Boolean(vendorId);
 
     const [form, setForm] = useState(emptyForm);
+    const [savedForm, setSavedForm] = useState(emptyForm);
+    const [isEditMode, setIsEditMode] = useState(!vendorId);
     const [vendorSource, setVendorSource] = useState("canonical");
-    const [loading, setLoading] = useState(isEditing);
+    const [loading, setLoading] = useState(isDetail);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState("");
+
+    useEffect(() => {
+        setIsEditMode(!vendorId);
+    }, [vendorId]);
 
     useEffect(() => {
         let cancelled = false;
 
         const loadVendor = async () => {
-            if (!isEditing) {
+            if (!isDetail) {
                 setLoading(false);
+                setForm(emptyForm);
+                setSavedForm(emptyForm);
                 return;
             }
 
@@ -89,8 +100,7 @@ const CreateNewVendor = () => {
                 }
 
                 if (!cancelled) {
-                    setVendorSource(vendor.source || "canonical");
-                    setForm({
+                    const nextForm = {
                         name: vendor.name || "",
                         email: vendor.email || "",
                         phoneNumber: vendor.phoneNumber || "",
@@ -99,7 +109,10 @@ const CreateNewVendor = () => {
                         state: vendor.state || vendor.address?.state || "",
                         zip: vendor.zip || vendor.address?.zip || "",
                         billingNotes: vendor.billingNotes || "",
-                    });
+                    };
+                    setVendorSource(vendor.source || "canonical");
+                    setForm(nextForm);
+                    setSavedForm(nextForm);
                 }
             } catch (loadError) {
                 console.error("Error loading vendor:", loadError);
@@ -114,7 +127,7 @@ const CreateNewVendor = () => {
         return () => {
             cancelled = true;
         };
-    }, [isEditing, recentlySelectedCompany, vendorId]);
+    }, [isDetail, recentlySelectedCompany, vendorId]);
 
     const updateField = (field, value) => {
         setForm((current) => ({
@@ -153,20 +166,30 @@ const CreateNewVendor = () => {
         try {
             setSaving(true);
             const nextVendorId = vendorId || `com_ven_${uuidv4()}`;
-            const vendor = {
-                id: nextVendorId,
+            const savedVendorForm = {
                 name: form.name.trim(),
                 email: form.email.trim(),
                 phoneNumber: form.phoneNumber.trim(),
-                address: {
-                    streetAddress: form.streetAddress.trim(),
-                    city: form.city.trim(),
-                    state: form.state.trim(),
-                    zip: form.zip.trim(),
-                },
+                streetAddress: form.streetAddress.trim(),
+                city: form.city.trim(),
+                state: form.state.trim(),
+                zip: form.zip.trim(),
                 billingNotes: form.billingNotes.trim(),
+            };
+            const vendor = {
+                id: nextVendorId,
+                name: savedVendorForm.name,
+                email: savedVendorForm.email,
+                phoneNumber: savedVendorForm.phoneNumber,
+                address: {
+                    streetAddress: savedVendorForm.streetAddress,
+                    city: savedVendorForm.city,
+                    state: savedVendorForm.state,
+                    zip: savedVendorForm.zip,
+                },
+                billingNotes: savedVendorForm.billingNotes,
                 updatedAt: serverTimestamp(),
-                ...(isEditing ? {} : { dateCreated: serverTimestamp() }),
+                ...(isDetail ? {} : { dateCreated: serverTimestamp() }),
             };
 
             await setDoc(
@@ -175,7 +198,10 @@ const CreateNewVendor = () => {
                 { merge: true }
             );
 
-            toast.success(isEditing ? "Vendor updated." : "Vendor created.");
+            toast.success(isDetail ? "Vendor updated." : "Vendor created.");
+            setForm(savedVendorForm);
+            setSavedForm(savedVendorForm);
+            setIsEditMode(false);
             navigate(`/company/vendors/detail/${nextVendorId}`);
         } catch (saveError) {
             console.error("Error saving vendor:", saveError);
@@ -184,6 +210,11 @@ const CreateNewVendor = () => {
             setSaving(false);
         }
     }
+
+    const cancelEdit = () => {
+        setForm(savedForm);
+        setIsEditMode(false);
+    };
 
     return (
         <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
@@ -195,19 +226,42 @@ const CreateNewVendor = () => {
                                 {recentlySelectedCompanyName || "Selected company"}
                             </p>
                             <h1 className="mt-2 text-3xl font-bold text-slate-950">
-                                {isEditing ? "Vendor Detail" : "New Vendor"}
+                                {isDetail ? "Vendor Detail" : "New Vendor"}
                             </h1>
                             <p className="mt-2 text-sm text-slate-600">
                                 Store vendor contact details, purchasing notes, billing info, and address records.
                             </p>
                         </div>
-                        <Link
-                            to="/company/vendors"
-                            className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                        >
-                            <FaArrowLeft className="text-xs" />
-                            Vendors
-                        </Link>
+                        <div className="flex flex-wrap gap-2">
+                            {isDetail && !isEditMode && (
+                                <button
+                                    type="button"
+                                    onClick={() => setIsEditMode(true)}
+                                    className="inline-flex w-fit items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                                >
+                                    <FaEdit className="text-xs" />
+                                    Edit Vendor
+                                </button>
+                            )}
+                            {isDetail && isEditMode && (
+                                <button
+                                    type="button"
+                                    onClick={cancelEdit}
+                                    disabled={saving}
+                                    className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <FaTimes className="text-xs" />
+                                    Cancel
+                                </button>
+                            )}
+                            <Link
+                                to="/company/vendors"
+                                className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                                <FaArrowLeft className="text-xs" />
+                                Vendors
+                            </Link>
+                        </div>
                     </div>
                 </section>
 
@@ -226,7 +280,12 @@ const CreateNewVendor = () => {
                         <main className="rounded-lg border border-slate-200 bg-white shadow-sm">
                             <div className="border-b border-slate-200 px-5 py-4">
                                 <h2 className="text-lg font-bold text-slate-950">Vendor Information</h2>
-                                {isEditing && vendorSource === "legacy" && (
+                                {isDetail && !isEditMode && (
+                                    <p className="mt-1 text-sm text-slate-500">
+                                        This vendor is in view mode. Use Edit Vendor to make changes.
+                                    </p>
+                                )}
+                                {isDetail && vendorSource === "legacy" && (
                                     <p className="mt-1 text-sm text-amber-700">
                                         This record was loaded from the legacy vendor path. Saving writes it to the current vendor path.
                                     </p>
@@ -243,9 +302,10 @@ const CreateNewVendor = () => {
                                             id="vendorName"
                                             value={form.name}
                                             onChange={(event) => updateField("name", event.target.value)}
+                                            disabled={!isEditMode}
                                             type="text"
                                             placeholder="Vendor name"
-                                            className={`${fieldClass} mt-2`}
+                                            className={`${fieldClass} ${readOnlyFieldClass} mt-2`}
                                         />
                                     </div>
 
@@ -257,9 +317,10 @@ const CreateNewVendor = () => {
                                             id="vendorEmail"
                                             value={form.email}
                                             onChange={(event) => updateField("email", event.target.value)}
+                                            disabled={!isEditMode}
                                             type="email"
                                             placeholder="vendor@email.com"
-                                            className={`${fieldClass} mt-2`}
+                                            className={`${fieldClass} ${readOnlyFieldClass} mt-2`}
                                         />
                                     </div>
 
@@ -271,9 +332,10 @@ const CreateNewVendor = () => {
                                             id="vendorPhone"
                                             value={form.phoneNumber}
                                             onChange={(event) => updateField("phoneNumber", event.target.value)}
+                                            disabled={!isEditMode}
                                             type="text"
                                             placeholder="(555) 555-5555"
-                                            className={`${fieldClass} mt-2`}
+                                            className={`${fieldClass} ${readOnlyFieldClass} mt-2`}
                                         />
                                     </div>
                                 </div>
@@ -290,8 +352,9 @@ const CreateNewVendor = () => {
                                                 initialValue={form.streetAddress}
                                                 onAddressSelect={handleAddressSelect}
                                                 onInputChange={(value) => updateField("streetAddress", value)}
+                                                disabled={!isEditMode}
                                                 placeholder="Search vendor address"
-                                                customClasses={`${fieldClass} mt-2 pl-10`}
+                                                customClasses={`${fieldClass} ${readOnlyFieldClass} mt-2 pl-10`}
                                                 iconClasses="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform text-slate-400"
                                             />
                                         </div>
@@ -304,9 +367,10 @@ const CreateNewVendor = () => {
                                                 id="vendorCity"
                                                 value={form.city}
                                                 onChange={(event) => updateField("city", event.target.value)}
+                                                disabled={!isEditMode}
                                                 type="text"
                                                 placeholder="City"
-                                                className={`${fieldClass} mt-2`}
+                                                className={`${fieldClass} ${readOnlyFieldClass} mt-2`}
                                             />
                                         </div>
 
@@ -318,9 +382,10 @@ const CreateNewVendor = () => {
                                                 id="vendorState"
                                                 value={form.state}
                                                 onChange={(event) => updateField("state", event.target.value)}
+                                                disabled={!isEditMode}
                                                 type="text"
                                                 placeholder="State"
-                                                className={`${fieldClass} mt-2`}
+                                                className={`${fieldClass} ${readOnlyFieldClass} mt-2`}
                                             />
                                         </div>
 
@@ -332,9 +397,10 @@ const CreateNewVendor = () => {
                                                 id="vendorZip"
                                                 value={form.zip}
                                                 onChange={(event) => updateField("zip", event.target.value)}
+                                                disabled={!isEditMode}
                                                 type="text"
                                                 placeholder="ZIP Code"
-                                                className={`${fieldClass} mt-2`}
+                                                className={`${fieldClass} ${readOnlyFieldClass} mt-2`}
                                             />
                                         </div>
                                     </div>
@@ -348,20 +414,23 @@ const CreateNewVendor = () => {
                                         id="vendorNotes"
                                         value={form.billingNotes}
                                         onChange={(event) => updateField("billingNotes", event.target.value)}
+                                        disabled={!isEditMode}
                                         placeholder="Notes, billing details, account info, preferred contact method..."
                                         rows={5}
-                                        className={`${fieldClass} mt-2`}
+                                        className={`${fieldClass} ${readOnlyFieldClass} mt-2`}
                                     />
                                 </div>
 
-                                <button
-                                    type="submit"
-                                    disabled={saving}
-                                    className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-                                >
-                                    <FaSave className="text-xs" />
-                                    {saving ? "Saving..." : isEditing ? "Save Vendor" : "Create Vendor"}
-                                </button>
+                                {isEditMode && (
+                                    <button
+                                        type="submit"
+                                        disabled={saving}
+                                        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                                    >
+                                        <FaSave className="text-xs" />
+                                        {saving ? "Saving..." : isDetail ? "Save Vendor" : "Create Vendor"}
+                                    </button>
+                                )}
                             </form>
                         </main>
 

@@ -3,13 +3,16 @@ import { Link } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
 import {
     FaArrowRight,
+    FaBoxOpen,
     FaDatabase,
     FaEnvelope,
+    FaExternalLinkAlt,
     FaMapMarkerAlt,
     FaPhone,
     FaPlus,
     FaSearch,
     FaStore,
+    FaTimes,
 } from 'react-icons/fa';
 import { Context } from "../../../context/AuthContext";
 import { db, functions } from "../../../utils/config";
@@ -37,6 +40,71 @@ const StatTile = ({ label, value, helper, icon: Icon }) => (
     </div>
 );
 
+const VendorQuickViewModal = ({ vendor, onClose }) => {
+    if (!vendor) return null;
+
+    const address = formatAddress(vendor);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6">
+            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-xl">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Vendor</p>
+                        <h2 className="mt-1 text-2xl font-bold text-slate-950">{vendor.name || "Unnamed vendor"}</h2>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close vendor details"
+                        className="rounded-md border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-50 hover:text-slate-800"
+                    >
+                        <FaTimes className="h-4 w-4" />
+                    </button>
+                </div>
+
+                <div className="space-y-4 px-5 py-5">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Phone</p>
+                            <p className="mt-1 break-words font-semibold text-slate-900">{vendor.phoneNumber || "No phone"}</p>
+                        </div>
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Email</p>
+                            <p className="mt-1 break-all font-semibold text-slate-900">{vendor.email || "No email"}</p>
+                        </div>
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 sm:col-span-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Address</p>
+                            <p className="mt-1 break-words font-semibold text-slate-900">{address || "No address"}</p>
+                        </div>
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 sm:col-span-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</p>
+                            <p className="mt-1 whitespace-pre-wrap break-words font-semibold text-slate-900">{vendor.billingNotes || "No notes"}</p>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                        <Link
+                            to="/company/items"
+                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                            <FaBoxOpen className="text-xs" />
+                            Vendor Items
+                        </Link>
+                        <Link
+                            to={`/company/vendors/detail/${vendor.id}`}
+                            className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                        >
+                            <FaExternalLinkAlt className="text-xs" />
+                            Open Detail
+                        </Link>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const Vendors = () => {
     const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const [vendorList, setVendorList] = useState([]);
@@ -45,6 +113,7 @@ const Vendors = () => {
     const [migrationMessage, setMigrationMessage] = useState("");
     const [migrationError, setMigrationError] = useState("");
     const [searchTerm, setSearchTerm] = useState("");
+    const [selectedVendor, setSelectedVendor] = useState(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -134,6 +203,13 @@ const Vendors = () => {
                             </p>
                         </div>
                         <div className="flex flex-wrap gap-2">
+                            <Link
+                                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                to="/company/items"
+                            >
+                                <FaBoxOpen className="text-xs" />
+                                Vendor Items
+                            </Link>
                             <button
                                 type="button"
                                 onClick={migrateLegacyVendors}
@@ -215,9 +291,13 @@ const Vendors = () => {
                                     filteredVendors.map((vendor) => (
                                         <tr key={`${vendor.source}-${vendor.id}`} className="transition hover:bg-slate-50">
                                             <td className="px-5 py-4">
-                                                <Link to={`/company/vendors/detail/${vendor.id}`} className="font-semibold text-slate-950 hover:text-blue-700">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedVendor(vendor)}
+                                                    className="text-left font-semibold text-slate-950 hover:text-blue-700"
+                                                >
                                                     {vendor.name}
-                                                </Link>
+                                                </button>
                                                 {vendor.billingNotes && (
                                                     <p className="mt-1 max-w-sm truncate text-xs text-slate-500">{vendor.billingNotes}</p>
                                                 )}
@@ -245,13 +325,14 @@ const Vendors = () => {
                                                 </span>
                                             </td>
                                             <td className="px-5 py-4 text-right">
-                                                <Link
-                                                    to={`/company/vendors/detail/${vendor.id}`}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedVendor(vendor)}
                                                     className="inline-flex items-center justify-end gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900"
                                                 >
                                                     Details
                                                     <FaArrowRight className="text-xs" />
-                                                </Link>
+                                                </button>
                                             </td>
                                         </tr>
                                     ))
@@ -260,6 +341,7 @@ const Vendors = () => {
                         </table>
                     </div>
                 </section>
+                <VendorQuickViewModal vendor={selectedVendor} onClose={() => setSelectedVendor(null)} />
             </div>
         </div>
     );

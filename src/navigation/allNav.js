@@ -114,11 +114,7 @@ export const allNav = [
     { id: 50, title: 'Route Dashboard', icon: <FaRegMap />, role: 'Company', path: '/company/route-dashboard', category: 'Management', permissionId: '210' },
     { id: 51, title: 'Daily Route Board', icon: <FaRoute />, role: 'Company', path: '/company/route-day-management', category: 'Management', permissionId: '210' },
     { id: 52, title: 'Planned Routes', icon: <MdAltRoute />, role: 'Company', path: '/company/route-management', category: 'Management', permissionId: '230' },
-    { id: 111, title: 'User Dashboard', icon: <MdManageAccounts />, role: 'Company', path: '/company/user-dashboard', category: 'Management', permissionId: '260' },
     { id: 112, title: 'Users', icon: <FaUsers />, role: 'Company', path: '/company/companyUsers', category: 'Management', permissionId: '260' },
-    { id: 116, title: 'Work Logs', icon: <MdHistory />, role: 'Company', path: '/company/workLogs', category: 'Management', permissionId: '280' },
-    { id: 113, title: 'Vendors', icon: <FaStore />, role: 'Company', path: '/company/vendors', category: 'Management' },
-    { id: 114, title: 'Fleet', icon: <FaRoute />, role: 'Company', path: '/company/fleet', category: 'Management', permissionId: '290' },
     //Build out with Update 2.1
     // { id: 114, title: 'Recurring Labor Contracts', icon: <FaFileContract />, role: 'Company', path: '/company/recurringLaborContracts', category: 'Users' },
     // { id: 115, title: 'One Time Labor Contracts', icon: <FaRegFileAlt />, role: 'Company', path: '/company/laborContracts', category: 'Users' },

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import DatePicker from "react-datepicker";
 import { query, collection, getDocs, getDoc, where, Timestamp, doc, updateDoc, setDoc, writeBatch, orderBy } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
@@ -1128,7 +1128,6 @@ const useNow = () => {
 };
 
 const RouteDashboard = () => {
-    const navigate = useNavigate();
     const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const now = useNow();
     const todayDate = useMemo(() => startOfDayDate(new Date()), []);
@@ -1162,6 +1161,7 @@ const RouteDashboard = () => {
     const [isMovingStops, setIsMovingStops] = useState(false);
     const [showMoveStopsPanel, setShowMoveStopsPanel] = useState(false);
     const [showMapPanel, setShowMapPanel] = useState(true);
+    const [previewStopId, setPreviewStopId] = useState('');
     const [mapOverlays, setMapOverlays] = useState({
         stops: true,
         techTrail: true,
@@ -1648,6 +1648,31 @@ const RouteDashboard = () => {
             return aTime - bTime;
         });
     }, [displayActiveRoutes, serviceStops]);
+
+    const previewStop = useMemo(() => (
+        allRouteStops.find(stop => stop.id === previewStopId) ||
+        serviceStops.find(stop => stop.id === previewStopId) ||
+        null
+    ), [allRouteStops, previewStopId, serviceStops]);
+
+    const previewStopRoute = useMemo(() => {
+        if (!previewStop) return null;
+
+        return displayActiveRoutes.find(route => (
+            route.id === previewStop.routeId ||
+            route.id === previewStop.activeRouteId ||
+            route.serviceStopsIds?.includes(previewStop.id) ||
+            route.techId === previewStop.techId ||
+            route.techName === previewStop.tech
+        )) || null;
+    }, [displayActiveRoutes, previewStop]);
+
+    const openStopPreview = useCallback((stopOrId) => {
+        const stopId = typeof stopOrId === 'string' ? stopOrId : stopOrId?.id;
+        if (!stopId) return;
+
+        setPreviewStopId(stopId);
+    }, []);
 
     useEffect(() => {
         setSelectedRouteId(previousRouteId => {
@@ -2406,7 +2431,7 @@ const RouteDashboard = () => {
                     <DailyRoutePulse
                         summary={dailyRoutePulse}
                         followUpItems={routeFollowUpItems}
-                        onOpenStop={(stopId) => navigate(`/company/serviceStops/detail/${stopId}`)}
+                        onOpenStop={openStopPreview}
                         onSelectRoute={setSelectedRouteId}
                     />
                 )}
@@ -2429,7 +2454,7 @@ const RouteDashboard = () => {
                                 onSelectRoute={setSelectedRouteId}
                                 onSelectRouteStops={toggleRouteUnfinishedStops}
                                 onToggleStop={toggleSelectedStop}
-                                onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
+                                onOpenStop={openStopPreview}
                                 onVehicleChange={updateRouteVehicle}
                             />
 
@@ -2580,11 +2605,27 @@ const RouteDashboard = () => {
                                     areaEstimates={selectedRouteAreaEstimates}
                                     routeLogs={selectedRouteLogs}
                                     selectedStopIds={selectedStopIds}
+                                    selectedStopsForMove={selectedStopsForMove}
+                                    totalStopsForMove={serviceStops.length}
                                     vendors={vendors}
+                                    technicians={technicians}
+                                    moveMode={moveMode}
+                                    moveDate={moveDate}
+                                    moveDay={moveDay}
+                                    moveTechId={moveTechId}
+                                    isMovingStops={isMovingStops}
                                     onSaveRouteCompletion={saveRouteCompletion}
                                     onSaveRouteOrder={saveRouteOrder}
                                     onToggleStop={toggleSelectedStop}
-                                    onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
+                                    onSelectRouteStops={toggleRouteUnfinishedStops}
+                                    onMoveModeChange={setMoveMode}
+                                    onMoveDateChange={setMoveDate}
+                                    onMoveDayChange={setMoveDay}
+                                    onMoveTechChange={setMoveTechId}
+                                    onMoveSelectedStops={moveSelectedStops}
+                                    onSelectAllUnfinished={selectAllUnfinishedStops}
+                                    onClearSelection={() => setSelectedStopIds([])}
+                                    onOpenStop={openStopPreview}
                                 />
                             )}
 
@@ -2594,14 +2635,23 @@ const RouteDashboard = () => {
                                 </h2>
                                 <ServiceStopTable
                                     stops={serviceStops}
-                                    navigate={navigate}
                                     now={now}
                                     selectedStopIds={selectedStopIds}
                                     onToggleStop={toggleSelectedStop}
+                                    onOpenStop={openStopPreview}
                                 />
                             </section>
                     </main>
                 )}
+
+                <ServiceStopQuickView
+                    stop={previewStop}
+                    route={previewStopRoute}
+                    now={now}
+                    isSelected={Boolean(previewStop && selectedStopIds.includes(previewStop.id))}
+                    onToggleStop={previewStop ? () => toggleSelectedStop(previewStop) : undefined}
+                    onClose={() => setPreviewStopId('')}
+                />
 
                 {!isLoading && !isAllRoutesSelected && selectedRoute && (
                     <RouteActionFooter
@@ -3026,10 +3076,10 @@ const DailyPulseStat = ({ label, value, helper, tone = 'slate' }) => {
     };
 
     return (
-        <div className={`rounded-lg border px-3 py-3 ${tones[tone] || tones.slate}`}>
-            <p className="text-[10px] font-bold uppercase tracking-wide opacity-65">{label}</p>
-            <p className="mt-1 text-xl font-bold leading-none">{value}</p>
-            {helper && <p className="mt-1 truncate text-xs font-semibold opacity-70">{helper}</p>}
+        <div className={`min-w-0 rounded-lg border px-2 py-2 sm:px-3 sm:py-3 ${tones[tone] || tones.slate}`}>
+            <p className="min-h-[1.6rem] text-[9px] font-bold uppercase leading-tight opacity-65 sm:min-h-0 sm:text-[10px]">{label}</p>
+            <p className="mt-1 truncate text-base font-bold leading-none sm:text-xl">{value}</p>
+            {helper && <p className="mt-1 hidden truncate text-xs font-semibold opacity-70 sm:block">{helper}</p>}
         </div>
     );
 };
@@ -3059,7 +3109,7 @@ const DailyRoutePulse = ({ summary, followUpItems, onOpenStop, onSelectRoute }) 
                     </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="mt-4 grid grid-cols-4 gap-2 sm:gap-3">
                     <DailyPulseStat
                         label="Stops Finished"
                         value={`${summary.finishedStops}/${summary.totalStops}`}
@@ -3701,10 +3751,26 @@ const ActiveRouteDetailPanel = ({
     areaEstimates,
     routeLogs,
     selectedStopIds,
+    selectedStopsForMove,
+    totalStopsForMove,
     vendors = [],
+    technicians,
+    moveMode,
+    moveDate,
+    moveDay,
+    moveTechId,
+    isMovingStops,
     onSaveRouteCompletion,
     onSaveRouteOrder,
     onToggleStop,
+    onSelectRouteStops,
+    onMoveModeChange,
+    onMoveDateChange,
+    onMoveDayChange,
+    onMoveTechChange,
+    onMoveSelectedStops,
+    onSelectAllUnfinished,
+    onClearSelection,
     onOpenStop,
 }) => {
     const expectedStopCount = route.serviceStopsIds?.length || 0;
@@ -3860,12 +3926,20 @@ const ActiveRouteDetailPanel = ({
                     <div className="flex flex-col gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                             <p className="font-semibold text-gray-800">Route Stops</p>
-                            <p className="text-xs text-gray-500">{unfinishedStops.length} unfinished stop(s) can be moved.</p>
+                            <p className="text-xs text-gray-500">{unfinishedStops.length} unfinished stop(s) can be selected for one-time or permanent moves.</p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
                                 {selectedCount} selected
                             </span>
+                            <button
+                                type="button"
+                                onClick={() => onSelectRouteStops(route)}
+                                disabled={!unfinishedStops.length}
+                                className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {selectedCount === unfinishedStops.length && unfinishedStops.length > 0 ? 'Clear Route Stops' : 'Select Open Stops'}
+                            </button>
                             {isEditingOrder ? (
                                 <button
                                     type="button"
@@ -4053,7 +4127,8 @@ const ActiveRouteDetailPanel = ({
                                                     ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
                                                     : 'border-gray-300 bg-white text-gray-600 hover:border-blue-400'
                                             }`}
-                                        title={movable ? 'Select stop' : 'Finished stops cannot be moved'}
+                                        title={movable ? 'Select stop for move' : 'Finished stops cannot be moved'}
+                                        aria-label={`${isSelected ? 'Remove' : 'Select'} ${stop.customerName || 'service stop'} for move`}
                                     >
                                         {isSelected ? '✓' : index + 1}
                                     </button>
@@ -4078,6 +4153,25 @@ const ActiveRouteDetailPanel = ({
                 </div>
 
                 <div className="space-y-4">
+                    <MoveStopsPanel
+                        selectedStops={selectedStopsForMove}
+                        selectedStopIds={selectedStopIds}
+                        totalStops={totalStopsForMove}
+                        technicians={technicians}
+                        moveMode={moveMode}
+                        moveDate={moveDate}
+                        moveDay={moveDay}
+                        moveTechId={moveTechId}
+                        isMovingStops={isMovingStops}
+                        onMoveModeChange={onMoveModeChange}
+                        onMoveDateChange={onMoveDateChange}
+                        onMoveDayChange={onMoveDayChange}
+                        onMoveTechChange={onMoveTechChange}
+                        onMoveSelectedStops={onMoveSelectedStops}
+                        onSelectAllUnfinished={onSelectAllUnfinished}
+                        onClearSelection={onClearSelection}
+                    />
+
                     <div className="rounded-lg border border-gray-200 p-4">
                         <p className="font-semibold text-gray-800">Latest Location</p>
                         {latestLocation ? (
@@ -4795,7 +4889,99 @@ const RouteActivityMap = ({ route, routes = [], stops, routeLocations, areaEstim
     );
 };
 
-const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggleStop }) => (
+const StopQuickViewRow = ({ label, value }) => (
+    <div>
+        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</p>
+        <p className="mt-0.5 break-words text-sm font-semibold text-slate-900">{value || 'N/A'}</p>
+    </div>
+);
+
+const ServiceStopQuickView = ({ stop, route, now, isSelected, onToggleStop, onClose }) => {
+    if (!stop) return null;
+
+    const { start, end } = getStopTiming(stop);
+    const status = getStopDisplayStatus(stop);
+    const movable = isStopMovable(stop);
+    const serviceDate = getDateValue(stop.serviceDate || stop.date);
+    const addressText = formatAddressValue(stop.address) || stop.address?.streetAddress || 'No address';
+    const durationText = start ? formatElapsedDuration(start, end || now) : stop.estimatedDuration ? `${stop.estimatedDuration} min estimated` : 'N/A';
+    const routeName = route?.techName || route?.name || stop.routeTechName || stop.tech || 'Unassigned';
+    const stopNumber = stop.routeStopIndex || route?.serviceStopsIds?.indexOf(stop.id) + 1 || '';
+    const notes = stop.description || stop.notes || stop.serviceNotes || stop.techNotes || '';
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-3 py-4 sm:items-center">
+            <div className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-2xl">
+                <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <ServiceStopKindBadge stop={stop} />
+                                <span className={`rounded-full px-2 py-1 text-xs font-bold ${status.className}`}>
+                                    {status.label}
+                                </span>
+                            </div>
+                            <h3 className="truncate text-lg font-bold text-slate-950">{stop.customerName || 'Service Stop'}</h3>
+                            <p className="mt-1 text-sm text-slate-500">{addressText}</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                            aria-label="Close stop details"
+                        >
+                            <XMarkIcon className="h-5 w-5" />
+                        </button>
+                    </div>
+                </div>
+
+                <div className="space-y-4 p-4">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <DetailPill label="Route" value={routeName} />
+                        <DetailPill label="Stop" value={stopNumber ? `#${stopNumber}` : 'N/A'} />
+                        <DetailPill label="Date" value={serviceDate ? format(serviceDate, 'MMM d') : 'N/A'} />
+                        <DetailPill label="Duration" value={durationText} />
+                    </div>
+
+                    <div className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+                        <StopQuickViewRow label="Technician" value={stop.tech || stop.routeTechName || route?.techName || 'Unassigned'} />
+                        <StopQuickViewRow label="Service Type" value={stop.type || stop.serviceType || stop.typeName || getServiceStopKindMeta(stop).label} />
+                        <StopQuickViewRow label="Start Time" value={formatTimeValue(start)} />
+                        <StopQuickViewRow label="End Time" value={formatTimeValue(end)} />
+                        <StopQuickViewRow label="Billing" value={stop.billingStatus || (stop.isInvoiced ? 'Invoiced' : 'Not Invoiced')} />
+                        <StopQuickViewRow label="Job" value={stop.jobName || stop.jobTitle || stop.jobId || 'None'} />
+                    </div>
+
+                    {notes && (
+                        <div className="rounded-lg border border-slate-200 p-4">
+                            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Notes</p>
+                            <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{notes}</p>
+                        </div>
+                    )}
+
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs font-semibold text-slate-500">
+                            {movable ? 'This stop can be selected for the move manager.' : 'Finished stops cannot be moved from this board.'}
+                        </p>
+                        <button
+                            type="button"
+                            onClick={onToggleStop}
+                            disabled={!movable}
+                            className={`rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${isSelected
+                                    ? 'border border-blue-600 bg-blue-600 text-white hover:bg-blue-700'
+                                    : 'border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                }`}
+                        >
+                            {isSelected ? 'Selected for Move' : 'Select for Move'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const ServiceStopTable = ({ stops, now, selectedStopIds = [], onToggleStop, onOpenStop }) => (
     <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -4821,7 +5007,7 @@ const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggle
                     return (
                         <tr
                             key={stop.id}
-                            onClick={() => navigate(`/company/serviceStops/detail/${stop.id}`)}
+                            onClick={() => onOpenStop(stop)}
                             className="cursor-pointer hover:bg-gray-50"
                         >
                             <td className='px-4 py-3 whitespace-nowrap'>
