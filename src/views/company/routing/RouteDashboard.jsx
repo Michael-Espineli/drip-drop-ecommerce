@@ -793,16 +793,6 @@ const minutesBetween = (start, end) => {
     return Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
 };
 
-const getRouteDurationMinutes = (route) => {
-    const durationSeconds = Number(route?.durationSeconds);
-    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
-        return Math.round(durationSeconds / 60);
-    }
-
-    const durationMinutes = Number(route?.durationMin);
-    return Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes : 0;
-};
-
 const numberOrNull = (value) => {
     if (value === "" || value === null || value === undefined) return null;
     const parsed = Number(value);
@@ -2333,6 +2323,27 @@ const RouteDashboard = () => {
         }
     };
 
+    const moveStopsPanel = showMoveStopsPanel ? (
+        <MoveStopsPanel
+            selectedStops={selectedStopsForMove}
+            selectedStopIds={selectedStopIds}
+            totalStops={serviceStops.length}
+            technicians={technicians}
+            moveMode={moveMode}
+            moveDate={moveDate}
+            moveDay={moveDay}
+            moveTechId={moveTechId}
+            isMovingStops={isMovingStops}
+            onMoveModeChange={setMoveMode}
+            onMoveDateChange={setMoveDate}
+            onMoveDayChange={setMoveDay}
+            onMoveTechChange={setMoveTechId}
+            onMoveSelectedStops={moveSelectedStops}
+            onSelectAllUnfinished={selectAllUnfinishedStops}
+            onClearSelection={() => setSelectedStopIds([])}
+        />
+    ) : null;
+
     return (
         <div className='min-h-screen bg-gray-50 p-4 pb-28 sm:p-6 sm:pb-28 lg:p-8 lg:pb-28'>
             <div className=" mx-auto">
@@ -2348,30 +2359,18 @@ const RouteDashboard = () => {
                         >
                             Service Stops
                         </Link>
-                        {!sameCalendarDate(serviceDate, todayDate) && (
-                            <button
-                                type="button"
+	                        {!sameCalendarDate(serviceDate, todayDate) && (
+	                            <button
+	                                type="button"
                                 onClick={() => handleServiceDateChange(todayDate)}
                                 className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
                             >
-                                Today
-                            </button>
-                        )}
-                        <button
-                            type="button"
-                            onClick={() => setShowMoveStopsPanel((current) => !current)}
-                            className={`rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm transition ${showMoveStopsPanel
-                                    ? 'border-red-600 bg-red-600 text-white hover:bg-red-700'
-                                    : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
-                                }`}
-                        >
-                            {showMoveStopsPanel
-                                ? 'Cancel Move'
-                                : `Move Stops${selectedStopsForMove.length ? ` (${selectedStopsForMove.length})` : ''}`}
-                        </button>
-                        {process.env.NODE_ENV !== 'production' && (
-                            <button
-                                type="button"
+	                                Today
+	                            </button>
+	                        )}
+	                        {process.env.NODE_ENV !== 'production' && (
+	                            <button
+	                                type="button"
                                 onClick={seedDemoRoute}
                                 disabled={isSeedingDemoRoute || !recentlySelectedCompany}
                                 className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -2401,35 +2400,12 @@ const RouteDashboard = () => {
                     canNavigateNextWeek={canNavigateNextWeek}
                     onPreviousWeek={() => navigateWeek(-1)}
                     onNextWeek={() => navigateWeek(1)}
-                    onSelectDate={handleServiceDateChange}
-                />
+	                    onSelectDate={handleServiceDateChange}
+	                />
 
-                {!isLoading && showMoveStopsPanel && (
-                    <div className="mb-4">
-                        <MoveStopsPanel
-                            selectedStops={selectedStopsForMove}
-                            selectedStopIds={selectedStopIds}
-                            totalStops={serviceStops.length}
-                            technicians={technicians}
-                            moveMode={moveMode}
-                            moveDate={moveDate}
-                            moveDay={moveDay}
-                            moveTechId={moveTechId}
-                            isMovingStops={isMovingStops}
-                            onMoveModeChange={setMoveMode}
-                            onMoveDateChange={setMoveDate}
-                            onMoveDayChange={setMoveDay}
-                            onMoveTechChange={setMoveTechId}
-                            onMoveSelectedStops={moveSelectedStops}
-                            onSelectAllUnfinished={selectAllUnfinishedStops}
-                            onClearSelection={() => setSelectedStopIds([])}
-                        />
-                    </div>
-                )}
-
-                {!isLoading && (
-                    <DailyRoutePulse
-                        summary={dailyRoutePulse}
+	                {!isLoading && (
+	                    <DailyRoutePulse
+	                        summary={dailyRoutePulse}
                         followUpItems={routeFollowUpItems}
                         onOpenStop={openStopPreview}
                         onSelectRoute={setSelectedRouteId}
@@ -2445,7 +2421,6 @@ const RouteDashboard = () => {
                             <RouteWorkloadBoard
                                 routes={displayActiveRoutes}
                                 stops={serviceStops}
-                                now={now}
                                 technicians={technicians}
                                 fleetVehicles={fleetVehicles}
                                 selectedRouteId={selectedRouteId}
@@ -2453,10 +2428,14 @@ const RouteDashboard = () => {
                                 vehicleUpdatingRouteId={vehicleUpdatingRouteId}
                                 onSelectRoute={setSelectedRouteId}
                                 onSelectRouteStops={toggleRouteUnfinishedStops}
-                                onToggleStop={toggleSelectedStop}
-                                onOpenStop={openStopPreview}
-                                onVehicleChange={updateRouteVehicle}
-                            />
+	                                onToggleStop={toggleSelectedStop}
+	                                onOpenStop={openStopPreview}
+	                                onVehicleChange={updateRouteVehicle}
+	                                moveStopsPanel={moveStopsPanel}
+	                                showMoveStopsPanel={showMoveStopsPanel}
+	                                selectedMoveStopCount={selectedStopsForMove.length}
+	                                onToggleMoveStopsPanel={() => setShowMoveStopsPanel((current) => !current)}
+	                            />
 
                             <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -3215,38 +3194,13 @@ const getRouteStatusClass = (status) => {
     }
 };
 
-const RouteSummaryDatum = ({ label, value, helper, compact = false }) => (
-    <div className={`min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 ${compact ? 'leading-tight' : ''}`}>
-        <p className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-bold uppercase tracking-wide text-gray-500`}>{label}</p>
-        <p className={`truncate ${compact ? 'text-xs' : 'text-sm'} font-bold text-gray-900`}>{value}</p>
-        {helper && <p className={`truncate ${compact ? 'text-[11px]' : 'text-xs'} text-gray-500`}>{helper}</p>}
-    </div>
-);
-
-const RouteCardMetric = ({ label, value, helper, tone = 'slate' }) => {
-    const toneClasses = {
-        slate: 'border-slate-200 bg-slate-50 text-slate-900',
-        blue: 'border-blue-100 bg-blue-50 text-blue-900',
-        emerald: 'border-emerald-100 bg-emerald-50 text-emerald-900',
-        amber: 'border-amber-100 bg-amber-50 text-amber-900',
-    };
-
-    return (
-        <div className={`min-w-0 rounded-lg border px-3 py-2 ${toneClasses[tone] || toneClasses.slate}`}>
-            <p className="text-[10px] font-bold uppercase tracking-wide opacity-65">{label}</p>
-            <p className="mt-0.5 truncate text-base font-bold leading-none">{value}</p>
-            {helper && <p className="mt-1 truncate text-[11px] font-semibold opacity-70">{helper}</p>}
-        </div>
-    );
-};
-
-const RouteProgressBar = ({ finishedCount, inProgressCount, totalCount }) => (
+const RouteProgressBar = ({ finishedCount, inProgressCount, openCount, totalCount }) => (
     <div className="mt-3">
-        <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-slate-500">
+        <div className="flex items-center justify-between gap-3 text-sm font-bold text-slate-700">
             <span>{finishedCount}/{totalCount} finished</span>
-            <span>{inProgressCount} active</span>
+            <span>{openCount} open / {inProgressCount} active</span>
         </div>
-        <div className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-slate-100">
+        <div className="mt-2 flex h-3 overflow-hidden rounded-full bg-slate-100">
             <span
                 className="bg-emerald-500"
                 style={{ width: totalCount ? `${(finishedCount / totalCount) * 100}%` : '0%' }}
@@ -3261,8 +3215,6 @@ const RouteProgressBar = ({ finishedCount, inProgressCount, totalCount }) => (
 
 const RouteTechnicianSummary = ({
     route,
-    stops,
-    now,
     technicians,
     fleetVehicles,
     onVehicleChange,
@@ -3270,69 +3222,40 @@ const RouteTechnicianSummary = ({
 }) => {
     if (!route) return null;
 
-    const activeStop = stops.find(stop => {
-        const { start, end } = getStopTiming(stop);
-        return start && !end;
-    });
-    const activeStart = activeStop ? getStopTiming(activeStop).start : null;
-    const durationMinutes = getRouteDurationMinutes(route);
     const vehicleOptions = buildVehicleOptionsForRoute(route, technicians, fleetVehicles);
-    const mileageText = route.distanceMiles ? `${Number(route.distanceMiles).toFixed(1)} mi` : 'N/A';
-    const durationText = activeStart
-        ? formatElapsedDuration(activeStart, now)
-        : durationMinutes
-            ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
-            : 'N/A';
+    const selectedVehicleValue = routeVehicleSelectionValue(route);
+    const hasSelectedVehicle = selectedVehicleValue !== 'none';
 
     return (
-        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <div className="min-w-0">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                    <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Vehicle</p>
-                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200">
-                        {routeVehicleSourceLabel(route)}
-                    </span>
-                </div>
-                <select
-                    value={routeVehicleSelectionValue(route)}
-                    onChange={(event) => onVehicleChange(route, event.target.value)}
-                    disabled={isVehicleUpdating}
-                    className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs font-semibold text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                    {vehicleOptions.map(option => (
-                        <option key={option.value} value={option.value}>
-                            {option.label}
-                        </option>
-                    ))}
-                </select>
-                <p className="mt-1 truncate text-[11px] leading-tight text-gray-500">
-                    {routeVehicleSummary(route, fleetVehicles, technicians)}
-                </p>
+        <label className="min-w-0">
+            <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Vehicle</span>
+                <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200">
+                    {routeVehicleSourceLabel(route)}
+                </span>
             </div>
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                <RouteSummaryDatum label="Mileage" value={mileageText} compact />
-                <RouteSummaryDatum
-                    label={activeStart ? 'Timer' : 'Duration'}
-                    value={durationText}
-                    helper={activeStart ? `Started ${formatTimeValue(activeStart)}` : ''}
-                    compact
-                />
-                <RouteSummaryDatum
-                    label="Active Stop"
-                    value={activeStop?.customerName || 'None'}
-                    helper={activeStop?.address?.streetAddress || ''}
-                    compact
-                />
-            </div>
-        </div>
+            <select
+                value={selectedVehicleValue}
+                onChange={(event) => onVehicleChange(route, event.target.value)}
+                disabled={isVehicleUpdating}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            >
+                {vehicleOptions.map(option => (
+                    <option key={option.value} value={option.value}>
+                        {option.label}
+                    </option>
+                ))}
+            </select>
+            <span className="mt-1 block truncate text-xs font-medium text-gray-500">
+                {hasSelectedVehicle ? routeVehicleSummary(route, fleetVehicles, technicians) : 'No vehicle assigned'}
+            </span>
+        </label>
     );
 };
 
 const RouteWorkloadBoard = ({
     routes,
     stops,
-    now,
     technicians,
     fleetVehicles,
     selectedRouteId,
@@ -3343,6 +3266,10 @@ const RouteWorkloadBoard = ({
     onToggleStop,
     onOpenStop,
     onVehicleChange,
+    moveStopsPanel,
+    showMoveStopsPanel,
+    selectedMoveStopCount,
+    onToggleMoveStopsPanel,
 }) => {
     const routeGroups = useMemo(() => {
         const routedStopIds = new Set();
@@ -3393,6 +3320,18 @@ const RouteWorkloadBoard = ({
                     <p className="text-sm text-gray-500">Route stops, technician status, vehicle assignment, and move tools in one dispatch view.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={onToggleMoveStopsPanel}
+                        className={`rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm transition ${showMoveStopsPanel
+                                ? 'border-red-600 bg-red-600 text-white hover:bg-red-700'
+                                : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                            }`}
+                    >
+                        {showMoveStopsPanel
+                            ? 'Cancel Move'
+                            : `Move Stops${selectedMoveStopCount ? ` (${selectedMoveStopCount})` : ''}`}
+                    </button>
                     <DetailPill label="Stops" value={stops.length} />
                     <DetailPill label="Routes" value={routes.length} />
                     <DetailPill label="Finished" value={finishedCount} />
@@ -3453,33 +3392,23 @@ const RouteWorkloadBoard = ({
                                     <RouteProgressBar
                                         finishedCount={finishedCount}
                                         inProgressCount={inProgressCount}
+                                        openCount={openCount}
                                         totalCount={group.stops.length}
                                     />
 
-                                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                                        <RouteCardMetric label="Stops" value={group.stops.length} helper={`${finishedCount} done`} tone="emerald" />
-                                        <RouteCardMetric label="Open" value={openCount} helper={`${inProgressCount} active`} tone={openCount ? 'amber' : 'emerald'} />
-                                        <RouteCardMetric label="Selected" value={selectedInRoute} helper="move list" tone={selectedInRoute ? 'blue' : 'slate'} />
-                                    </div>
-
                                     {group.route && (
-                                        <RouteTechnicianSummary
-                                            route={group.route}
-                                            stops={group.stops}
-                                            now={now}
-                                            technicians={technicians}
-                                            fleetVehicles={fleetVehicles}
-                                            onVehicleChange={onVehicleChange}
-                                            isVehicleUpdating={vehicleUpdatingRouteId === group.route.id}
-                                        />
-                                    )}
-
-                                    {group.route && (
-                                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                        <div className="mt-4 grid gap-2 lg:grid-cols-[minmax(220px,1fr)_140px_170px] lg:items-start">
+                                            <RouteTechnicianSummary
+                                                route={group.route}
+                                                technicians={technicians}
+                                                fleetVehicles={fleetVehicles}
+                                                onVehicleChange={onVehicleChange}
+                                                isVehicleUpdating={vehicleUpdatingRouteId === group.route.id}
+                                            />
                                             <button
                                                 type="button"
                                                 onClick={() => onSelectRoute(group.route.id)}
-                                                className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${isFocused
+                                                className={`rounded-lg border px-3 py-2 text-sm font-semibold transition lg:mt-5 ${isFocused
                                                         ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
                                                         : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
                                                     }`}
@@ -3489,7 +3418,7 @@ const RouteWorkloadBoard = ({
                                             <button
                                                 type="button"
                                                 onClick={() => onSelectRouteStops(group.route)}
-                                                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                                                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 lg:mt-5"
                                             >
                                                 {selectedInRoute ? `${selectedInRoute} Selected` : 'Select Open Stops'}
                                             </button>
@@ -3505,7 +3434,10 @@ const RouteWorkloadBoard = ({
                     )}
                 </div>
 
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div className="space-y-4">
+                    {moveStopsPanel}
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                     <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                             <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Route Stops</h3>
@@ -3585,6 +3517,7 @@ const RouteWorkloadBoard = ({
                             Select an active route to see its service stops.
                         </div>
                     )}
+                    </div>
                 </div>
             </div>
         </section>
@@ -3614,8 +3547,8 @@ const MoveStopsPanel = ({
 
     return (
         <section className="rounded-xl border border-blue-200 bg-white p-3 shadow-sm">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-                <div className="min-w-0 xl:w-52">
+            <div className="flex flex-col gap-3">
+                <div className="min-w-0">
                     <h2 className="text-lg font-bold text-gray-800">Move Stops</h2>
                     <p className="text-sm text-gray-500">{selectedCount} selected out of {totalStops}</p>
                     <span className="mt-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
@@ -3623,7 +3556,7 @@ const MoveStopsPanel = ({
                     </span>
                 </div>
 
-                <div className="grid flex-1 gap-3 md:grid-cols-2 xl:grid-cols-[220px_180px_minmax(200px,1fr)_220px]">
+                <div className="grid flex-1 gap-3 md:grid-cols-2">
                     <div>
                         <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Move Type</span>
                         <div className="mt-1 grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-1">
@@ -3707,7 +3640,7 @@ const MoveStopsPanel = ({
                     </div>
                 </div>
 
-                <div className="xl:w-56">
+                <div>
                     <button
                         type="button"
                         onClick={onMoveSelectedStops}
@@ -3725,7 +3658,7 @@ const MoveStopsPanel = ({
             {selectedPreview.length > 0 && (
                 <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Selected</p>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="mt-2 grid gap-2 md:grid-cols-2">
                         {selectedPreview.map(stop => (
                             <div key={stop.id} className="min-w-0 text-sm">
                                 <p className="truncate font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</p>

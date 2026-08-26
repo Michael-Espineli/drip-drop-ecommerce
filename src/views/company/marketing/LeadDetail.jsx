@@ -12,10 +12,12 @@ import {
     where,
     getDocs
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
 import { format } from 'date-fns';
+import { FaEnvelope, FaExternalLinkAlt, FaFileSignature, FaCheckCircle } from 'react-icons/fa';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { SERVICE_STOP_TYPE_USE_CASES } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import {
@@ -25,6 +27,17 @@ import {
     normalizeLeadSourceItem,
     pipelineLeadSourcesRef,
 } from '../../../utils/customerPipeline';
+import LeadCancellationDialog from './LeadCancellationDialog';
+import {
+    cancelLeadWithOptions,
+    normalizeLeadCancellationKey,
+    previewLeadCancellationTargets,
+} from '../../../utils/leads/leadCancellation';
+import { functions } from '../../../utils/config';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
+import { SalesAgreementStatus, salesCollectionNames } from '../../../utils/models/Sales';
+import ServiceAgreementSendDialog from '../sales/components/ServiceAgreementSendDialog';
+import { appConfirm } from '../../../utils/appDialog';
 
 const SERVICE_STOP_OPERATION_STATUS = {
     finished: 'Finished',
@@ -41,6 +54,75 @@ const leadStageButtonClasses = {
     Completed: 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
     Cancelled: 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100',
 };
+
+const terminalAgreementStatusKeys = new Set(['canceled', 'cancelled', 'rejected', 'expired', 'superseded']);
+
+const normalizeAgreementStatusKey = (value = '') => (
+    String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+);
+
+const labelize = (value = '') => (
+    String(value || 'Unknown')
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/[_-]/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+);
+
+const formatCurrency = (amountCents = 0) => (
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+        .format((Number(amountCents) || 0) / 100)
+);
+
+const formatAgreementDate = (value) => {
+    if (!value) return '';
+    const date = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return format(date, 'MMM d, yyyy');
+};
+
+const agreementAmountCents = (agreement = {}) => (
+    Number(
+        agreement.totalAmountCents ??
+        agreement.rateAmountCents ??
+        agreement.subtotalAmountCents ??
+        agreement.amountCents ??
+        0
+    ) || 0
+);
+
+const agreementHasTerms = (agreement = {}) => (
+    Boolean(String(agreement.terms || '').trim()) ||
+    (Array.isArray(agreement.termsList) && agreement.termsList.length > 0)
+);
+
+const agreementIsAccepted = (agreement = {}) => (
+    normalizeAgreementStatusKey(agreement.status) === normalizeAgreementStatusKey(SalesAgreementStatus.accepted)
+);
+
+const agreementCanSend = (agreement = {}) => (
+    Boolean(agreement?.id) &&
+    !agreementIsAccepted(agreement) &&
+    !terminalAgreementStatusKeys.has(normalizeAgreementStatusKey(agreement.status)) &&
+    Array.isArray(agreement.lineItems) &&
+    agreement.lineItems.length > 0 &&
+    agreementHasTerms(agreement)
+);
+
+const agreementCanAccept = (agreement = {}) => (
+    Boolean(agreement?.id) &&
+    !agreementIsAccepted(agreement) &&
+    !terminalAgreementStatusKeys.has(normalizeAgreementStatusKey(agreement.status))
+);
+
+const agreementWasSent = (agreement = {}) => (
+    Boolean(
+        agreement.sentAt ||
+        agreement.emailDelivery?.lastSentAt ||
+        agreement.emailDelivery?.sentAt ||
+        ['sent', 'revised'].includes(normalizeAgreementStatusKey(agreement.status))
+    )
+);
 
 const isLeadServiceEstimateVisit = (visit = {}) => {
     const useCase = String(visit.serviceStopTypeUseCaseRawValue || '').trim();
@@ -219,7 +301,7 @@ const PreEstimateVisitLockedCard = ({ lead }) => {
 export default function LeadDetail() {
     const { leadId } = useParams();
     const navigate = useNavigate();
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
@@ -227,6 +309,7 @@ export default function LeadDetail() {
     const [estimate, setEstimate] = useState(null);
     const [loading, setLoading] = useState(true);
     const [estimateVisit, setEstimateVisit] = useState(null);
+    const [linkedAgreement, setLinkedAgreement] = useState(null);
 
     const [savingDescription, setSavingDescription] = useState(false);
     const [descriptionDraft, setDescriptionDraft] = useState('');
@@ -237,6 +320,12 @@ export default function LeadDetail() {
     const [savingStatus, setSavingStatus] = useState(false);
     const [showCancelReason, setShowCancelReason] = useState(false);
     const [cancelReasonDraft, setCancelReasonDraft] = useState('');
+    const [showCancelDialog, setShowCancelDialog] = useState(false);
+    const [cancelDialogTargets, setCancelDialogTargets] = useState({});
+    const [loadingCancelTargets, setLoadingCancelTargets] = useState(false);
+    const [sendingAgreement, setSendingAgreement] = useState(false);
+    const [showAgreementSendDialog, setShowAgreementSendDialog] = useState(false);
+    const [acceptingAgreement, setAcceptingAgreement] = useState(false);
     const [leadSources, setLeadSources] = useState(DEFAULT_LEAD_SOURCES.map(normalizeLeadSourceItem));
     const [leadSourceDraft, setLeadSourceDraft] = useState('Manual');
     const [newLeadSourceDraft, setNewLeadSourceDraft] = useState('');
@@ -275,6 +364,9 @@ export default function LeadDetail() {
 
         const fetchLeadDetails = async () => {
             setLoading(true);
+            setEstimate(null);
+            setEstimateVisit(null);
+            setLinkedAgreement(null);
             try {
                 const leadRef = doc(db, 'homeownerServiceRequests', leadId);
                 const docSnap = await getDoc(leadRef);
@@ -353,6 +445,45 @@ export default function LeadDetail() {
                     }
 
                     setEstimateVisit(matchedEstimateVisit);
+
+                    try {
+                        const explicitAgreementId =
+                            leadData.serviceAgreementId ||
+                            leadData.salesAgreementId ||
+                            leadData.agreementId ||
+                            matchedEstimateVisit?.serviceAgreementId ||
+                            matchedEstimateVisit?.salesAgreementId ||
+                            matchedEstimateVisit?.agreementId ||
+                            '';
+                        let matchedAgreement = null;
+
+                        if (explicitAgreementId) {
+                            const agreementSnap = await getDoc(doc(db, salesCollectionNames.agreements, explicitAgreementId));
+                            if (agreementSnap.exists()) {
+                                const agreementData = agreementSnap.data();
+                                if (!agreementData.companyId || agreementData.companyId === recentlySelectedCompany) {
+                                    matchedAgreement = { id: agreementSnap.id, ...agreementData };
+                                }
+                            }
+                        }
+
+                        if (!matchedAgreement) {
+                            const agreementSnap = await getDocs(query(
+                                collection(db, salesCollectionNames.agreements),
+                                where('companyId', '==', recentlySelectedCompany),
+                                where('leadId', '==', leadId)
+                            ));
+                            const agreements = agreementSnap.docs
+                                .map((agreementDoc) => ({ id: agreementDoc.id, ...agreementDoc.data() }));
+
+                            matchedAgreement = agreements.find((agreement) => !terminalAgreementStatusKeys.has(normalizeAgreementStatusKey(agreement.status))) || agreements[0] || null;
+                        }
+
+                        setLinkedAgreement(matchedAgreement);
+                    } catch (agreementError) {
+                        console.warn('Unable to load linked service agreement for lead', agreementError);
+                        setLinkedAgreement(null);
+                    }
                 } else {
                     toast.error('Lead not found or access denied.');
                     navigate('/company/leads');
@@ -368,11 +499,295 @@ export default function LeadDetail() {
         fetchLeadDetails();
     }, [leadId, recentlySelectedCompany, db, navigate]);
 
+    const actorName = `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() ||
+        user?.displayName ||
+        user?.email ||
+        '';
+
+    const closeCancelDialog = () => {
+        if (savingStatus) return;
+        setShowCancelDialog(false);
+        setCancelDialogTargets({});
+        setLoadingCancelTargets(false);
+    };
+
+    const openLeadCancellationDialog = async () => {
+        if (!requirePermission("614", "update leads")) return;
+        if (!lead || !recentlySelectedCompany) return;
+
+        setShowCancelReason(false);
+        setShowCancelDialog(true);
+        setCancelDialogTargets({});
+        setLoadingCancelTargets(true);
+
+        try {
+            const targets = await previewLeadCancellationTargets({
+                db,
+                companyId: recentlySelectedCompany,
+                lead,
+            });
+            setCancelDialogTargets(targets);
+        } catch (error) {
+            console.error('Unable to load lead cancellation targets', error);
+            toast.error('Could not load linked cleanup options.');
+        } finally {
+            setLoadingCancelTargets(false);
+        }
+    };
+
+    const sendLinkedAgreementEmail = async ({ primaryEmail, additionalEmails = [] } = {}) => {
+        if (!linkedAgreement?.id) return;
+        if (!can("400")) {
+            toast.error('You do not have permission to send service agreements.');
+            return;
+        }
+        if (!agreementCanSend(linkedAgreement)) {
+            toast.error(agreementIsAccepted(linkedAgreement)
+                ? 'Accepted agreements cannot be resent from this action.'
+                : 'Add line items and terms before sending this service agreement.');
+            return;
+        }
+
+        const recipientEmail = String(primaryEmail || linkedAgreement.email || '').trim();
+        if (!recipientEmail) {
+            toast.error('Add a recipient email before sending.');
+            return;
+        }
+
+        setSendingAgreement(true);
+
+        try {
+            const sendCallable = httpsCallable(functions, 'sendServiceAgreementEmail');
+            const authPayload = await getCallableAuthPayload();
+            const result = await sendCallable({
+                companyId: linkedAgreement.companyId || recentlySelectedCompany,
+                agreementId: linkedAgreement.id,
+                agreementBaseUrl: window.location.origin,
+                includeInspectionReport: linkedAgreement.emailDelivery?.includeInspectionReport === true || linkedAgreement.includeInspectionReport === true,
+                primaryEmail: recipientEmail,
+                additionalEmails,
+                ...authPayload,
+            });
+
+            setLinkedAgreement((current) => current?.id === linkedAgreement.id
+                ? {
+                    ...current,
+                    status: agreementIsAccepted(current) ? current.status : SalesAgreementStatus.sent,
+                    email: recipientEmail,
+                    emailDelivery: {
+                        ...(current.emailDelivery || {}),
+                        lastSentAt: new Date(),
+                    },
+                }
+                : current);
+            setLead((current) => current
+                ? {
+                    ...current,
+                    serviceAgreementId: linkedAgreement.id,
+                    serviceAgreementTitle: linkedAgreement.title || 'Service Agreement',
+                    serviceAgreementStatus: agreementIsAccepted(linkedAgreement) ? linkedAgreement.status : SalesAgreementStatus.sent,
+                }
+                : current);
+
+            if (result.data?.testMode) {
+                toast.success(`Test email sent to ${result.data.to}. Customer email saved as ${result.data.intendedTo}.`);
+            } else if (result.data?.includeInspectionReport && !result.data?.hasInspectionReport) {
+                toast.success('Service agreement sent. No linked inspection report was found yet.');
+            } else {
+                toast.success(result.data?.message || 'Service agreement email sent.');
+            }
+            setShowAgreementSendDialog(false);
+        } catch (sendError) {
+            console.error('Unable to send service agreement from lead', sendError);
+            toast.error(sendError.message || 'Failed to send service agreement email.');
+        } finally {
+            setSendingAgreement(false);
+        }
+    };
+
+    const markLinkedAgreementAccepted = async ({ completeLead = true, confirm = true } = {}) => {
+        if (!linkedAgreement?.id) return false;
+        if (!can("400")) {
+            toast.error('You do not have permission to update service agreements.');
+            return false;
+        }
+        if (agreementIsAccepted(linkedAgreement)) return true;
+        if (!agreementCanAccept(linkedAgreement)) {
+            toast.error(`Agreement status is ${labelize(linkedAgreement.status)}.`);
+            return false;
+        }
+
+        if (confirm) {
+            const confirmed = await appConfirm({
+                title: 'Mark Service Agreement Accepted',
+                message: `Mark "${linkedAgreement.title || 'Service Agreement'}" accepted${completeLead ? ' and complete this lead' : ''}?`,
+                confirmLabel: 'Mark Accepted',
+                cancelLabel: 'Keep Editing',
+            });
+            if (!confirmed) return false;
+        }
+
+        setAcceptingAgreement(true);
+
+        try {
+            const acceptancePayload = {
+                status: SalesAgreementStatus.accepted,
+                acceptedAt: serverTimestamp(),
+                acceptedByUserId: user?.uid || user?.id || '',
+                acceptedByUserName: actorName,
+                acceptedByEmail: user?.email || dataBaseUser?.email || '',
+                acceptedSource: 'customerOffline',
+                acceptedNote: completeLead
+                    ? 'Marked accepted from the linked lead.'
+                    : 'Marked accepted while completing the linked lead.',
+                statusChangedAt: serverTimestamp(),
+                statusChangedByUserId: user?.uid || user?.id || '',
+                statusChangedByUserName: actorName,
+                statusChangeReason: 'Agreement manually accepted from the linked lead.',
+                updatedAt: serverTimestamp(),
+            };
+            const updates = [
+                updateDoc(doc(db, salesCollectionNames.agreements, linkedAgreement.id), acceptancePayload),
+            ];
+
+            if (estimateVisit?.id) {
+                updates.push(updateDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', estimateVisit.id), {
+                    serviceAgreementId: linkedAgreement.id,
+                    serviceAgreementTitle: linkedAgreement.title || 'Service Agreement',
+                    serviceAgreementStatus: SalesAgreementStatus.accepted,
+                    serviceAgreementAcceptedAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                }));
+            }
+
+            if (completeLead) {
+                updates.push(updateDoc(doc(db, 'homeownerServiceRequests', leadId), {
+                    status: 'Completed',
+                    leadStatus: 'Completed',
+                    serviceAgreementId: linkedAgreement.id,
+                    serviceAgreementTitle: linkedAgreement.title || 'Service Agreement',
+                    serviceAgreementStatus: SalesAgreementStatus.accepted,
+                    serviceAgreementAcceptedAt: serverTimestamp(),
+                    dateCompleted: serverTimestamp(),
+                    lostReason: '',
+                    cancelReason: '',
+                    statusChangeReason: '',
+                    updatedAt: serverTimestamp(),
+                }));
+            }
+
+            await Promise.all(updates);
+
+            setLinkedAgreement((current) => current?.id === linkedAgreement.id
+                ? {
+                    ...current,
+                    status: SalesAgreementStatus.accepted,
+                    acceptedAt: new Date(),
+                    acceptedByUserId: user?.uid || user?.id || '',
+                    acceptedByUserName: actorName,
+                    acceptedByEmail: user?.email || dataBaseUser?.email || '',
+                    acceptedSource: 'customerOffline',
+                }
+                : current);
+            setLead((current) => current
+                ? {
+                    ...current,
+                    ...(completeLead ? { status: 'Completed', leadStatus: 'Completed' } : {}),
+                    serviceAgreementId: linkedAgreement.id,
+                    serviceAgreementTitle: linkedAgreement.title || 'Service Agreement',
+                    serviceAgreementStatus: SalesAgreementStatus.accepted,
+                    lostReason: completeLead ? '' : current.lostReason,
+                    cancelReason: completeLead ? '' : current.cancelReason,
+                }
+                : current);
+
+            if (completeLead) setCancelReasonDraft('');
+            toast.success(completeLead
+                ? 'Service agreement accepted and lead completed.'
+                : 'Service agreement marked accepted.');
+            return true;
+        } catch (acceptError) {
+            console.error('Unable to mark service agreement accepted from lead', acceptError);
+            toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
+            return false;
+        } finally {
+            setAcceptingAgreement(false);
+        }
+    };
+
+    const confirmLeadCancellation = async ({ reason, options }) => {
+        if (!requirePermission("614", "update leads")) return;
+        if (!lead || !recentlySelectedCompany) return;
+
+        const originalLead = lead;
+        setSavingStatus(true);
+        setLead(prev => ({ ...prev, status: 'Cancelled', leadStatus: 'Cancelled' }));
+
+        try {
+            const result = await cancelLeadWithOptions({
+                db,
+                companyId: recentlySelectedCompany,
+                lead,
+                reason: reason || cancelReasonDraft || 'Marked cancelled from lead detail.',
+                targets: cancelDialogTargets,
+                options,
+                actor: {
+                    id: user?.uid || user?.id || '',
+                    name: actorName,
+                    email: user?.email || dataBaseUser?.email || '',
+                },
+            });
+
+            setLead(prev => ({
+                ...prev,
+                status: 'Cancelled',
+                leadStatus: 'Cancelled',
+                lostReason: result.reason,
+                cancelReason: result.reason,
+                statusChangeReason: result.reason,
+                serviceAgreementId: result.targets?.agreement?.id || prev.serviceAgreementId || '',
+                serviceAgreementStatus: result.agreementRejected ? 'rejected' : prev.serviceAgreementStatus,
+            }));
+            setCancelReasonDraft(result.reason);
+            setShowCancelReason(false);
+            if (result.serviceStopDeleted) setEstimateVisit(null);
+
+            const cleanupMessages = [
+                result.serviceStopDeleted ? 'service stop deleted' : '',
+                result.customerInactive ? 'customer made inactive' : '',
+                result.agreementRejected ? 'agreement rejected' : '',
+            ].filter(Boolean);
+            toast.success(cleanupMessages.length
+                ? `Lead cancelled; ${cleanupMessages.join(', ')}.`
+                : 'Status updated to Cancelled');
+            setShowCancelDialog(false);
+            setCancelDialogTargets({});
+        } catch (error) {
+            setLead(originalLead);
+            toast.error(error.message || 'Failed to update status.');
+        } finally {
+            setSavingStatus(false);
+        }
+    };
+
     const handleStatusChange = async (newStatus, options = {}) => {
         if (!requirePermission("614", "update leads")) return;
-        if (newStatus === 'Cancelled' && !options.reason && !cancelReasonDraft.trim()) {
-            setShowCancelReason(true);
+        if (newStatus === 'Cancelled' && !options.skipCancellationDialog) {
+            if (normalizeLeadCancellationKey(status) === 'cancelled') {
+                setShowCancelReason(true);
+                return;
+            }
+            await openLeadCancellationDialog();
             return;
+        }
+        if (newStatus === 'Completed' && linkedAgreement?.id && !agreementIsAccepted(linkedAgreement)) {
+            if (!agreementWasSent(linkedAgreement) && agreementCanSend(linkedAgreement)) {
+                setShowAgreementSendDialog(true);
+                toast('Send the service agreement first. Once the customer accepts, mark the lead completed.');
+                return;
+            }
+            const accepted = await markLinkedAgreementAccepted({ completeLead: false, confirm: true });
+            if (!accepted) return;
         }
 
         const leadRef = doc(db, 'homeownerServiceRequests', leadId);
@@ -405,6 +820,12 @@ export default function LeadDetail() {
                     updates.dateCompleted = new Date();
                     updates.lostReason = "";
                     updates.cancelReason = "";
+                    if (linkedAgreement?.id) {
+                        updates.serviceAgreementId = linkedAgreement.id;
+                        updates.serviceAgreementTitle = linkedAgreement.title || 'Service Agreement';
+                        updates.serviceAgreementStatus = SalesAgreementStatus.accepted;
+                        updates.serviceAgreementAcceptedAt = serverTimestamp();
+                    }
                     break;
                 case 'Cancelled':
                     updates.dateCompleted = new Date();
@@ -694,7 +1115,7 @@ export default function LeadDetail() {
                             Schedule Estimate
                         </button>
                     )}
-                    {can("612") && (
+                    {can("612") && !linkedAgreement?.id && (
                         <button
                             onClick={handleCreateServiceAgreementFromLead}
                             className={actionButtonClass}
@@ -707,6 +1128,106 @@ export default function LeadDetail() {
         }
 
         return null;
+    };
+
+    const renderLinkedAgreement = () => {
+        if (!linkedCustomerId) return null;
+
+        if (!linkedAgreement?.id) {
+            return (
+                <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4">
+                    <p className="text-sm font-semibold text-slate-900">No linked service agreement yet.</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                        Create one from this lead when the estimate is ready.
+                    </p>
+                </div>
+            );
+        }
+
+        const statusKey = normalizeAgreementStatusKey(linkedAgreement.status);
+        const accepted = agreementIsAccepted(linkedAgreement);
+        const sentAt = linkedAgreement.sentAt || linkedAgreement.emailDelivery?.lastSentAt || linkedAgreement.emailDelivery?.sentAt;
+        const acceptedAt = linkedAgreement.acceptedAt;
+        const sendDisabled = !agreementCanSend(linkedAgreement) || sendingAgreement || acceptingAgreement;
+        const acceptDisabled = !agreementCanAccept(linkedAgreement) || sendingAgreement || acceptingAgreement;
+        const sentBefore = agreementWasSent(linkedAgreement);
+
+        return (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-md bg-blue-50 p-2 text-blue-700">
+                                <FaFileSignature className="text-sm" />
+                            </span>
+                            <div className="min-w-0">
+                                <p className="truncate text-sm font-bold text-slate-950">
+                                    {linkedAgreement.title || 'Service Agreement'}
+                                </p>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                    {formatCurrency(agreementAmountCents(linkedAgreement))}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                        accepted
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : terminalAgreementStatusKeys.has(statusKey)
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-blue-100 text-blue-800'
+                    }`}
+                    >
+                        {labelize(linkedAgreement.status || 'Draft')}
+                    </span>
+                </div>
+
+                <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                        <dt className="font-semibold uppercase tracking-wide text-slate-500">Sent</dt>
+                        <dd className="mt-1 text-slate-800">{formatAgreementDate(sentAt) || 'Not sent'}</dd>
+                    </div>
+                    <div>
+                        <dt className="font-semibold uppercase tracking-wide text-slate-500">Accepted</dt>
+                        <dd className="mt-1 text-slate-800">{formatAgreementDate(acceptedAt) || 'Not accepted'}</dd>
+                    </div>
+                </dl>
+
+                <div className="mt-4 grid gap-2">
+                    <Link
+                        to={`/company/sales/agreements/${linkedAgreement.id}`}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                        <FaExternalLinkAlt className="text-xs" />
+                        View Agreement
+                    </Link>
+                    {can("400") && (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => setShowAgreementSendDialog(true)}
+                                disabled={sendDisabled}
+                                title={sendDisabled && !sendingAgreement ? 'Agreement must be active and include line items and terms before sending.' : undefined}
+                                className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <FaEnvelope className="text-xs" />
+                                {sendingAgreement ? 'Sending...' : sentBefore ? 'Resend Agreement' : 'Send Agreement'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => markLinkedAgreementAccepted({ completeLead: true, confirm: true })}
+                                disabled={acceptDisabled}
+                                title={acceptDisabled && !acceptingAgreement ? 'Agreement is already final.' : undefined}
+                                className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <FaCheckCircle className="text-xs" />
+                                {acceptingAgreement ? 'Accepting...' : accepted ? 'Accepted' : 'Mark Accepted'}
+                            </button>
+                        </>
+                    )}
+                </div>
+            </div>
+        );
     };
 
     return (
@@ -1088,7 +1609,7 @@ export default function LeadDetail() {
                                         />
                                         <button
                                             type="button"
-                                            onClick={() => handleStatusChange('Cancelled', { reason: cancelReasonDraft.trim() || 'No reason provided' })}
+                                            onClick={() => handleStatusChange('Cancelled', { reason: cancelReasonDraft.trim() || 'No reason provided', skipCancellationDialog: true })}
                                             disabled={savingStatus}
                                             className="mt-2 w-full rounded-md bg-rose-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
@@ -1164,19 +1685,52 @@ export default function LeadDetail() {
                                     </div>
                                 )}
 
-                                {(can("612") || can("22") || can("242")) && (
-                                    <div className={panelClass}>
-                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">
-                                            {linkedCustomerId ? 'Next Steps' : 'Lead Conversion'}
-                                        </h3>
-                                        <div className="space-y-3">{renderActions()}</div>
-                                    </div>
-                                )}
+	                                {(can("612") || can("22") || can("242")) && (
+	                                    <div className={panelClass}>
+	                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">
+	                                            {linkedCustomerId ? 'Next Steps' : 'Lead Conversion'}
+	                                        </h3>
+	                                        <div className="space-y-3">
+                                                {renderLinkedAgreement()}
+                                                {renderActions()}
+                                            </div>
+	                                    </div>
+	                                )}
                             </>
                         )}
                     </div>
                 </div>
             </div>
-        </div>
-    );
+            <LeadCancellationDialog
+                lead={showCancelDialog ? lead : null}
+                targets={cancelDialogTargets}
+                loadingTargets={loadingCancelTargets}
+                saving={savingStatus}
+                permissions={{
+                    canDeleteServiceStop: can("246"),
+                    canDeactivateCustomer: can("14"),
+                    canRejectAgreement: can("400"),
+                }}
+	                onClose={closeCancelDialog}
+	                onConfirm={confirmLeadCancellation}
+	            />
+            <ServiceAgreementSendDialog
+                agreement={linkedAgreement}
+                open={showAgreementSendDialog}
+                sending={sendingAgreement}
+                includeInspectionReport={linkedAgreement?.emailDelivery?.includeInspectionReport === true || linkedAgreement?.includeInspectionReport === true}
+                hasLinkedInspectionReport={Boolean(
+                    linkedAgreement?.inspectionReportId ||
+                    linkedAgreement?.inspectionReportUrl ||
+                    linkedAgreement?.inspectionReportStoragePath ||
+                    estimateVisit?.inspectionReportId ||
+                    estimateVisit?.inspectionReportUrl
+                )}
+                onClose={() => {
+                    if (!sendingAgreement) setShowAgreementSendDialog(false);
+                }}
+                onConfirm={sendLinkedAgreementEmail}
+            />
+	        </div>
+	    );
 }

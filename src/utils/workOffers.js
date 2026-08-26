@@ -29,6 +29,9 @@ const cents = (value) => {
   return Number.isFinite(n) ? Math.round(n) : 0;
 };
 
+const workOfferOrEmpty = (offer) =>
+  offer && typeof offer === "object" ? offer : {};
+
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -81,42 +84,56 @@ export const normalizeWorkOfferStatus = (status) => {
 export const normalizedWorkOfferStatusKey = (status) =>
   normalizeWorkOfferStatus(status).toLowerCase().replace(/\s+/g, " ");
 
-export const isOpenWorkOffer = (offer = {}) =>
-  OPEN_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(offer.status));
+export const isOpenWorkOffer = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  return OPEN_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status));
+};
 
-export const isAcceptedWorkOffer = (offer = {}) =>
-  ACCEPTED_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(offer.status));
+export const isAcceptedWorkOffer = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  return ACCEPTED_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status));
+};
 
-export const isAcceptedReadyToScheduleWorkOffer = (offer = {}) =>
-  isAcceptedWorkOffer(offer) && !(offer.serviceStopId || offer.scheduledServiceStopId);
+export const isAcceptedReadyToScheduleWorkOffer = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  return isAcceptedWorkOffer(safeOffer) && !(safeOffer.serviceStopId || safeOffer.scheduledServiceStopId);
+};
 
-export const isScheduledWorkOffer = (offer = {}) =>
-  SCHEDULED_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(offer.status)) ||
-  Boolean(offer.serviceStopId || offer.scheduledServiceStopId);
+export const isScheduledWorkOffer = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  return (
+    SCHEDULED_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status)) ||
+    Boolean(safeOffer.serviceStopId || safeOffer.scheduledServiceStopId)
+  );
+};
 
-export const isFinalWorkOffer = (offer = {}) =>
-  FINAL_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(offer.status));
+export const isFinalWorkOffer = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  return FINAL_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status));
+};
 
 export const getWorkOfferTaskCount = (offer = {}) => {
-  if (Array.isArray(offer.jobTaskIds)) return offer.jobTaskIds.length;
-  if (Array.isArray(offer.taskIds)) return offer.taskIds.length;
-  if (Array.isArray(offer.tasks)) return offer.tasks.length;
-  if (Array.isArray(offer.serviceStopTaskIds)) return offer.serviceStopTaskIds.length;
+  const safeOffer = workOfferOrEmpty(offer);
+  if (Array.isArray(safeOffer.jobTaskIds)) return safeOffer.jobTaskIds.length;
+  if (Array.isArray(safeOffer.taskIds)) return safeOffer.taskIds.length;
+  if (Array.isArray(safeOffer.tasks)) return safeOffer.tasks.length;
+  if (Array.isArray(safeOffer.serviceStopTaskIds)) return safeOffer.serviceStopTaskIds.length;
   return 0;
 };
 
 export const getWorkOfferTargetText = (offer = {}) => {
-  if (offer.offeredToUserName) return offer.offeredToUserName;
-  if (offer.acceptedByUserName) return offer.acceptedByUserName;
-  if (offer.receiverName) return offer.receiverName;
-  if (offer.workerName) return offer.workerName;
-  if (offer.companyUserName) return offer.companyUserName;
-  if (offer.externalCompanyName) return offer.externalCompanyName;
-  if (offer.boardName) return offer.boardName;
+  const safeOffer = workOfferOrEmpty(offer);
+  if (safeOffer.offeredToUserName) return safeOffer.offeredToUserName;
+  if (safeOffer.acceptedByUserName) return safeOffer.acceptedByUserName;
+  if (safeOffer.receiverName) return safeOffer.receiverName;
+  if (safeOffer.workerName) return safeOffer.workerName;
+  if (safeOffer.companyUserName) return safeOffer.companyUserName;
+  if (safeOffer.externalCompanyName) return safeOffer.externalCompanyName;
+  if (safeOffer.boardName) return safeOffer.boardName;
   if (
-    offer.postedToBoard ||
-    offer.isBoardPost ||
-    BOARD_WORK_OFFER_TYPES.has(normalizeWorkOfferTypeKey(offer.offerType))
+    safeOffer.postedToBoard ||
+    safeOffer.isBoardPost ||
+    BOARD_WORK_OFFER_TYPES.has(normalizeWorkOfferTypeKey(safeOffer.offerType))
   ) {
     return "Internal Board";
   }
@@ -124,47 +141,51 @@ export const getWorkOfferTargetText = (offer = {}) => {
 };
 
 export const getWorkOfferTypeText = (offer = {}) => {
-  const offerType = normalizeWorkOfferTypeKey(offer.offerType);
+  const safeOffer = workOfferOrEmpty(offer);
+  const offerType = normalizeWorkOfferTypeKey(safeOffer.offerType);
   if (offerType === "direct user" || offerType === "direct") return "Direct User";
   if (offerType === "internal board" || offerType === "board") return "Internal Board";
   if (offerType === "external company" || offerType === "external") return "External Company";
-  if (offer.postedToBoard || offer.isBoardPost) return "Internal Board";
-  if (offer.externalCompanyId || offer.externalCompanyName) return "External Company";
+  if (safeOffer.postedToBoard || safeOffer.isBoardPost) return "Internal Board";
+  if (safeOffer.externalCompanyId || safeOffer.externalCompanyName) return "External Company";
   return "Direct User";
 };
 
 export const getWorkOfferEstimatedPayCents = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
   const explicitTotal =
-    offer.estimatedPayWithIncentiveCents ??
-    offer.totalPayWithIncentiveCents;
+    safeOffer.estimatedPayWithIncentiveCents ??
+    safeOffer.totalPayWithIncentiveCents;
 
   if (explicitTotal !== undefined && explicitTotal !== null) {
     return cents(explicitTotal);
   }
 
-  return getWorkOfferBasePayCents(offer) + getWorkOfferIncentiveCents(offer);
+  return getWorkOfferBasePayCents(safeOffer) + getWorkOfferIncentiveCents(safeOffer);
 };
 
 export const getWorkOfferBasePayCents = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
   const value =
-    offer.estimatedBasePayCents ??
-    offer.basePayCents ??
-    offer.estimatedPayCents ??
-    offer.estimatedPayTotalCents ??
-    offer.estimatedLaborCents ??
-    offer.payEstimateCents ??
-    offer.totalEstimatedPayCents ??
-    offer.offeredAmountCents ??
-    offer.rate ??
+    safeOffer.estimatedBasePayCents ??
+    safeOffer.basePayCents ??
+    safeOffer.estimatedPayCents ??
+    safeOffer.estimatedPayTotalCents ??
+    safeOffer.estimatedLaborCents ??
+    safeOffer.payEstimateCents ??
+    safeOffer.totalEstimatedPayCents ??
+    safeOffer.offeredAmountCents ??
+    safeOffer.rate ??
     0;
   return cents(value);
 };
 
 export const normalizeWorkOfferIncentive = (offer = {}) => {
-  const incentive = offer.incentive && typeof offer.incentive === "object"
-    ? offer.incentive
+  const safeOffer = workOfferOrEmpty(offer);
+  const incentive = safeOffer.incentive && typeof safeOffer.incentive === "object"
+    ? safeOffer.incentive
     : {};
-  const type = normalizeIncentiveTypeKey(incentive.type || offer.incentiveType || "none");
+  const type = normalizeIncentiveTypeKey(incentive.type || safeOffer.incentiveType || "none");
   const normalizedType =
     type === "flat" || type === "flat rate"
       ? "flat"
@@ -173,17 +194,17 @@ export const normalizeWorkOfferIncentive = (offer = {}) => {
         : "none";
   const amountCents = Math.max(0, cents(
     incentive.amountCents ??
-    offer.incentiveAmountCents ??
-    offer.flatIncentiveCents ??
+    safeOffer.incentiveAmountCents ??
+    safeOffer.flatIncentiveCents ??
     0
   ));
   const percentage = Math.max(0, Number(
     incentive.percentage ??
-    offer.incentivePercentage ??
-    offer.percentageIncentive ??
+    safeOffer.incentivePercentage ??
+    safeOffer.percentageIncentive ??
     0
   ) || 0);
-  const notes = String(incentive.notes || offer.incentiveNotes || "").trim();
+  const notes = String(incentive.notes || safeOffer.incentiveNotes || "").trim();
 
   if (normalizedType === "flat") {
     return {
@@ -212,19 +233,21 @@ export const normalizeWorkOfferIncentive = (offer = {}) => {
 };
 
 export const getWorkOfferIncentiveCents = (offer = {}) => {
-  const incentive = normalizeWorkOfferIncentive(offer);
+  const safeOffer = workOfferOrEmpty(offer);
+  const incentive = normalizeWorkOfferIncentive(safeOffer);
 
   if (incentive.type === "flat") return incentive.amountCents;
   if (incentive.type === "percentage") {
-    return Math.round(getWorkOfferBasePayCents(offer) * (incentive.percentage / 100));
+    return Math.round(getWorkOfferBasePayCents(safeOffer) * (incentive.percentage / 100));
   }
 
   return 0;
 };
 
 export const getWorkOfferIncentiveText = (offer = {}) => {
-  const incentive = normalizeWorkOfferIncentive(offer);
-  const incentiveCents = getWorkOfferIncentiveCents(offer);
+  const safeOffer = workOfferOrEmpty(offer);
+  const incentive = normalizeWorkOfferIncentive(safeOffer);
+  const incentiveCents = getWorkOfferIncentiveCents(safeOffer);
 
   if (incentive.type === "flat") {
     return incentiveCents > 0 ? `Flat ${moneyFromCents(incentiveCents)}` : "Flat incentive";
@@ -238,7 +261,8 @@ export const getWorkOfferIncentiveText = (offer = {}) => {
 };
 
 export const getWorkOfferCategoryText = (offer = {}) => {
-  switch (offer.workOfferCategory || offer.workCategory || offer.sourceType) {
+  const safeOffer = workOfferOrEmpty(offer);
+  switch (safeOffer.workOfferCategory || safeOffer.workCategory || safeOffer.sourceType) {
     case "fullRoute":
     case "route":
       return "Full Route";
@@ -255,13 +279,15 @@ export const getWorkOfferCategoryText = (offer = {}) => {
   }
 };
 
-export const getWorkOfferCanSelfSchedule = (offer = {}) =>
-  Boolean(
-    offer.canTechnicianSchedule ||
-    offer.allowsTechnicianSelfScheduling ||
-    offer.allowTechnicianScheduling ||
-    offer.technicianCanSchedule
+export const getWorkOfferCanSelfSchedule = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  return Boolean(
+    safeOffer.canTechnicianSchedule ||
+    safeOffer.allowsTechnicianSelfScheduling ||
+    safeOffer.allowTechnicianScheduling ||
+    safeOffer.technicianCanSchedule
   );
+};
 
 export const workOfferMatchesStatusFilter = (offer = {}, filter = "open") => {
   switch (filter) {
@@ -281,31 +307,33 @@ export const workOfferMatchesStatusFilter = (offer = {}, filter = "open") => {
   }
 };
 
-export const buildWorkOfferSearchText = (offer = {}) =>
-  [
-    offer.id,
-    offer.title,
-    offer.name,
-    offer.description,
-    offer.notes,
-    offer.adminNotes,
-    offer.workerNotes,
-    offer.jobInternalId,
-    offer.jobName,
-    offer.customerName,
-    offer.serviceLocationName,
-    offer.serviceStopTypeName,
-    offer.companyServiceStopTypeName,
-    offer.routeName,
-    offer.routeTechName,
-    offer.boardName,
-    Array.isArray(offer.boardNames) ? offer.boardNames.join(" ") : "",
-    getWorkOfferCategoryText(offer),
-    getWorkOfferIncentiveText(offer),
-    offer.status,
-    getWorkOfferTargetText(offer),
-    getWorkOfferTypeText(offer),
+export const buildWorkOfferSearchText = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  return [
+    safeOffer.id,
+    safeOffer.title,
+    safeOffer.name,
+    safeOffer.description,
+    safeOffer.notes,
+    safeOffer.adminNotes,
+    safeOffer.workerNotes,
+    safeOffer.jobInternalId,
+    safeOffer.jobName,
+    safeOffer.customerName,
+    safeOffer.serviceLocationName,
+    safeOffer.serviceStopTypeName,
+    safeOffer.companyServiceStopTypeName,
+    safeOffer.routeName,
+    safeOffer.routeTechName,
+    safeOffer.boardName,
+    Array.isArray(safeOffer.boardNames) ? safeOffer.boardNames.join(" ") : "",
+    getWorkOfferCategoryText(safeOffer),
+    getWorkOfferIncentiveText(safeOffer),
+    safeOffer.status,
+    getWorkOfferTargetText(safeOffer),
+    getWorkOfferTypeText(safeOffer),
   ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+};

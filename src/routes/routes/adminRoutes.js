@@ -18,6 +18,7 @@ const UniversalReadingsDosages = lazy(() => import("../../views/admin/universalT
 const TesterStripProfiles = lazy(() => import("../../views/admin/testerStripProfiles/TesterStripProfiles"))
 const DripDropWorkflowArchitectureDocsPage = lazy(() => import("../../views/admin/documentation/DripDropWorkflowArchitectureDocsPage"))
 const FeatureFlags = lazy(() => import("../../views/admin/featureFlags/FeatureFlags"))
+const Permissions = lazy(() => import("../../views/admin/permissions/Permissions"))
 const Complaints = lazy(() => import("../../views/admin/complaints/Complaints"))
 const ProductFeedback = lazy(() => import("../../views/admin/feedback/ProductFeedback"))
 const AppErrors = lazy(() => import("../../views/admin/errors/AppErrors"))
@@ -144,6 +145,12 @@ export const adminRoutes = [
     {
         path: '/admin/feature-flags',
         element: <FeatureFlags />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/permissions',
+        element: <Permissions />,
         role: 'Admin'
     }
     ,

@@ -31,6 +31,8 @@ import {
   productOptionSearchText,
 } from "../../../utils/productCatalog";
 
+const MURDOCK_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
+
 const uomOptions = [
   { id: "gallon", label: "Gallon" },
   { id: "pounds", label: "Pounds" },
@@ -57,6 +59,11 @@ const categoryOptions = [
 ];
 
 const subcategoryOptions = [{ id: "misc", label: "Misc" }];
+
+const customReceiptReaderOptions = [
+  { value: "/company/purchased-items/alpha-water-import", label: "Alpha Water Import" },
+  { value: "/company/purchased-items/heritage-import", label: "Heritage Import" },
+];
 
 const blankDatabaseItemForm = {
   name: "",
@@ -129,6 +136,25 @@ const getCompanyUserId = (userOption) => userOption?.userId || userOption?.id ||
 const lineTotal = (line) => numberFromInput(line.rate) * numberFromInput(line.quantityString || line.quantity);
 
 const databaseItemRateCents = (item) => Number(item?.rate || 0);
+
+const normalizeMatchKey = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+const getVendorItemVendorId = (item = {}) => item.vendorId || item.venderId || "";
+
+const vendorItemMatchesVendor = (item = {}, vendor = null) => {
+  if (!vendor) return true;
+
+  const selectedVendorId = selectedOptionId(vendor);
+  const itemVendorId = getVendorItemVendorId(item);
+  if (selectedVendorId && itemVendorId) return itemVendorId === selectedVendorId;
+
+  const selectedVendorNameKey = normalizeMatchKey(getVendorName(vendor));
+  const itemVendorNameKey = normalizeMatchKey(item.storeName || item.vendorName || item.venderName);
+  return Boolean(selectedVendorNameKey && itemVendorNameKey && itemVendorNameKey === selectedVendorNameKey);
+};
 
 const vendorItemProductLink = (vendorItem, products = []) => {
   if (!vendorItem) return { productId: "", productName: "" };
@@ -226,6 +252,7 @@ const CreateNewPurchase = () => {
   const newProductWillBeCreated =
     databaseItemForm.productLinkMode !== "create" || normalizeTextValue(databaseItemForm.productName || databaseItemForm.name);
   const selectMenuPortalTarget = typeof document !== "undefined" ? document.body : null;
+  const showCustomReceiptReaders = recentlySelectedCompany === MURDOCK_COMPANY_ID;
 
   const productOptions = useMemo(
     () =>
@@ -246,6 +273,17 @@ const CreateNewPurchase = () => {
       }),
     [products]
   );
+
+  const filteredVendorItemList = useMemo(
+    () => vendorItemList.filter((item) => vendorItemMatchesVendor(item, selectedVendor)),
+    [selectedVendor, vendorItemList]
+  );
+
+  useEffect(() => {
+    if (!selectedVendorItem) return;
+    if (vendorItemMatchesVendor(selectedVendorItem, selectedVendor)) return;
+    setSelectedVendorItem(null);
+  }, [selectedVendor, selectedVendorItem]);
 
   useEffect(() => {
     const loadSelectors = async () => {
@@ -427,6 +465,11 @@ const CreateNewPurchase = () => {
 
   const handlePurchaseDateChange = (dateOption) => {
     setPurchaseDate(dateOption || new Date());
+  };
+
+  const handleCustomReceiptReaderChange = (option) => {
+    if (!option?.value) return;
+    navigate(option.value);
   };
 
   const handleSourceFilesChange = (event) => {
@@ -691,6 +734,9 @@ const CreateNewPurchase = () => {
           String(first.name || "").localeCompare(String(second.name || ""))
         )
       );
+      if (vendor) {
+        setSelectedVendor(vendor);
+      }
       setSelectedVendorItem(nextVendorItem);
       setDatabaseItemForm(blankDatabaseItemForm);
       setShowCreateItemModal(false);
@@ -832,7 +878,20 @@ const CreateNewPurchase = () => {
             </Link>
             <h1 className="text-3xl font-bold text-gray-900">Create New Receipt</h1>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {showCustomReceiptReaders ? (
+              <div className="min-w-[220px] text-sm font-semibold text-gray-700">
+                <Select
+                  value={null}
+                  options={customReceiptReaderOptions}
+                  onChange={handleCustomReceiptReaderChange}
+                  isSearchable={false}
+                  placeholder="Custom receipt readers"
+                  styles={selectStyles}
+                  theme={selectTheme}
+                />
+              </div>
+            ) : null}
             <button
               type="button"
               onClick={() => saveReceipt({ addAnother: true })}
@@ -877,7 +936,13 @@ const CreateNewPurchase = () => {
                 <Select
                   value={selectedVendor}
                   options={vendorList}
-                  onChange={setSelectedVendor}
+                  onChange={(option) => {
+                    setSelectedVendor(option);
+                    setDatabaseItemForm((current) => ({
+                      ...current,
+                      vendor: option || current.vendor,
+                    }));
+                  }}
                   isSearchable
                   placeholder="Select a Vendor"
                   styles={selectStyles}
@@ -1155,11 +1220,16 @@ const CreateNewPurchase = () => {
 
             <div className="mt-6 grid grid-cols-1 gap-4 border-t border-gray-200 pt-5 md:grid-cols-12">
               <div className="md:col-span-7">
-                <label className="block text-sm font-semibold text-gray-700">Vendor Item</label>
+                <div className="flex items-center justify-between gap-3">
+                  <label className="block text-sm font-semibold text-gray-700">Vendor Item</label>
+                  <span className="text-xs font-semibold text-gray-500">
+                    {filteredVendorItemList.length} for {getVendorName(selectedVendor) || "all vendors"}
+                  </span>
+                </div>
                 <div className="mt-1">
                   <Select
                     value={selectedVendorItem}
-                    options={vendorItemList}
+                    options={filteredVendorItemList}
                     onChange={setSelectedVendorItem}
                     isSearchable
                     placeholder="Search vendor items"
@@ -1167,7 +1237,9 @@ const CreateNewPurchase = () => {
                     filterOption={(option, inputValue) =>
                       option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
                     }
-                    noOptionsMessage={() => "No vendor items found"}
+                    noOptionsMessage={() =>
+                      selectedVendor ? "No vendor items found for this vendor" : "No vendor items found"
+                    }
                     styles={selectStyles}
                     theme={selectTheme}
                     menuPortalTarget={selectMenuPortalTarget || undefined}

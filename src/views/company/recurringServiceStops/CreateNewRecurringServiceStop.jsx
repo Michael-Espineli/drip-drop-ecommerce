@@ -23,10 +23,13 @@ import {
     suggestCompanyServiceStopType,
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { addRecurringServiceStopToPlannedRoute } from '../../../utils/recurringRouteSync';
-import MapComponent from '../../components/MapComponent';
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from '../../../utils/companyUsers';
 
 const functions = getFunctions();
+const PREVIEW_MAP_HEIGHT = "520px";
+const ROUTE_PREVIEW_FALLBACK_ZOOM = 11;
+const SINGLE_STOP_PREVIEW_ZOOM = 15;
+const EMPTY_ROUTE_STOPS = Object.freeze([]);
 
 const firestoreValueToDate = (value) => {
     if (!value) return null;
@@ -99,7 +102,76 @@ const routePreviewStopCoordinate = (stop) => {
     return { lat, lng };
 };
 
-const PlannedRoutePreviewMap = ({ stops = [], height = "260px" }) => {
+const LocationPreviewMap = ({ latitude, longitude, referenceStops = [], height = PREVIEW_MAP_HEIGHT }) => {
+    const mapRef = React.useRef(null);
+    const [mapsReady, setMapsReady] = useState(hasGoogleMaps);
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    const hasCoordinates = Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0);
+
+    const referencePositions = useMemo(() => (
+        referenceStops
+            .map(routePreviewStopCoordinate)
+            .filter(Boolean)
+    ), [referenceStops]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+        if (mapsReady) return undefined;
+
+        const timer = window.setInterval(() => {
+            if (hasGoogleMaps()) {
+                setMapsReady(true);
+                window.clearInterval(timer);
+            }
+        }, 250);
+
+        return () => window.clearInterval(timer);
+    }, [mapsReady]);
+
+    useEffect(() => {
+        if (!mapsReady || !hasCoordinates || !mapRef.current || !hasGoogleMaps()) return undefined;
+
+        const googleMaps = window.google.maps;
+        const selectedPosition = { lat, lng };
+        const map = new googleMaps.Map(mapRef.current, {
+            center: selectedPosition,
+            zoom: referencePositions.length > 1 ? ROUTE_PREVIEW_FALLBACK_ZOOM : SINGLE_STOP_PREVIEW_ZOOM,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: true,
+        });
+        const marker = new googleMaps.Marker({
+            position: selectedPosition,
+            map,
+            title: "Selected service location",
+        });
+        let idleListener = null;
+        let disposed = false;
+
+        if (referencePositions.length > 1) {
+            const bounds = new googleMaps.LatLngBounds();
+            referencePositions.forEach((position) => bounds.extend(position));
+
+            if (!bounds.isEmpty()) {
+                map.fitBounds(bounds);
+                idleListener = googleMaps.event.addListenerOnce(map, 'idle', () => {
+                    if (!disposed) map.panTo(selectedPosition);
+                });
+            }
+        }
+
+        return () => {
+            disposed = true;
+            if (idleListener) idleListener.remove();
+            marker.setMap(null);
+        };
+    }, [hasCoordinates, lat, lng, mapsReady, referencePositions]);
+
+    return <div ref={mapRef} style={{ width: '100%', height }} />;
+};
+
+const PlannedRoutePreviewMap = ({ stops = [], height = PREVIEW_MAP_HEIGHT }) => {
     const mapRef = React.useRef(null);
     const [mapsReady, setMapsReady] = useState(hasGoogleMaps);
 
@@ -132,7 +204,7 @@ const PlannedRoutePreviewMap = ({ stops = [], height = "260px" }) => {
 
         const googleMaps = window.google.maps;
         const map = new googleMaps.Map(mapRef.current, {
-            zoom: 11,
+            zoom: ROUTE_PREVIEW_FALLBACK_ZOOM,
             mapTypeControl: false,
             streetViewControl: false,
             fullscreenControl: true,
@@ -233,7 +305,7 @@ const PlannedRoutePreviewMap = ({ stops = [], height = "260px" }) => {
         if (!bounds.isEmpty()) {
             map.fitBounds(bounds);
             if (positions.length === 1) {
-                map.setZoom(15);
+                map.setZoom(SINGLE_STOP_PREVIEW_ZOOM);
             }
         }
 
@@ -328,6 +400,7 @@ const CreateNewRecurringServiceStop = () => {
     const selectedTechnicianLabel = tech?.label || tech?.userName || tech?.firstName || "Technician";
     const routePreviewStops = routePreview.stops || [];
     const routePreviewMappedStopCount = routePreviewStops.filter(routePreviewStopCoordinate).length;
+    const locationPreviewReferenceStops = routePreviewMappedStopCount > 1 ? routePreviewStops : EMPTY_ROUTE_STOPS;
     const routePreviewTitle = routePreview.route
         ? routePreview.route.description || routePreview.route.name || `${selectedTechnicianLabel} ${dayOfWeek?.label || dayOfWeek?.value || ""} Route`
         : `${selectedTechnicianLabel} ${dayOfWeek?.label || dayOfWeek?.value || ""} Route`;
@@ -996,11 +1069,10 @@ const CreateNewRecurringServiceStop = () => {
 
                                     {hasSelectedLocationMap ? (
                                         <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
-                                            <MapComponent
+                                            <LocationPreviewMap
                                                 latitude={selectedLocationLatitude}
                                                 longitude={selectedLocationLongitude}
-                                                zoom={15}
-                                                height="260px"
+                                                referenceStops={locationPreviewReferenceStops}
                                             />
                                         </div>
                                     ) : (
@@ -1054,7 +1126,7 @@ const CreateNewRecurringServiceStop = () => {
                                         </div>
                                     ) : (
                                         <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
-                                            <PlannedRoutePreviewMap stops={routePreviewStops} height="260px" />
+                                            <PlannedRoutePreviewMap stops={routePreviewStops} />
                                         </div>
                                     )}
                                 </div>

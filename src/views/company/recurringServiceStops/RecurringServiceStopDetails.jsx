@@ -10,6 +10,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  writeBatch,
   orderBy,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -17,6 +18,7 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { format } from "date-fns";
+import { TrashIcon } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import { removeRecurringServiceStopFromPlannedRoutes } from "../../../utils/recurringRouteSync";
 import { appConfirm } from "../../../utils/appDialog";
@@ -64,6 +66,7 @@ import { v4 as uuidv4 } from 'uuid';
 const functions = getFunctions();
 
 const jobTaskTypeOptions = JOB_TASK_TYPE_NAMES;
+const MAX_FIRESTORE_BATCH_WRITES = 450;
 
 const buildEquipmentDatabaseItemOption = (data = {}, docId = "") => {
   const id = data.id || docId;
@@ -150,6 +153,7 @@ const RecurringServiceStopDetails = () => {
 
   const [showAddTask, setShowAddTask] = useState(false);
   const [savingTask, setSavingTask] = useState(false);
+  const [deletingTaskKey, setDeletingTaskKey] = useState("");
 
   const [newTask, setNewTask] = useState({
     name: "",
@@ -1039,6 +1043,149 @@ const RecurringServiceStopDetails = () => {
     setNewTaskEquipmentMapping(emptyDatabaseEquipmentMapping());
   };
 
+  const deleteRefsInBatches = async (refs = []) => {
+    const uniqueRefs = [];
+    const seenPaths = new Set();
+
+    refs.forEach((ref) => {
+      if (!ref?.path || seenPaths.has(ref.path)) return;
+      seenPaths.add(ref.path);
+      uniqueRefs.push(ref);
+    });
+
+    for (let index = 0; index < uniqueRefs.length; index += MAX_FIRESTORE_BATCH_WRITES) {
+      const batch = writeBatch(db);
+      uniqueRefs.slice(index, index + MAX_FIRESTORE_BATCH_WRITES).forEach((ref) => {
+        batch.delete(ref);
+      });
+      await batch.commit();
+    }
+
+    return uniqueRefs.length;
+  };
+
+  const sameRecurringTask = (candidate = {}, task = {}, taskIndex = -1, candidateIndex = -1) => {
+    if (task?.id && candidate?.id === task.id) return true;
+    if (task?.taskGroupTaskId && candidate?.taskGroupTaskId === task.taskGroupTaskId) return true;
+    if (!task?.id && taskIndex === candidateIndex) return true;
+    return false;
+  };
+
+  const removeTaskFromInlineArrays = async ({ task, taskIndex, recurringStopRef }) => {
+    const recurringStopSnap = await getDoc(recurringStopRef);
+    const recurringStopData = recurringStopSnap.data() || {};
+    const inlineTaskFields = ["tasks", "serviceTasks", "recurringServiceStopTasks"];
+    const updates = {};
+
+    inlineTaskFields.forEach((field) => {
+      const currentTasks = recurringStopData[field];
+      if (!Array.isArray(currentTasks)) return;
+
+      const nextTasks = currentTasks.filter((candidate, candidateIndex) => (
+        !sameRecurringTask(candidate, task, taskIndex, candidateIndex)
+      ));
+
+      if (nextTasks.length !== currentTasks.length) {
+        updates[field] = nextTasks;
+      }
+    });
+
+    if (Object.keys(updates).length) {
+      await updateDoc(recurringStopRef, updates);
+    }
+  };
+
+  const deleteRecurringTask = async (task, taskIndex) => {
+    if (!recentlySelectedCompany || !recurringServiceStopId) return;
+
+    const taskKey = task?.id || `${task?.name || "task"}-${taskIndex}`;
+    const ok = await appConfirm({
+      title: "Delete Recurring Task",
+      message: "Delete this task from the recurring service stop and all future service stops tied to it?",
+      confirmLabel: "Delete Task",
+      variant: "danger",
+    });
+    if (!ok) return;
+
+    try {
+      setDeletingTaskKey(taskKey);
+
+      const recurringStopRef = doc(
+        db,
+        "companies",
+        recentlySelectedCompany,
+        "recurringServiceStop",
+        recurringServiceStopId
+      );
+      const refsToDelete = [];
+
+      if (task?.id) {
+        refsToDelete.push(doc(recurringStopRef, "tasks", task.id));
+
+        const futureStopsSnap = await getDocs(
+          query(
+            collection(db, "companies", recentlySelectedCompany, "serviceStops"),
+            where("recurringServiceStopId", "==", recurringServiceStopId),
+            where("serviceDate", ">=", new Date())
+          )
+        );
+
+        const futureStopTaskSnaps = await Promise.all(
+          futureStopsSnap.docs.flatMap((serviceStopDoc) => {
+            const serviceStopId = serviceStopDoc.data()?.id || serviceStopDoc.id;
+            const tasksRef = collection(
+              db,
+              "companies",
+              recentlySelectedCompany,
+              "serviceStops",
+              serviceStopId,
+              "tasks"
+            );
+
+            return [
+              getDocs(query(tasksRef, where("recurringServiceStopTaskId", "==", task.id))),
+              getDocs(query(tasksRef, where("recurringServiceStopTaskId.id", "==", task.id))),
+            ];
+          })
+        );
+
+        futureStopTaskSnaps.forEach((snapshot) => {
+          snapshot.docs.forEach((taskDoc) => refsToDelete.push(taskDoc.ref));
+        });
+      }
+
+      const deletedGeneratedTasks = await deleteRefsInBatches(refsToDelete);
+      await removeTaskFromInlineArrays({ task, taskIndex, recurringStopRef });
+
+      setRecurringServiceStopTasks((current) => (
+        current.filter((candidate, candidateIndex) => (
+          !sameRecurringTask(candidate, task, taskIndex, candidateIndex)
+        ))
+      ));
+
+      toast.success(
+        deletedGeneratedTasks > 1
+          ? "Deleted recurring task and future scheduled tasks"
+          : "Deleted recurring task"
+      );
+    } catch (error) {
+      console.error("Failed to delete recurring task:", error);
+      await reportDetailsError(error, {
+        where: "RecurringServiceStopDetails.deleteRecurringTask",
+        title: "Recurring service stop task deletion failed",
+        description: "Deleting a recurring service stop task and its future service stop tasks failed.",
+        data: {
+          taskId: task?.id || "",
+          taskName: task?.name || "",
+          taskType: task?.type || "",
+        },
+      });
+      toast.error("Failed to delete recurring task");
+    } finally {
+      setDeletingTaskKey("");
+    }
+  };
+
   const saveEquipmentMappingForDatabaseItem = async (dbItem, mapping) => {
     if (!dbItem?.id) return null;
 
@@ -1402,12 +1549,6 @@ const RecurringServiceStopDetails = () => {
                   collectionPath={`companies/${recentlySelectedCompany}/recurringServiceStop`}
                   webPath={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
                 />
-                <Link
-                  to="/company/recurringServiceStop"
-                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Back
-                </Link>
                 <button
                   onClick={editRSS}
                   className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
@@ -1458,125 +1599,130 @@ const RecurringServiceStopDetails = () => {
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                <Field label="Internal Id" value={recurringServiceStop.internalId} />
-                <Field label="Customer" value={recurringServiceStop.customerName} />
-                <Field label="Street Address" value={recurringServiceStop.streetAddress} />
-                <Field label="Tech">
-                  {!edit ? (
-                    <p className="text-gray-800">{recurringServiceStop.tech || "—"}</p>
-                  ) : (
-                    <Select
-                      value={selectedTech}
-                      options={companyUserOptions}
-                      onChange={setSelectedTech}
-                      isSearchable
-                      placeholder="Select technician"
-                      theme={selectTheme}
-                      styles={selectStyles}
-                    />
-                  )}
-                </Field>
-                <Field label="Pay Type">
-                  {!edit ? (
-                    <p className="text-gray-800">{recurringServiceStop.payTypeName || recurringServiceStop.type || "—"}</p>
-                  ) : (
-                    <Select
-                      value={selectedServiceStopType}
-                      options={serviceStopTypeOptions}
-                      onChange={setSelectedServiceStopType}
-                      isSearchable
-                      placeholder="Select a Pay Type"
-                      theme={selectTheme}
-                      styles={selectStyles}
-                    />
-                  )}
-                </Field>
-                <Field label="Start Date">
-                  {!edit ? (
-                    <p className="text-gray-800">{startDate}</p>
-                  ) : (
-                    <input
-                      type="date"
-                      value={startDateInput}
-                      onChange={(event) => setStartDateInput(event.target.value)}
-                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
-                  )}
-                </Field>
-                <Field label="End Date">
-                  {!edit ? (
-                    <p className="text-gray-800">{recurringServiceStop.noEndDate ? "No End Date" : endDate}</p>
-                  ) : (
-                    <div className="space-y-3">
-                      <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={noEndDateInput}
-                          onChange={(event) => setNoEndDateInput(event.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        No End Date
-                      </label>
+              <div className="grid grid-cols-1 gap-x-10 gap-y-6 md:grid-cols-2">
+                <div className="space-y-5">
+                  <Field label="Customer" value={recurringServiceStop.customerName} />
+                  <Field label="Street Address" value={recurringServiceStop.streetAddress} />
+                  <Field label="Pay Type">
+                    {!edit ? (
+                      <p className="text-gray-800">{recurringServiceStop.payTypeName || recurringServiceStop.type || "—"}</p>
+                    ) : (
+                      <Select
+                        value={selectedServiceStopType}
+                        options={serviceStopTypeOptions}
+                        onChange={setSelectedServiceStopType}
+                        isSearchable
+                        placeholder="Select a Pay Type"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    )}
+                  </Field>
+                  <Field label="Estimated Time" value={formatMinutes(recurringServiceStop.estimatedTime)} />
+                </div>
 
-                      {!noEndDateInput && (
-                        <input
-                          type="date"
-                          value={endDateInput}
-                          min={startDateInput || formatDateInputValue(recurringServiceStop.startDate) || undefined}
-                          onChange={(event) => setEndDateInput(event.target.value)}
-                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        />
-                      )}
-                    </div>
-                  )}
-                </Field>
+                <div className="space-y-5">
+                  <Field label="Tech">
+                    {!edit ? (
+                      <p className="text-gray-800">{recurringServiceStop.tech || "—"}</p>
+                    ) : (
+                      <Select
+                        value={selectedTech}
+                        options={companyUserOptions}
+                        onChange={setSelectedTech}
+                        isSearchable
+                        placeholder="Select technician"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    )}
+                  </Field>
 
-                <Field label="Frequency">
-                  {!edit ? (
-                    <p className="text-gray-800">{recurringServiceStop.frequency || "—"}</p>
-                  ) : (
-                    <Select
-                      value={selectedFrequency}
-                      options={frequencyOptions}
-                      onChange={setSelectedFrequency}
-                      isSearchable
-                      placeholder="Select frequency"
-                      theme={selectTheme}
-                      styles={selectStyles}
-                    />
-                  )}
-                </Field>
+                  <Field label="Day of Week">
+                    {!edit ? (
+                      <p className="text-gray-800">
+                        {recurringServiceStop.daysOfWeek || recurringServiceStop.day || "—"}
+                      </p>
+                    ) : (
+                      <Select
+                        value={selectedDays?.[0] || null}
+                        options={daysOptions}
+                        onChange={(option) => setSelectedDays(option ? [option] : [])}
+                        placeholder="Select day"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    )}
+                  </Field>
 
-                <Field label="Day of Week">
-                  {!edit ? (
-                    <p className="text-gray-800">
-                      {recurringServiceStop.daysOfWeek || recurringServiceStop.day || "—"}
-                    </p>
-                  ) : (
-                    <Select
-                      value={selectedDays?.[0] || null}
-                      options={daysOptions}
-                      onChange={(option) => setSelectedDays(option ? [option] : [])}
-                      placeholder="Select day"
-                      theme={selectTheme}
-                      styles={selectStyles}
-                    />
-                  )}
-                </Field>
+                  <Field label="Frequency">
+                    {!edit ? (
+                      <p className="text-gray-800">{recurringServiceStop.frequency || "—"}</p>
+                    ) : (
+                      <Select
+                        value={selectedFrequency}
+                        options={frequencyOptions}
+                        onChange={setSelectedFrequency}
+                        isSearchable
+                        placeholder="Select frequency"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    )}
+                  </Field>
 
-                <Field label="Estimated Time" value={formatMinutes(recurringServiceStop.estimatedTime)} />
+                  <Field label="Start Date">
+                    {!edit ? (
+                      <p className="text-gray-800">{startDate}</p>
+                    ) : (
+                      <input
+                        type="date"
+                        value={startDateInput}
+                        onChange={(event) => setStartDateInput(event.target.value)}
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    )}
+                  </Field>
+                  <Field label="End Date">
+                    {!edit ? (
+                      <p className="text-gray-800">{recurringServiceStop.noEndDate ? "No End Date" : endDate}</p>
+                    ) : (
+                      <div className="space-y-3">
+                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={noEndDateInput}
+                            onChange={(event) => setNoEndDateInput(event.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          No End Date
+                        </label>
+
+                        {!noEndDateInput && (
+                          <input
+                            type="date"
+                            value={endDateInput}
+                            min={startDateInput || formatDateInputValue(recurringServiceStop.startDate) || undefined}
+                            onChange={(event) => setEndDateInput(event.target.value)}
+                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                        )}
+                      </div>
+                    )}
+                  </Field>
+                </div>
               </div>
             </section>
 
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="mb-4 flex flex-col gap-4">
                 <div>
                   <h3 className="text-xl font-bold text-slate-950">Tasks</h3>
                   <p className="text-sm text-slate-600">Tasks configured for this recurring stop</p>
                 </div>
 
-                <div className="grid w-full gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] xl:w-[42rem]">
+                <div className="grid w-full gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
                   <Select
                     value={selectedTaskTemplate}
                     options={taskGroupOptions}
@@ -1779,38 +1925,58 @@ const RecurringServiceStopDetails = () => {
                   <table className="min-w-full bg-white">
                     <thead className="bg-slate-100">
                       <tr>
-                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600">
                           Task Name
                         </th>
-                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600">
                           Type
                         </th>
-                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600">
                           Contracted Rate
                         </th>
-                        <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
+                        <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600">
                           Estimated Time
+                        </th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-600">
+                          Actions
                         </th>
                       </tr>
                     </thead>
 
                     <tbody className="divide-y divide-slate-200">
-                      {recurringServiceStopTasks.map((task, index) => (
-                        <tr key={task.id || `${task.name}-${index}`} className="transition-colors hover:bg-slate-50">
-                          <td className="whitespace-nowrap p-4 font-medium text-slate-900">
-                            {task.name || "—"}
-                          </td>
-                          <td className="whitespace-nowrap p-4 text-slate-700">
-                            {task.type || "—"}
-                          </td>
-                          <td className="whitespace-nowrap p-4 text-slate-700">
-                            {formatCurrencyFromCents(task.contractedRate)}
-                          </td>
-                          <td className="whitespace-nowrap p-4 text-slate-700">
-                            {formatMinutes(task.estimatedTime)}
-                          </td>
-                        </tr>
-                      ))}
+                      {recurringServiceStopTasks.map((task, index) => {
+                        const taskKey = task.id || `${task.name || "task"}-${index}`;
+                        const deletingThisTask = deletingTaskKey === taskKey;
+
+                        return (
+                          <tr key={taskKey} className="transition-colors hover:bg-slate-50">
+                            <td className="whitespace-nowrap px-3 py-2 text-sm font-medium text-slate-900">
+                              {task.name || "—"}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2 text-sm text-slate-700">
+                              {task.type || "—"}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2 text-sm text-slate-700">
+                              {formatCurrencyFromCents(task.contractedRate)}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2 text-sm text-slate-700">
+                              {formatMinutes(task.estimatedTime)}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right">
+                              <button
+                                type="button"
+                                onClick={() => deleteRecurringTask(task, index)}
+                                disabled={Boolean(deletingTaskKey)}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                aria-label={`Delete ${task.name || "task"}`}
+                                title={deletingThisTask ? "Deleting task" : "Delete task"}
+                              >
+                                <TrashIcon className="h-4 w-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1848,7 +2014,7 @@ const RecurringServiceStopDetails = () => {
                 </div>
               </div>
 
-              <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="Current Estimate" value={formatMinutes(currentEstimateMinutes)} />
                 <Field label="Historic Average" value={formatMinutes(historicAverageMinutes)} />
                 <Field label="Data Points" value={String(durationSampleCount)} />
@@ -1967,6 +2133,7 @@ const RecurringServiceStopDetails = () => {
                 </div>
               )}
             </section>
+            </div>
           </main>
 
           <aside className="space-y-5 lg:sticky lg:top-6 lg:self-start">

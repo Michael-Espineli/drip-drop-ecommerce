@@ -715,6 +715,7 @@ const CompanyUserDetails = () => {
     const [roleList, setRoleList] = useState([]);
     const [areRolesLoading, setAreRolesLoading] = useState(true);
     const [isEditingProfile, setIsEditingProfile] = useState(false);
+    const [isEditingRoleAssignment, setIsEditingRoleAssignment] = useState(false);
     const [profileDraft, setProfileDraft] = useState(buildProfileDraft(null));
     const [isSavingProfile, setIsSavingProfile] = useState(false);
     const [, setCompanyUserAccessDoc] = useState(null);
@@ -1384,6 +1385,10 @@ const CompanyUserDetails = () => {
             currentProfile.workerType !== profileDraft.workerType
         );
     }, [profileDraft, user]);
+    const hasRoleAssignmentChanges = useMemo(() => {
+        if (!user) return false;
+        return buildProfileDraft(user).roleId !== profileDraft.roleId;
+    }, [profileDraft.roleId, user]);
 
     const assignedRegionalTags = useMemo(
         () => normalizeCustomerTags(regionalAccessDraft.tags),
@@ -1674,6 +1679,18 @@ const CompanyUserDetails = () => {
     const handleCancelProfileEdit = () => {
         setProfileDraft(buildProfileDraft(user));
         setIsEditingProfile(false);
+        setIsEditingRoleAssignment(false);
+    };
+
+    const handleStartRoleAssignmentEdit = () => {
+        setProfileDraft(buildProfileDraft(user));
+        setIsEditingProfile(false);
+        setIsEditingRoleAssignment(true);
+    };
+
+    const handleCancelRoleAssignmentEdit = () => {
+        setProfileDraft(buildProfileDraft(user));
+        setIsEditingRoleAssignment(false);
     };
 
     const handleSaveProfile = async () => {
@@ -1707,6 +1724,7 @@ const CompanyUserDetails = () => {
                 workerType: payload.workerType,
             } : current));
             setIsEditingProfile(false);
+            setIsEditingRoleAssignment(false);
             toast.success("Company user updated.");
         } catch (error) {
             console.error("Error updating company user:", error);
@@ -3279,24 +3297,70 @@ const CompanyUserDetails = () => {
                 title="Role Assignment"
                 description="The assigned role provides default permissions, dashboard views, and customer tag visibility unless a user-level override is saved."
                 action={can("264") && (
-                    <button
-                        type="button"
-                        onClick={() => {
-                            handleTabChange("general");
-                            setIsEditingProfile(true);
-                        }}
-                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
-                    >
-                        <PencilSquareIcon className="h-4 w-4" />
-                        Edit Role
-                    </button>
+                    isEditingRoleAssignment ? (
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={handleCancelRoleAssignmentEdit}
+                                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
+                            >
+                                <XMarkIcon className="h-4 w-4" />
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleSaveProfile}
+                                disabled={isSavingProfile || areRolesLoading || !hasRoleAssignmentChanges}
+                                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                <CheckIcon className="h-4 w-4" />
+                                {isSavingProfile ? "Saving..." : "Save Role"}
+                            </button>
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={handleStartRoleAssignmentEdit}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
+                        >
+                            <PencilSquareIcon className="h-4 w-4" />
+                            Edit Role
+                        </button>
+                    )
                 )}
             >
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    <DetailField label="Assigned Role" value={assignedRole?.label || assignedRole?.name || user.roleName} />
-                    <DetailField label="Role Dashboard Views" value={roleDashboardScopes.map((scopeId) => DASHBOARD_SCOPE_ACCESS_OPTIONS.find((option) => option.id === scopeId)?.label || scopeId).join(", ")} />
-                    <DetailField label="Role Customer Tags" value={roleCustomerTagAccessSummary} />
-                </div>
+                {isEditingRoleAssignment ? (
+                    <div className="space-y-4">
+                        <label className="block max-w-xl space-y-1.5">
+                            <span className="text-sm font-semibold text-slate-700">Assigned Role</span>
+                            <Select
+                                value={selectedRoleOption}
+                                options={roleOptions}
+                                onChange={(selected) => setProfileDraft((current) => ({
+                                    ...current,
+                                    roleId: selected?.value || "",
+                                    roleName: selected?.label || "",
+                                }))}
+                                isLoading={areRolesLoading}
+                                isDisabled={areRolesLoading || isSavingProfile}
+                                placeholder="Select role..."
+                                styles={selectStyles}
+                            />
+                        </label>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                            <DetailField label="Current Role" value={assignedRole?.label || assignedRole?.name || user.roleName} />
+                            <DetailField label="Selected Role" value={selectedRoleOption?.label || profileDraft.roleName} />
+                            <DetailField label="Selected Permissions" value={selectedRoleOption?.permissionIdList?.length ? `${selectedRoleOption.permissionIdList.length} permissions` : "No permissions found"} />
+                        </div>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        <DetailField label="Assigned Role" value={assignedRole?.label || assignedRole?.name || user.roleName} />
+                        <DetailField label="Role Dashboard Views" value={roleDashboardScopes.map((scopeId) => DASHBOARD_SCOPE_ACCESS_OPTIONS.find((option) => option.id === scopeId)?.label || scopeId).join(", ")} />
+                        <DetailField label="Role Customer Tags" value={roleCustomerTagAccessSummary} />
+                    </div>
+                )}
             </Section>
 
             <Section
@@ -4606,6 +4670,7 @@ const CompanyUserDetails = () => {
                                 type="button"
                                 onClick={() => {
                                     handleTabChange("general");
+                                    setIsEditingRoleAssignment(false);
                                     setIsEditingProfile(true);
                                 }}
                                 className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getFirestore, collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext'; // Adjust path if necessary
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
@@ -16,7 +16,11 @@ import {
 } from '@heroicons/react/24/outline';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { getLeadSourceLabel } from '../../../utils/customerPipeline';
-import { appConfirm } from '../../../utils/appDialog';
+import LeadCancellationDialog from './LeadCancellationDialog';
+import {
+    cancelLeadWithOptions,
+    previewLeadCancellationTargets,
+} from '../../../utils/leads/leadCancellation';
 
 // StatCard component for displaying header stats
 const StatCard = ({ title, count, Icon, color, selected, selectedClass, onClick }) => (
@@ -100,7 +104,10 @@ export default function Leads() {
     const [statusFilter, setStatusFilter] = useState('Pending');
     const [sourceFilter, setSourceFilter] = useState('All');
     const [cancellingLeadId, setCancellingLeadId] = useState('');
-    const { recentlySelectedCompany } = useContext(Context);
+    const [cancelDialogLead, setCancelDialogLead] = useState(null);
+    const [cancelDialogTargets, setCancelDialogTargets] = useState({});
+    const [loadingCancelTargets, setLoadingCancelTargets] = useState(false);
+    const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
     const { can } = useCompanyPermissions();
     const db = getFirestore();
     const navigate = useNavigate();
@@ -306,38 +313,77 @@ export default function Leads() {
             : buildLeadServiceAgreementPath(lead));
     };
 
-    const markLeadCancelled = async (lead, event) => {
+    const actorName = useMemo(() => (
+        `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() ||
+        user?.displayName ||
+        user?.email ||
+        ''
+    ), [dataBaseUser?.firstName, dataBaseUser?.lastName, user?.displayName, user?.email]);
+
+    const closeCancelDialog = () => {
+        if (cancellingLeadId) return;
+        setCancelDialogLead(null);
+        setCancelDialogTargets({});
+        setLoadingCancelTargets(false);
+    };
+
+    const openLeadCancellationDialog = async (lead, event) => {
         stopRowNavigation(event);
         if (isLeadCancelled(lead) || !can("614")) return;
 
-        const confirmed = await appConfirm({
-            title: 'Mark lead cancelled?',
-            message: `Mark ${lead.homeownerName || lead.customerName || 'this lead'} as cancelled?`,
-            confirmLabel: 'Mark Cancelled',
-            cancelLabel: 'Keep Lead',
-            variant: 'danger',
-        });
-
-        if (!confirmed) return;
-
-        const reason = lead.lostReason || lead.cancelReason || lead.statusChangeReason || 'Marked cancelled from leads list.';
-        setCancellingLeadId(lead.id);
+        setCancelDialogLead(lead);
+        setCancelDialogTargets({});
+        setLoadingCancelTargets(true);
 
         try {
-            await updateDoc(doc(db, 'homeownerServiceRequests', lead.id), {
-                status: 'Cancelled',
-                leadStatus: 'Cancelled',
-                lostReason: reason,
-                cancelReason: reason,
-                statusChangeReason: reason,
-                lostAt: serverTimestamp(),
-                dateCompleted: serverTimestamp(),
-                updatedAt: serverTimestamp(),
+            const targets = await previewLeadCancellationTargets({
+                db,
+                companyId: recentlySelectedCompany,
+                lead,
             });
-            toast.success('Lead marked cancelled.');
+            setCancelDialogTargets(targets);
+        } catch (error) {
+            console.error('Unable to load lead cancellation targets', error);
+            toast.error('Could not load linked cleanup options.');
+        } finally {
+            setLoadingCancelTargets(false);
+        }
+    };
+
+    const confirmLeadCancellation = async ({ reason, options }) => {
+        if (!cancelDialogLead || !can("614")) return;
+
+        setCancellingLeadId(cancelDialogLead.id);
+
+        try {
+            const result = await cancelLeadWithOptions({
+                db,
+                companyId: recentlySelectedCompany,
+                lead: cancelDialogLead,
+                reason: reason || cancelDialogLead.lostReason || cancelDialogLead.cancelReason || cancelDialogLead.statusChangeReason || 'Marked cancelled from leads list.',
+                targets: cancelDialogTargets,
+                options,
+                actor: {
+                    id: user?.uid || user?.id || '',
+                    name: actorName,
+                    email: user?.email || dataBaseUser?.email || '',
+                },
+            });
+
+            const cleanupMessages = [
+                result.serviceStopDeleted ? 'service stop deleted' : '',
+                result.customerInactive ? 'customer made inactive' : '',
+                result.agreementRejected ? 'agreement rejected' : '',
+            ].filter(Boolean);
+            toast.success(cleanupMessages.length
+                ? `Lead cancelled; ${cleanupMessages.join(', ')}.`
+                : 'Lead marked cancelled.');
+            setCancelDialogLead(null);
+            setCancelDialogTargets({});
+            setLoadingCancelTargets(false);
         } catch (error) {
             console.error('Unable to cancel lead', error);
-            toast.error('Failed to mark lead cancelled.');
+            toast.error(error.message || 'Failed to mark lead cancelled.');
         } finally {
             setCancellingLeadId('');
         }
@@ -518,7 +564,7 @@ export default function Leads() {
                                                     {can("614") && (
                                                         <button
                                                             type="button"
-                                                            onClick={(event) => markLeadCancelled(lead, event)}
+                                                            onClick={(event) => openLeadCancellationDialog(lead, event)}
                                                             className={`${actionButtonClass} border-red-200 bg-red-50 text-red-700 hover:bg-red-100`}
                                                             disabled={isLeadCancelled(lead) || cancellingLeadId === lead.id}
                                                             title={isLeadCancelled(lead) ? 'Lead is already cancelled.' : 'Mark cancelled'}
@@ -537,6 +583,19 @@ export default function Leads() {
                     )}
                 </section>
             </div>
+            <LeadCancellationDialog
+                lead={cancelDialogLead}
+                targets={cancelDialogTargets}
+                loadingTargets={loadingCancelTargets}
+                saving={Boolean(cancellingLeadId)}
+                permissions={{
+                    canDeleteServiceStop: can("246"),
+                    canDeactivateCustomer: can("14"),
+                    canRejectAgreement: can("400"),
+                }}
+                onClose={closeCancelDialog}
+                onConfirm={confirmLeadCancellation}
+            />
         </div>
     );
 }

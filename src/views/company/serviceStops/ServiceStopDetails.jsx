@@ -2052,8 +2052,6 @@ const ServiceStopDetails = () => {
         setEditEnabled(nextValue);
         if (!nextValue) {
             setShowDeleteConfirm(false);
-            setShowAddTask(false);
-            resetTaskForm();
             setEditForm({
                 serviceDate: formatDateInput(serviceStop?.serviceDate),
                 techId: serviceStop?.techId || "",
@@ -3187,6 +3185,16 @@ const ServiceStopDetails = () => {
                         <p className="text-sm text-slate-500">#{serviceStop.internalId || "—"}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
+                        {(can("244") || can("246")) && (
+                            <button
+                                type="button"
+                                onClick={() => toggleEditEnabled(true)}
+                                disabled={editEnabled}
+                                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-default disabled:bg-slate-200 disabled:text-slate-500"
+                            >
+                                Edit
+                            </button>
+                        )}
                         <ShareItemButton
                             type="serviceStop"
                             recordId={serviceStopId}
@@ -4096,15 +4104,15 @@ const ServiceStopDetails = () => {
                                         <h3 className="text-xl font-bold text-slate-800">Admin Edit</h3>
                                         <p className="text-sm text-slate-600">Scheduling, technician, description, and completion controls</p>
                                     </div>
-                                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-                                        <input
-                                            type="checkbox"
-                                            checked={editEnabled}
-                                            onChange={(event) => toggleEditEnabled(event.target.checked)}
-                                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                                        />
-                                        Edit enabled
-                                    </label>
+                                    {editEnabled && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleEditEnabled(false)}
+                                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                            Done
+                                        </button>
+                                    )}
                                 </div>
 
                                 {editEnabled ? (
@@ -4189,7 +4197,7 @@ const ServiceStopDetails = () => {
                                     </div>
                                 ) : (
                                     <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                                        Enable editing to change scheduling, finish manually, add tasks, or delete this stop.
+                                        Select Edit at the top to change scheduling, finish manually, or delete this stop.
                                     </div>
                                 )}
                             </div>
@@ -4204,17 +4212,19 @@ const ServiceStopDetails = () => {
                                     </p>
                                 </div>
 
-                                {editEnabled && !showAddTask && can("244") && (
+                                {can("244") && (
                                     <button
+                                        type="button"
                                         onClick={() => setShowAddTask(true)}
-                                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+                                        disabled={showAddTask}
+                                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-default disabled:bg-slate-200 disabled:text-slate-500"
                                     >
                                         Add Task
                                     </button>
                                 )}
                             </div>
 
-                            {editEnabled && showAddTask && (
+                            {showAddTask && can("244") && (
                                 <form
                                     onSubmit={saveNewTask}
                                     className="mb-6 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4"

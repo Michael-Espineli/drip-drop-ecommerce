@@ -132,6 +132,10 @@ import {
   JOB_BILLING_STATUS,
   JOB_OPERATION_STATUS,
 } from "../../../utils/jobStatusFilters";
+import {
+  SERVICE_STOP_TYPE_USE_CASES,
+  serviceStopTypeMatchesUseCase,
+} from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
 import {
   EQUIPMENT_DATABASE_CATEGORY,
@@ -350,21 +354,75 @@ const JobHeaderActionMenuItem = ({
   );
 };
 
+const JobLineActionMenu = ({
+  actions = [],
+  label = "Line item actions",
+  disabled = false,
+}) => {
+  const visibleActions = actions.filter(Boolean);
+  if (!visibleActions.length) return null;
+
+  const toneClassFor = (tone = "slate") => (
+    tone === "red"
+      ? "text-red-700 hover:bg-red-50 data-[focus]:bg-red-50"
+      : tone === "emerald"
+        ? "text-emerald-700 hover:bg-emerald-50 data-[focus]:bg-emerald-50"
+        : tone === "blue"
+          ? "text-blue-700 hover:bg-blue-50 data-[focus]:bg-blue-50"
+          : "text-slate-700 hover:bg-slate-50 data-[focus]:bg-slate-50"
+  );
+
+  return (
+    <Menu as="div" className="relative inline-block text-left">
+      <MenuButton
+        type="button"
+        disabled={disabled}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label={label}
+        title={label}
+      >
+        <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
+      </MenuButton>
+      <MenuItems className="absolute right-0 z-30 mt-2 w-44 origin-top-right overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
+        {visibleActions.map((action) => {
+          const Icon = action.icon;
+          return (
+            <MenuItem key={action.label} disabled={action.disabled}>
+              <button
+                type="button"
+                onClick={(event) => action.onClick?.(event)}
+                disabled={action.disabled}
+                className={[
+                  "flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+                  toneClassFor(action.tone),
+                ].join(" ")}
+              >
+                {Icon && <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />}
+                <span>{action.label}</span>
+              </button>
+            </MenuItem>
+          );
+        })}
+      </MenuItems>
+    </Menu>
+  );
+};
+
 const JobProgressTimeline = ({ steps = [] }) => {
   const completedCount = steps.filter((step) => step.done).length;
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Job Progress</h2>
-          <p className="mt-1 text-sm font-semibold text-slate-900">
+          <p className="text-xs font-semibold text-slate-700">
             {completedCount} of {steps.length} steps complete
           </p>
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+      <div className="mt-3 grid grid-cols-2 gap-1.5 md:grid-cols-4 2xl:grid-cols-7">
         {steps.map((step, index) => {
           const done = Boolean(step.done);
 
@@ -372,7 +430,7 @@ const JobProgressTimeline = ({ steps = [] }) => {
             <div
               key={step.id}
               className={[
-                "rounded-lg border p-3",
+                "rounded-md border px-2 py-2",
                 done
                   ? "border-emerald-200 bg-emerald-50 text-emerald-900"
                   : "border-slate-200 bg-slate-50 text-slate-600",
@@ -381,17 +439,17 @@ const JobProgressTimeline = ({ steps = [] }) => {
               <div className="flex items-center gap-2">
                 <span
                   className={[
-                    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold",
+                    "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold",
                     done
                       ? "border-emerald-300 bg-white text-emerald-700"
                       : "border-slate-300 bg-white text-slate-500",
                   ].join(" ")}
                 >
-                  {done ? <CheckCircleIcon className="h-4 w-4" aria-hidden="true" /> : index + 1}
+                  {done ? <CheckCircleIcon className="h-3.5 w-3.5" aria-hidden="true" /> : index + 1}
                 </span>
-                <span className="text-sm font-bold">{step.label}</span>
+                <span className="truncate text-xs font-bold">{step.label}</span>
               </div>
-              <p className="mt-2 text-xs leading-5 opacity-80">{step.detail}</p>
+              <p className="mt-1 truncate text-[11px] leading-4 opacity-80">{step.detail}</p>
             </div>
           );
         })}
@@ -2393,13 +2451,32 @@ const JobDetailView = () => {
     return normalizedItems;
   };
 
+  const operationsPlannedStopPayTypes = useMemo(() => {
+    const activeTypes = (companyServiceStopTypes || [])
+      .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive");
+    const jobScopedTypes = activeTypes.filter((type) => (
+      serviceStopTypeMatchesUseCase(type, SERVICE_STOP_TYPE_USE_CASES.jobVisit) ||
+      serviceStopTypeMatchesUseCase(type, SERVICE_STOP_TYPE_USE_CASES.jobEstimate)
+    ));
+    const selectedType = plannedStopForm.serviceStopTypeId
+      ? activeTypes.find((type) => type.id === plannedStopForm.serviceStopTypeId)
+      : null;
+
+    if (selectedType && !jobScopedTypes.some((type) => type.id === selectedType.id)) {
+      return [selectedType, ...jobScopedTypes];
+    }
+
+    return jobScopedTypes;
+  }, [companyServiceStopTypes, plannedStopForm.serviceStopTypeId]);
+
   const selectedPlannedStopType = useMemo(() => {
     if (!plannedStopForm.serviceStopTypeId) return null;
     return (
+      operationsPlannedStopPayTypes.find((type) => type.id === plannedStopForm.serviceStopTypeId) ||
       (companyServiceStopTypes || []).find((type) => type.id === plannedStopForm.serviceStopTypeId) ||
       null
     );
-  }, [companyServiceStopTypes, plannedStopForm.serviceStopTypeId]);
+  }, [companyServiceStopTypes, operationsPlannedStopPayTypes, plannedStopForm.serviceStopTypeId]);
 
   const plannedStopFormTasks = useMemo(() => {
     const selectedTaskIds = new Set(plannedStopForm.taskIds || []);
@@ -8230,65 +8307,38 @@ const JobDetailView = () => {
     return (
       <div
         key={line.id}
-        className="rounded-xl border border-gray-200 bg-gray-50 p-4"
+        className="rounded-md border border-slate-200 bg-white px-3 py-2"
       >
-        <div className="flex items-start justify-between gap-3">
+        <div className="grid gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto] md:items-center">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold text-slate-900">{getPayrollLineTitle(line)}</p>
+            <p className="mt-0.5 truncate text-xs text-slate-500">Worker: {getPayrollLineWorker(line)}</p>
+          </div>
           <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Payroll Line
-            </p>
-
-            <p className="mt-1 text-base font-bold text-gray-800">
-              {getPayrollLineTitle(line)}
-            </p>
-
-            <p className="mt-1 text-sm text-gray-600">
-              Worker: <span className="font-semibold">{getPayrollLineWorker(line)}</span>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Pay Basis</p>
+            <p className="mt-0.5 truncate text-xs font-semibold text-slate-800">{line.payBasis || line.rateType || "—"}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Source / Status</p>
+            <p className="mt-0.5 truncate text-xs font-semibold text-slate-800">
+              {[line.sourceType || line.category || "—", line.status || ""].filter(Boolean).join(" • ")}
             </p>
           </div>
-
-          <span className="px-3 py-1 text-xs font-bold rounded-full border bg-green-50 text-green-700 border-green-200">
-            {moneyFromCents(amountCents)}
-          </span>
-        </div>
-
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Pay Basis
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {line.payBasis || line.rateType || "—"}
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Source
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {line.sourceType || line.category || "—"}
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Status
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {line.status || "—"}
-            </p>
+          <div className="justify-self-start md:justify-self-end">
+            <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+              {moneyFromCents(amountCents)}
+            </span>
           </div>
         </div>
 
-	        {line.notes && (
-	          <p className="mt-4 text-sm text-gray-700 whitespace-pre-wrap">
-	            {line.notes}
-		      </p>
-		        )}
-		      </div>
-			    );
-			  };
+        {line.notes && (
+          <p className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-600">
+            {line.notes}
+          </p>
+        )}
+      </div>
+    );
+  };
   const clearLaborLineEditor = ({ force = false } = {}) => {
     if (savingLaborLine && !force) return;
     setNewLaborLine(false);
@@ -9892,7 +9942,7 @@ const JobDetailView = () => {
     setEditingPlannedStopId("");
     setPlannedStopForm({
       ...EMPTY_PLANNED_STOP_FORM,
-      serviceStopTypeId: companyServiceStopTypes?.[0]?.id || "",
+      serviceStopTypeId: operationsPlannedStopPayTypes?.[0]?.id || "",
     });
     setNewPlannedStop(true);
   };
@@ -11419,17 +11469,6 @@ const JobDetailView = () => {
           </div>
 
           <div className="flex flex-wrap justify-end gap-1.5">
-            {canUpdateCurrentJob && !isEditingMaterial && (
-              <button
-                type="button"
-                onClick={() => startPlannedMaterialEdit(item)}
-                disabled={savingShoppingEdit}
-                className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Edit
-              </button>
-            )}
-
             {!materialPurchased && (
               <button
                 type="button"
@@ -11441,13 +11480,26 @@ const JobDetailView = () => {
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={(e) => deleteShoppingListItem(e, itemId)}
-              className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100"
-            >
-              Delete
-            </button>
+            {(canUpdateCurrentJob || itemId) && (
+              <JobLineActionMenu
+                label="Planned product actions"
+                actions={[
+                  canUpdateCurrentJob && !isEditingMaterial && {
+                    label: "Edit",
+                    icon: PencilSquareIcon,
+                    onClick: () => startPlannedMaterialEdit(item),
+                    disabled: savingShoppingEdit,
+                    tone: "blue",
+                  },
+                  {
+                    label: "Delete",
+                    icon: XMarkIcon,
+                    onClick: (event) => deleteShoppingListItem(event, itemId),
+                    tone: "red",
+                  },
+                ]}
+              />
+            )}
           </div>
         </div>
 
@@ -11631,15 +11683,11 @@ const JobDetailView = () => {
     return (
       <div
         key={item.id}
-        className="rounded-xl border border-gray-200 bg-gray-50 p-4"
+        className="rounded-md border border-slate-200 bg-white px-3 py-2"
       >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Purchased Product
-            </p>
-
-            <p className="mt-1 text-base font-bold text-gray-800">
+        <div className="grid gap-2 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto] lg:items-center">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold text-slate-900">
               {purchasedItemPath ? (
                 <Link to={purchasedItemPath} className="text-blue-700 hover:text-blue-900 hover:underline">
                   {item.name || "Purchased Item"}
@@ -11649,27 +11697,34 @@ const JobDetailView = () => {
               )}
             </p>
 
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-600">
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
               <span>{item.venderName || item.vendorName || "Vendor"}</span>
               <span aria-hidden="true">•</span>
               <span>Qty: {item.quantityString || item.quantity || "—"}</span>
               <span aria-hidden="true">•</span>
-              <span>Unit Cost: {moneyFromCents(item.price)}</span>
-              <span aria-hidden="true">•</span>
-              <span>Total Cost: {moneyFromCents(totalCostCents)}</span>
-              <span aria-hidden="true">•</span>
-              <span>Total Billing Rate: {billingRateLabel}</span>
+              <span>{item.sku ? `SKU: ${item.sku}` : "No SKU"}</span>
             </div>
           </div>
 
-          <div className="flex flex-col items-end gap-2">
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Cost</p>
+              <p className="mt-0.5 font-semibold text-slate-900">{moneyFromCents(totalCostCents)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Billing</p>
+              <p className="mt-0.5 font-semibold text-slate-900">{billingRateLabel}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
             {(item.jobBillable ?? item.billable) && (
-              <span className="px-3 py-1 text-xs font-bold rounded-full border bg-blue-50 text-blue-700 border-blue-200">
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-bold text-blue-700">
                 Job Billable
               </span>
             )}
 
-            <span className="px-3 py-1 text-xs font-bold rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
               Billing By Job
             </span>
 
@@ -11678,7 +11733,7 @@ const JobDetailView = () => {
               onClick={() => removePurchasedItemFromJob(item)}
               disabled={isRemoving}
               title="Remove purchased product from this job"
-              className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 bg-white px-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <XMarkIcon className="h-3.5 w-3.5" aria-hidden="true" />
               {isRemoving ? "Removing..." : "Remove"}
@@ -11687,17 +11742,17 @@ const JobDetailView = () => {
         </div>
 
         {(invoiceLabel || item.sku) && (
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2">
             {invoiceLabel && (
               invoicePath ? (
                 <Link
                   to={invoicePath}
-                  className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-blue-700 border border-gray-200 hover:bg-blue-50 hover:border-blue-200"
+                  className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50 hover:border-blue-200"
                 >
                   Invoice: {invoiceLabel}
                 </Link>
               ) : (
-                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-200">
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
                   Invoice: {invoiceLabel}
                 </span>
               )
@@ -11707,12 +11762,12 @@ const JobDetailView = () => {
               databaseItemPath ? (
                 <Link
                   to={databaseItemPath}
-                  className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-blue-700 border border-gray-200 hover:bg-blue-50 hover:border-blue-200"
+                  className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50 hover:border-blue-200"
                 >
                   SKU: {item.sku}
                 </Link>
               ) : (
-                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-200">
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
                   SKU: {item.sku}
                 </span>
               )
@@ -12451,11 +12506,17 @@ const JobDetailView = () => {
     </div>
   );
 
-  const DetailDisclosure = useCallback(({ panelId, title, helper = "", count = "", children }) => {
+  const DetailDisclosure = useCallback(({ panelId, title, helper = "", count = "", collapsible = true, className = "", children }) => {
+    const sectionClassName = ["space-y-2", className].filter(Boolean).join(" ");
+
+    if (!collapsible) {
+      return <section className={sectionClassName}>{children}</section>;
+    }
+
     const isOpen = Boolean(openDetailPanels[panelId]);
 
     return (
-      <section className="space-y-2">
+      <section className={sectionClassName}>
         <button
           type="button"
           onClick={() => setOpenDetailPanels((prev) => ({ ...prev, [panelId]: !isOpen }))}
@@ -13362,16 +13423,6 @@ const JobDetailView = () => {
           </div>
 
           <div className="flex shrink-0 flex-wrap gap-1.5 lg:justify-end">
-            {canUpdateCurrentJob && (
-              <button
-                type="button"
-                onClick={() => openPlannedStopEditor(stop)}
-                disabled={savingPlannedStop}
-                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Edit
-              </button>
-            )}
             <Link
               to={`/company/serviceStops/createNew/${jobId}?plannedStopId=${stop.id}&category=jobVisit`}
               className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700 transition hover:bg-blue-100"
@@ -13379,13 +13430,28 @@ const JobDetailView = () => {
               Schedule
             </Link>
 
-            <button
-              type="button"
-              onClick={() => deletePlannedServiceStop(stop.id)}
-              className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-bold text-red-700 transition hover:bg-red-100"
-            >
-              Delete
-            </button>
+            {canUpdateCurrentJob && (
+              <JobLineActionMenu
+                label="Operations stop actions"
+                disabled={savingPlannedStop}
+                actions={[
+                  {
+                    label: "Edit",
+                    icon: PencilSquareIcon,
+                    onClick: () => openPlannedStopEditor(stop),
+                    disabled: savingPlannedStop,
+                    tone: "blue",
+                  },
+                  {
+                    label: "Delete",
+                    icon: XMarkIcon,
+                    onClick: () => deletePlannedServiceStop(stop.id),
+                    disabled: savingPlannedStop,
+                    tone: "red",
+                  },
+                ]}
+              />
+            )}
           </div>
         </div>
 
@@ -13638,6 +13704,77 @@ const JobDetailView = () => {
       </button>
     );
   };
+
+  const renderPlannedVsActualWidget = () => (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div>
+        <h4 className="text-base font-bold text-slate-900">Planned Vs Actual</h4>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Compare the original plan against actual recorded cost.
+        </p>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Estimate Services
+          </p>
+          <p className="mt-1 text-base font-bold text-slate-900">
+            {moneyFromCents(plannedLaborPriceCents)}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-600">
+            {moneyFromCents(plannedTotalLaborCents)} planned cost
+          </p>
+        </div>
+
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Estimate Products
+          </p>
+          <p className="mt-1 text-base font-bold text-slate-900">
+            {moneyFromCents(plannedMaterialPriceCents)}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-600">
+            {moneyFromCents(plannedMaterialCostCents)} planned cost
+          </p>
+        </div>
+
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Actual Cost Delta
+          </p>
+          <p
+            className={[
+              "mt-1 text-base font-bold",
+              actualCostVarianceCents > 0 ? "text-red-700" : "text-green-700",
+            ].join(" ")}
+          >
+            {moneyFromCents(actualCostVarianceCents)}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-600">
+            Actual cost minus planned cost
+          </p>
+        </div>
+
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Profit Movement
+          </p>
+          <p
+            className={[
+              "mt-1 text-base font-bold",
+              actualProfitCents < projectedProfitCents ? "text-red-700" : "text-green-700",
+            ].join(" ")}
+          >
+            {moneyFromCents(actualProfitCents - projectedProfitCents)}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-600">
+            Actual profit minus projected profit
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 
   const formattedDateCreated = job.dateCreated ? format(job.dateCreated, "MMMM d, yyyy") : "N/A";
   const formattedLastUpdated = formatDateTimeValue(
@@ -15095,7 +15232,7 @@ const JobDetailView = () => {
 	    );
 	  };
 
-	  const renderPlanInvoiceTaskEditForm = () => (
+  const renderPlanInvoiceTaskEditForm = () => (
     <form onSubmit={saveTaskEdit} className="rounded-md border border-blue-200 bg-white p-3 shadow-sm">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
@@ -15283,6 +15420,45 @@ const JobDetailView = () => {
       </div>
     </form>
   );
+
+  const renderTaskEditModal = () => {
+    if (!editingTaskId) return null;
+
+    const editingTask = (taskList || []).find((task) => task.id === editingTaskId);
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-job-task-title"
+      >
+        <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Job Task</p>
+              <h3 id="edit-job-task-title" className="mt-1 text-lg font-bold text-slate-950">Edit Task</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                {editingTask?.name || editingTask?.description || editingTask?.type || "Update the selected task."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={cancelTaskEdit}
+              disabled={savingTaskEdit}
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Close task editor"
+            >
+              <XMarkIcon className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="overflow-y-auto bg-slate-50 p-5">
+            {renderPlanInvoiceTaskEditForm()}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderPlanInvoiceNewTaskForm = () => (
     <form onSubmit={handleAddTask} className="space-y-4">
@@ -15695,7 +15871,6 @@ const JobDetailView = () => {
 
   const renderUnassignedLaborScopeRow = () => {
     if (!unassignedLaborTasks.length) return null;
-    const editingUnassignedTask = unassignedLaborTasks.find((task) => editingTaskId === task.id) || null;
 
     return (
       <React.Fragment>
@@ -15730,24 +15905,26 @@ const JobDetailView = () => {
                       </p>
                     </div>
                     {canUpdateCurrentJob && (
-                      <div className="flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          onClick={(event) => startTaskEdit(event, task)}
-                          disabled={savingTaskEdit}
-                          className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(event) => deleteTaskItem(event, task.id)}
-                          disabled={savingTaskEdit}
-                          className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      <JobLineActionMenu
+                        label="Task actions"
+                        disabled={savingTaskEdit}
+                        actions={[
+                          {
+                            label: "Edit",
+                            icon: PencilSquareIcon,
+                            onClick: (event) => startTaskEdit(event, task),
+                            disabled: savingTaskEdit,
+                            tone: "blue",
+                          },
+                          {
+                            label: "Delete",
+                            icon: XMarkIcon,
+                            onClick: (event) => deleteTaskItem(event, task.id),
+                            disabled: savingTaskEdit,
+                            tone: "red",
+                          },
+                        ]}
+                      />
                     )}
                   </div>
                 ))}
@@ -15755,13 +15932,6 @@ const JobDetailView = () => {
             </div>
           </td>
         </tr>
-        {editingUnassignedTask && (
-          <tr>
-            <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
-              {renderPlanInvoiceTaskEditForm()}
-            </td>
-          </tr>
-        )}
       </React.Fragment>
     );
   };
@@ -15770,7 +15940,6 @@ const JobDetailView = () => {
     const laborLine = (laborLineItems || []).find((item) => item.id === line.sourceId) || null;
     const isEditingLaborLine = Boolean(laborLine?.id && editingLaborLineId === laborLine.id);
     const linkedTasks = (taskList || []).filter((task) => (line.taskIds || []).includes(task.id));
-    const editingLinkedTask = linkedTasks.find((task) => editingTaskId === task.id) || null;
     const showLaborLineWorkDetails = Boolean(
       laborLine && !isEditingLaborLine && (linkedTasks.length || canUpdateCurrentJob)
     );
@@ -15812,38 +15981,35 @@ const JobDetailView = () => {
             {moneyFromCents(line.profitCents)}
           </td>
           <td className="px-4 py-3 text-right">
-            <div className="flex flex-wrap justify-end gap-2">
-              {line.generated && canUpdateCurrentJob && (
-                <button
-                  type="button"
-                  onClick={() => editGeneratedLaborLine(line)}
-                  disabled={savingLaborLine || newLaborLine}
-                  className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Make Editable
-                </button>
-              )}
-              {laborLine && canUpdateCurrentJob && (
-                <button
-                  type="button"
-                  onClick={() => startLaborLineEdit(laborLine)}
-                  disabled={savingLaborLine}
-                  className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Edit
-                </button>
-              )}
-              {laborLine && canUpdateCurrentJob && (
-                <button
-                  type="button"
-                  onClick={() => deleteLaborLineItem(laborLine)}
-                  disabled={savingLaborLine}
-                  className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Delete
-                </button>
-              )}
-            </div>
+            {canUpdateCurrentJob && (
+              <JobLineActionMenu
+                label="Service line actions"
+                disabled={savingLaborLine || (line.generated && newLaborLine)}
+                actions={[
+                  line.generated && {
+                    label: "Make Editable",
+                    icon: PencilSquareIcon,
+                    onClick: () => editGeneratedLaborLine(line),
+                    disabled: savingLaborLine || newLaborLine,
+                    tone: "blue",
+                  },
+                  laborLine && {
+                    label: "Edit",
+                    icon: PencilSquareIcon,
+                    onClick: () => startLaborLineEdit(laborLine),
+                    disabled: savingLaborLine,
+                    tone: "blue",
+                  },
+                  laborLine && {
+                    label: "Delete",
+                    icon: XMarkIcon,
+                    onClick: () => deleteLaborLineItem(laborLine),
+                    disabled: savingLaborLine,
+                    tone: "red",
+                  },
+                ]}
+              />
+            )}
           </td>
         </tr>
         {newTask && laborLine?.id && newTaskLaborLineId === laborLine.id && (
@@ -15884,24 +16050,26 @@ const JobDetailView = () => {
                             </p>
                           </div>
                           {canUpdateCurrentJob && (
-                            <div className="flex flex-wrap gap-1.5">
-                              <button
-                                type="button"
-                                onClick={(event) => startTaskEdit(event, task)}
-                                disabled={savingTaskEdit}
-                                className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(event) => deleteTaskItem(event, task.id)}
-                                disabled={savingTaskEdit}
-                                className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                Delete
-                              </button>
-                            </div>
+                            <JobLineActionMenu
+                              label="Task actions"
+                              disabled={savingTaskEdit}
+                              actions={[
+                                {
+                                  label: "Edit",
+                                  icon: PencilSquareIcon,
+                                  onClick: (event) => startTaskEdit(event, task),
+                                  disabled: savingTaskEdit,
+                                  tone: "blue",
+                                },
+                                {
+                                  label: "Delete",
+                                  icon: XMarkIcon,
+                                  onClick: (event) => deleteTaskItem(event, task.id),
+                                  disabled: savingTaskEdit,
+                                  tone: "red",
+                                },
+                              ]}
+                            />
                           )}
                         </div>
                       ))
@@ -15910,13 +16078,6 @@ const JobDetailView = () => {
                 </div>
 
               </div>
-            </td>
-          </tr>
-        )}
-        {editingLinkedTask && (
-          <tr>
-            <td colSpan={7} className="bg-blue-50/60 px-4 py-3">
-              {renderPlanInvoiceTaskEditForm()}
             </td>
           </tr>
         )}
@@ -16097,8 +16258,8 @@ const JobDetailView = () => {
 
         {!isInitialShellLoading && <JobProgressTimeline steps={jobProgressSteps} />}
 
-        <section className="grid gap-6 lg:grid-cols-[450px_minmax(0,1fr)]">
-          <aside className="space-y-4">
+        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+          <aside className="space-y-4 lg:order-2">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
               <div className="mt-3 space-y-2">
@@ -16137,53 +16298,6 @@ const JobDetailView = () => {
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
-              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Job Snapshot</h2>
-              {sectionLoading.snapshot ? (
-                <div className="mt-3 animate-pulse space-y-3">
-                  {Array.from({ length: 5 }).map((_, index) => (
-                    <div key={`snapshot-loading-${index}`}>
-                      <div className="h-3 w-20 rounded bg-slate-200" />
-                      <div className="mt-2 h-4 w-36 rounded bg-slate-100" />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <dl className="mt-3 space-y-3">
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">
-                      {renderCustomerDetailLink(getCustomerDisplayName("Not set"), {}, "", "Not set")}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Admin</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{job.adminName || "Not set"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Issue Priority</dt>
-                    <dd className="mt-1">
-                      <IssuePriorityBadge priority={job.issuePriorityLevel || job.priorityLevel || job.solutionTier} />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Site</dt>
-                    <dd className="mt-1 text-slate-700">{siteAddress || "Not set"}</dd>
-                  </div>
-                  <div className="border-t border-slate-200 pt-3">
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Estimate Price</dt>
-                    <dd className="mt-1 text-lg font-bold text-slate-950">{moneyFromCents(estimateCustomerPriceCents)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Projected Profit</dt>
-                    <dd className={projectedProfitCents < 0 ? "mt-1 font-bold text-rose-700" : "mt-1 font-bold text-emerald-700"}>
-                      {moneyFromCents(projectedProfitCents)}
-                    </dd>
-                  </div>
-                </dl>
-              )}
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Comments</h2>
@@ -16204,8 +16318,8 @@ const JobDetailView = () => {
             </div>
           </aside>
 
-          <div className="min-w-0 space-y-4">
-            {selectedSection !== "Planned" && (
+          <div className="flex min-w-0 flex-col gap-4 lg:order-1">
+            {["Billing", "History"].includes(selectedSection) && (
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -16244,6 +16358,7 @@ const JobDetailView = () => {
                   title="Summary"
                   helper="Core job details and financial snapshot"
                   count="Summary"
+                  collapsible={false}
                 >
                   {sectionLoading.plannedOverview ? (
                     <SectionSkeleton title="Loading overview" rows={6} />
@@ -16255,18 +16370,18 @@ const JobDetailView = () => {
                           <p className="mt-0.5 text-xs text-slate-500">Core job details and statuses</p>
                         </div>
                       </div>
-                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                         {!edit ? (
                           <StatCard
-                            title="Estimate Price"
+                            title="Estimated Price"
                             value={moneyFromCents(plannedEstimatePriceCents || job.rate)}
-                            subtitle={plannedEstimatePriceCents ? "Services + products billing" : "Saved job rate"}
+                            subtitle="Customer-facing estimate"
                             tone="blue"
                           />
                         ) : (
                           <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-800">
                             <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
-                              Customer Price
+                              Estimated Price
                             </p>
 
                             <div className="mt-1 flex items-center gap-2">
@@ -16289,40 +16404,48 @@ const JobDetailView = () => {
                         )}
 
                         <StatCard
-                          title="Services"
-                          value={moneyFromCents(plannedTotalLaborCents)}
-                          subtitle={(laborLineItems || []).length
-                            ? `${moneyFromCents(plannedLaborPriceCents)} customer price • ${laborLineItems.length} service line${laborLineItems.length === 1 ? "" : "s"}`
-                            : `${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tech tasks • ${moneyFromCents(plannedTaskBillingLaborCents)} billable tasks`}
-                        />
-
-                        <StatCard
-                          title="Products"
-                          value={moneyFromCents(plannedMaterialCostCents)}
-                          subtitle={`${moneyFromCents(plannedMaterialPriceCents)} billable`}
-                        />
-
-                        <StatCard
-                          title="Profit"
+                          title="Projected Profit"
                           value={moneyFromCents(projectedProfitCents)}
                           subtitle="Price minus planned cost"
                           tone={projectedProfitCents < 0 ? "red" : "green"}
                         />
-
-                        <StatCard
-                          title="Stops"
-                          value={String(plannedServiceStops.length)}
-                          subtitle="Expected visits before scheduling"
-                        />
-
-                        <StatCard
-                          title="Work Offers"
-                          value={String(workOffers.length)}
-                          subtitle="Direct offers and board posts"
-                          tone="amber"
-                        />
-
                       </div>
+
+                      {sectionLoading.snapshot ? (
+                        <div className="mt-4 animate-pulse rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                            {Array.from({ length: 4 }).map((_, index) => (
+                              <div key={`summary-snapshot-loading-${index}`}>
+                                <div className="h-3 w-20 rounded bg-slate-200" />
+                                <div className="mt-2 h-4 w-32 rounded bg-slate-100" />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <dl className="mt-4 grid grid-cols-1 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4">
+                          <div>
+                            <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
+                            <dd className="mt-1 text-sm font-semibold text-slate-900">
+                              {renderCustomerDetailLink(getCustomerDisplayName("Not set"), {}, "", "Not set")}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Admin</dt>
+                            <dd className="mt-1 text-sm font-semibold text-slate-900">{job.adminName || "Not set"}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Issue Priority</dt>
+                            <dd className="mt-1">
+                              <IssuePriorityBadge priority={job.issuePriorityLevel || job.priorityLevel || job.solutionTier} />
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Site</dt>
+                            <dd className="mt-1 text-sm font-semibold text-slate-700">{siteAddress || "Not set"}</dd>
+                          </div>
+                        </dl>
+                      )}
 
                       <div className="mt-3 grid grid-cols-1 gap-3">
                         <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -16376,6 +16499,7 @@ const JobDetailView = () => {
                   title="Plan Options"
                   helper="Customer choices and saved plan snapshots"
                   count={jobPlans.length}
+                  collapsible={false}
                 >
                   <div className="space-y-4">
                     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -16458,6 +16582,7 @@ const JobDetailView = () => {
                 title="Plan Editor"
                 helper="Build the estimate workspace before saving or sending"
                 count={selectedEditorPlan ? "Saved" : "Draft"}
+                collapsible={false}
               >
                 <div className="rounded-lg border border-blue-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -16806,10 +16931,11 @@ const JobDetailView = () => {
 	                      </div>
 	                    </div>
 
-	                    <div className="bg-white p-4">
-	                      {renderOperationsPlanSection()}
-	                    </div>
 	                  </div>
+
+                  <div className="mt-4">
+                    {renderOperationsPlanSection()}
+                  </div>
 
                   {acceptedWorkflowIsReady && (
                     <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3">
@@ -17801,6 +17927,8 @@ const JobDetailView = () => {
                 title="Work Offers"
                 helper="Technician offers and internal board posts connected to this job"
                 count={workOffers.length}
+                collapsible={false}
+                className="order-2"
               >
                 {sectionLoading.workOffers ? (
                   <SectionSkeleton title="Loading work offers" rows={4} />
@@ -17908,6 +18036,8 @@ const JobDetailView = () => {
                 title="Service Stops"
                 helper="Scheduled and completed visits recorded for this job"
                 count={serviceStops.length}
+                collapsible={false}
+                className="order-1"
               >
                 {sectionLoading.actual ? (
                   <SectionSkeleton title="Loading service stops" rows={3} />
@@ -17992,12 +18122,16 @@ const JobDetailView = () => {
                 title="Actual Work"
                 helper="Payroll, purchased products, and plan comparison"
                 count={(actualPayLineItems?.length || 0) + (purchasedItems?.length || 0)}
+                collapsible={false}
+                className="order-3"
               >
                 {sectionLoading.actual ? (
                   <SectionSkeleton title="Loading actual work" rows={4} />
                 ) : (
                   <div className="space-y-6">
-                    <div className="bg-white shadow-lg rounded-xl p-6">
+                    {renderPlannedVsActualWidget()}
+
+                    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                         <div>
                           <h3 className="text-xl font-bold text-gray-800">Actual Work</h3>
@@ -18052,8 +18186,8 @@ const JobDetailView = () => {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                      <div className="bg-white shadow-lg rounded-xl p-6">
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <h4 className="text-lg font-bold text-gray-800">Actual Payroll</h4>
@@ -18068,9 +18202,9 @@ const JobDetailView = () => {
                           </span>
                         </div>
 
-                        <div className="mt-6 space-y-3">
+                        <div className="mt-3 space-y-2">
                           {!actualPayLineItems.length ? (
-                            <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+                            <div className="rounded-md border border-dashed border-gray-300 p-4 text-center">
                               <p className="text-gray-700 font-medium">Payroll line items not connected yet.</p>
                               <p className="text-sm text-gray-500 mt-1">
                                 This tab is ready, but the exact web payroll line item path still needs to be confirmed.
@@ -18082,7 +18216,7 @@ const JobDetailView = () => {
                         </div>
                       </div>
 
-                      <div className="bg-white shadow-lg rounded-xl p-6">
+                      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <h4 className="text-lg font-bold text-gray-800">Purchased Products</h4>
@@ -18105,9 +18239,9 @@ const JobDetailView = () => {
                           </div>
                         </div>
 
-                        <div className="mt-6 space-y-3">
+                        <div className="mt-3 space-y-2">
                           {!purchasedItems.length ? (
-                            <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+                            <div className="rounded-md border border-dashed border-gray-300 p-4 text-center">
                               <p className="text-gray-700 font-medium">No purchased products yet.</p>
                               <p className="text-sm text-gray-500 mt-1">
                                 Purchased items from vendor receipts will appear here when tied to this job.
@@ -18314,74 +18448,6 @@ const JobDetailView = () => {
                       )}
                     </div>
 
-                    <div className="bg-white shadow-lg rounded-xl p-6">
-                      <div>
-                        <h4 className="text-lg font-bold text-gray-800">Plan vs Actual</h4>
-                        <p className="text-gray-600 mt-1 text-sm">
-                          Compare the original plan against actual recorded cost.
-                        </p>
-                      </div>
-
-                      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            Estimate Services
-                          </p>
-                          <p className="mt-1 text-lg font-bold text-gray-800">
-                            {moneyFromCents(plannedLaborPriceCents)}
-                          </p>
-                          <p className="mt-1 text-sm text-gray-600">
-                            {moneyFromCents(plannedTotalLaborCents)} planned cost
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            Estimate Products
-                          </p>
-                          <p className="mt-1 text-lg font-bold text-gray-800">
-                            {moneyFromCents(plannedMaterialPriceCents)}
-                          </p>
-                          <p className="mt-1 text-sm text-gray-600">
-                            {moneyFromCents(plannedMaterialCostCents)} planned cost
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            Actual Cost Delta
-                          </p>
-                          <p
-                            className={[
-                              "mt-1 text-lg font-bold",
-                              actualCostVarianceCents > 0 ? "text-red-700" : "text-green-700",
-                            ].join(" ")}
-                          >
-                            {moneyFromCents(actualCostVarianceCents)}
-                          </p>
-                          <p className="mt-1 text-sm text-gray-600">
-                            Actual cost minus planned cost
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            Profit Movement
-                          </p>
-                          <p
-                            className={[
-                              "mt-1 text-lg font-bold",
-                              actualProfitCents < projectedProfitCents ? "text-red-700" : "text-green-700",
-                            ].join(" ")}
-                          >
-                            {moneyFromCents(actualProfitCents - projectedProfitCents)}
-                          </p>
-                          <p className="mt-1 text-sm text-gray-600">
-                            Actual profit minus projected profit
-                          </p>
-                        </div>
-                      </div>
-                    </div>
                   </div>
                 )}
               </DetailDisclosure>
@@ -19036,6 +19102,7 @@ const JobDetailView = () => {
 	      {renderLaborLineTaskSelectorModal()}
 	      {renderServiceCatalogCreatorModal()}
 	      {renderNewTaskModal()}
+	      {renderTaskEditModal()}
 	      {showCreateTemplateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
@@ -19339,7 +19406,7 @@ const JobDetailView = () => {
                     className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
                   >
                     <option value="">Select pay type</option>
-                    {(companyServiceStopTypes || []).map((type) => (
+                    {operationsPlannedStopPayTypes.map((type) => (
                       <option key={type.id} value={type.id}>
                         {type.name || type.label || type.type || "Pay Type"}
                       </option>

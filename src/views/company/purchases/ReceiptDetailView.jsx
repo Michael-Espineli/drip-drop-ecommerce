@@ -11,6 +11,7 @@ import {
     writeBatch,
     arrayUnion,
     arrayRemove,
+    serverTimestamp,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../../../utils/config";
@@ -20,6 +21,7 @@ import Select from "react-select";
 import { appConfirm } from "../../../utils/appDialog";
 import { compareCompanyUsersByName } from "../../../utils/companyUsers";
 import ShareItemButton from "../../components/share/ShareItemButton";
+import { FaCheckCircle, FaEdit, FaSave, FaTimes, FaTrash, FaUndo } from "react-icons/fa";
 
 const ReceiptDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -46,6 +48,7 @@ const ReceiptDetailView = () => {
         date: "",
         dateRaw: null,
         invoiceNum: "",
+        referenceNumber: "",
         numberOfItems: "",
         pdfUrlList: [],
         purchasedItemIds: [],
@@ -199,6 +202,7 @@ const ReceiptDetailView = () => {
                     date: formattedDate,
                     dateRaw,
                     invoiceNum: data.invoiceNum || "",
+                    referenceNumber: data.referenceNumber || data.receiptReferenceNumber || data.receiptNumber || data.id || docSnap.id || "",
                     numberOfItems: data.numberOfItems || 0,
                     pdfUrlList: data.pdfUrlList || [],
                     purchasedItemIds: data.purchasedItemIds || [],
@@ -251,6 +255,8 @@ const ReceiptDetailView = () => {
                         venderName: purchaseData.venderName,
                         notes: purchaseData.notes || "",
                         date: formattedPurchaseDate,
+                        returned: !!purchaseData.returned,
+                        status: purchaseData.status || "",
                         total,
                     };
                 });
@@ -288,6 +294,13 @@ const ReceiptDetailView = () => {
             subtotalDifference: storedSubtotal - subtotal,
         };
     }, [purchaseList, receipt.costAfterTaxRaw, receipt.costRaw, receipt.taxRaw]);
+
+    const receiptReferenceNumber = receipt.referenceNumber || receipt.id || receiptId;
+    const returnedItemCount = useMemo(
+        () => purchaseList.filter((item) => item.returned).length,
+        [purchaseList]
+    );
+    const allItemsReturned = purchaseList.length > 0 && returnedItemCount === purchaseList.length;
 
     const handleEditFieldChange = (field, value) => {
         setEditForm((prev) => ({
@@ -451,6 +464,52 @@ const ReceiptDetailView = () => {
         }
     };
 
+    const markReceiptItemsReturned = async () => {
+        if (!recentlySelectedCompany || !receiptId || purchaseList.length === 0 || allItemsReturned) return;
+
+        const confirmed = await appConfirm({
+            title: "Mark Receipt Returned",
+            message: `Mark all ${purchaseList.length} purchased item(s) on this receipt as returned?`,
+            confirmLabel: "Mark Returned",
+            variant: "danger",
+        });
+        if (!confirmed) return;
+
+        try {
+            setUpdating(true);
+
+            const linkedPurchasesQuery = query(
+                collection(db, "companies", recentlySelectedCompany, "purchasedItems"),
+                where("receiptId", "==", receiptId)
+            );
+            const linkedPurchasesSnap = await getDocs(linkedPurchasesQuery);
+            const batch = writeBatch(db);
+
+            linkedPurchasesSnap.docs.forEach((purchaseDoc) => {
+                batch.update(purchaseDoc.ref, {
+                    returned: true,
+                    returnedAt: serverTimestamp(),
+                    status: "Returned",
+                });
+            });
+
+            await batch.commit();
+
+            setPurchaseList((prev) =>
+                prev.map((item) => ({
+                    ...item,
+                    returned: true,
+                    status: "Returned",
+                }))
+            );
+        } catch (error) {
+            console.log(error);
+            console.log("Receipt Detail View Mark Returned");
+        } finally {
+            setUpdating(false);
+        }
+    };
+
     const handleAddFilesClick = () => {
         if (fileInputRef.current) {
             fileInputRef.current.click();
@@ -523,195 +582,103 @@ const ReceiptDetailView = () => {
         }
     };
 
-    const detailFieldClass = "rounded-lg border border-gray-200 bg-gray-50 p-4";
+    const detailRowClass = "flex items-start justify-between gap-4 rounded-md border border-slate-200 bg-slate-50 p-3";
+    const detailLabelClass = "text-sm font-semibold text-slate-500";
+    const detailValueClass = "text-right font-semibold text-slate-900";
+    const inputClass = "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
     return (
-        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
-            <div className="w-full">
-                <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <Link
-                            to="/company/receipts"
-                            className="app-back-link"
-                        >
-                            &larr; Back to Receipts
-                        </Link>
-                        <h2 className="text-3xl font-bold text-gray-800">Receipt Detail View</h2>
-                    </div>
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Link
+                                    to="/company/receipts"
+                                    className="app-back-link"
+                                >
+                                    &larr; Back to Receipts
+                                </Link>
+                                {allItemsReturned ? (
+                                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-emerald-700">
+                                        Returned
+                                    </span>
+                                ) : null}
+                            </div>
+                            <h1 className="mt-3 text-3xl font-bold text-slate-950">
+                                {receipt.storeName || receipt.invoiceNum || "Receipt"}
+                            </h1>
+                            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                                {[receipt.invoiceNum ? `Invoice ${receipt.invoiceNum}` : "", receipt.date, receipt.techName].filter(Boolean).join(" - ") || "Review receipt totals, files, and linked purchased items."}
+                            </p>
+                        </div>
 
-                    {!edit ? (
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                            <ShareItemButton
-                                type="receipt"
-                                recordId={receiptId}
-                                title={receipt.storeName || receipt.vendorName || receipt.invoiceNum || "Receipt"}
-                                subtitle={[receipt.techName, receipt.invoiceNum].filter(Boolean).join(" - ")}
-                                companyId={recentlySelectedCompany}
-                                collectionPath={`companies/${recentlySelectedCompany}/receipts`}
-                                webPath={`/company/receipts/detail/${receiptId}`}
-                            />
-                            <button
-                                onClick={editJob}
-                                className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
-                            >
-                                Edit
-                            </button>
-                        </div>
-                    ) : (
-                        <div className="flex flex-wrap gap-2">
-                            <button
-                                onClick={saveEditChanges}
-                                disabled={updating}
-                                className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
-                            >
-                                Save
-                            </button>
-                            <button
-                                onClick={cancelEditJob}
-                                disabled={updating}
-                                className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={deleteJob}
-                                disabled={updating}
-                                className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
-                            >
-                                Delete
-                            </button>
-                        </div>
-                    )}
-                </div>
+                        {!edit ? (
+                            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                                <ShareItemButton
+                                    type="receipt"
+                                    recordId={receiptId}
+                                    title={receipt.storeName || receipt.vendorName || receipt.invoiceNum || "Receipt"}
+                                    subtitle={[receipt.techName, receipt.invoiceNum].filter(Boolean).join(" - ")}
+                                    companyId={recentlySelectedCompany}
+                                    collectionPath={`companies/${recentlySelectedCompany}/receipts`}
+                                    webPath={`/company/receipts/detail/${receiptId}`}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={markReceiptItemsReturned}
+                                    disabled={updating || purchaseList.length === 0 || allItemsReturned}
+                                    className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <FaUndo className="text-xs" />
+                                    {allItemsReturned ? "Returned" : "Mark as Returned"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={editJob}
+                                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                                >
+                                    <FaEdit className="text-xs" />
+                                    Edit
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap gap-2 lg:justify-end">
+                                <button
+                                    type="button"
+                                    onClick={saveEditChanges}
+                                    disabled={updating}
+                                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50"
+                                >
+                                    <FaSave className="text-xs" />
+                                    Save
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={cancelEditJob}
+                                    disabled={updating}
+                                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                    <FaTimes className="text-xs" />
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={deleteJob}
+                                    disabled={updating}
+                                    className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                                >
+                                    <FaTrash className="text-xs" />
+                                    Delete
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </section>
 
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
                     <div className="space-y-6 lg:col-span-3">
-                        <div className="rounded-lg bg-white p-6 shadow-lg">
-                            <h3 className="text-xl font-bold mb-4 text-gray-800">Receipt Details</h3>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-700">
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Receipt Reference</p>
-                                    <p>{receipt.invoiceNum || "Receipt"}</p>
-                                </div>
-
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Invoice Number</p>
-                                    {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.invoiceNum}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("invoiceNum", e.target.value)
-                                            }
-                                            className="w-full p-2 border border-gray-300 rounded-lg"
-                                        />
-                                    ) : (
-                                        <p>{receipt.invoiceNum || "—"}</p>
-                                    )}
-                                </div>
-
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Date</p>
-                                    {edit ? (
-                                        <input
-                                            type="date"
-                                            value={editForm.date}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("date", e.target.value)
-                                            }
-                                            className="w-full p-2 border border-gray-300 rounded-lg"
-                                        />
-                                    ) : (
-                                        <p>{receipt.date || "—"}</p>
-                                    )}
-                                </div>
-
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Store</p>
-                                    {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.storeName}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("storeName", e.target.value)
-                                            }
-                                            className="w-full p-2 border border-gray-300 rounded-lg"
-                                        />
-                                    ) : (
-                                        <p>{receipt.storeName || "—"}</p>
-                                    )}
-                                </div>
-
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Tech</p>
-                                    {edit ? (
-                                        <Select
-                                            value={selectedTech}
-                                            options={companyUserList}
-                                            onChange={handleTechChange}
-                                            isSearchable
-                                            placeholder="Select a Tech"
-                                            theme={selectTheme}
-                                            styles={selectStyles}
-                                        />
-                                    ) : (
-                                        <p>{receipt.techName || "—"}</p>
-                                    )}
-                                </div>
-
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Number of Items</p>
-                                    {edit ? (
-                                        <input
-                                            type="number"
-                                            value={editForm.numberOfItems}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("numberOfItems", e.target.value)
-                                            }
-                                            className="w-full p-2 border border-gray-300 rounded-lg"
-                                        />
-                                    ) : (
-                                        <p>{receipt.numberOfItems || 0}</p>
-                                    )}
-                                </div>
-
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Subtotal</p>
-                                    {edit ? (
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            value={editForm.cost}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("cost", e.target.value)
-                                            }
-                                            className="w-full p-2 border border-gray-300 rounded-lg"
-                                        />
-                                    ) : (
-                                        <p>{receipt.cost || formatCurrency(0)}</p>
-                                    )}
-                                </div>
-
-                                <div className={detailFieldClass}>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Total After Tax</p>
-                                    {edit ? (
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            value={editForm.costAfterTax}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("costAfterTax", e.target.value)
-                                            }
-                                            className="w-full p-2 border border-gray-300 rounded-lg"
-                                        />
-                                    ) : (
-                                        <p>{receipt.costAfterTax || formatCurrency(0)}</p>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-
                         <div className="rounded-lg bg-white p-6 shadow-lg">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Items</h3>
 
@@ -849,59 +816,142 @@ const ReceiptDetailView = () => {
                     </div>
 
                     <div className="space-y-6">
-                        <div className="rounded-lg bg-white p-6 shadow-lg">
-                            <h3 className="text-xl font-bold mb-4 text-gray-800">Summary</h3>
-                            <div className="space-y-3 text-gray-700">
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                    <span>Store:</span>
-                                    <span>{receipt.storeName || "—"}</span>
+                        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <h3 className="text-lg font-bold text-slate-950">Details</h3>
+                            <div className="mt-4 space-y-3 text-sm text-slate-700">
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Receipt Reference</span>
+                                    <span className={`${detailValueClass} break-all`}>{receiptReferenceNumber || "—"}</span>
                                 </div>
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                    <span>Tech:</span>
-                                    <span>{receipt.techName || "—"}</span>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Invoice Number</span>
+                                    {edit ? (
+                                        <input
+                                            type="text"
+                                            value={editForm.invoiceNum}
+                                            onChange={(e) => handleEditFieldChange("invoiceNum", e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    ) : (
+                                        <span className={detailValueClass}>{receipt.invoiceNum || "—"}</span>
+                                    )}
                                 </div>
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                    <span>Date:</span>
-                                    <span>{receipt.date || "—"}</span>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Store</span>
+                                    {edit ? (
+                                        <input
+                                            type="text"
+                                            value={editForm.storeName}
+                                            onChange={(e) => handleEditFieldChange("storeName", e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    ) : (
+                                        <span className={detailValueClass}>{receipt.storeName || "—"}</span>
+                                    )}
                                 </div>
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                    <span>Items:</span>
-                                    <span>{receipt.numberOfItems || 0}</span>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Technician</span>
+                                    {edit ? (
+                                        <div className="min-w-0 flex-1">
+                                            <Select
+                                                value={selectedTech}
+                                                options={companyUserList}
+                                                onChange={handleTechChange}
+                                                isSearchable
+                                                placeholder="Select a Tech"
+                                                theme={selectTheme}
+                                                styles={selectStyles}
+                                            />
+                                        </div>
+                                    ) : (
+                                        <span className={detailValueClass}>{receipt.techName || "—"}</span>
+                                    )}
                                 </div>
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                    <span>Receipt Subtotal:</span>
-                                    <span>{receipt.cost || formatCurrency(0)}</span>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Date</span>
+                                    {edit ? (
+                                        <input
+                                            type="date"
+                                            value={editForm.date}
+                                            onChange={(e) => handleEditFieldChange("date", e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    ) : (
+                                        <span className={detailValueClass}>{receipt.date || "—"}</span>
+                                    )}
                                 </div>
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                    <span>Receipt Tax:</span>
-                                    <span>{formatCurrency(itemSummary.storedTax)}</span>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Items</span>
+                                    {edit ? (
+                                        <input
+                                            type="number"
+                                            value={editForm.numberOfItems}
+                                            onChange={(e) => handleEditFieldChange("numberOfItems", e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    ) : (
+                                        <span className={detailValueClass}>{receipt.numberOfItems || 0}</span>
+                                    )}
                                 </div>
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                    <span>Item Subtotal:</span>
-                                    <span>{formatCurrency(itemSummary.subtotal)}</span>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Returned Items</span>
+                                    <span className={`${detailValueClass} inline-flex items-center gap-2`}>
+                                        {allItemsReturned ? <FaCheckCircle className="text-emerald-600" /> : null}
+                                        {returnedItemCount} of {purchaseList.length}
+                                    </span>
                                 </div>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Receipt Subtotal</span>
+                                    {edit ? (
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={editForm.cost}
+                                            onChange={(e) => handleEditFieldChange("cost", e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    ) : (
+                                        <span className={detailValueClass}>{receipt.cost || formatCurrency(0)}</span>
+                                    )}
+                                </div>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Receipt Tax</span>
+                                    <span className={detailValueClass}>{formatCurrency(itemSummary.storedTax)}</span>
+                                </div>
+
+                                <div className={detailRowClass}>
+                                    <span className={detailLabelClass}>Item Subtotal</span>
+                                    <span className={detailValueClass}>{formatCurrency(itemSummary.subtotal)}</span>
+                                </div>
+
                                 {Math.abs(itemSummary.subtotalDifference) >= 0.01 && (
-                                    <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                                        Receipt subtotal differs from linked item subtotal by{" "}
-                                        {formatCurrency(itemSummary.subtotalDifference)}.
+                                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+                                        Receipt subtotal differs from linked item subtotal by {formatCurrency(itemSummary.subtotalDifference)}.
                                     </div>
                                 )}
-                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3 text-lg font-bold text-gray-800">
-                                    <span>Receipt Total:</span>
-                                    <span>{formatCurrency(itemSummary.storedTotal)}</span>
-                                </div>
-                            </div>
-                        </div>
 
-                        <div className="rounded-lg bg-white p-6 shadow-lg">
-                            <h3 className="text-xl font-bold mb-4 text-gray-800">Quick Actions</h3>
-                            <div className="space-y-3">
-                                <Link
-                                    to="/company/purchased-items"
-                                    className="block w-full text-center py-3 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
-                                >
-                                    Back to Purchased Items
-                                </Link>
+                                <div className="flex items-start justify-between gap-4 rounded-md border border-slate-300 bg-slate-100 p-3 text-base font-bold text-slate-950">
+                                    <span>Receipt Total</span>
+                                    {edit ? (
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={editForm.costAfterTax}
+                                            onChange={(e) => handleEditFieldChange("costAfterTax", e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    ) : (
+                                        <span className="text-right">{formatCurrency(itemSummary.storedTotal)}</span>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </div>

@@ -40,6 +40,7 @@ import {
     MdOutlineRequestQuote,
     MdPayment,
     MdReceiptLong,
+    MdSecurity,
     MdShoppingCart,
 } from "react-icons/md";
 import { IoIosChatbubbles, IoIosPeople } from "react-icons/io";
@@ -57,6 +58,7 @@ export const allNav = [
     { id: 13, title: 'Universal Readings & Dosages', icon: <FaClipboardList />, role: 'Admin', path: '/admin/universal-readings-dosages', category: 'Development' },
     { id: 16, title: 'Tester Strip Profiles', icon: <FaClipboardList />, role: 'Admin', path: '/admin/tester-strip-profiles', category: 'Development' },
     { id: 5, title: 'Feature Flags', icon: <AiOutlineApi />, role: 'Admin', path: '/admin/feature-flags', category: 'Development' },
+    { id: 20, title: 'Permissions', icon: <MdSecurity />, role: 'Admin', path: '/admin/permissions', category: 'Development' },
     { id: 10, title: 'Product Feedback', icon: <GiBugNet />, role: 'Admin', path: '/admin/product-feedback', category: 'Development' },
     { id: 14, title: 'Errors', icon: <FaExclamationTriangle />, role: 'Admin', path: '/admin/errors', category: 'Development' },
     { id: 12, title: 'Documentation', icon: <AiOutlineFileText />, role: 'Admin', path: '/admin/documentation', category: 'Development' },
@@ -90,6 +92,8 @@ export const allNav = [
     { id: 124, title: 'PNL Viewer', icon: <MdOutlineCalculate />, role: 'Company', path: '/company/sales/pnl-viewer', category: 'Finance', permissionId: '420', featureFlagId: 'feature_flag_004' },
     { id: 63, title: 'Finished Jobs', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/jobs/billing', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
     { id: 66, title: 'Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/estimates', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
+    { id: 119, title: 'Product Catalog', icon: <BiCategory />, role: 'Company', path: '/company/product-catalog', category: 'Finance', permissionId: '850' },
+    { id: 125, title: 'Service Catalog', icon: <BiCategory />, role: 'Company', path: '/company/sales/catalog-items', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 69, title: 'Service Agreements', icon: <FaFileContract />, role: 'Company', path: '/company/sales/agreements', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 72, title: 'Billing Subscriptions', icon: <FaCreditCard />, role: 'Company', path: '/company/sales/subscriptions', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 70, title: 'Invoices', icon: <MdReceiptLong />, role: 'Company', path: '/company/sales/invoices', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
@@ -102,11 +106,8 @@ export const allNav = [
     { id: 31, title: 'Equipment', icon: <FaWrench />, role: 'Company', path: '/company/equipment/needs-maintenance', category: 'Operations', permissionId: '60' },
     { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations', permissionId: '30' },
     { id: 30, title: 'Jobs', icon: <AiOutlineSolution />, role: 'Company', path: '/company/jobs/operations', category: 'Operations', permissionId: '20' },
-    { id: 40, title: 'Offered Work', icon: <FaBriefcase />, role: 'Company', path: '/company/offered-work', category: 'Operations', permissionId: OFFERED_WORK_PERMISSION_ID },
     { id: 37, title: 'Part Approvals', icon: <FaClipboardList />, role: 'Company', path: '/company/part-approvals', category: 'Operations' },
     { id: 35, title: 'Shopping List', icon: <MdShoppingCart />, role: 'Company', path: '/company/shopping-list', category: 'Operations' },
-    { id: 119, title: 'Product Catalog', icon: <BiCategory />, role: 'Company', path: '/company/product-catalog', category: 'Operations', permissionId: '850' },
-    { id: 120, title: 'Vendor Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/items', category: 'Operations', permissionId: '850' },
     { id: 36, title: 'Purchased Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/purchased-items', category: 'Operations', permissionId: '400' },
     { id: 103, title: 'Receipts', icon: <IoDocumentTextOutline />, role: 'Company', path: '/company/receipts', category: 'Operations', permissionId: '400' },
 
@@ -114,6 +115,7 @@ export const allNav = [
     { id: 50, title: 'Route Dashboard', icon: <FaRegMap />, role: 'Company', path: '/company/route-dashboard', category: 'Management', permissionId: '210' },
     { id: 51, title: 'Daily Route Board', icon: <FaRoute />, role: 'Company', path: '/company/route-day-management', category: 'Management', permissionId: '210' },
     { id: 52, title: 'Planned Routes', icon: <MdAltRoute />, role: 'Company', path: '/company/route-management', category: 'Management', permissionId: '230' },
+    { id: 40, title: 'Offered Work', icon: <FaBriefcase />, role: 'Company', path: '/company/offered-work', category: 'Management', permissionId: OFFERED_WORK_PERMISSION_ID },
     { id: 112, title: 'Users', icon: <FaUsers />, role: 'Company', path: '/company/companyUsers', category: 'Management', permissionId: '260' },
     //Build out with Update 2.1
     // { id: 114, title: 'Recurring Labor Contracts', icon: <FaFileContract />, role: 'Company', path: '/company/recurringLaborContracts', category: 'Users' },

@@ -551,7 +551,7 @@ const agreementPrintTotalCents = (agreement = {}) => {
   return Number.isFinite(explicitTotal) ? explicitTotal : subtotal;
 };
 
-const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '' }) => {
+const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '', includeSignatures = true }) => {
   const providerName = firstAgreementText(agreement.companyName, companyName, 'Service Provider');
   const clientName = firstAgreementText(agreement.customerName, agreement.customerDisplayName, 'Client');
   const clientEmail = firstAgreementText(agreement.email, agreement.customerEmail, agreement.billingEmail);
@@ -587,6 +587,37 @@ const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '' }
       ? `<ol>${termsList.map((term) => `<li>${agreementHtmlWithBreaks(term)}</li>`).join('')}</ol>`
       : '',
   ].filter(Boolean).join('');
+  const acceptedSignatureName = firstAgreementText(agreement.acceptedSignatureName, agreement.acceptedBySignatureName);
+  const signatureHtml = includeSignatures
+    ? `
+            <p>
+              By signing below or accepting through the provided DripDrop review link, the Client authorizes the Service
+              Provider to begin the services described in this Agreement.
+            </p>
+            <div class="signature-grid">
+              <div>
+                <div class="signature-value">${escapeAgreementHtml(acceptedSignatureName)}</div>
+                <div class="signature-line">Client Signature</div>
+              </div>
+              <div>
+                <div class="signature-value">${escapeAgreementHtml(acceptedSignatureName ? formatDate(agreement.acceptedAt) : '')}</div>
+                <div class="signature-line">Date</div>
+              </div>
+              <div>
+                <div class="signature-value"></div>
+                <div class="signature-line">Service Provider Representative</div>
+              </div>
+              <div>
+                <div class="signature-value"></div>
+                <div class="signature-line">Date</div>
+              </div>
+            </div>
+    `
+    : `
+            <p>
+              Acceptance may be completed through the provided DripDrop review link or recorded separately by the company.
+            </p>
+    `;
 
   return `
     <!doctype html>
@@ -719,6 +750,12 @@ const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '' }
             border-top: 1px solid #111827;
             padding-top: 5px;
           }
+          .signature-value {
+            font-size: 14px;
+            font-weight: 700;
+            min-height: 22px;
+            padding: 0 0 4px;
+          }
           footer {
             align-items: center;
             color: #4b5563;
@@ -815,24 +852,7 @@ const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '' }
 
           <section>
             <h2>6. Acceptance</h2>
-            <p>
-              By signing below or accepting through the provided DripDrop review link, the Client authorizes the Service
-              Provider to begin the services described in this Agreement.
-            </p>
-            <div class="signature-grid">
-              <div>
-                <div class="signature-line">Client Signature</div>
-              </div>
-              <div>
-                <div class="signature-line">Date</div>
-              </div>
-              <div>
-                <div class="signature-line">Service Provider Representative</div>
-              </div>
-              <div>
-                <div class="signature-line">Date</div>
-              </div>
-            </div>
+            ${signatureHtml}
           </section>
 
           <footer>
@@ -960,6 +980,7 @@ const SalesAgreementDetail = () => {
   const [sending, setSending] = useState(false);
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [includeInspectionReport, setIncludeInspectionReport] = useState(false);
+  const [includeSignaturesInDownload, setIncludeSignaturesInDownload] = useState(true);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -2452,6 +2473,7 @@ const SalesAgreementDetail = () => {
     printWindow.document.write(buildPrintableServiceAgreementHtml({
       agreement,
       companyName: recentlySelectedCompanyName,
+      includeSignatures: includeSignaturesInDownload,
     }));
     printWindow.document.close();
     printWindow.focus();
@@ -2520,16 +2542,30 @@ const SalesAgreementDetail = () => {
                   webPath={`/company/sales/agreements/${agreementId}`}
                   disabled={!agreement || companyMismatch}
                 />
-                <button
-                  type="button"
-                  onClick={downloadServiceAgreement}
-                  disabled={!agreement || companyMismatch}
-                  title="Download or print this service agreement"
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaDownload className="text-xs" />
-                  Download
-                </button>
+                <div className="inline-flex overflow-hidden rounded-md border border-slate-300 bg-white">
+                  <button
+                    type="button"
+                    onClick={downloadServiceAgreement}
+                    disabled={!agreement || companyMismatch}
+                    title="Download or print this service agreement"
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FaDownload className="text-xs" />
+                    Download
+                  </button>
+                  <label
+                    className="inline-flex items-center gap-2 border-l border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
+                    title="Include the acceptance signature block in the downloaded agreement"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={includeSignaturesInDownload}
+                      onChange={(event) => setIncludeSignaturesInDownload(event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Signatures
+                  </label>
+                </div>
                 <button
                   type="button"
                   onClick={createRenewalAgreement}
@@ -2539,15 +2575,17 @@ const SalesAgreementDetail = () => {
                   <FaCopy className="text-xs" />
                   {creatingRenewal ? 'Creating...' : 'Offer New Agreement'}
                 </button>
-                <button
-                  type="button"
-                  onClick={openEditor}
-                  disabled={!agreement || companyMismatch || savingEdit}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaEdit className="text-xs" />
-                  Edit Service Agreement
-                </button>
+                <span className="inline-flex" title={sendEmailButtonTitle}>
+                  <button
+                    type="button"
+                    onClick={() => setShowSendDialog(true)}
+                    disabled={!canSend}
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FaEnvelope className="text-xs" />
+                    {sending ? 'Sending...' : 'Send Email'}
+                  </button>
+                </span>
                 <button
                   type="button"
                   onClick={openAcceptanceModal}
@@ -2574,17 +2612,15 @@ const SalesAgreementDetail = () => {
                     Schedule Route
                   </Link>
                 )}
-                <span className="inline-flex" title={sendEmailButtonTitle}>
-                  <button
-                    type="button"
-                    onClick={() => setShowSendDialog(true)}
-                    disabled={!canSend}
-                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <FaEnvelope className="text-xs" />
-                    {sending ? 'Sending...' : 'Send Email'}
-                  </button>
-                </span>
+                <button
+                  type="button"
+                  onClick={openEditor}
+                  disabled={!agreement || companyMismatch || savingEdit}
+                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaEdit className="text-xs" />
+                  Edit
+                </button>
               </div>
 
               <div className="w-full max-w-md space-y-2">

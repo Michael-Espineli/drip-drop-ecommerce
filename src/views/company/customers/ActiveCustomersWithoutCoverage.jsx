@@ -1,21 +1,28 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import {
   FaArrowLeft,
+  FaChevronDown,
   FaExternalLinkAlt,
   FaFileSignature,
   FaPlus,
   FaRoute,
   FaSearch,
+  FaUserSlash,
   FaUsers,
 } from "react-icons/fa";
+import toast from "react-hot-toast";
 
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 import { SalesAgreementStatus, salesCollectionNames } from "../../../utils/models/Sales";
 import { filterCustomersByRegionalAccess } from "../../../utils/customerTags";
+import { appConfirm } from "../../../utils/appDialog";
+import { endCustomerPipelineRowsForInactiveCustomer } from "../../../utils/customerPipeline";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const agreementTerminalStatuses = new Set([
   SalesAgreementStatus.canceled,
@@ -125,16 +132,85 @@ const searchableCustomerText = (customer = {}) => [
   customer.id,
 ].filter(Boolean).join(" ").toLowerCase();
 
+const uniqueDocsByPath = (docs) => Array.from(
+  new Map(docs.map((documentSnapshot) => [documentSnapshot.ref.path, documentSnapshot])).values()
+);
+
+const deactivateCustomerRelations = async ({ companyId, customerId }) => {
+  if (!companyId || !customerId) {
+    return { serviceLocations: 0, bodiesOfWater: 0, equipment: 0 };
+  }
+
+  const serviceLocationsSnapshot = await getDocs(query(
+    collection(db, "companies", companyId, "serviceLocations"),
+    where("customerId", "==", customerId)
+  ));
+  const serviceLocationDocs = serviceLocationsSnapshot.docs;
+  const serviceLocationIds = serviceLocationDocs.map((locationDoc) => locationDoc.id);
+
+  const [bodiesByCustomerSnapshot, equipmentByCustomerSnapshot] = await Promise.all([
+    getDocs(query(
+      collection(db, "companies", companyId, "bodiesOfWater"),
+      where("customerId", "==", customerId)
+    )),
+    getDocs(query(
+      collection(db, "companies", companyId, "equipment"),
+      where("customerId", "==", customerId)
+    )),
+  ]);
+
+  const [bodiesByLocationSnapshots, equipmentByLocationSnapshots] = await Promise.all([
+    Promise.all(serviceLocationIds.map((locationId) => getDocs(query(
+      collection(db, "companies", companyId, "bodiesOfWater"),
+      where("serviceLocationId", "==", locationId)
+    )))),
+    Promise.all(serviceLocationIds.map((locationId) => getDocs(query(
+      collection(db, "companies", companyId, "equipment"),
+      where("serviceLocationId", "==", locationId)
+    )))),
+  ]);
+
+  const bodyOfWaterDocs = uniqueDocsByPath([
+    ...bodiesByCustomerSnapshot.docs,
+    ...bodiesByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
+  ]);
+  const bodyOfWaterIds = bodyOfWaterDocs.map((bodyDoc) => bodyDoc.id);
+  const equipmentByBodyOfWaterSnapshots = await Promise.all(bodyOfWaterIds.map((bodyOfWaterId) => getDocs(query(
+    collection(db, "companies", companyId, "equipment"),
+    where("bodyOfWaterId", "==", bodyOfWaterId)
+  ))));
+  const equipmentDocs = uniqueDocsByPath([
+    ...equipmentByCustomerSnapshot.docs,
+    ...equipmentByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
+    ...equipmentByBodyOfWaterSnapshots.flatMap((snapshot) => snapshot.docs),
+  ]);
+
+  await Promise.all([
+    ...serviceLocationDocs.map((locationDoc) => updateDoc(locationDoc.ref, { isActive: false, active: false })),
+    ...bodyOfWaterDocs.map((bodyDoc) => updateDoc(bodyDoc.ref, { isActive: false, active: false })),
+    ...equipmentDocs.map((equipmentDoc) => updateDoc(equipmentDoc.ref, { isActive: false, active: false })),
+  ]);
+
+  return {
+    serviceLocations: serviceLocationDocs.length,
+    bodiesOfWater: bodyOfWaterDocs.length,
+    equipment: equipmentDocs.length,
+  };
+};
+
 const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
   const {
     recentlySelectedCompany,
     recentlySelectedCompanyName,
+    user,
+    dataBaseUser,
     companyRole,
     companyUserAccess,
     selectedCustomerRegionTag,
     featureFlagsLoaded,
     isFeatureEnabled,
   } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const config = pageConfig[mode] || pageConfig.serviceAgreements;
   const CoverageIcon = config.icon;
   const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
@@ -145,6 +221,7 @@ const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [deactivatingCustomerId, setDeactivatingCustomerId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -232,6 +309,49 @@ const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
   }, [missingCustomers, searchTerm]);
 
   const coveredVisibleCount = visibleCustomers.length - missingCustomers.length;
+  const useCustomerActionsMenu = mode === "recurringServiceStops";
+
+  const handleMakeInactive = async (customer) => {
+    if (!requirePermission("14", "update customers")) return;
+    if (!recentlySelectedCompany || !customer?.id) return;
+
+    const confirmed = await appConfirm({
+      title: "Make Customer Inactive",
+      message: `Are you sure you want to mark ${customerDisplayName(customer)} as inactive? This will not delete their data. Linked service locations, bodies of water, and equipment will also be marked inactive.`,
+      confirmLabel: "Make Inactive",
+      cancelLabel: "Cancel",
+      tone: "warning",
+    });
+
+    if (!confirmed) return;
+
+    setDeactivatingCustomerId(customer.id);
+
+    try {
+      const customerRef = doc(db, "companies", recentlySelectedCompany, "customers", customer.id);
+      await updateDoc(customerRef, { active: false, isActive: false });
+
+      const inactiveCascadeCounts = await deactivateCustomerRelations({
+        companyId: recentlySelectedCompany,
+        customerId: customer.id,
+      });
+      const pipelineRowsEnded = await endCustomerPipelineRowsForInactiveCustomer({
+        companyId: recentlySelectedCompany,
+        customerId: customer.id,
+        reason: "Customer marked inactive",
+        actorId: user?.uid || "",
+        actorName: `${dataBaseUser?.firstName || ""} ${dataBaseUser?.lastName || ""}`.trim() || user?.displayName || user?.email || "",
+      });
+
+      setCustomers((currentCustomers) => currentCustomers.filter((row) => row.id !== customer.id));
+      toast.success(`Customer marked inactive. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`);
+    } catch (statusError) {
+      console.error("Failed to update customer status.", statusError);
+      toast.error("Failed to update customer status.");
+    } finally {
+      setDeactivatingCustomerId("");
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-6 text-slate-900 sm:px-4 lg:px-5">
@@ -326,22 +446,33 @@ const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
                         {customerAddress(customer) || "No address on file"}
                       </td>
                       <td className="px-5 py-4 align-top">
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <Link
-                            to={`/company/customers/details/${customer.id}`}
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                          >
-                            <FaExternalLinkAlt className="text-[10px]" />
-                            Customer
-                          </Link>
-                          <Link
-                            to={config.actionTo(customer.id)}
-                            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                          >
-                            <FaPlus className="text-[10px]" />
-                            {config.actionLabel}
-                          </Link>
-                        </div>
+                        {useCustomerActionsMenu ? (
+                          <CustomerActionsMenu
+                            customer={customer}
+                            actionLabel={config.actionLabel}
+                            actionTo={config.actionTo(customer.id)}
+                            canMakeInactive={can("14")}
+                            deactivating={deactivatingCustomerId === customer.id}
+                            onMakeInactive={() => handleMakeInactive(customer)}
+                          />
+                        ) : (
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <Link
+                              to={`/company/customers/details/${customer.id}`}
+                              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                              <FaExternalLinkAlt className="text-[10px]" />
+                              Customer
+                            </Link>
+                            <Link
+                              to={config.actionTo(customer.id)}
+                              className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                            >
+                              <FaPlus className="text-[10px]" />
+                              {config.actionLabel}
+                            </Link>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -354,6 +485,63 @@ const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
     </div>
   );
 };
+
+const menuItemClassName = "flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold transition";
+
+const CustomerActionsMenu = ({
+  customer,
+  actionLabel,
+  actionTo,
+  canMakeInactive,
+  deactivating,
+  onMakeInactive,
+}) => (
+  <div className="flex justify-end">
+    <Menu as="div" className="relative inline-block text-left">
+      <MenuButton
+        className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={deactivating}
+        title={`Actions for ${customerDisplayName(customer)}`}
+      >
+        Actions
+        <FaChevronDown className="text-[10px]" aria-hidden="true" />
+      </MenuButton>
+      <MenuItems className="absolute right-0 z-30 mt-2 w-56 origin-top-right overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg focus:outline-none">
+        <MenuItem>
+          <Link
+            to={`/company/customers/details/${customer.id}`}
+            className={`${menuItemClassName} text-slate-700 hover:bg-slate-50 data-[focus]:bg-slate-50`}
+          >
+            <FaExternalLinkAlt className="text-[10px]" aria-hidden="true" />
+            Customer
+          </Link>
+        </MenuItem>
+        <MenuItem>
+          <Link
+            to={actionTo}
+            className={`${menuItemClassName} text-blue-700 hover:bg-blue-50 data-[focus]:bg-blue-50`}
+          >
+            <FaPlus className="text-[10px]" aria-hidden="true" />
+            {actionLabel}
+          </Link>
+        </MenuItem>
+        {canMakeInactive && (
+          <MenuItem disabled={deactivating}>
+            <button
+              type="button"
+              onClick={onMakeInactive}
+              disabled={deactivating}
+              className={`${menuItemClassName} text-amber-700 hover:bg-amber-50 data-[focus]:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              <FaUserSlash className="text-[10px]" aria-hidden="true" />
+              {deactivating ? "Making inactive..." : "Make Inactive"}
+            </button>
+          </MenuItem>
+        )}
+      </MenuItems>
+    </Menu>
+  </div>
+);
 
 const SummaryCard = ({ icon: Icon, label, value, tone = "slate" }) => {
   const iconClassName = tone === "blue" ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600";

@@ -22,8 +22,6 @@ import {
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
 
-const MURDOCK_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
-
 const purchaseFilters = [
   { value: "all", label: "All" },
   { value: "billable", label: "Billable" },
@@ -362,7 +360,6 @@ const PurchaseListView = () => {
   const [jobsLoading, setJobsLoading] = useState(false);
   const [jobSelection, setJobSelection] = useState(null);
   const { recentlySelectedCompany } = useContext(Context);
-  const showAlphaWaterImport = recentlySelectedCompany === MURDOCK_COMPANY_ID;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1283,14 +1280,6 @@ const PurchaseListView = () => {
               <p className="mt-1 text-sm text-slate-500">Review purchased items, receipt links, billing status, and job connections.</p>
             </div>
           <div className="flex flex-wrap justify-end gap-2">
-            {showAlphaWaterImport ? (
-              <Link
-                to="/company/purchased-items/alpha-water-import"
-                className="inline-flex items-center justify-center rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-bold text-amber-800 shadow-sm transition hover:bg-amber-100"
-              >
-                Alpha Water Import
-              </Link>
-            ) : null}
             <Link to={'/company/purchased-items/createNew'}
               className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
             >

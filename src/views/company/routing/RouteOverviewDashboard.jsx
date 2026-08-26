@@ -4,7 +4,6 @@ import { collection, getDocs, query, Timestamp, where } from "firebase/firestore
 import {
   FaArrowRight,
   FaCalendarDay,
-  FaCheckCircle,
   FaClipboardList,
   FaExclamationTriangle,
   FaFileContract,
@@ -221,6 +220,66 @@ const ListCard = ({ title, helper, to, children }) => (
 
 const EmptyRow = ({ children }) => <div className="p-5 text-sm text-slate-500">{children}</div>;
 
+const TodayExecutionCard = ({
+  dailyRoutes,
+  todayCompletionPercent,
+  todayRouteRows,
+  todayStopSummary,
+}) => (
+  <ListCard title="Today's Execution" to="/company/route-day-management">
+    <div className="p-5">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Stops complete</p>
+          <p className="mt-1 text-3xl font-bold leading-none text-slate-950">{todayCompletionPercent}%</p>
+        </div>
+        <p className="pb-1 text-sm font-semibold text-slate-500">{todayStopSummary.finished}/{todayStopSummary.total} stops</p>
+      </div>
+      <div className="mt-3">
+        <ProgressBar value={todayCompletionPercent} tone="emerald" />
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-md bg-slate-50 px-2 py-2">
+          <p className="text-xs font-bold text-slate-900">{dailyRoutes.length}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Routes</p>
+        </div>
+        <div className="rounded-md bg-blue-50 px-2 py-2">
+          <p className="text-xs font-bold text-blue-900">{todayStopSummary.inProgress}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-600">Active</p>
+        </div>
+        <div className="rounded-md bg-amber-50 px-2 py-2">
+          <p className="text-xs font-bold text-amber-900">{todayStopSummary.notStarted}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">Open</p>
+        </div>
+      </div>
+      <div className="mt-4 space-y-2">
+        {todayRouteRows.length ? todayRouteRows.map((route) => {
+          const completion = route.totalStops ? Math.round((route.finishedStops / route.totalStops) * 100) : 0;
+
+          return (
+            <div key={route.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-slate-900">{route.techName}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{route.status} - {formatTime(route.startTime)}</p>
+                </div>
+                <span className="rounded bg-white px-2 py-1 text-xs font-bold text-slate-700">{route.finishedStops}/{route.totalStops}</span>
+              </div>
+              <div className="mt-2">
+                <ProgressBar value={completion} tone={route.status === "Finished" ? "emerald" : route.inProgressStops ? "blue" : "amber"} />
+              </div>
+            </div>
+          );
+        }) : (
+          <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-center text-sm font-semibold text-slate-500">
+            No active route activity found for today.
+          </p>
+        )}
+      </div>
+    </div>
+  </ListCard>
+);
+
 const RouteOverviewDashboard = () => {
   const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
   const [loading, setLoading] = useState(true);
@@ -387,7 +446,6 @@ const RouteOverviewDashboard = () => {
   const customerCoveragePercent = activeCustomers.length
     ? Math.round((customersWithRecurringStops / activeCustomers.length) * 100)
     : 100;
-  const daysWithRecurringStops = daySummaries.filter((summary) => summary.recurringStopCount > 0).length;
   const routedTechnicianCount = technicianSummaries.filter((summary) => summary.routeCount > 0).length;
   const dayMaxStops = Math.max(1, ...daySummaries.map((summary) => summary.recurringStopCount));
   const technicianMaxStops = Math.max(1, ...technicianSummaries.map((summary) => summary.stopCount));
@@ -506,7 +564,7 @@ const RouteOverviewDashboard = () => {
         </header>
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid xl:grid-cols-[minmax(0,1fr)_340px_390px]">
+          <div className="grid xl:grid-cols-[minmax(0,1fr)_390px]">
             <div className="p-5">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
@@ -535,64 +593,6 @@ const RouteOverviewDashboard = () => {
               </div>
             </div>
 
-            <section className="border-t border-slate-200 bg-white p-5 xl:border-l xl:border-t-0">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <FaCheckCircle className="text-emerald-600" />
-                  <h2 className="text-lg font-bold text-slate-950">Today Execution</h2>
-                </div>
-                <Link to="/company/route-day-management" className="text-xs font-semibold text-blue-700 hover:text-blue-900">Open board</Link>
-              </div>
-              <div className="mt-4 flex items-end justify-between gap-3">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Stops complete</p>
-                  <p className="mt-1 text-3xl font-bold leading-none text-slate-950">{todayCompletionPercent}%</p>
-                </div>
-                <p className="pb-1 text-sm font-semibold text-slate-500">{todayStopSummary.finished}/{todayStopSummary.total} stops</p>
-              </div>
-              <div className="mt-3">
-                <ProgressBar value={todayCompletionPercent} tone="emerald" />
-              </div>
-              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-md bg-slate-50 px-2 py-2">
-                  <p className="text-xs font-bold text-slate-900">{dailyRoutes.length}</p>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Routes</p>
-                </div>
-                <div className="rounded-md bg-blue-50 px-2 py-2">
-                  <p className="text-xs font-bold text-blue-900">{todayStopSummary.inProgress}</p>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-600">Active</p>
-                </div>
-                <div className="rounded-md bg-amber-50 px-2 py-2">
-                  <p className="text-xs font-bold text-amber-900">{todayStopSummary.notStarted}</p>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">Open</p>
-                </div>
-              </div>
-              <div className="mt-4 space-y-2">
-                {todayRouteRows.length ? todayRouteRows.map((route) => {
-                  const completion = route.totalStops ? Math.round((route.finishedStops / route.totalStops) * 100) : 0;
-
-                  return (
-                    <div key={route.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-bold text-slate-900">{route.techName}</p>
-                          <p className="mt-0.5 truncate text-xs text-slate-500">{route.status} - {formatTime(route.startTime)}</p>
-                        </div>
-                        <span className="rounded bg-white px-2 py-1 text-xs font-bold text-slate-700">{route.finishedStops}/{route.totalStops}</span>
-                      </div>
-                      <div className="mt-2">
-                        <ProgressBar value={completion} tone={route.status === "Finished" ? "emerald" : route.inProgressStops ? "blue" : "amber"} />
-                      </div>
-                    </div>
-                  );
-                }) : (
-                  <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-center text-sm font-semibold text-slate-500">
-                    No active route activity found for today.
-                  </p>
-                )}
-              </div>
-            </section>
-
             <aside className="border-t border-slate-800 bg-slate-900 p-5 text-white xl:border-l xl:border-t-0">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -603,34 +603,36 @@ const RouteOverviewDashboard = () => {
               </div>
 
               <div className="mt-5 space-y-3">
-                <Link to="/company/sales/agreements/needs-routing" className="flex items-center justify-between gap-3 rounded-md bg-white/10 px-3 py-3 text-sm font-semibold text-white transition hover:bg-white/15">
-                  <span>Accepted agreements missing stops</span>
-                  <span className="rounded bg-amber-300 px-2 py-1 text-xs font-bold text-slate-950">{agreementsNeedRecurringStops.length}</span>
-                </Link>
-                <Link to="/company/recurringServiceStop/active-customers-without-recurring-service-stops" className="flex items-center justify-between gap-3 rounded-md bg-white/10 px-3 py-3 text-sm font-semibold text-white transition hover:bg-white/15">
-                  <span>Customers without recurring stops</span>
-                  <span className="rounded bg-white px-2 py-1 text-xs font-bold text-slate-950">{customersWithoutRecurringStops.length}</span>
-                </Link>
-                <Link to="/company/route-management" className="flex items-center justify-between gap-3 rounded-md bg-white/10 px-3 py-3 text-sm font-semibold text-white transition hover:bg-white/15">
-                  <span>Days with recurring stops</span>
-                  <span className="rounded bg-white px-2 py-1 text-xs font-bold text-slate-950">{daysWithRecurringStops}/7</span>
-                </Link>
+                {agreementsNeedRecurringStops.length > 0 && (
+                  <Link to="/company/sales/agreements/needs-routing" className="flex items-center justify-between gap-3 rounded-md bg-white/10 px-3 py-3 text-sm font-semibold text-white transition hover:bg-white/15">
+                    <span>Accepted agreements missing stops</span>
+                    <span className="rounded bg-amber-300 px-2 py-1 text-xs font-bold text-slate-950">{agreementsNeedRecurringStops.length}</span>
+                  </Link>
+                )}
+                {customersWithoutRecurringStops.length > 0 && (
+                  <Link to="/company/recurringServiceStop/active-customers-without-recurring-service-stops" className="flex items-center justify-between gap-3 rounded-md bg-white/10 px-3 py-3 text-sm font-semibold text-white transition hover:bg-white/15">
+                    <span>Customers without recurring stops</span>
+                    <span className="rounded bg-white px-2 py-1 text-xs font-bold text-slate-950">{customersWithoutRecurringStops.length}</span>
+                  </Link>
+                )}
+                {agreementsNeedRecurringStops.length === 0 && customersWithoutRecurringStops.length === 0 && (
+                  <p className="rounded-md bg-white/5 px-3 py-3 text-sm font-semibold text-slate-300">No routing follow-up needed.</p>
+                )}
               </div>
 
-              <div className="mt-5 border-t border-white/10 pt-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-300">Next customers missing stops</p>
-                <div className="mt-3 space-y-2">
-                  {customersWithoutRecurringStops.slice(0, 3).map((customer) => (
-                    <Link key={customer.id} to={`/company/customers/details/${customer.id}`} className="block min-w-0 rounded-md bg-white/5 px-3 py-2 transition hover:bg-white/10">
-                      <p className="truncate text-sm font-semibold">{customerDisplayName(customer)}</p>
-                      <p className="mt-0.5 truncate text-xs text-slate-300">{customerContact(customer) || "No contact saved"}</p>
-                    </Link>
-                  ))}
-                  {customersWithoutRecurringStops.length === 0 && (
-                    <p className="rounded-md bg-white/5 px-3 py-3 text-sm font-semibold text-slate-300">Every active customer has a recurring service stop.</p>
-                  )}
+              {customersWithoutRecurringStops.length > 0 && (
+                <div className="mt-5 border-t border-white/10 pt-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-300">Next customers missing stops</p>
+                  <div className="mt-3 space-y-2">
+                    {customersWithoutRecurringStops.slice(0, 3).map((customer) => (
+                      <Link key={customer.id} to={`/company/customers/details/${customer.id}`} className="block min-w-0 rounded-md bg-white/5 px-3 py-2 transition hover:bg-white/10">
+                        <p className="truncate text-sm font-semibold">{customerDisplayName(customer)}</p>
+                        <p className="mt-0.5 truncate text-xs text-slate-300">{customerContact(customer) || "No contact saved"}</p>
+                      </Link>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </aside>
           </div>
         </section>
@@ -675,48 +677,57 @@ const RouteOverviewDashboard = () => {
                 })}
               </div>
             </ListCard>
+          </div>
 
-            <div className="grid gap-5 lg:grid-cols-2">
-              <ListCard title="Accepted Agreements Missing Recurring Stops" helper="Accepted recurring service agreements without a matching recurring service stop." to="/company/sales/agreements/needs-routing">
-                {agreementsNeedRecurringStops.length === 0 ? (
-                  <EmptyRow>No accepted recurring service agreements are missing recurring stops.</EmptyRow>
-                ) : agreementsNeedRecurringStops.slice(0, 6).map((agreement) => (
-                  <Link key={agreement.id} to={`/company/sales/agreements/${agreement.id}`} className="block px-5 py-4 transition hover:bg-slate-50">
+          <TodayExecutionCard
+            dailyRoutes={dailyRoutes}
+            todayCompletionPercent={todayCompletionPercent}
+            todayRouteRows={todayRouteRows}
+            todayStopSummary={todayStopSummary}
+          />
+        </section>
+
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
+          <div className="grid gap-5 lg:grid-cols-2">
+            <ListCard title="Accepted Agreements Missing Recurring Stops" helper="Accepted recurring service agreements without a matching recurring service stop." to="/company/sales/agreements/needs-routing">
+              {agreementsNeedRecurringStops.length === 0 ? (
+                <EmptyRow>No accepted recurring service agreements are missing recurring stops.</EmptyRow>
+              ) : agreementsNeedRecurringStops.slice(0, 6).map((agreement) => (
+                <Link key={agreement.id} to={`/company/sales/agreements/${agreement.id}`} className="block px-5 py-4 transition hover:bg-slate-50">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">{agreement.title || "Service Agreement"}</p>
+                      <p className="mt-1 text-sm text-slate-500">{agreement.customerName || "Customer"}</p>
+                      <p className="mt-1 text-xs text-slate-400">Accepted {formatDate(agreement.acceptedAt || agreement.updatedAt || agreement.createdAt)}</p>
+                    </div>
+                    <FaArrowRight className="mt-1 text-xs text-slate-400" />
+                  </div>
+                </Link>
+              ))}
+            </ListCard>
+
+            <ListCard title="Route Template Changes" helper="Recently changed recurring route templates." to="/company/route-management">
+              {recentRoutes.length === 0 ? (
+                <EmptyRow>No route templates yet.</EmptyRow>
+              ) : recentRoutes.slice(0, 6).map((route) => {
+                const stops = routeStops(route);
+                return (
+                  <Link
+                    key={route.id}
+                    to="/company/route-management"
+                    className="block px-5 py-4 transition hover:bg-slate-50"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">{agreement.title || "Service Agreement"}</p>
-                        <p className="mt-1 text-sm text-slate-500">{agreement.customerName || "Customer"}</p>
-                        <p className="mt-1 text-xs text-slate-400">Accepted {formatDate(agreement.acceptedAt || agreement.updatedAt || agreement.createdAt)}</p>
+                        <p className="truncate text-sm font-semibold text-slate-900">{routeTitle(route)}</p>
+                        <p className="mt-1 text-sm text-slate-500">{route.day || "No day"} - {route.tech || route.techName || "Unassigned"}</p>
                       </div>
-                      <FaArrowRight className="mt-1 text-xs text-slate-400" />
+                      <span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{stops.length} stops</span>
                     </div>
                   </Link>
-                ))}
-              </ListCard>
-
-              <ListCard title="Route Template Changes" helper="Recently changed recurring route templates." to="/company/route-management">
-                {recentRoutes.length === 0 ? (
-                  <EmptyRow>No route templates yet.</EmptyRow>
-                ) : recentRoutes.slice(0, 6).map((route) => {
-                  const stops = routeStops(route);
-                  return (
-                    <Link
-                      key={route.id}
-                      to="/company/route-management"
-                      className="block px-5 py-4 transition hover:bg-slate-50"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-900">{routeTitle(route)}</p>
-                          <p className="mt-1 text-sm text-slate-500">{route.day || "No day"} - {route.tech || route.techName || "Unassigned"}</p>
-                        </div>
-                        <span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{stops.length} stops</span>
-                      </div>
-                    </Link>
-                  );
-                })}
-              </ListCard>
-            </div>
+                );
+              })}
+            </ListCard>
           </div>
 
           <aside className="space-y-5">

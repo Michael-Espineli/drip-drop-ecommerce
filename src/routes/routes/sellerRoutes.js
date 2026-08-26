@@ -70,6 +70,7 @@ const PurchaseListView = lazy(() => import("../../views/company/purchases/Purcha
 const CreateNewPurchase = lazy(() => import("../../views/company/purchases/CreateNewPurchase"))
 const PurchaseDetailView = lazy(() => import("../../views/company/purchases/PurchaseDetailView"))
 const AlphaWaterReceiptImport = lazy(() => import("../../views/company/purchases/AlphaWaterReceiptImport"))
+const HeritageReceiptImport = lazy(() => import("../../views/company/purchases/HeritageReceiptImport"))
 const ShoppingPurchaseReconciliation = lazy(() => import("../../views/company/purchases/ShoppingPurchaseReconciliation"))
 
 const ShoppingListView = lazy(() => import("../../views/company/shoppingList/ShoppingListListView"))
@@ -617,6 +618,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/purchased-items/heritage-import',
+        element: <HeritageReceiptImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/shopping-purchase-reconciliation',
         element: <ShoppingPurchaseReconciliation />,
         ability: ['Admin', 'Seller'],
@@ -647,6 +655,13 @@ export const sellerRoutes = [
     {
         path: '/company/purchasedItems/alpha-water-import',
         element: <AlphaWaterReceiptImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/purchasedItems/heritage-import',
+        element: <HeritageReceiptImport />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }

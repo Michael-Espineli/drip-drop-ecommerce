@@ -1339,8 +1339,8 @@ const CreateNewServiceStop = () => {
     ].filter(Boolean);
 
     return (
-        <div className="min-h-screen bg-slate-50 px-3 py-3 text-slate-950 sm:px-4 lg:px-5">
-            <div className="mx-auto max-w-screen-2xl space-y-4">
+        <div className="min-h-screen bg-slate-50 px-2 py-3 text-slate-950 sm:px-3 lg:px-4">
+            <div className="mx-auto max-w-[1800px] space-y-4">
                 <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <button
