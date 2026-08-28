@@ -13,6 +13,7 @@ import {
   FaEye,
   FaPlus,
   FaSave,
+  FaSearch,
   FaTags,
   FaTimes,
 } from 'react-icons/fa';
@@ -30,7 +31,11 @@ import {
 } from '../../../utils/sales/salesFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { appConfirm } from '../../../utils/appDialog';
-import { jobTaskTypeOptionsFromDocs } from '../../../utils/jobTaskTypes';
+import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs } from '../../../utils/jobTaskTypes';
+import {
+  fetchRecurringTaskGroupOptions,
+  fetchTaskGroupTasks,
+} from '../../../utils/recurringServiceStopTasks';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -137,6 +142,10 @@ const templateToForm = (template = {}) => ({
     'rateCents'
   ),
   customerApprovalRequired: Boolean(template.customerApprovalRequired || template.customerApproval),
+  isTaskGroup: Boolean(template.isTaskGroup || template.taskGroupId),
+  taskGroupId: template.taskGroupId || '',
+  taskGroupName: template.taskGroupName || '',
+  taskGroupTaskId: template.taskGroupTaskId || '',
 });
 
 const normalizeTaskTemplatesForSave = (templates = []) => (
@@ -157,6 +166,10 @@ const normalizeTaskTemplatesForSave = (templates = []) => (
         laborCostCents: dollarsToCents(template.laborCost),
         billingLaborPriceCents: dollarsToCents(template.billingLaborPrice),
         customerApprovalRequired: Boolean(template.customerApprovalRequired),
+        isTaskGroup: Boolean(template.isTaskGroup || template.taskGroupId),
+        taskGroupId: template.taskGroupId || '',
+        taskGroupName: template.taskGroupName || '',
+        taskGroupTaskId: template.taskGroupTaskId || '',
       };
     })
     .filter(Boolean)
@@ -173,6 +186,47 @@ const taskTemplateTotals = (templates = []) => (
     { minutes: 0, laborCostCents: 0, billingLaborPriceCents: 0 }
   )
 );
+
+const taskGroupTaskToTemplateForm = (task = {}, taskGroup = {}) => {
+  const rawType = task.type || task.taskType || task.typeName || 'General';
+  const estimatedMinutes = Number(
+    task.estimatedTime ??
+    task.estimatedMinutes ??
+    task.minutes ??
+    task.durationMinutes ??
+    0
+  );
+  const name = String(task.name || task.taskName || task.title || rawType || 'Task').trim();
+
+  return {
+    id: `service_task_template_${uuidv4()}`,
+    name,
+    type: canonicalJobTaskType(rawType) || 'General',
+    description: String(task.description || '').trim(),
+    estimatedMinutes: Number.isFinite(estimatedMinutes) ? String(Math.max(estimatedMinutes, 0)) : '',
+    laborCost: templateCentsToInput(
+      task,
+      'contractedRate',
+      'contractRateCents',
+      'contractedRateCents',
+      'laborCostCents',
+      'laborCost',
+      'rate'
+    ),
+    billingLaborPrice: templateCentsToInput(
+      task,
+      'billingLaborPriceCents',
+      'billingLaborCents',
+      'unitAmountCents',
+      'priceCents'
+    ),
+    customerApprovalRequired: Boolean(task.customerApprovalRequired || task.customerApproval),
+    isTaskGroup: true,
+    taskGroupId: taskGroup.id || '',
+    taskGroupName: taskGroup.label || taskGroup.name || taskGroup.groupName || '',
+    taskGroupTaskId: task.id || task.taskGroupTaskId || '',
+  };
+};
 
 const initialForm = {
   name: '',
@@ -217,6 +271,27 @@ const sourceTypeLabels = {
   [SalesCatalogSourceType.stripeProductPrice]: 'Stripe Product / Price',
 };
 
+const catalogSearchText = (item = {}) => [
+  item.name,
+  item.description,
+  catalogTypeLabel(item.type),
+  labelize(item.billingBehavior),
+  sourceTypeLabels[item.sourceType] || item.sourceType,
+  item.stripeProductId,
+  item.stripePriceId,
+  ...taskTemplatesForItem(item).flatMap((template) => [
+    template.name,
+    template.title,
+    template.description,
+    template.type,
+    template.taskType,
+    template.taskGroupName,
+  ]),
+]
+  .filter(Boolean)
+  .join(' ')
+  .toLowerCase();
+
 const sourcePickerConfig = {
   [SalesCatalogSourceType.serviceStopType]: {
     label: 'Pay Type',
@@ -254,7 +329,7 @@ const selectStyles = {
   }),
   menuPortal: (base) => ({
     ...base,
-    zIndex: 60,
+    zIndex: 70,
   }),
 };
 
@@ -269,7 +344,12 @@ const SalesCatalogItems = () => {
   const [editingItemId, setEditingItemId] = useState('');
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [filterType, setFilterType] = useState('all');
+  const [catalogSearchTerm, setCatalogSearchTerm] = useState('');
   const [taskTypeList, setTaskTypeList] = useState([]);
+  const [taskGroupOptions, setTaskGroupOptions] = useState([]);
+  const [taskGroupModalOpen, setTaskGroupModalOpen] = useState(false);
+  const [selectedTaskGroup, setSelectedTaskGroup] = useState(null);
+  const [addingTaskGroup, setAddingTaskGroup] = useState(false);
   const [creatingStripeCatalogItemId, setCreatingStripeCatalogItemId] = useState('');
   const [sourceOptions, setSourceOptions] = useState({
     [SalesCatalogSourceType.serviceStopType]: [],
@@ -366,15 +446,45 @@ const SalesCatalogItems = () => {
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [recentlySelectedCompany]);
 
+  useEffect(() => {
+    let canceled = false;
+
+    const loadTaskGroups = async () => {
+      if (!recentlySelectedCompany) {
+        setTaskGroupOptions([]);
+        return;
+      }
+
+      try {
+        const options = await fetchRecurringTaskGroupOptions({ db, companyId: recentlySelectedCompany });
+        if (!canceled) setTaskGroupOptions(options);
+      } catch (error) {
+        console.error('Unable to load task group options', error);
+        if (!canceled) setTaskGroupOptions([]);
+      }
+    };
+
+    loadTaskGroups();
+
+    return () => {
+      canceled = true;
+    };
+  }, [recentlySelectedCompany]);
+
   const activeCatalogItems = useMemo(
     () => catalogItems.filter((item) => item.active !== false),
     [catalogItems]
   );
 
   const filteredCatalogItems = useMemo(() => {
-    if (filterType === 'all') return activeCatalogItems;
-    return activeCatalogItems.filter((item) => item.type === filterType);
-  }, [activeCatalogItems, filterType]);
+    const search = catalogSearchTerm.trim().toLowerCase();
+
+    return activeCatalogItems.filter((item) => {
+      const matchesType = filterType === 'all' || item.type === filterType;
+      const matchesSearch = !search || catalogSearchText(item).includes(search);
+      return matchesType && matchesSearch;
+    });
+  }, [activeCatalogItems, catalogSearchTerm, filterType]);
 
   const selectedCatalogItem = useMemo(
     () => catalogItems.find((item) => item.id === catalogItemId) || null,
@@ -427,6 +537,8 @@ const SalesCatalogItems = () => {
   const closeFormModal = () => {
     if (saving) return;
     setFormModalOpen(false);
+    setTaskGroupModalOpen(false);
+    setSelectedTaskGroup(null);
     resetForm();
   };
 
@@ -464,6 +576,49 @@ const SalesCatalogItems = () => {
       ...current,
       taskTemplates: [...(current.taskTemplates || []), emptyTaskTemplate()],
     }));
+  };
+
+  const openTaskGroupModal = () => {
+    setSelectedTaskGroup(null);
+    setTaskGroupModalOpen(true);
+  };
+
+  const closeTaskGroupModal = () => {
+    if (addingTaskGroup) return;
+    setTaskGroupModalOpen(false);
+    setSelectedTaskGroup(null);
+  };
+
+  const addSelectedTaskGroup = async () => {
+    if (!recentlySelectedCompany || !selectedTaskGroup) return;
+
+    try {
+      setAddingTaskGroup(true);
+      const groupTasks = await fetchTaskGroupTasks({
+        db,
+        companyId: recentlySelectedCompany,
+        taskGroup: selectedTaskGroup,
+      });
+
+      if (!groupTasks.length) {
+        toast.error('This task group does not have any tasks.');
+        return;
+      }
+
+      const nextTemplates = groupTasks.map((task) => taskGroupTaskToTemplateForm(task, selectedTaskGroup));
+      setForm((current) => ({
+        ...current,
+        taskTemplates: [...(current.taskTemplates || []), ...nextTemplates],
+      }));
+      setTaskGroupModalOpen(false);
+      setSelectedTaskGroup(null);
+      toast.success(`${nextTemplates.length} task${nextTemplates.length === 1 ? '' : 's'} added from task group.`);
+    } catch (error) {
+      console.error('Unable to add task group to service catalog item', error);
+      toast.error(error.message || 'Failed to add task group.');
+    } finally {
+      setAddingTaskGroup(false);
+    }
   };
 
   const removeTaskTemplate = (templateId) => {
@@ -709,7 +864,12 @@ const SalesCatalogItems = () => {
         },
       );
       toast.success('Service archived.');
-      if (editingItemId === item.id) resetForm();
+      if (editingItemId === item.id) {
+        setFormModalOpen(false);
+        setTaskGroupModalOpen(false);
+        setSelectedTaskGroup(null);
+        resetForm();
+      }
       if (catalogItemId === item.id) navigate('/company/sales/catalog-items');
     } catch (error) {
       console.error('Unable to archive service catalog item', error);
@@ -778,14 +938,24 @@ const SalesCatalogItems = () => {
             These seed job tasks when this service is added to a job or job template.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={addTaskTemplate}
-          className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
-        >
-          <FaPlus className="text-xs" />
-          Add Task
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={addTaskTemplate}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+          >
+            <FaPlus className="text-xs" />
+            Add Task
+          </button>
+          <button
+            type="button"
+            onClick={openTaskGroupModal}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            <FaPlus className="text-xs" />
+            Add Task Group
+          </button>
+        </div>
       </div>
 
       {!(form.taskTemplates || []).length ? (
@@ -795,10 +965,25 @@ const SalesCatalogItems = () => {
       ) : (
         <div className="mt-3 space-y-3">
           {form.taskTemplates.map((template, index) => (
-            <div key={template.id} className="rounded-md border border-slate-200 bg-white p-3">
-              <div className="grid gap-3 xl:grid-cols-[minmax(180px,1.1fr)_minmax(170px,0.9fr)_minmax(240px,1.4fr)_110px_120px_120px_minmax(140px,auto)_auto] xl:items-end">
-                <label className="block text-sm font-semibold text-slate-700">
+            <div key={template.id} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
                   <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</span>
+                  {template.taskGroupName && (
+                    <span className="ml-2 text-xs font-semibold text-blue-600">{template.taskGroupName}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeTaskTemplate(template.id)}
+                  className="inline-flex min-h-[38px] items-center justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                >
+                  Remove
+                </button>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)]">
+                <label className="block text-sm font-semibold text-slate-700">
+                  Task Name
                   <input
                     type="text"
                     value={template.name}
@@ -822,16 +1007,18 @@ const SalesCatalogItems = () => {
                     />
                   </div>
                 </div>
-                <label className="block text-sm font-semibold text-slate-700">
-                  Notes
-                  <textarea
-                    value={template.description}
-                    onChange={(event) => updateTaskTemplate(template.id, 'description', event.target.value)}
-                    rows={1}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="Spray grids, check grids, reassemble filter"
-                  />
-                </label>
+              </div>
+              <label className="block text-sm font-semibold text-slate-700">
+                Notes
+                <textarea
+                  value={template.description}
+                  onChange={(event) => updateTaskTemplate(template.id, 'description', event.target.value)}
+                  rows={3}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  placeholder="Spray grids, check grids, reassemble filter"
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 xl:items-end">
                 <label className="block text-sm font-semibold text-slate-700">
                   Estimated Minutes
                   <input
@@ -874,13 +1061,6 @@ const SalesCatalogItems = () => {
                   />
                   Customer approval
                 </label>
-                <button
-                  type="button"
-                  onClick={() => removeTaskTemplate(template.id)}
-                  className="min-h-[38px] rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                >
-                  Remove
-                </button>
               </div>
             </div>
           ))}
@@ -889,14 +1069,81 @@ const SalesCatalogItems = () => {
     </div>
   );
 
+  const renderTaskGroupPickerModal = () => {
+    if (!taskGroupModalOpen) return null;
+
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4">
+        <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">Add Task Group</h3>
+              <p className="mt-1 text-sm text-slate-500">Select a reusable task group to add its tasks to this service.</p>
+            </div>
+            <button
+              type="button"
+              onClick={closeTaskGroupModal}
+              disabled={addingTaskGroup}
+              className="rounded-md border border-slate-300 bg-white p-2 text-slate-500 transition hover:bg-slate-50 disabled:opacity-50"
+              aria-label="Close task group picker"
+            >
+              <FaTimes />
+            </button>
+          </div>
+
+          <div className="p-5">
+            <label className="block text-sm font-semibold text-slate-700">
+              Task Group
+              <div className="mt-2 font-normal">
+                <Select
+                  value={selectedTaskGroup}
+                  options={taskGroupOptions}
+                  onChange={setSelectedTaskGroup}
+                  isSearchable
+                  isClearable
+                  isDisabled={addingTaskGroup}
+                  placeholder={taskGroupOptions.length ? 'Select task group' : 'No task groups found'}
+                  theme={selectTheme}
+                  styles={selectStyles}
+                  menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
+                />
+              </div>
+            </label>
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
+            <button
+              type="button"
+              onClick={closeTaskGroupModal}
+              disabled={addingTaskGroup}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={addSelectedTaskGroup}
+              disabled={!selectedTaskGroup || addingTaskGroup}
+              className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <FaPlus className="text-xs" />
+              {addingTaskGroup ? 'Adding...' : 'Add Task Group'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderCatalogFormModal = () => {
     if (!formModalOpen) return null;
+    const editingItem = catalogItems.find((item) => item.id === editingItemId) || null;
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
         <form
           onSubmit={handleSubmit}
-          className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+          className="flex max-h-[92vh] w-full max-w-[96rem] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
         >
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
             <div>
@@ -1128,7 +1375,7 @@ const SalesCatalogItems = () => {
                   </div>
                 )}
 
-                {renderStripeReferencePanel(editingItemId ? catalogItems.find((item) => item.id === editingItemId) : null)}
+                {renderStripeReferencePanel(editingItem)}
               </div>
             </div>
             <div className="mt-5">
@@ -1136,24 +1383,39 @@ const SalesCatalogItems = () => {
             </div>
           </div>
 
-          <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
-            <button
-              type="button"
-              onClick={closeFormModal}
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              <FaTimes className="text-xs" />
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
-            >
-              {editingItemId ? <FaSave className="text-xs" /> : <FaPlus className="text-xs" />}
-              {saving ? 'Saving...' : editingItemId ? 'Save Service' : 'Create Service'}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 p-4">
+            {editingItem ? (
+              <button
+                type="button"
+                onClick={() => archiveItem(editingItem)}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+              >
+                <FaArchive className="text-xs" />
+                Archive Service
+              </button>
+            ) : (
+              <span />
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeFormModal}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                <FaTimes className="text-xs" />
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+              >
+                {editingItemId ? <FaSave className="text-xs" /> : <FaPlus className="text-xs" />}
+                {saving ? 'Saving...' : editingItemId ? 'Save Service' : 'Create Service'}
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -1205,13 +1467,15 @@ const SalesCatalogItems = () => {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Link
-            to={catalogItemId ? '/company/sales/catalog-items' : '/company/sales'}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-          >
-            <FaArrowLeft className="text-xs" />
-            {catalogItemId ? 'Service Catalog' : 'Sales'}
-          </Link>
+          {catalogItemId && (
+            <Link
+              to="/company/sales/catalog-items"
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              <FaArrowLeft className="text-xs" />
+              Service Catalog
+            </Link>
+          )}
           <Link
             to="/company/settings/terms-templates"
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
@@ -1238,16 +1502,29 @@ const SalesCatalogItems = () => {
           <h2 className="text-lg font-bold text-slate-950">Catalog</h2>
           <p className="mt-1 text-sm text-slate-500">Reusable services available to estimates, agreements, jobs, and billing.</p>
         </div>
-        <select
-          value={filterType}
-          onChange={(event) => setFilterType(event.target.value)}
-          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-        >
-          <option value="all">All Types</option>
-          {typeOptions.map((option) => (
-            <option key={option} value={option}>{catalogTypeLabel(option)}</option>
-          ))}
-        </select>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+          <label className="relative w-full sm:w-80">
+            <span className="sr-only">Search service catalog</span>
+            <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={catalogSearchTerm}
+              onChange={(event) => setCatalogSearchTerm(event.target.value)}
+              placeholder="Search services, tasks, Stripe IDs..."
+              className="w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+          </label>
+          <select
+            value={filterType}
+            onChange={(event) => setFilterType(event.target.value)}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+          >
+            <option value="all">All Types</option>
+            {typeOptions.map((option) => (
+              <option key={option} value={option}>{catalogTypeLabel(option)}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {loading ? (
@@ -1255,16 +1532,24 @@ const SalesCatalogItems = () => {
       ) : filteredCatalogItems.length === 0 ? (
         <div className="p-8 text-center">
           <FaTags className="mx-auto text-3xl text-slate-300" />
-          <p className="mt-3 font-semibold text-slate-800">No services yet</p>
-          <p className="mt-1 text-sm text-slate-500">Create services, recurring offerings, fees, and reusable Stripe references here.</p>
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="mt-4 inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-          >
-            <FaPlus className="text-xs" />
-            Add first service
-          </button>
+          <p className="mt-3 font-semibold text-slate-800">
+            {activeCatalogItems.length ? 'No services found' : 'No services yet'}
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            {activeCatalogItems.length
+              ? 'Try another search or filter.'
+              : 'Create services, recurring offerings, fees, and reusable Stripe references here.'}
+          </p>
+          {!activeCatalogItems.length && (
+            <button
+              type="button"
+              onClick={openCreateModal}
+              className="mt-4 inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+            >
+              <FaPlus className="text-xs" />
+              Add first service
+            </button>
+          )}
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -1356,14 +1641,6 @@ const SalesCatalogItems = () => {
                           <FaEdit />
                           Edit
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => archiveItem(item)}
-                          className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                        >
-                          <FaArchive />
-                          Archive
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1414,24 +1691,14 @@ const SalesCatalogItems = () => {
               <h2 className="mt-1 text-xl font-bold text-slate-950">{selectedCatalogItem.name}</h2>
               <p className="mt-1 max-w-3xl text-sm text-slate-600">{selectedCatalogItem.description || 'No description'}</p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => handleEdit(selectedCatalogItem)}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FaEdit className="text-xs" />
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => archiveItem(selectedCatalogItem)}
-                className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
-              >
-                <FaArchive className="text-xs" />
-                Archive
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => handleEdit(selectedCatalogItem)}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              <FaEdit className="text-xs" />
+              Edit
+            </button>
           </div>
 
           <div className="grid gap-4 p-5 md:grid-cols-2">
@@ -1580,6 +1847,7 @@ const SalesCatalogItems = () => {
         {catalogItemId ? renderDetailView() : renderCatalogList()}
       </div>
       {renderCatalogFormModal()}
+      {renderTaskGroupPickerModal()}
     </div>
   );
 };

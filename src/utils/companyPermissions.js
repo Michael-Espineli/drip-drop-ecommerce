@@ -16,6 +16,10 @@ export const EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID = "28";
 export const CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID = "29";
 export const CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID = "27";
 export const CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID = "31";
+export const FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID = "72";
+export const FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID = "74";
+export const FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID = "627";
+export const FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID = "628";
 export const BASIC_WORK_ORDER_PERMISSION_IDS = [
   SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
   CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
@@ -25,9 +29,9 @@ export const BASIC_WORK_ORDER_PERMISSION_IDS = [
 
 const webImplementedPermissionIds = new Set([
   "0", "10", "12", "14", "16", JOBS_PERMISSION_ID, CREATE_JOBS_PERMISSION_ID, SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID, UPDATE_JOBS_PERMISSION_ID, "26", CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID, EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID, CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "30", CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "32", "34", "36",
-  "40", "42", "44", "50", "52", "54", "60", "62", "64", "66",
+  "40", "42", "44", "50", "52", "54", "60", "62", "64", "66", FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID, FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID,
   "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID, OFFERED_WORK_PERMISSION_ID, CREATE_OFFERED_WORK_PERMISSION_ID, UPDATE_OFFERED_WORK_PERMISSION_ID, SPLIT_OFFERED_WORK_PERMISSION_ID, INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, APPROVE_OFFERED_WORK_PERMISSION_ID, VIEW_ALL_OFFERED_WORK_PERMISSION_ID, ACCEPT_OFFERED_WORK_PERMISSION_ID, "400", "420",
-  "600", "610", "612", "614", "620", "622", "630", "632", "634", "800", "810", "820", "822", "824", "826", "830",
+  "600", "610", "612", "614", "620", "622", FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID, FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID, "630", "632", "634", "800", "810", "820", "822", "824", "826", "830",
   "840", "850", "852", "854", "856", "860", "864", "870", "880", "882", "884", "886", "890", "900", "910"
 ]);
 
@@ -62,6 +66,8 @@ const permissionCatalog = [
   { id: "62", name: "Create Equipment", description: "", category: "Operations", ios: true, web: false },
   { id: "64", name: "Update Equipment", description: "", category: "Operations", ios: true, web: false },
   { id: "66", name: "Delete Equipment", description: "", category: "Operations", ios: true, web: false },
+  { id: FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID, name: "Build Field Job Estimate Plans", description: "Can save technician-built job estimate plans from a job estimate service stop without full job update access.", category: "Operations", ios: false, web: false },
+  { id: FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID, name: "Send Field Job Estimates", description: "Can send a job estimate from field workflows after the plan is ready.", category: "Operations", ios: false, web: false },
   { id: "200", name: "Management", description: "", category: "Operations", ios: false, web: false },
   { id: "210", name: "Route Over View", description: "", category: "Management", ios: true, web: false },
   { id: "220", name: "Live Route Access", description: "", category: "Management", ios: true, web: false },
@@ -114,6 +120,8 @@ const permissionCatalog = [
   { id: "622", name: "Respond Estimates", description: "", category: "Marketing", ios: false, web: false },
   { id: "624", name: "Update Estimates", description: "", category: "Marketing", ios: false, web: false },
   { id: "626", name: "Delete Estimates", description: "", category: "Marketing", ios: false, web: false },
+  { id: FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID, name: "Recommend Initial Survey Price", description: "Can save a technician's recommended service agreement price from an initial survey service stop.", category: "Marketing", ios: false, web: false },
+  { id: FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID, name: "Create And Send Field Service Agreements", description: "Can open the field agreement draft/send flow from an initial survey without full finance access.", category: "Marketing", ios: false, web: false },
   { id: "630", name: "Pipeline", description: "Can view the customer onboarding pipeline.", category: "Marketing", ios: false, web: false },
   { id: "632", name: "Create Pipeline", description: "Can sync leads and customers into the pipeline and add manual pipeline rows.", category: "Marketing", ios: false, web: false },
   { id: "634", name: "Update Pipeline", description: "Can update pipeline notes, manual signoffs, statuses, lead sources, and pipeline settings.", category: "Marketing", ios: false, web: false },
@@ -171,7 +179,7 @@ export const companyPermissionsByCategory = companyPermissions.reduce((acc, perm
   return acc;
 }, {});
 
-const childPermissionPrefixes = ["Create", "Update", "Delete", "Respond", "Split", "Incentivize", "Approve", "View All", "Accept"];
+const childPermissionPrefixes = ["Create", "Update", "Delete", "Respond", "Split", "Incentivize", "Approve", "View All", "Accept", "Schedule", "Edit", "Build", "Send", "Recommend"];
 
 const normalizePermissionName = (value = "") =>
   value.toLowerCase().replace(/[^a-z0-9]/g, "");

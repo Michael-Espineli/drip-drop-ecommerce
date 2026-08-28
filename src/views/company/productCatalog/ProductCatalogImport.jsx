@@ -277,6 +277,9 @@ const ProductCatalogImport = () => {
             storeItems: arrayUnion(getVendorItemDisplayName(row.vendorItem)),
             storeItemsIds: arrayUnion(row.vendorItem.id),
             vendorItemIds: arrayUnion(row.vendorItem.id),
+            active: true,
+            availableForPartPurchase: true,
+            partPurchaseAvailable: true,
             dateUpdated: now,
             updatedAt: now,
           });

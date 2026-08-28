@@ -111,8 +111,8 @@ const reviewStatusClass = (status) => {
     return 'border-amber-200 bg-amber-50 text-amber-700';
 };
 
-const DashboardPanel = ({ children, className = '' }) => (
-    <section className={`flex flex-col rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:min-h-[360px] sm:p-6 ${className}`}>
+const DashboardPanel = ({ children, className = '', expanded = false }) => (
+    <section className={`flex flex-col rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-6 ${expanded ? 'min-h-[430px]' : 'sm:min-h-[360px]'} ${className}`}>
         {children}
     </section>
 );
@@ -161,7 +161,7 @@ const invoiceBalanceCents = (invoice) => {
     return Math.max(total - paid - writtenOff, 0);
 };
 
-const MyPoolSnapshot = () => {
+const MyPoolSnapshot = ({ expanded = false }) => {
     const { user } = useContext(Context);
     const [locations, setLocations] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -195,7 +195,7 @@ const MyPoolSnapshot = () => {
     );
 
     return (
-        <DashboardPanel>
+        <DashboardPanel expanded={expanded}>
             <PanelHeader
                 icon={WrenchScrewdriverIcon}
                 iconClassName="text-teal-600"
@@ -578,7 +578,7 @@ const ApprovalsAndEstimatesWidget = () => {
     const totalReviewValueCents = reviewItems.reduce((total, item) => total + Number(item.amountCents || 0), 0);
 
     return (
-        <DashboardPanel className="min-h-[430px]">
+        <DashboardPanel expanded>
             <PanelHeader
                 icon={ClipboardDocumentCheckIcon}
                 iconClassName="text-indigo-600"
@@ -671,17 +671,18 @@ const ClientDashboard = () => {
                     </p>
                 </div>
 
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.75fr)]">
+                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(380px,0.85fr)]">
                     <ApprovalsAndEstimatesWidget />
-                    {messagesEnabled ? <RecentChatsWidget /> : <BillingWidget />}
+                    <MyPoolSnapshot expanded />
                 </div>
 
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                    <MyPoolSnapshot />
+                <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+                    <BillingWidget />
                     <ServiceRequestsWidget />
                     <RepairRequestsWidget />
-                    {messagesEnabled && <BillingWidget />}
                 </div>
+
+                {messagesEnabled && <RecentChatsWidget />}
             </div>
         </div>
     );

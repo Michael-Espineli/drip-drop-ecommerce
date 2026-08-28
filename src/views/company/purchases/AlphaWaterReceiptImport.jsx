@@ -1281,6 +1281,9 @@ const AlphaWaterReceiptImport = () => {
           storeItems: arrayUnion(item.name),
           storeItemsIds: arrayUnion(itemId),
           vendorItemIds: arrayUnion(itemId),
+          active: true,
+          availableForPartPurchase: true,
+          partPurchaseAvailable: true,
           dateUpdated: now,
           updatedAt: now,
         });
@@ -1527,6 +1530,9 @@ const AlphaWaterReceiptImport = () => {
             storeItems: arrayUnion(databaseItem?.name || line.name || itemId),
             storeItemsIds: arrayUnion(itemId),
             vendorItemIds: arrayUnion(itemId),
+            active: true,
+            availableForPartPurchase: true,
+            partPurchaseAvailable: true,
             dateUpdated: now,
             updatedAt: now,
           });

@@ -32,6 +32,7 @@ import { db, functions, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { createCustomerNote } from "../../../utils/customerNotes";
 import {
     companyPermissionCategoryGroups,
     companyPermissions,
@@ -510,6 +511,12 @@ const buildServiceStopReference = (stop = {}) => ({
     description: getServiceStopSubtitle(stop),
     date: getServiceStopDate(stop) || null,
     path: stop.id ? `/company/serviceStops/detail/${stop.id}` : "",
+    customerId: stop.customerId || "",
+    customerName: stop.customerName || "",
+    bodyOfWaterId: stop.bodyOfWaterId || stop.poolId || "",
+    bodyOfWaterName: stop.bodyOfWaterName || stop.poolName || stop.bodyOfWater || "",
+    serviceLocationId: stop.serviceLocationId || stop.locationId || "",
+    serviceLocationName: stop.serviceLocationName || stop.locationName || "",
 });
 
 const buildJobReference = (job = {}) => ({
@@ -519,9 +526,19 @@ const buildJobReference = (job = {}) => ({
     description: getJobSubtitle(job),
     date: getJobDate(job) || null,
     path: job.id ? `/company/jobs/detail/${job.id}` : "",
+    customerId: job.customerId || "",
+    customerName: job.customerName || "",
+    bodyOfWaterId: job.bodyOfWaterId || "",
+    bodyOfWaterName: job.bodyOfWaterName || "",
+    serviceLocationId: job.serviceLocationId || job.locationId || "",
+    serviceLocationName: job.serviceLocationName || job.locationName || "",
 });
 
 const isNonEmptyString = (value) => String(value || "").trim().length > 0;
+
+const uniqueNonEmptyText = (values = []) => (
+    [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))]
+);
 
 const performanceReviewsRef = (companyId, companyUserId) => (
     collection(db, "companyUserPerformanceReviews", companyId, "companyUsers", companyUserId, "reviews")
@@ -755,6 +772,7 @@ const CompanyUserDetails = () => {
     const [isEditingPerformanceReview, setIsEditingPerformanceReview] = useState(false);
     const [isUpdatingPerformanceReview, setIsUpdatingPerformanceReview] = useState(false);
     const [showAllPerformanceHistory, setShowAllPerformanceHistory] = useState(false);
+    const [copyingPerformanceReviewId, setCopyingPerformanceReviewId] = useState("");
     const [summaryDraft, setSummaryDraft] = useState(emptySummaryDraft);
     const [isSavingPerformance, setIsSavingPerformance] = useState(false);
     const [isUploadingPerformanceFiles, setIsUploadingPerformanceFiles] = useState(false);
@@ -1593,6 +1611,224 @@ const CompanyUserDetails = () => {
         () => jobReferenceOptions.filter((reference) => performanceDraft.referenceJobIds.includes(reference.id)),
         [performanceDraft.referenceJobIds, jobReferenceOptions]
     );
+    const recentServiceStopsById = useMemo(
+        () => new Map(recentServiceStops.map((stop) => [String(stop.id), stop])),
+        [recentServiceStops]
+    );
+    const recentJobsById = useMemo(
+        () => new Map(recentJobs.map((job) => [String(job.id), job])),
+        [recentJobs]
+    );
+    const normalizePerformanceCustomerReference = (record = {}, fallback = {}, sourceType = "") => {
+        const customerId = String(record.customerId || fallback.customerId || "").trim();
+        if (!customerId) return null;
+
+        return {
+            customerId,
+            customerName: record.customerName || fallback.customerName || "",
+            bodyOfWaterId: record.bodyOfWaterId || record.poolId || fallback.bodyOfWaterId || "",
+            bodyOfWaterName: record.bodyOfWaterName || record.poolName || record.bodyOfWater || fallback.bodyOfWaterName || "",
+            serviceLocationId: record.serviceLocationId || record.locationId || fallback.serviceLocationId || "",
+            serviceLocationName: record.serviceLocationName || record.locationName || fallback.serviceLocationName || "",
+            sourceType,
+            id: record.id || fallback.id || "",
+            label: fallback.label || (sourceType === "job" ? getJobTitle(record) : getServiceStopTitle(record)),
+        };
+    };
+    const resolvePerformanceReviewCustomerReferences = async (review = {}) => {
+        if (!recentlySelectedCompany) return [];
+
+        const reviewReferences = review.references || {};
+        const jobReferences = Array.isArray(reviewReferences.jobs) ? reviewReferences.jobs : [];
+        const serviceStopReferences = Array.isArray(reviewReferences.serviceStops) ? reviewReferences.serviceStops : [];
+        const directCustomerReferences = [
+            ...(Array.isArray(reviewReferences.customers) ? reviewReferences.customers : []),
+            ...(Array.isArray(review.customerReferences) ? review.customerReferences : []),
+        ];
+        const byCustomer = new Map();
+        const addReference = (reference) => {
+            if (!reference?.customerId) return;
+
+            const current = byCustomer.get(reference.customerId) || {
+                customerId: reference.customerId,
+                customerName: reference.customerName || "",
+                bodyOfWaterIds: [],
+                bodyOfWaterNames: [],
+                serviceLocationIds: [],
+                serviceLocationNames: [],
+                references: [],
+            };
+
+            byCustomer.set(reference.customerId, {
+                ...current,
+                customerName: current.customerName || reference.customerName || "",
+                bodyOfWaterIds: uniqueNonEmptyText([...current.bodyOfWaterIds, reference.bodyOfWaterId]),
+                bodyOfWaterNames: uniqueNonEmptyText([...current.bodyOfWaterNames, reference.bodyOfWaterName]),
+                serviceLocationIds: uniqueNonEmptyText([...current.serviceLocationIds, reference.serviceLocationId]),
+                serviceLocationNames: uniqueNonEmptyText([...current.serviceLocationNames, reference.serviceLocationName]),
+                references: [
+                    ...current.references,
+                    {
+                        type: reference.sourceType || "reference",
+                        id: reference.id || "",
+                        label: reference.label || reference.customerName || "Reference",
+                    },
+                ],
+            });
+        };
+
+        directCustomerReferences.forEach((reference) => {
+            addReference({
+                customerId: String(reference.customerId || reference.id || "").trim(),
+                customerName: reference.customerName || reference.name || "",
+                bodyOfWaterId: reference.bodyOfWaterId || "",
+                bodyOfWaterName: reference.bodyOfWaterName || "",
+                serviceLocationId: reference.serviceLocationId || "",
+                serviceLocationName: reference.serviceLocationName || "",
+                sourceType: "customer",
+                id: reference.customerId || reference.id || "",
+                label: reference.customerName || reference.name || "Customer",
+            });
+        });
+
+        const resolvedJobs = await Promise.all(jobReferences.map(async (reference) => {
+            if (reference.customerId) return reference;
+            if (!reference?.id) return reference;
+
+            const localJob = recentJobsById.get(String(reference.id));
+            if (localJob) return { ...localJob, label: reference.label || getJobTitle(localJob) };
+
+            try {
+                const jobSnapshot = await getDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", reference.id));
+                return jobSnapshot.exists()
+                    ? { id: jobSnapshot.id, ...jobSnapshot.data(), label: reference.label || getJobTitle(jobSnapshot.data()) }
+                    : reference;
+            } catch (error) {
+                console.error("Error resolving performance job reference:", error);
+                return reference;
+            }
+        }));
+
+        resolvedJobs
+            .map((record, index) => normalizePerformanceCustomerReference(record, jobReferences[index], "job"))
+            .forEach(addReference);
+
+        const resolvedServiceStops = await Promise.all(serviceStopReferences.map(async (reference) => {
+            if (reference.customerId) return reference;
+            if (!reference?.id) return reference;
+
+            const localStop = recentServiceStopsById.get(String(reference.id));
+            if (localStop) return { ...localStop, label: reference.label || getServiceStopTitle(localStop) };
+
+            try {
+                const stopSnapshot = await getDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", reference.id));
+                return stopSnapshot.exists()
+                    ? { id: stopSnapshot.id, ...stopSnapshot.data(), label: reference.label || getServiceStopTitle(stopSnapshot.data()) }
+                    : reference;
+            } catch (error) {
+                console.error("Error resolving performance service stop reference:", error);
+                return reference;
+            }
+        }));
+
+        resolvedServiceStops
+            .map((record, index) => normalizePerformanceCustomerReference(record, serviceStopReferences[index], "serviceStop"))
+            .forEach(addReference);
+
+        return [...byCustomer.values()].map((reference) => ({
+            ...reference,
+            bodyOfWaterId: reference.bodyOfWaterIds.length === 1 ? reference.bodyOfWaterIds[0] : "",
+            bodyOfWaterName: reference.bodyOfWaterNames.length === 1 ? reference.bodyOfWaterNames[0] : "",
+            serviceLocationId: reference.serviceLocationIds.length === 1 ? reference.serviceLocationIds[0] : "",
+            serviceLocationName: reference.serviceLocationNames.length === 1 ? reference.serviceLocationNames[0] : "",
+            references: reference.references.filter((item, index, items) => (
+                items.findIndex((candidate) => (
+                    candidate.type === item.type &&
+                    candidate.id === item.id &&
+                    candidate.label === item.label
+                )) === index
+            )),
+        }));
+    };
+    const buildPerformanceReviewCustomerNoteText = (review = {}, customerReference = {}) => {
+        const referenceLabels = uniqueNonEmptyText(
+            (customerReference.references || []).map((reference) => (
+                [labelize(reference.type), reference.label].filter(Boolean).join(": ")
+            ))
+        );
+        const noteBody = String(review.note || review.title || "Performance note copied without additional notes.").trim();
+        const contextLines = [
+            `Technician performance note copied from ${displayName}.`,
+            review.title ? `Title: ${review.title}` : "",
+            `Type: ${getPerformanceTypeLabel(review.type)}`,
+            `Technician: ${displayName}`,
+            `Date: ${formatDateTime(review.date || review.createdAt)}`,
+            customerReference.serviceLocationName ? `Location: ${customerReference.serviceLocationName}` : "",
+            customerReference.bodyOfWaterName ? `Body of water: ${customerReference.bodyOfWaterName}` : "",
+            referenceLabels.length ? `References: ${referenceLabels.join(", ")}` : "",
+        ].filter(Boolean);
+
+        return [...contextLines, "", noteBody].join("\n");
+    };
+    const copyPerformanceReviewToCustomerNotes = async (review = {}) => {
+        if (!requirePermission("264", "copy performance notes to customer notes")) return;
+
+        try {
+            setCopyingPerformanceReviewId(review.id || "performance-review");
+            const customerReferences = await resolvePerformanceReviewCustomerReferences(review);
+
+            if (!customerReferences.length) {
+                toast.error("No customer was found from this performance note's references.");
+                return;
+            }
+
+            const actorUserId = dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "";
+            const attachedReports = Array.isArray(review.attachedReports) ? review.attachedReports : [];
+            const attachments = Array.isArray(review.attachments) ? review.attachments : [];
+            const results = await Promise.all(customerReferences.map((customerReference) => (
+                createCustomerNote({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    customerId: customerReference.customerId,
+                    customerName: customerReference.customerName,
+                    bodyOfWaterId: customerReference.bodyOfWaterId,
+                    bodyOfWaterName: customerReference.bodyOfWaterName,
+                    serviceLocationId: customerReference.serviceLocationId,
+                    userId: actorUserId,
+                    userName: reviewerName,
+                    authorId: actorUserId,
+                    authorName: reviewerName,
+                    note: buildPerformanceReviewCustomerNoteText(review, customerReference),
+                    audience: "office",
+                    visibility: "office",
+                    source: "technicianPerformanceReview",
+                    sourceType: "technicianPerformanceReview",
+                    sourceId: review.id || "",
+                    sourcePath: `companyUserPerformanceReviews/${recentlySelectedCompany}/companyUsers/${user.id}/reviews/${review.id}`,
+                    performanceReviewId: review.id || "",
+                    references: {
+                        companyUserId: user.id,
+                        technicianUserId: user.userId || "",
+                        technicianName: displayName,
+                        sourceReferences: customerReference.references,
+                    },
+                    metadata: {
+                        performanceReviewType: review.type || "",
+                        visibleToTechnician: Boolean(review.visibleToTechnician),
+                    },
+                    attachedReports,
+                    attachments,
+                })
+            )));
+
+            toast.success(`${results.length} customer note${results.length === 1 ? "" : "s"} created.`);
+        } catch (error) {
+            console.error("Error copying performance note to customer notes:", error);
+            toast.error(error?.message || "Failed to copy performance note to customer notes.");
+        } finally {
+            setCopyingPerformanceReviewId("");
+        }
+    };
     const activeAssignedRecurringServiceStops = useMemo(
         () => assignedRecurringServiceStops.filter(isActiveRecurringServiceStop),
         [assignedRecurringServiceStops]
@@ -2585,6 +2821,7 @@ const CompanyUserDetails = () => {
         ].filter((attachment, index, attachments) => (
             attachment?.url && attachments.findIndex((candidate) => candidate.url === attachment.url) === index
         ));
+        const isCopyingReview = copyingPerformanceReviewId === review.id;
 
         return (
             <article key={review.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -2606,6 +2843,22 @@ const CompanyUserDetails = () => {
                     <div className="shrink-0 text-left md:text-right">
                         <p className="text-xs font-semibold text-slate-500">{formatDateTime(review.date || review.createdAt)}</p>
                         <p className="mt-1 text-xs text-slate-500">{review.createdByName || "Management"}</p>
+                        {canEditPerformanceReviews && (
+                            <button
+                                type="button"
+                                onClick={() => copyPerformanceReviewToCustomerNotes(review)}
+                                disabled={isCopyingReview}
+                                className={[
+                                    "mt-3 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition",
+                                    isCopyingReview
+                                        ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                                        : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+                                ].join(" ")}
+                            >
+                                <ClipboardDocumentCheckIcon className="h-4 w-4" />
+                                {isCopyingReview ? "Copying..." : "Copy to Customer Notes"}
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -2705,6 +2958,7 @@ const CompanyUserDetails = () => {
         ].filter((attachment, index, attachments) => (
             attachment?.url && attachments.findIndex((candidate) => candidate.url === attachment.url) === index
         ));
+        const isCopyingReview = copyingPerformanceReviewId === review.id;
 
         return (
             <tr key={review.id} className="align-top">
@@ -2740,6 +2994,24 @@ const CompanyUserDetails = () => {
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">
                     {review.createdByName || "Management"}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">
+                    {canEditPerformanceReviews && (
+                        <button
+                            type="button"
+                            onClick={() => copyPerformanceReviewToCustomerNotes(review)}
+                            disabled={isCopyingReview}
+                            className={[
+                                "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition",
+                                isCopyingReview
+                                    ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                                    : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+                            ].join(" ")}
+                        >
+                            <ClipboardDocumentCheckIcon className="h-3.5 w-3.5" />
+                            {isCopyingReview ? "Copying..." : "Copy"}
+                        </button>
+                    )}
                 </td>
             </tr>
         );
@@ -4484,6 +4756,7 @@ const CompanyUserDetails = () => {
                                                 <th className="px-4 py-3 text-left">Refs</th>
                                                 <th className="px-4 py-3 text-left">Files</th>
                                                 <th className="px-4 py-3 text-left">By</th>
+                                                <th className="px-4 py-3 text-left">Actions</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100 bg-white">

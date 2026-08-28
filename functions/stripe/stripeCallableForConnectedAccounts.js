@@ -809,6 +809,8 @@ const syncLinkedJobForAgreementStatus = async ({
   timestamp = admin.firestore.FieldValue.serverTimestamp(),
   selectedSolutionId = '',
   selectedSolutionOption = null,
+  responseType = '',
+  responseNote = '',
 }) => {
   const companyId = agreement.companyId || '';
   const jobId = linkedJobIdForAgreement(agreement);
@@ -869,7 +871,21 @@ const syncLinkedJobForAgreementStatus = async ({
     update.billingStatus = 'Estimate';
     update.salesAgreementSentAt = timestamp;
     if (!job.operationStatus || job.operationStatus === 'Estimate Pending') {
-      update.operationStatus = 'Unscheduled';
+      update.operationStatus = 'Estimate Pending';
+    }
+  }
+
+  if (statusKey === 'rejected') {
+    const changeRequest = responseType === 'changesRequested';
+    update.billingStatus = 'Rejected';
+    update.salesAgreementRejectedAt = timestamp;
+    update.salesAgreementCustomerResponseType = responseType || 'rejected';
+    update.salesAgreementResponseNote = responseNote || '';
+    update.planSelectionStatus = changeRequest ? 'Changes Requested' : 'Rejected';
+    update.solutionSelectionStatus = changeRequest ? 'Changes Requested' : 'Rejected';
+
+    if (!job.operationStatus || ['Estimate Pending', 'Unscheduled'].includes(job.operationStatus)) {
+      update.operationStatus = 'Estimate Pending';
     }
   }
 
@@ -885,6 +901,63 @@ const syncLinkedJobForAgreementStatus = async ({
       actorUserId,
       actorUserName,
     });
+  }
+
+  if (statusKey === 'rejected') {
+    const changeRequest = responseType === 'changesRequested';
+    const responseLabel = changeRequest ? 'Customer requested estimate changes' : 'Customer rejected estimate';
+    const responseDescription = responseNote || (changeRequest
+      ? 'Customer requested a different plan or estimate revision.'
+      : 'Customer declined all estimate options.');
+    const commentId = `comp_wo_com_${uuidv4()}`;
+    const historyId = `comp_job_hist_${uuidv4()}`;
+
+    await Promise.all([
+      jobRef.collection('comments').doc(commentId).set({
+        id: commentId,
+        jobId,
+        companyId,
+        userId: actorUserId || '',
+        userName: actorUserName || 'Customer',
+        authorId: actorUserId || '',
+        authorName: actorUserName || 'Customer',
+        date: timestamp,
+        dateMillis: Date.now(),
+        comment: [responseLabel, responseNote].filter(Boolean).join('\n'),
+        resolved: false,
+        sourceType: changeRequest ? 'estimateChangesRequested' : 'estimateRejected',
+        metadata: {
+          salesAgreementId: agreement.id || agreement.agreementId || '',
+          responseType: responseType || 'rejected',
+        },
+      }),
+      jobRef.collection('history').doc(historyId).set({
+        id: historyId,
+        companyId,
+        jobId,
+        eventType: 'Billing',
+        title: responseLabel,
+        description: responseDescription,
+        changes: [
+          { field: 'billingStatus', label: 'Billing Status', before: job.billingStatus || '—', after: 'Rejected' },
+          {
+            field: 'planSelectionStatus',
+            label: 'Plan Selection',
+            before: job.planSelectionStatus || job.solutionSelectionStatus || '—',
+            after: changeRequest ? 'Changes Requested' : 'Rejected',
+          },
+        ],
+        metadata: {
+          salesAgreementId: agreement.id || agreement.agreementId || '',
+          responseType: responseType || 'rejected',
+        },
+        severity: changeRequest ? 'warning' : 'danger',
+        actorUserId: actorUserId || '',
+        actorUserName: actorUserName || 'Customer',
+        createdAt: timestamp,
+        createdAtMillis: Date.now(),
+      }),
+    ]);
   }
 };
 
@@ -1620,6 +1693,13 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   const agreementId = receivedData.agreementId;
   const requestedSolutionId = String(receivedData.selectedPlanId || receivedData.selectedSolutionId || '').trim();
   const acceptanceNote = String(receivedData.acceptanceNote || '').trim();
+  const requestedAcceptanceSource = normalizeStatus(receivedData.acceptanceSource || receivedData.acceptedSource || '');
+  const acceptedSource = {
+    customeroffline: 'customerOffline',
+    internalmanual: 'internalManual',
+    customerportal: 'customerPortal',
+    emaillink: 'emailLink',
+  }[requestedAcceptanceSource] || 'customerPortal';
   const acceptanceConfirmation = validateAgreementAcceptance(receivedData);
   const acceptanceAudit = getAgreementAcceptanceAudit(context);
 
@@ -1696,7 +1776,11 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
   const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
   const acceptedByEmail = callableAuth.token?.email || agreement.email || '';
-  const acceptedByName = callableAuth.token?.name || agreement.customerName || acceptedByEmail || 'Customer';
+  const acceptedByName = String(receivedData.acceptedByName || receivedData.acceptedByUserName || '').trim()
+    || callableAuth.token?.name
+    || agreement.customerName
+    || acceptedByEmail
+    || 'Customer';
 
   await db.runTransaction(async (transaction) => {
     const freshAgreementSnap = await transaction.get(agreementRef);
@@ -1898,7 +1982,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       acceptedByUserId: callableAuth.uid,
       acceptedByUserName: acceptedByName,
       acceptedByEmail,
-      acceptedSource: 'customerPortal',
+      acceptedSource,
       acceptedNote: acceptanceNote,
       createBillingSubscriptionOnAcceptance: salesBillingAutomationEnabled,
       acceptedSignatureName: acceptanceConfirmation.signatureName,
@@ -1930,6 +2014,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         acceptedByUserId: callableAuth.uid,
         acceptedByUserName: acceptedByName,
         acceptedByEmail,
+        acceptedSource,
         acceptedSignatureName: acceptanceConfirmation.signatureName,
         acceptedTermsConfirmed: acceptanceConfirmation.acceptedTermsConfirmed,
         acceptedPricingConfirmed: acceptanceConfirmation.acceptedPricingConfirmed,
@@ -2112,6 +2197,112 @@ exports.rejectSalesServiceAgreement = functions.https.onCall(async (data, contex
   return {
     status: 'success',
     agreementId,
+  };
+});
+
+exports.rejectPublicSalesServiceAgreement = functions.https.onCall(async (data, context) => {
+  const receivedData = getCallableData(data);
+  const agreementId = String(receivedData.agreementId || '').trim();
+  const accessToken = String(receivedData.accessToken || receivedData.reviewToken || '').trim();
+  const email = receivedData.email || '';
+  const responseType = String(receivedData.responseType || receivedData.customerResponseType || 'rejected').trim() === 'changesRequested'
+    ? 'changesRequested'
+    : 'rejected';
+  const rejectionNote = String(receivedData.rejectionNote || receivedData.responseNote || '').trim().slice(0, 2000);
+
+  if (!agreementId) {
+    throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
+  }
+
+  if (!accessToken) {
+    throw new functions.https.HttpsError('invalid-argument', 'Open the service agreement from the email link before responding.');
+  }
+
+  if (responseType === 'changesRequested' && rejectionNote.length < 3) {
+    throw new functions.https.HttpsError('invalid-argument', 'Add a short note about what you would like changed.');
+  }
+
+  const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
+  const agreementSnap = await agreementRef.get();
+
+  if (!agreementSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+  }
+
+  const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
+  if (!publicAgreementLinkCanAccess({ agreement, accessToken, email })) {
+    throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+  }
+
+  const statusKey = normalizeStatus(agreement.status);
+  if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
+    throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available for a response.');
+  }
+
+  const rejectedAt = admin.firestore.FieldValue.serverTimestamp();
+  const rejectedByEmail = normalizeEmail(email || agreement.email || agreement.customerEmail || agreement.billingEmail);
+  const rejectedByName = agreement.customerName || rejectedByEmail || 'Customer';
+  const rejectedByUserId = agreement.customerUserId || '';
+
+  await db.runTransaction(async (transaction) => {
+    const freshAgreementSnap = await transaction.get(agreementRef);
+
+    if (!freshAgreementSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    }
+
+    const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
+    if (!publicAgreementLinkCanAccess({ agreement: freshAgreement, accessToken, email })) {
+      throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+    }
+
+    const freshStatusKey = normalizeStatus(freshAgreement.status);
+    if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
+      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available for a response.');
+    }
+
+    transaction.set(agreementRef, {
+      status: 'rejected',
+      rejectedAt,
+      rejectedByUserId,
+      rejectedByUserName: rejectedByName,
+      rejectedByEmail,
+      rejectedSource: 'emailLink',
+      rejectedNote: rejectionNote,
+      customerResponseType: responseType,
+      changesRequestedAt: responseType === 'changesRequested' ? rejectedAt : null,
+      customerUserId: freshAgreement.customerUserId || rejectedByUserId || null,
+      statusChangedAt: rejectedAt,
+      statusChangedByUserId: rejectedByUserId,
+      statusChangedByUserName: rejectedByName,
+      statusChangeReason: rejectionNote || (
+        responseType === 'changesRequested'
+          ? 'Customer requested a different estimate from the email review link.'
+          : 'Customer declined from the email review link.'
+      ),
+      updatedAt: rejectedAt,
+    }, { merge: true });
+  });
+
+  await syncLinkedJobForAgreementStatus({
+    agreement,
+    status: 'rejected',
+    actorUserId: rejectedByUserId || 'email-link',
+    actorUserName: rejectedByName,
+    timestamp: rejectedAt,
+    responseType,
+    responseNote: rejectionNote,
+  });
+  await syncLinkedLeadForAgreementStatus({
+    agreement,
+    status: 'rejected',
+    timestamp: rejectedAt,
+  });
+
+  return {
+    status: 'success',
+    agreementId,
+    customerResponseType: responseType,
   };
 });
 

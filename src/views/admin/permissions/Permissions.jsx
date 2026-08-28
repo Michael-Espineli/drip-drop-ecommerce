@@ -32,6 +32,9 @@ const childPermissionPrefixes = [
   "Accept",
   "Schedule",
   "Edit",
+  "Build",
+  "Send",
+  "Recommend",
 ];
 
 const permissionStatusFilters = [
@@ -67,6 +70,9 @@ function generatedDescription(permission) {
   if (action === "Delete") return `Can remove existing ${subjectText} records or configuration.`;
   if (action === "Respond") return `Can respond to ${subjectText} and move that workflow forward.`;
   if (action === "Schedule") return `Can schedule ${subjectText} for available company users.`;
+  if (action === "Build") return `Can build ${subjectText} while working in the field.`;
+  if (action === "Send") return `Can send ${subjectText} to customers.`;
+  if (action === "Recommend") return `Can recommend ${subjectText} for company review or customer follow-up.`;
   if (action === "Split") return `Can split ${subjectText} into smaller assignable pieces.`;
   if (action === "Incentivize") return `Can add incentive pay or rewards to ${subjectText}.`;
   if (action === "Approve") return `Can approve ${subjectText} when approval is required.`;

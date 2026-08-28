@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   collection,
   doc,
@@ -45,6 +45,7 @@ import {
   SalesAgreementPnlChemicalCostMode,
   SalesInvoiceLineItem,
   SalesAgreementStatus,
+  SalesAgreementSourceType,
   SalesAutopayStatus,
   SalesInvoiceDeliveryMethod,
   salesCollectionNames,
@@ -84,6 +85,7 @@ import {
   updateTermsTemplate,
 } from '../../../utils/terms/termsTemplateFirestore';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID } from '../../../utils/companyPermissions';
 import { appConfirm } from '../../../utils/appDialog';
 import ShareItemButton from '../../components/share/ShareItemButton';
 
@@ -551,7 +553,423 @@ const agreementPrintTotalCents = (agreement = {}) => {
   return Number.isFinite(explicitTotal) ? explicitTotal : subtotal;
 };
 
-const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '', includeSignatures = true }) => {
+const salesPlanOptionId = (option = {}) => String(option.planId || option.solutionId || option.id || '').trim();
+
+const salesPlanOptionTitle = (option = {}) => (
+  [option.planTierLabel || option.solutionTierLabel, option.title || option.name || option.planName]
+    .filter(Boolean)
+    .join(' - ') || 'Plan Option'
+);
+
+const salesPlanOptionsForAgreement = (agreement = {}) => (
+  Array.isArray(agreement.planOptions) && agreement.planOptions.length
+    ? agreement.planOptions
+    : Array.isArray(agreement.solutionOptions)
+      ? agreement.solutionOptions
+      : []
+);
+
+const selectedPlanIdForSalesAgreement = (agreement = {}) => String(
+  agreement.acceptedPlanId ||
+  agreement.acceptedSolutionId ||
+  agreement.selectedPlanId ||
+  agreement.selectedSolutionId ||
+  agreement.defaultPlanId ||
+  agreement.defaultSolutionId ||
+  ''
+).trim();
+
+const salesPlanOptionLineItems = (option = {}, fallbackLineItems = []) => (
+  Array.isArray(option.lineItems) && option.lineItems.length
+    ? option.lineItems
+    : fallbackLineItems
+);
+
+const salesPlanOptionTotalCents = (option = {}, fallbackLineItems = []) => {
+  const directTotal = Number(option.totalAmountCents || option.rateAmountCents || 0);
+  if (directTotal) return directTotal;
+
+  return salesPlanOptionLineItems(option, fallbackLineItems).reduce(
+    (total, item) => total + agreementLineItemTotalCents(item),
+    0
+  );
+};
+
+const selectedPlanOptionForAgreement = (agreement = {}, selectedPlanId = '') => {
+  const options = salesPlanOptionsForAgreement(agreement);
+  if (!options.length) return null;
+
+  const selectedId = String(selectedPlanId || selectedPlanIdForSalesAgreement(agreement)).trim();
+  return options.find((option) => salesPlanOptionId(option) === selectedId) || options[0] || null;
+};
+
+const isJobEstimateAgreement = (agreement = {}) => Boolean(
+  normalizeStatus(agreement.sourceType) === normalizeStatus(SalesAgreementSourceType.oneOffJob) ||
+  agreement.jobId ||
+  agreement.workOrderId ||
+  agreement.rateType === 'oneTime' ||
+  agreement.serviceCadence === 'oneTime'
+);
+
+const buildPrintableJobEstimateHtml = ({ agreement = {}, companyName = '', selectedPlanId = '', includeSignatures = true }) => {
+  const providerName = firstAgreementText(agreement.companyName, companyName, 'Service Provider');
+  const clientName = firstAgreementText(agreement.customerName, agreement.customerDisplayName, 'Client');
+  const clientEmail = firstAgreementText(agreement.email, agreement.customerEmail, agreement.billingEmail);
+  const location = agreementLocationForPrint(agreement);
+  const termsList = termsToStrings(agreement.termsList);
+  const termsIntro = stripNumberedTermsFromContent(agreement.terms, termsList);
+  const preparedDate = formatDate(agreement.createdAt || agreement.sentAt || new Date());
+  const planOptions = salesPlanOptionsForAgreement(agreement);
+  const selectedOption = selectedPlanOptionForAgreement(agreement, selectedPlanId);
+  const selectedOptionId = salesPlanOptionId(selectedOption || {});
+  const documentTitle = firstAgreementText(agreement.title, 'Job Estimate');
+  const optionSections = planOptions.length
+    ? planOptions.map((option, index) => {
+      const optionId = salesPlanOptionId(option);
+      const active = optionId && optionId === selectedOptionId;
+      const optionLineItems = salesPlanOptionLineItems(option, agreement.lineItems || []);
+      const lineRows = optionLineItems.length
+        ? optionLineItems.map((item) => {
+          const quantity = Number(item.quantity || 1) || 1;
+          return `
+            <tr>
+              <td>
+                <strong>${escapeAgreementHtml(item.name || item.description || 'Service')}</strong>
+                ${item.description ? `<div class="muted">${agreementHtmlWithBreaks(item.description)}</div>` : ''}
+              </td>
+              <td>${escapeAgreementHtml(quantity)}</td>
+              <td><strong>${escapeAgreementHtml(formatCurrency(agreementLineItemTotalCents(item)))}</strong></td>
+            </tr>
+          `;
+        }).join('')
+        : '<tr><td colspan="3" class="muted">No itemized services or products were saved with this option.</td></tr>';
+
+      return `
+        <section>
+          <div class="option-header">
+            <div>
+              <h2>${index + 3}. ${escapeAgreementHtml(salesPlanOptionTitle(option))}</h2>
+              ${active ? '<span class="selected-pill">Selected / default option</span>' : ''}
+            </div>
+            <strong class="price">${escapeAgreementHtml(formatCurrency(salesPlanOptionTotalCents(option, agreement.lineItems || [])))}</strong>
+          </div>
+          ${option.description ? `<p>${agreementHtmlWithBreaks(option.description)}</p>` : ''}
+          <table class="line-items">
+            <thead>
+              <tr>
+                <th>Service or Product</th>
+                <th>Qty</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>${lineRows}</tbody>
+          </table>
+        </section>
+      `;
+    }).join('')
+    : '';
+  const fallbackLineRows = !planOptions.length
+    ? (Array.isArray(agreement.lineItems) && agreement.lineItems.length
+      ? agreement.lineItems.map((item) => {
+        const quantity = Number(item.quantity || 1) || 1;
+        return `
+          <tr>
+            <td>
+              <strong>${escapeAgreementHtml(item.name || item.description || 'Service')}</strong>
+              ${item.description ? `<div class="muted">${agreementHtmlWithBreaks(item.description)}</div>` : ''}
+            </td>
+            <td>${escapeAgreementHtml(quantity)}</td>
+            <td><strong>${escapeAgreementHtml(formatCurrency(agreementLineItemTotalCents(item)))}</strong></td>
+          </tr>
+        `;
+      }).join('')
+      : '<tr><td colspan="3" class="muted">No itemized services or products were saved with this estimate.</td></tr>')
+    : '';
+  const termsHtml = [
+    termsIntro ? `<p>${agreementHtmlWithBreaks(termsIntro)}</p>` : '',
+    termsList.length
+      ? `<ol>${termsList.map((term) => `<li>${agreementHtmlWithBreaks(term)}</li>`).join('')}</ol>`
+      : '',
+  ].filter(Boolean).join('');
+  const acceptedSignatureName = firstAgreementText(agreement.acceptedSignatureName, agreement.acceptedBySignatureName);
+  const signatureHtml = includeSignatures
+    ? `
+            <p>
+              By signing below or accepting through the provided DripDrop review link, the Client authorizes the
+              Service Provider to complete the approved estimate option.
+            </p>
+            <div class="signature-grid">
+              <div>
+                <div class="signature-value">${escapeAgreementHtml(acceptedSignatureName)}</div>
+                <div class="signature-line">Client Signature</div>
+              </div>
+              <div>
+                <div class="signature-value">${escapeAgreementHtml(acceptedSignatureName ? formatDate(agreement.acceptedAt) : '')}</div>
+                <div class="signature-line">Date</div>
+              </div>
+              <div>
+                <div class="signature-value">${escapeAgreementHtml(selectedOption ? salesPlanOptionTitle(selectedOption) : '')}</div>
+                <div class="signature-line">Approved Option</div>
+              </div>
+              <div>
+                <div class="signature-value"></div>
+                <div class="signature-line">Service Provider Representative</div>
+              </div>
+            </div>
+    `
+    : `
+            <p>
+              Acceptance may be completed through the provided DripDrop review link or recorded separately by the company.
+            </p>
+    `;
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <title>${escapeAgreementHtml(providerName)} - ${escapeAgreementHtml(documentTitle)}</title>
+        <style>
+          @page { margin: 0.35in; size: Letter; }
+          * { box-sizing: border-box; }
+          body {
+            color: #111827;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 11px;
+            line-height: 1.45;
+            margin: 0;
+            background: #ffffff;
+          }
+          .page {
+            max-width: 7.7in;
+            margin: 0 auto;
+            padding: 0.45in;
+          }
+          header {
+            border-bottom: 2px solid #111827;
+            margin-bottom: 18px;
+            padding-bottom: 12px;
+            text-align: center;
+          }
+          h1 {
+            font-size: 18px;
+            letter-spacing: 0;
+            margin: 0 0 10px;
+            text-transform: uppercase;
+          }
+          .document-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            color: #4b5563;
+            font-size: 10px;
+            text-transform: uppercase;
+          }
+          section {
+            break-inside: avoid;
+            margin-top: 14px;
+          }
+          h2 {
+            font-size: 11px;
+            margin: 0 0 7px;
+            text-transform: uppercase;
+          }
+          p {
+            margin: 0 0 8px;
+          }
+          .blank {
+            border-bottom: 1px solid #111827;
+            display: inline-block;
+            min-width: 155px;
+            padding: 0 4px 1px;
+          }
+          .long-blank {
+            min-width: 245px;
+          }
+          .summary-grid {
+            display: grid;
+            gap: 8px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+          .summary-cell {
+            border: 1px solid #d1d5db;
+            padding: 8px;
+          }
+          .summary-cell span {
+            color: #4b5563;
+            display: block;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+          }
+          .summary-cell strong {
+            display: block;
+            margin-top: 3px;
+          }
+          .option-header {
+            align-items: start;
+            border-top: 1px solid #111827;
+            display: flex;
+            gap: 16px;
+            justify-content: space-between;
+            padding-top: 10px;
+          }
+          .price {
+            font-size: 15px;
+            white-space: nowrap;
+          }
+          .selected-pill {
+            border: 1px solid #93c5fd;
+            color: #1d4ed8;
+            display: inline-block;
+            font-size: 9px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            padding: 2px 6px;
+            text-transform: uppercase;
+          }
+          .muted {
+            color: #4b5563;
+            font-size: 10px;
+            font-weight: 400;
+            margin-top: 3px;
+          }
+          table {
+            border-collapse: collapse;
+            width: 100%;
+          }
+          .line-items {
+            margin-top: 8px;
+          }
+          .line-items th,
+          .line-items td {
+            border: 1px solid #9ca3af;
+            padding: 6px;
+            text-align: left;
+            vertical-align: top;
+          }
+          .line-items th {
+            background: #f3f4f6;
+            color: #4b5563;
+            font-size: 9px;
+            text-transform: uppercase;
+          }
+          ol {
+            margin: 0;
+            padding-left: 18px;
+          }
+          li {
+            margin-bottom: 5px;
+          }
+          .signature-grid {
+            display: grid;
+            gap: 26px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            margin-top: 32px;
+          }
+          .signature-line {
+            border-top: 1px solid #111827;
+            padding-top: 5px;
+          }
+          .signature-value {
+            font-size: 14px;
+            font-weight: 700;
+            min-height: 22px;
+            padding: 0 0 4px;
+          }
+          footer {
+            align-items: center;
+            color: #4b5563;
+            display: flex;
+            font-size: 10px;
+            justify-content: space-between;
+            margin-top: 28px;
+          }
+          @media print {
+            body { margin: 0; padding: 0; }
+            .page { max-width: none; padding: 0.35in; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="page">
+          <header>
+            <h1>Job Estimate</h1>
+            <div class="document-meta">
+              <span>${escapeAgreementHtml(documentTitle)}</span>
+              <span>Estimate: ${escapeAgreementHtml(agreement.id || 'Not assigned')}</span>
+              <span>Prepared: ${escapeAgreementHtml(preparedDate)}</span>
+            </div>
+          </header>
+
+          <section>
+            <h2>1. The Parties</h2>
+            <p>
+              This Job Estimate is prepared by
+              <span class="blank long-blank">${escapeAgreementHtml(providerName)}</span>
+              for
+              <span class="blank long-blank">${escapeAgreementHtml(clientName)}</span>.
+            </p>
+            <p>
+              Client contact:
+              <span class="blank long-blank">${escapeAgreementHtml(clientEmail || 'Not provided')}</span>
+              Service location:
+              <span class="blank long-blank">${escapeAgreementHtml(location.addressText || location.name || 'Not provided')}</span>
+            </p>
+          </section>
+
+          <section>
+            <h2>2. Estimate Snapshot</h2>
+            <div class="summary-grid">
+              <div class="summary-cell"><span>Status</span><strong>${escapeAgreementHtml(labelize(agreement.status || 'draft'))}</strong></div>
+              <div class="summary-cell"><span>Review By</span><strong>${escapeAgreementHtml(formatDate(agreement.expiresAt))}</strong></div>
+              <div class="summary-cell"><span>Options</span><strong>${escapeAgreementHtml(planOptions.length || 1)}</strong></div>
+              <div class="summary-cell"><span>Selected Option</span><strong>${escapeAgreementHtml(selectedOption ? salesPlanOptionTitle(selectedOption) : 'Not selected')}</strong></div>
+            </div>
+            ${agreement.description ? `<p style="margin-top: 10px;">${agreementHtmlWithBreaks(agreement.description)}</p>` : ''}
+          </section>
+
+          ${optionSections || `
+            <section>
+              <h2>3. Estimate Items</h2>
+              <table class="line-items">
+                <thead>
+                  <tr>
+                    <th>Service or Product</th>
+                    <th>Qty</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>${fallbackLineRows}</tbody>
+              </table>
+            </section>
+          `}
+
+          <section>
+            <h2>${planOptions.length ? planOptions.length + 3 : 4}. Terms And Conditions</h2>
+            ${termsHtml || '<p class="muted">No additional terms were saved with this estimate.</p>'}
+          </section>
+
+          <section>
+            <h2>${planOptions.length ? planOptions.length + 4 : 5}. Acceptance</h2>
+            ${signatureHtml}
+          </section>
+
+          <footer>
+            <strong>DripDrop Estimate</strong>
+            <span>Page 1 of 1</span>
+          </footer>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
+const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '', includeSignatures = true, selectedPlanId = '' }) => {
+  if (isJobEstimateAgreement(agreement)) {
+    return buildPrintableJobEstimateHtml({ agreement, companyName, selectedPlanId, includeSignatures });
+  }
+
   const providerName = firstAgreementText(agreement.companyName, companyName, 'Service Provider');
   const clientName = firstAgreementText(agreement.customerName, agreement.customerDisplayName, 'Client');
   const clientEmail = firstAgreementText(agreement.email, agreement.customerEmail, agreement.billingEmail);
@@ -960,9 +1378,11 @@ const linkedInspectionServiceStopIdForAgreement = (agreement = {}) => {
   return '';
 };
 
-const SalesAgreementDetail = () => {
+const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
   const { agreementId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const shouldOpenSendDialogFromQuery = searchParams.get('send') === '1';
   const {
     customerBillingEnabled,
     dataBaseUser,
@@ -973,6 +1393,7 @@ const SalesAgreementDetail = () => {
     user,
   } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
+  const canUseFieldAgreementWorkflow = can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) || can('400');
   const [agreement, setAgreement] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -981,6 +1402,7 @@ const SalesAgreementDetail = () => {
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [includeInspectionReport, setIncludeInspectionReport] = useState(false);
   const [includeSignaturesInDownload, setIncludeSignaturesInDownload] = useState(true);
+  const [selectedEstimatePlanId, setSelectedEstimatePlanId] = useState('');
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -1237,6 +1659,27 @@ const SalesAgreementDetail = () => {
     () => (Array.isArray(agreement?.lineItems) ? agreement.lineItems : []),
     [agreement]
   );
+  const agreementIsJobEstimate = detailMode === 'estimate' || isJobEstimateAgreement(agreement || {});
+  const documentLabel = agreementIsJobEstimate ? 'Estimate' : 'Service Agreement';
+  const documentLabelLower = agreementIsJobEstimate ? 'estimate' : 'service agreement';
+  const documentArticle = agreementIsJobEstimate ? 'an' : 'a';
+  const documentPluralLabel = agreementIsJobEstimate ? 'Estimates' : 'Service Agreements';
+  const documentListPath = agreementIsJobEstimate ? '/company/estimates' : '/company/sales/agreements';
+  const estimatePlanOptions = useMemo(
+    () => salesPlanOptionsForAgreement(agreement || {}),
+    [agreement]
+  );
+  const estimatePlanOptionIds = useMemo(
+    () => estimatePlanOptions.map(salesPlanOptionId).filter(Boolean).join('|'),
+    [estimatePlanOptions]
+  );
+  const selectedEstimatePlanOption = useMemo(
+    () => selectedPlanOptionForAgreement(agreement || {}, selectedEstimatePlanId),
+    [agreement, selectedEstimatePlanId]
+  );
+  const displayLineItems = agreementIsJobEstimate && selectedEstimatePlanOption
+    ? salesPlanOptionLineItems(selectedEstimatePlanOption, lineItems)
+    : lineItems;
   const locations = useMemo(
     () => (Array.isArray(agreement?.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : []),
     [agreement]
@@ -1250,11 +1693,18 @@ const SalesAgreementDetail = () => {
     [agreement?.terms, agreementTermsList]
   );
   const hasTerms = Boolean(agreementTermsIntro || agreementTermsList.length);
-  const subtotalAmountCents = agreement?.subtotalAmountCents ?? lineItems.reduce(
+  const subtotalAmountCents = agreementIsJobEstimate && selectedEstimatePlanOption
+    ? salesPlanOptionLineItems(selectedEstimatePlanOption, lineItems).reduce(
+      (total, item) => total + agreementLineItemTotalCents(item),
+      0
+    )
+    : (agreement?.subtotalAmountCents ?? lineItems.reduce(
     (total, item) => total + (Number(item.totalAmountCents) || 0),
     0
-  );
-  const totalAmountCents = agreement?.totalAmountCents ?? agreement?.rateAmountCents ?? subtotalAmountCents;
+  ));
+  const totalAmountCents = agreementIsJobEstimate && selectedEstimatePlanOption
+    ? salesPlanOptionTotalCents(selectedEstimatePlanOption, lineItems)
+    : (agreement?.totalAmountCents ?? agreement?.rateAmountCents ?? subtotalAmountCents);
   const emailDelivery = agreement?.emailDelivery || {};
   const linkedInspectionServiceStopId = linkedInspectionServiceStopIdForAgreement(agreement || {});
   const inspectionReportUrl = (
@@ -1361,6 +1811,10 @@ const SalesAgreementDetail = () => {
     () => [...agreementHistoryRows].reverse().find((record) => record.amountDeltaCents > 0) || null,
     [agreementHistoryRows]
   );
+  const estimateHasPricedOptions = estimatePlanOptions.some((option) => (
+    salesPlanOptionTotalCents(option, lineItems) > 0 ||
+    salesPlanOptionLineItems(option, lineItems).length > 0
+  ));
 
   const readinessItems = [
     {
@@ -1374,9 +1828,11 @@ const SalesAgreementDetail = () => {
       helper: `${locations.length} location${locations.length === 1 ? '' : 's'} included.`,
     },
     {
-      ready: lineItems.length > 0,
-      title: 'Catalog line items',
-      helper: `${lineItems.length} line item${lineItems.length === 1 ? '' : 's'} included.`,
+      ready: agreementIsJobEstimate ? estimateHasPricedOptions || displayLineItems.length > 0 : lineItems.length > 0,
+      title: agreementIsJobEstimate ? 'Plan options' : 'Catalog line items',
+      helper: agreementIsJobEstimate
+        ? `${estimatePlanOptions.length || 1} option${estimatePlanOptions.length === 1 ? '' : 's'} included.`
+        : `${lineItems.length} line item${lineItems.length === 1 ? '' : 's'} included.`,
     },
     {
       ready: hasTerms,
@@ -1387,6 +1843,7 @@ const SalesAgreementDetail = () => {
   const canSend = Boolean(
     agreement &&
     user &&
+    canUseFieldAgreementWorkflow &&
     !companyMismatch &&
     !editing &&
     readinessItems
@@ -1399,10 +1856,13 @@ const SalesAgreementDetail = () => {
   const sendEmailDisabledReasons = [];
 
   if (!agreement) {
-    sendEmailDisabledReasons.push('Agreement is still loading.');
+    sendEmailDisabledReasons.push(`${documentLabel} is still loading.`);
   }
   if (agreement && !user) {
-    sendEmailDisabledReasons.push('You must be signed in to send this agreement.');
+    sendEmailDisabledReasons.push(`You must be signed in to send this ${documentLabelLower}.`);
+  }
+  if (agreement && user && !canUseFieldAgreementWorkflow) {
+    sendEmailDisabledReasons.push(`Your role cannot send ${documentPluralLabel.toLowerCase()}.`);
   }
   if (companyMismatch) {
     sendEmailDisabledReasons.push('Select the company that owns this agreement.');
@@ -1418,15 +1878,53 @@ const SalesAgreementDetail = () => {
     sendEmailDisabledReasons.push('Email send is already in progress.');
   }
   if (currentStatusKey === normalizeStatus(SalesAgreementStatus.accepted)) {
-    sendEmailDisabledReasons.push('Accepted agreements cannot be sent again from this button.');
+    sendEmailDisabledReasons.push(`Accepted ${documentPluralLabel.toLowerCase()} cannot be sent again from this button.`);
   }
   if (['canceled', 'rejected', 'expired', 'superseded'].includes(currentStatusKey)) {
-    sendEmailDisabledReasons.push(`Agreement status is ${labelize(agreement?.status || currentStatusKey)}.`);
+    sendEmailDisabledReasons.push(`${documentLabel} status is ${labelize(agreement?.status || currentStatusKey)}.`);
   }
 
   const sendEmailButtonTitle = canSend
     ? (agreement?.email ? 'Verify recipients before sending' : 'Add a recipient before sending')
     : `Send Email is disabled:\n${sendEmailDisabledReasons.join('\n') || 'No send reason is available.'}`;
+
+  useEffect(() => {
+    if (!shouldOpenSendDialogFromQuery || !agreement?.id || showSendDialog || sending) return;
+    if (canSend) setShowSendDialog(true);
+  }, [agreement?.id, canSend, sending, shouldOpenSendDialogFromQuery, showSendDialog]);
+
+  useEffect(() => {
+    if (!agreementIsJobEstimate || !agreement?.id) {
+      if (selectedEstimatePlanId) setSelectedEstimatePlanId('');
+      return;
+    }
+
+    const preferredPlanId =
+      selectedPlanIdForSalesAgreement(agreement) ||
+      salesPlanOptionId(estimatePlanOptions[0] || {});
+    const currentSelectionIsValid = Boolean(
+      selectedEstimatePlanId &&
+      estimatePlanOptions.some((option) => salesPlanOptionId(option) === selectedEstimatePlanId)
+    );
+
+    if (preferredPlanId && !currentSelectionIsValid) {
+      setSelectedEstimatePlanId(preferredPlanId);
+    }
+  }, [
+    agreement,
+    agreement?.id,
+    agreement?.acceptedPlanId,
+    agreement?.acceptedSolutionId,
+    agreement?.defaultPlanId,
+    agreement?.defaultSolutionId,
+    agreement?.selectedPlanId,
+    agreement?.selectedSolutionId,
+    agreementIsJobEstimate,
+    estimatePlanOptionIds,
+    estimatePlanOptions,
+    selectedEstimatePlanId,
+  ]);
+
   const canMarkAccepted = Boolean(
     agreement &&
     user &&
@@ -1722,6 +2220,10 @@ const SalesAgreementDetail = () => {
   };
 
   const sendAgreementEmail = async ({ primaryEmail, additionalEmails = [] } = {}) => {
+    if (!canUseFieldAgreementWorkflow) {
+      toast.error(`Your role cannot send ${documentPluralLabel.toLowerCase()}.`);
+      return;
+    }
     if (!canSend) return;
 
     const recipientEmail = String(primaryEmail || agreement?.email || '').trim();
@@ -1733,11 +2235,37 @@ const SalesAgreementDetail = () => {
     setSending(true);
 
     try {
+      let agreementForSend = agreement;
+
+      if (agreementIsJobEstimate && selectedEstimatePlanOption) {
+        const selectedPlanId = salesPlanOptionId(selectedEstimatePlanOption);
+        const selectedLineItems = salesPlanOptionLineItems(selectedEstimatePlanOption, lineItems);
+        const selectedSubtotalAmountCents = selectedLineItems.reduce(
+          (total, item) => total + agreementLineItemTotalCents(item),
+          0
+        );
+        const selectedTotalAmountCents = salesPlanOptionTotalCents(selectedEstimatePlanOption, lineItems);
+        const selectedPlanPatch = {
+          selectedPlanId,
+          selectedSolutionId: selectedPlanId,
+          defaultPlanId: selectedPlanId,
+          defaultSolutionId: selectedPlanId,
+          lineItems: selectedLineItems,
+          subtotalAmountCents: selectedSubtotalAmountCents,
+          totalAmountCents: selectedTotalAmountCents,
+          rateAmountCents: selectedTotalAmountCents,
+          updatedAt: serverTimestamp(),
+        };
+
+        await updateDoc(doc(db, salesCollectionNames.agreements, agreement.id), selectedPlanPatch);
+        agreementForSend = { ...agreement, ...selectedPlanPatch };
+      }
+
       const sendCallable = httpsCallable(functions, 'sendServiceAgreementEmail');
       const authPayload = await getCallableAuthPayload();
       const result = await sendCallable({
-        companyId: agreement.companyId,
-        agreementId: agreement.id,
+        companyId: agreementForSend.companyId,
+        agreementId: agreementForSend.id,
         agreementBaseUrl: window.location.origin,
         includeInspectionReport,
         primaryEmail: recipientEmail,
@@ -2054,8 +2582,8 @@ const SalesAgreementDetail = () => {
 
     const templateName = editDraft.termsTemplateName || selectedEditTermsTemplate?.name || 'selected template';
     const confirmed = await appConfirm({
-      title: 'Update Service Agreement Template',
-      message: `Update "${templateName}" with the current default content, terms lines, and agreement defaults from this agreement?`,
+      title: `Update ${agreementIsJobEstimate ? 'Estimate' : 'Service Agreement'} Template`,
+      message: `Update "${templateName}" with the current default content, terms lines, and ${documentLabelLower} defaults from this ${documentLabelLower}?`,
       confirmLabel: 'Update Template',
     });
     if (!confirmed) return;
@@ -2217,8 +2745,8 @@ const SalesAgreementDetail = () => {
         statusChangedByUserId: user?.uid || '',
         statusChangedByUserName: actorName,
         statusChangeReason: nextStatus === SalesAgreementStatus.revised
-          ? 'Agreement edited after send or acceptance.'
-          : 'Draft agreement edited.',
+          ? `${documentLabel} edited after send or acceptance.`
+          : `Draft ${documentLabelLower} edited.`,
       });
 
       if (billingSubscription?.id) {
@@ -2242,12 +2770,12 @@ const SalesAgreementDetail = () => {
       }
 
       toast.success(nextStatus === SalesAgreementStatus.revised
-        ? 'Service agreement updated and marked revised.'
-        : 'Service agreement updated.');
+        ? `${documentLabel} updated and marked revised.`
+        : `${documentLabel} updated.`);
       closeEditor();
     } catch (saveError) {
-      console.error('Unable to update service agreement', saveError);
-      toast.error(saveError.message || 'Failed to update service agreement.');
+      console.error('Unable to update sales document', saveError);
+      toast.error(saveError.message || `Failed to update ${documentLabelLower}.`);
     } finally {
       setSavingEdit(false);
     }
@@ -2255,14 +2783,14 @@ const SalesAgreementDetail = () => {
 
   const deleteAgreement = async () => {
     if (!agreement || deleteConfirmation.trim().toUpperCase() !== 'DELETE') return;
-    if (!requirePermission(SALES_PERMISSION_ID, 'delete service agreements')) return;
+    if (!requirePermission(SALES_PERMISSION_ID, `delete ${documentPluralLabel.toLowerCase()}`)) return;
 
     const selectedCompanyId = String(recentlySelectedCompany || '').trim();
     const agreementCompanyId = salesRecordCompanyId(agreement);
     const agreementOwnershipIssue = !selectedCompanyId
-      ? 'Select the company that owns this service agreement before deleting it.'
+      ? `Select the company that owns this ${documentLabelLower} before deleting it.`
       : getSalesDeleteOwnershipIssue({
-        label: 'This service agreement',
+        label: `This ${documentLabelLower}`,
         record: agreement,
         selectedCompanyId,
       });
@@ -2294,9 +2822,9 @@ const SalesAgreementDetail = () => {
         : [];
 
       toast.success(deletedSubscriptionIds.length
-        ? 'Service agreement and billing subscription deleted.'
-        : 'Service agreement deleted.');
-      navigate('/company/sales/agreements');
+        ? `${documentLabel} and billing subscription deleted.`
+        : `${documentLabel} deleted.`);
+      navigate(documentListPath);
     } catch (deleteError) {
       console.error('Unable to delete service agreement', {
         error: deleteError,
@@ -2319,6 +2847,45 @@ const SalesAgreementDetail = () => {
     setMarkingAccepted(true);
 
     try {
+      if (agreementIsJobEstimate) {
+        const selectedPlanId =
+          selectedEstimatePlanId ||
+          salesPlanOptionId(selectedEstimatePlanOption || {}) ||
+          selectedPlanIdForSalesAgreement(agreement);
+        const selectedPlanTitle = selectedEstimatePlanOption
+          ? salesPlanOptionTitle(selectedEstimatePlanOption)
+          : 'selected plan';
+
+        if (estimatePlanOptions.length > 1 && !selectedPlanId) {
+          toast.error('Choose which plan the customer accepted.');
+          return;
+        }
+
+        const acceptCallable = httpsCallable(functions, 'acceptSalesServiceAgreement');
+        const authPayload = await getCallableAuthPayload();
+        const result = await acceptCallable({
+          companyId: agreement.companyId,
+          agreementId: agreement.id,
+          selectedPlanId,
+          selectedSolutionId: selectedPlanId,
+          acceptanceSource,
+          acceptanceNote: acceptanceNote.trim(),
+          acceptedByName: actorName,
+          acceptedTerms: true,
+          acceptedPricing: true,
+          acceptedAutopayNotice: true,
+          signatureName: actorName,
+          customerBillingPreference: 'requestInvoice',
+          createBillingSubscription: false,
+          ...authPayload,
+        });
+
+        setSelectedEstimatePlanId(result.data?.selectedPlanId || selectedPlanId);
+        toast.success(`Estimate accepted: ${selectedPlanTitle}.`);
+        closeAcceptanceModal();
+        return;
+      }
+
       const shouldCreateBillingSubscription = Boolean(
         customerBillingEnabled &&
         isRecurringAgreement &&
@@ -2459,13 +3026,13 @@ const SalesAgreementDetail = () => {
 
   const downloadServiceAgreement = () => {
     if (!agreement || companyMismatch) {
-      toast.error('Load a service agreement before downloading.');
+      toast.error(`Load ${documentArticle} ${documentLabelLower} before downloading.`);
       return;
     }
 
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
-      toast.error('Allow popups to download or print the service agreement.');
+      toast.error(`Allow popups to download or print the ${documentLabelLower}.`);
       return;
     }
 
@@ -2474,13 +3041,14 @@ const SalesAgreementDetail = () => {
       agreement,
       companyName: recentlySelectedCompanyName,
       includeSignatures: includeSignaturesInDownload,
+      selectedPlanId: selectedEstimatePlanId,
     }));
     printWindow.document.close();
     printWindow.focus();
     setTimeout(() => {
       printWindow.print();
     }, 250);
-    toast.success('Use Save as PDF in the print dialog to download the agreement.');
+    toast.success(`Use Save as PDF in the print dialog to download the ${documentLabelLower}.`);
   };
 
   const editChemicalBillingMode = editDraft?.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
@@ -2495,30 +3063,47 @@ const SalesAgreementDetail = () => {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <Link
-                  to="/company/sales/agreements"
+                  to={documentListPath}
                   className="app-back-link"
                 >
-                  &larr; Back to Service Agreements
+                  &larr; Back to {documentPluralLabel}
                 </Link>
                 {agreement?.status && <StatusBadge status={agreement.status} />}
               </div>
               <div className="mt-3 flex items-center gap-2">
                 <h1 className="text-3xl font-bold text-slate-950">
-                  {agreement?.title || 'Service Agreement'}
+                  {agreement?.title || documentLabel}
                 </h1>
                 <FeatureInfoButton title="How Sending Works" align="left">
-                  <p>
-                    SendGrid emails use the saved agreement snapshot. The customer receives the pricing, service
-                    location, terms, and review link from the agreement record.
-                  </p>
-                  <p>
-                    Sending changes the status to sent and records delivery metadata. Billing should still wait for
-                    customer acceptance or a manual company acceptance.
-                  </p>
+                  {agreementIsJobEstimate ? (
+                    <>
+                      <p>
+                        SendGrid emails use the saved estimate snapshot. The customer receives the job message,
+                        terms, and plan comparison from this estimate record.
+                      </p>
+                      <p>
+                        Customers can accept one plan option from the review link. The office can also pick the accepted
+                        plan here when approval happens outside the portal.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p>
+                        SendGrid emails use the saved agreement snapshot. The customer receives the pricing, service
+                        location, terms, and review link from the agreement record.
+                      </p>
+                      <p>
+                        Sending changes the status to sent and records delivery metadata. Billing should still wait for
+                        customer acceptance or a manual company acceptance.
+                      </p>
+                    </>
+                  )}
                 </FeatureInfoButton>
               </div>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Review the snapshot before emailing the customer.
+                {agreementIsJobEstimate
+                  ? 'Review the customer estimate, plan options, and selected/default plan before sending or accepting.'
+                  : 'Review the snapshot before emailing the customer.'}
               </p>
             </div>
 
@@ -2527,7 +3112,7 @@ const SalesAgreementDetail = () => {
                 <ShareItemButton
                   type="serviceAgreement"
                   recordId={agreementId}
-                  title={agreement?.title || 'Service Agreement'}
+                  title={agreement?.title || documentLabel}
                   subtitle={[
                     agreement?.customerName,
                     agreement?.status,
@@ -2539,7 +3124,7 @@ const SalesAgreementDetail = () => {
                   customerId={agreement?.customerId}
                   customerUserId={agreement?.customerUserId}
                   collectionPath={salesCollectionNames.agreements}
-                  webPath={`/company/sales/agreements/${agreementId}`}
+                  webPath={agreementIsJobEstimate ? `/company/estimates/${agreementId}` : `/company/sales/agreements/${agreementId}`}
                   disabled={!agreement || companyMismatch}
                 />
                 <div className="inline-flex overflow-hidden rounded-md border border-slate-300 bg-white">
@@ -2547,7 +3132,7 @@ const SalesAgreementDetail = () => {
                     type="button"
                     onClick={downloadServiceAgreement}
                     disabled={!agreement || companyMismatch}
-                    title="Download or print this service agreement"
+                    title={`Download or print this ${documentLabelLower}`}
                     className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <FaDownload className="text-xs" />
@@ -2555,7 +3140,7 @@ const SalesAgreementDetail = () => {
                   </button>
                   <label
                     className="inline-flex items-center gap-2 border-l border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
-                    title="Include the acceptance signature block in the downloaded agreement"
+                    title={`Include the acceptance signature block in the downloaded ${documentLabelLower}`}
                   >
                     <input
                       type="checkbox"
@@ -2566,15 +3151,17 @@ const SalesAgreementDetail = () => {
                     Signatures
                   </label>
                 </div>
-                <button
-                  type="button"
-                  onClick={createRenewalAgreement}
-                  disabled={!canCreateRenewal}
-                  className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaCopy className="text-xs" />
-                  {creatingRenewal ? 'Creating...' : 'Offer New Agreement'}
-                </button>
+                {!agreementIsJobEstimate && (
+                  <button
+                    type="button"
+                    onClick={createRenewalAgreement}
+                    disabled={!canCreateRenewal}
+                    className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FaCopy className="text-xs" />
+                    {creatingRenewal ? 'Creating...' : 'Offer New Agreement'}
+                  </button>
+                )}
                 <span className="inline-flex" title={sendEmailButtonTitle}>
                   <button
                     type="button"
@@ -2635,7 +3222,7 @@ const SalesAgreementDetail = () => {
                   <span>
                     Include inspection report
                     <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                      Adds the linked site inspection report to the service agreement email and public review page.
+                      Adds the linked site inspection report to the {documentLabelLower} email and public review page.
                     </span>
                   </span>
                 </label>
@@ -2692,13 +3279,13 @@ const SalesAgreementDetail = () => {
 
         {companyMismatch && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-            This agreement belongs to another company. Select the matching company before sending.
+            This {documentLabelLower} belongs to another company. Select the matching company before sending.
           </div>
         )}
 
         {loading ? (
           <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
-            Loading service agreement...
+            Loading {documentLabelLower}...
           </div>
         ) : agreement && !companyMismatch ? (
           <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_360px]">
@@ -2761,6 +3348,73 @@ const SalesAgreementDetail = () => {
                   )}
                 </div>
               </section>
+
+              {agreementIsJobEstimate && estimatePlanOptions.length > 0 && (
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-950">Plan Options</h2>
+                      <p className="mt-1 text-sm text-slate-500">
+                        The customer can compare these options before accepting one plan.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                      {estimatePlanOptions.length} option{estimatePlanOptions.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 divide-y divide-slate-200 rounded-lg border border-slate-200">
+                    {estimatePlanOptions.map((option) => {
+                      const optionId = salesPlanOptionId(option);
+                      const active = optionId && optionId === selectedEstimatePlanId;
+                      const accepted = optionId && optionId === String(agreement.acceptedPlanId || agreement.acceptedSolutionId || '');
+                      const optionLineItems = salesPlanOptionLineItems(option, lineItems);
+                      const optionTotalCents = salesPlanOptionTotalCents(option, lineItems);
+
+                      return (
+                        <button
+                          key={optionId || salesPlanOptionTitle(option)}
+                          type="button"
+                          onClick={() => {
+                            if (optionId) setSelectedEstimatePlanId(optionId);
+                          }}
+                          className={[
+                            'grid w-full gap-3 p-4 text-left transition md:grid-cols-[minmax(0,1fr)_160px] md:items-center',
+                            active ? 'bg-blue-50/70' : 'bg-white hover:bg-slate-50',
+                          ].join(' ')}
+                        >
+                          <span className="min-w-0">
+                            <span className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-slate-950">{salesPlanOptionTitle(option)}</span>
+                              {accepted ? (
+                                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                                  Accepted Plan
+                                </span>
+                              ) : active ? (
+                                <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700">
+                                  Default / manual accept
+                                </span>
+                              ) : null}
+                            </span>
+                            {option.description && (
+                              <span className="mt-1 block text-sm text-slate-600">{option.description}</span>
+                            )}
+                            <span className="mt-1 block text-xs text-slate-500">
+                              {Number(option.taskCount || 0)} task(s) - {Number(option.plannedStopCount || 0)} stop(s) - {optionLineItems.length} line item(s)
+                            </span>
+                          </span>
+                          <span className="text-left md:text-right">
+                            <span className="block text-base font-bold text-slate-950">{formatCurrency(optionTotalCents)}</span>
+                            <span className="mt-1 block text-xs font-semibold text-slate-500">
+                              {active ? 'Shown below' : 'Click to view'}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
 
               {isRecurringAgreement && (
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -2833,10 +3487,12 @@ const SalesAgreementDetail = () => {
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center gap-2">
                   <FaReceipt className="text-slate-400" />
-                  <h2 className="text-lg font-bold text-slate-950">Pricing Snapshot</h2>
+                  <h2 className="text-lg font-bold text-slate-950">
+                    {agreementIsJobEstimate ? 'Selected Plan Pricing' : 'Pricing Snapshot'}
+                  </h2>
                 </div>
                 <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-                  {lineItems.length === 0 ? (
+                  {displayLineItems.length === 0 ? (
                     <div className="bg-slate-50 p-5 text-sm text-slate-500">No line items saved.</div>
                   ) : (
                     <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -2849,7 +3505,7 @@ const SalesAgreementDetail = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
-                        {lineItems.map((item) => (
+                        {displayLineItems.map((item) => (
                           <tr key={item.id || item.catalogItemId}>
                             <td className="px-4 py-3">
                               <p className="font-semibold text-slate-900">{item.name || item.description}</p>
@@ -2870,7 +3526,7 @@ const SalesAgreementDetail = () => {
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2">
                     <FaHistory className="text-slate-400" />
-                    <h2 className="text-lg font-bold text-slate-950">Agreement History</h2>
+                    <h2 className="text-lg font-bold text-slate-950">{documentLabel} History</h2>
                   </div>
                   <span className="text-sm font-semibold text-slate-500">
                     {lastRaisedHistoryRow ? `Last raised ${formatDate(lastRaisedHistoryRow.effectiveDate)}` : 'No rate increase recorded'}
@@ -2890,7 +3546,7 @@ const SalesAgreementDetail = () => {
                           <th className="px-4 py-3">Status</th>
                           <th className="px-4 py-3 text-right">Rate</th>
                           <th className="px-4 py-3 text-right">Change</th>
-                          <th className="px-4 py-3">Agreement</th>
+                          <th className="px-4 py-3">{documentLabel}</th>
                           <th className="min-w-[240px] px-4 py-3">Notes</th>
                         </tr>
                       </thead>
@@ -2922,10 +3578,10 @@ const SalesAgreementDetail = () => {
                               </td>
                               <td className="px-4 py-3">
                                 <Link
-                                  to={`/company/sales/agreements/${historyRow.id}`}
+                                  to={agreementIsJobEstimate ? `/company/estimates/${historyRow.id}` : `/company/sales/agreements/${historyRow.id}`}
                                   className="font-semibold text-blue-700 hover:text-blue-900"
                                 >
-                                  {historyRow.isCurrentAgreement ? 'Current Agreement' : historyRow.title || 'Open Agreement'}
+                                  {historyRow.isCurrentAgreement ? `Current ${documentLabel}` : historyRow.title || `Open ${documentLabel}`}
                                 </Link>
                               </td>
                               <td className="max-w-[360px] whitespace-normal px-4 py-3 text-xs text-slate-600">
@@ -2980,12 +3636,37 @@ const SalesAgreementDetail = () => {
               </section>
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Service Summary</h2>
+                <h2 className="text-lg font-bold text-slate-950">
+                  {agreementIsJobEstimate ? 'Estimate Summary' : 'Service Summary'}
+                </h2>
                 <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Service Frequency</dt>
-                    <dd className="font-semibold text-slate-900">{formatServiceFrequency(agreement)}</dd>
-                  </div>
+                  {agreementIsJobEstimate ? (
+                    <>
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-slate-500">Plan Options</dt>
+                        <dd className="font-semibold text-slate-900">{estimatePlanOptions.length || 1}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-slate-500">Selected / Default</dt>
+                        <dd className="mt-1 font-semibold text-slate-900">
+                          {selectedEstimatePlanOption ? salesPlanOptionTitle(selectedEstimatePlanOption) : 'Not selected'}
+                        </dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-slate-500">Review By</dt>
+                        <dd className="font-semibold text-slate-900">{formatDate(agreement.expiresAt)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
+                        <dt className="text-slate-500">Selected Total</dt>
+                        <dd className="text-lg font-bold text-slate-950">{formatCurrency(totalAmountCents)}</dd>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">Service Frequency</dt>
+                      <dd className="font-semibold text-slate-900">{formatServiceFrequency(agreement)}</dd>
+                    </div>
+                  )}
                 </dl>
               </section>
 
@@ -3004,58 +3685,62 @@ const SalesAgreementDetail = () => {
                     <dt className="text-slate-500">Payment Terms</dt>
                     <dd className="font-semibold text-slate-900">{labelize(agreement.paymentTerms)}</dd>
                   </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">First Invoice Send</dt>
-                    <dd className="font-semibold text-slate-900">{formatDate(agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt)}</dd>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Auto Email Invoices</dt>
-                    <dd className="font-semibold text-slate-900">{agreement.manualBillingAutoSendEnabled ? 'Enabled' : 'Disabled'}</dd>
-                  </div>
-                  <div className="space-y-2 border-t border-slate-200 pt-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">Chemical Billing</dt>
-                      <dd className="text-right font-semibold text-slate-900">{chemicalBillingLabel(agreement)}</dd>
-                    </div>
-                    {separatelyBilledChemicalDisplay && (
-                      <div>
-                        <dt className="text-slate-500">Billed Separately</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{separatelyBilledChemicalDisplay}</dd>
+                  {!agreementIsJobEstimate && (
+                    <>
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-slate-500">First Invoice Send</dt>
+                        <dd className="font-semibold text-slate-900">{formatDate(agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt)}</dd>
                       </div>
-                    )}
-                    {includedChemicalDisplay && (
-                      <div>
-                        <dt className="text-slate-500">Included Chemicals</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{includedChemicalDisplay}</dd>
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-slate-500">Auto Email Invoices</dt>
+                        <dd className="font-semibold text-slate-900">{agreement.manualBillingAutoSendEnabled ? 'Enabled' : 'Disabled'}</dd>
                       </div>
-                    )}
-                    {customerPurchasedChemicalDisplay && (
-                      <div>
-                        <dt className="text-slate-500">Customer Purchased</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{customerPurchasedChemicalDisplay}</dd>
+                      <div className="space-y-2 border-t border-slate-200 pt-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <dt className="text-slate-500">Chemical Billing</dt>
+                          <dd className="text-right font-semibold text-slate-900">{chemicalBillingLabel(agreement)}</dd>
+                        </div>
+                        {separatelyBilledChemicalDisplay && (
+                          <div>
+                            <dt className="text-slate-500">Billed Separately</dt>
+                            <dd className="mt-1 break-words font-semibold text-slate-900">{separatelyBilledChemicalDisplay}</dd>
+                          </div>
+                        )}
+                        {includedChemicalDisplay && (
+                          <div>
+                            <dt className="text-slate-500">Included Chemicals</dt>
+                            <dd className="mt-1 break-words font-semibold text-slate-900">{includedChemicalDisplay}</dd>
+                          </div>
+                        )}
+                        {customerPurchasedChemicalDisplay && (
+                          <div>
+                            <dt className="text-slate-500">Customer Purchased</dt>
+                            <dd className="mt-1 break-words font-semibold text-slate-900">{customerPurchasedChemicalDisplay}</dd>
+                          </div>
+                        )}
+                        {agreement.chemicalBillingNotes && (
+                          <div>
+                            <dt className="text-slate-500">Chemical Notes</dt>
+                            <dd className="mt-1 whitespace-pre-wrap font-semibold text-slate-900">{agreement.chemicalBillingNotes}</dd>
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {agreement.chemicalBillingNotes && (
-                      <div>
-                        <dt className="text-slate-500">Chemical Notes</dt>
-                        <dd className="mt-1 whitespace-pre-wrap font-semibold text-slate-900">{agreement.chemicalBillingNotes}</dd>
+                      <div className="space-y-2 border-t border-slate-200 pt-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <dt className="text-slate-500">PNL Revenue</dt>
+                          <dd className="font-semibold text-slate-900">{agreement.pnlIncludeInReports === false ? 'Excluded' : 'Included'}</dd>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <dt className="text-slate-500">PNL Chemicals</dt>
+                          <dd className="text-right font-semibold text-slate-900">Based on Billing</dd>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <dt className="text-slate-500">Customer Purchased</dt>
+                          <dd className="font-semibold text-slate-900">Ignored</dd>
+                        </div>
                       </div>
-                    )}
-                  </div>
-                  <div className="space-y-2 border-t border-slate-200 pt-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">PNL Revenue</dt>
-                      <dd className="font-semibold text-slate-900">{agreement.pnlIncludeInReports === false ? 'Excluded' : 'Included'}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">PNL Chemicals</dt>
-                      <dd className="text-right font-semibold text-slate-900">Based on Billing</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">Customer Purchased</dt>
-                      <dd className="font-semibold text-slate-900">Ignored</dd>
-                    </div>
-                  </div>
+                    </>
+                  )}
                   <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
                     <dt className="text-slate-500">Subtotal</dt>
                     <dd className="font-semibold text-slate-900">{formatCurrency(subtotalAmountCents)}</dd>
@@ -3067,15 +3752,15 @@ const SalesAgreementDetail = () => {
                   {(supersedesAgreementId || agreement.supersededByAgreementId || agreement.agreementHistoryGroupId) && (
                     <div className="space-y-2 border-t border-slate-200 pt-3">
                       <div className="flex items-center justify-between gap-3">
-                        <dt className="text-slate-500">Agreement Version</dt>
+                        <dt className="text-slate-500">{documentLabel} Version</dt>
                         <dd className="font-semibold text-slate-900">v{agreement.agreementVersion || 1}</dd>
                       </div>
                       {supersedesAgreementId && (
                         <div className="flex items-center justify-between gap-3">
                           <dt className="text-slate-500">Replaces</dt>
                           <dd className="font-semibold">
-                            <Link to={`/company/sales/agreements/${supersedesAgreementId}`} className="text-blue-700 hover:text-blue-900">
-                              Previous Agreement
+                            <Link to={agreementIsJobEstimate ? `/company/estimates/${supersedesAgreementId}` : `/company/sales/agreements/${supersedesAgreementId}`} className="text-blue-700 hover:text-blue-900">
+                              Previous {documentLabel}
                             </Link>
                           </dd>
                         </div>
@@ -3084,8 +3769,8 @@ const SalesAgreementDetail = () => {
                         <div className="flex items-center justify-between gap-3">
                           <dt className="text-slate-500">Replaced By</dt>
                           <dd className="font-semibold">
-                            <Link to={`/company/sales/agreements/${agreement.supersededByAgreementId}`} className="text-blue-700 hover:text-blue-900">
-                              {agreement.supersededByAgreementTitle || 'New Agreement'}
+                            <Link to={agreementIsJobEstimate ? `/company/estimates/${agreement.supersededByAgreementId}` : `/company/sales/agreements/${agreement.supersededByAgreementId}`} className="text-blue-700 hover:text-blue-900">
+                              {agreement.supersededByAgreementTitle || `New ${documentLabel}`}
                             </Link>
                           </dd>
                         </div>
@@ -3097,23 +3782,27 @@ const SalesAgreementDetail = () => {
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-slate-950">Billing Flow</h2>
+                  <h2 className="text-lg font-bold text-slate-950">
+                    {agreementIsJobEstimate ? 'Estimate Flow' : 'Billing Flow'}
+                  </h2>
                   <FaCreditCard className="text-slate-400" />
                 </div>
                 <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Subscription</dt>
-                    <dd className="font-semibold text-slate-900">
-                      {hasBillingSubscription ? (
-                        <Link
-                          to={`/company/sales/subscriptions/${billingSubscription?.id || agreement.billingSubscriptionId}`}
-                          className="text-blue-700 hover:text-blue-900"
-                        >
-                          Open Billing Subscription
-                        </Link>
-                      ) : 'Not created'}
-                    </dd>
-                  </div>
+                  {!agreementIsJobEstimate && (
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">Subscription</dt>
+                      <dd className="font-semibold text-slate-900">
+                        {hasBillingSubscription ? (
+                          <Link
+                            to={`/company/sales/subscriptions/${billingSubscription?.id || agreement.billingSubscriptionId}`}
+                            className="text-blue-700 hover:text-blue-900"
+                          >
+                            Open Billing Subscription
+                          </Link>
+                        ) : 'Not created'}
+                      </dd>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-slate-500">Billing Status</dt>
                     <dd className="font-semibold text-slate-900">{labelize(billingFlowStatus)}</dd>
@@ -3145,18 +3834,18 @@ const SalesAgreementDetail = () => {
                 {!isAccepted && (
                   <p className="mt-4 text-sm text-slate-500">
                     {!isRecurringAgreement
-                      ? 'One-time job estimates convert to invoices instead of billing subscriptions.'
+                      ? `${agreementIsJobEstimate ? 'Accepted job estimates' : 'One-time agreements'} convert to invoices instead of billing subscriptions.`
                       : !customerBillingEnabled
-                        ? 'Customer billing is off. This agreement can still be accepted without creating a billing subscription.'
+                        ? `Customer billing is off. This ${documentLabelLower} can still be accepted without creating a billing subscription.`
                         : salesBillingAutomationEnabled
-                          ? 'Creating a billing subscription is selected by default when this agreement is accepted.'
-                          : 'This agreement can be accepted without billing, or you can select billing during acceptance.'}
+                          ? `Creating a billing subscription is selected by default when this ${documentLabelLower} is accepted.`
+                          : `This ${documentLabelLower} can be accepted without billing, or you can select billing during acceptance.`}
                   </p>
                 )}
 
                 {isAccepted && !isRecurringAgreement && !hasBillingSubscription && (
                   <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                    One-time job estimates do not create billing subscriptions. Convert the finished job to an invoice when ready.
+                    Job estimates do not create billing subscriptions. Convert the finished job to an invoice when ready.
                   </div>
                 )}
 
@@ -3248,6 +3937,14 @@ const SalesAgreementDetail = () => {
                       <dt className="text-slate-500">Source</dt>
                       <dd className="mt-1 font-semibold text-slate-900">{acceptanceSourceLabel(agreement.acceptedSource)}</dd>
                     </div>
+                    {agreementIsJobEstimate && (
+                      <div>
+                        <dt className="text-slate-500">Accepted Plan</dt>
+                        <dd className="mt-1 font-semibold text-slate-900">
+                          {agreement.acceptedPlanTitle || agreement.acceptedSolutionTitle || (selectedEstimatePlanOption ? salesPlanOptionTitle(selectedEstimatePlanOption) : 'Not selected')}
+                        </dd>
+                      </div>
+                    )}
                     {agreement.acceptedNote && (
                       <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-slate-700">
                         {agreement.acceptedNote}
@@ -3255,13 +3952,13 @@ const SalesAgreementDetail = () => {
                     )}
                     {!acceptanceIsCurrent && (
                       <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                        This agreement was edited after acceptance. Send the revised version or mark the new version accepted.
+                        This {documentLabelLower} was edited after acceptance. Send the revised version or mark the new version accepted.
                       </div>
                     )}
                   </dl>
                 ) : (
                   <p className="mt-4 text-sm text-slate-500">
-                    Mark accepted when the homeowner approves outside the portal, or after the future customer portal acceptance flow records it directly.
+                    Mark accepted when the homeowner approves outside the portal, or after the customer portal records acceptance directly.
                   </p>
                 )}
 
@@ -3336,7 +4033,7 @@ const SalesAgreementDetail = () => {
             <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white shadow-2xl">
             <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Edit Service Agreement</h2>
+                <h2 className="text-xl font-bold text-slate-950">Edit {documentLabel}</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   Updates change the saved customer-facing snapshot.
                 </p>
@@ -3355,14 +4052,14 @@ const SalesAgreementDetail = () => {
             <div className="space-y-6 p-5">
               {normalizeStatus(agreement?.status) === normalizeStatus(SalesAgreementStatus.sent) && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                  This agreement has already been sent. Saving changes updates the agreement record for future sends and review.
+                  This {documentLabelLower} has already been sent. Saving changes updates the record for future sends and review.
                 </div>
               )}
 
               <section className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
                   <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTemplateSelector">
-                    Service Agreement Template
+                    {agreementIsJobEstimate ? 'Estimate Terms Template' : 'Service Agreement Template'}
                   </label>
                   <select
                     id="agreementTemplateSelector"
@@ -3504,7 +4201,7 @@ const SalesAgreementDetail = () => {
                   <div>
                     <h3 className="text-base font-bold text-slate-950">Services & Products</h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Customer-facing pricing rows for this service agreement.
+                      Customer-facing pricing rows for this {documentLabelLower}.
                     </p>
                   </div>
                 </div>
@@ -3892,7 +4589,7 @@ const SalesAgreementDetail = () => {
                   <div>
                     <h3 className="text-base font-bold text-slate-950">Terms</h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Select a saved template, then add or adjust lines for this agreement only.
+                      Select a saved template, then add or adjust lines for this {documentLabelLower} only.
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
@@ -3911,7 +4608,7 @@ const SalesAgreementDetail = () => {
                     <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{editDraft.terms}</p>
                   ) : (
                     <p className="mt-2 text-sm text-slate-500">
-                      No default content saved for this agreement template.
+                      No default content saved for this {documentLabelLower} template.
                     </p>
                   )}
                 </div>
@@ -3923,7 +4620,7 @@ const SalesAgreementDetail = () => {
                     disabled={!can("884") || !editDraft.termsTemplateId || applyingTermsTemplate || updatingTermsTemplate || savingEdit}
                     className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {updatingTermsTemplate ? 'Updating template...' : 'Update source template from this agreement'}
+                    {updatingTermsTemplate ? 'Updating template...' : `Update source template from this ${documentLabelLower}`}
                   </button>
                 </div>
 
@@ -4192,12 +4889,55 @@ const SalesAgreementDetail = () => {
                 <FaUserCheck />
               </span>
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Mark Agreement Accepted</h2>
+                <h2 className="text-xl font-bold text-slate-950">Mark {documentLabel} Accepted</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Use this when the homeowner has accepted outside the portal, or when your team is recording an internal approval.
+                  {agreementIsJobEstimate
+                    ? 'Use this when the homeowner approved a specific estimate option outside the portal.'
+                    : 'Use this when the homeowner has accepted outside the portal, or when your team is recording an internal approval.'}
                 </p>
               </div>
             </div>
+
+            {agreementIsJobEstimate && estimatePlanOptions.length > 0 && (
+              <div className="mt-5 rounded-md border border-blue-100 bg-blue-50/70 p-3">
+                <p className="text-sm font-bold text-blue-950">Plan being accepted</p>
+                <div className="mt-3 space-y-2">
+                  {estimatePlanOptions.map((option) => {
+                    const optionId = salesPlanOptionId(option);
+                    const active = optionId && optionId === selectedEstimatePlanId;
+
+                    return (
+                      <label
+                        key={optionId || salesPlanOptionTitle(option)}
+                        className={[
+                          'flex cursor-pointer items-start gap-3 rounded-md border p-3 transition',
+                          active ? 'border-blue-300 bg-white' : 'border-blue-100 bg-blue-50 hover:bg-white',
+                        ].join(' ')}
+                      >
+                        <input
+                          type="radio"
+                          name="manualAcceptedEstimatePlan"
+                          checked={active}
+                          onChange={() => {
+                            if (optionId) setSelectedEstimatePlanId(optionId);
+                          }}
+                          className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block font-semibold text-slate-950">{salesPlanOptionTitle(option)}</span>
+                          <span className="mt-1 block text-sm text-slate-600">
+                            {formatCurrency(salesPlanOptionTotalCents(option, lineItems))}
+                          </span>
+                          {option.description && (
+                            <span className="mt-1 block text-xs text-slate-500">{option.description}</span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <fieldset className="mt-5 space-y-3">
               <legend className="text-sm font-semibold text-slate-700">Acceptance source</legend>
@@ -4247,7 +4987,8 @@ const SalesAgreementDetail = () => {
             />
 
             <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-              This will set the agreement status to accepted and record {actorName} as the person who marked it.
+              This will set the {documentLabelLower} status to accepted and record {actorName} as the person who marked it.
+              {agreementIsJobEstimate && selectedEstimatePlanOption ? ` ${salesPlanOptionTitle(selectedEstimatePlanOption)} will be promoted into the job's Actual section.` : ''}
               {supersedesAgreementId ? ' It will also end the previous agreement and mark it superseded.' : ''}
             </div>
 
@@ -4272,7 +5013,7 @@ const SalesAgreementDetail = () => {
             ) : (
               <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                 {!isRecurringAgreement
-                  ? 'One-time agreements do not create billing subscriptions.'
+                  ? `${agreementIsJobEstimate ? 'Job estimates' : 'One-time agreements'} do not create billing subscriptions.`
                   : 'Customer billing is off in Company Settings, so this acceptance will not create a billing subscription.'}
               </div>
             )}
@@ -4303,9 +5044,9 @@ const SalesAgreementDetail = () => {
       {confirmingDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
           <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
-            <h2 className="text-xl font-bold text-slate-950">Delete Service Agreement</h2>
+            <h2 className="text-xl font-bold text-slate-950">Delete {documentLabel}</h2>
             <p className="mt-2 text-sm text-slate-600">
-              This permanently removes the agreement snapshot and any linked billing subscription records.
+              This permanently removes the {documentLabelLower} snapshot and any linked billing subscription records.
               Active Stripe subscriptions must be canceled before deleting.
             </p>
             <label className="mt-4 block text-sm font-semibold text-slate-700" htmlFor="deleteAgreementConfirmation">
@@ -4336,7 +5077,7 @@ const SalesAgreementDetail = () => {
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FaTrash className="text-xs" />
-                {deleting ? 'Deleting...' : 'Delete Agreement'}
+                {deleting ? 'Deleting...' : `Delete ${documentLabel}`}
               </button>
             </div>
           </div>

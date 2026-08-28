@@ -37,6 +37,8 @@ import {
   IoCallOutline,
   IoCardOutline,
   IoCarOutline,
+  IoChevronDownOutline,
+  IoChevronUpOutline,
   IoCashOutline,
   IoChatbubbleEllipsesOutline,
   IoCheckmarkCircleOutline,
@@ -57,6 +59,7 @@ import {
   IoPricetagOutline,
   IoReaderOutline,
   IoSparklesOutline,
+  IoSwapVerticalOutline,
   IoTimeOutline,
   IoTrailSignOutline,
   IoWarningOutline,
@@ -78,6 +81,10 @@ const dateFromValue = (value) => {
   if (!value) return null;
   if (value?.toDate) return value.toDate();
   if (value instanceof Date) return value;
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
@@ -87,7 +94,29 @@ const shortDate = (value) => {
   return date ? date.toLocaleDateString() : "-";
 };
 
-const isoDate = (date) => date.toISOString().slice(0, 10);
+const isoDate = (value) => {
+  const date = dateFromValue(value);
+  if (!date) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const currentWeekDateRange = (now = new Date()) => {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - start.getDay());
+
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    startDate: isoDate(start),
+    endDate: isoDate(end),
+  };
+};
 
 const isoDateTime = (value) => {
   const date = dateFromValue(value);
@@ -136,6 +165,32 @@ const DetailField = ({ label, value, accent }) => (
     </p>
   </div>
 );
+
+const SortableHeader = ({ label, sortKey, activeSort, onSort, align = "left" }) => {
+  const isActive = activeSort?.key === sortKey;
+  const Icon = isActive
+    ? activeSort.direction === "asc" ? IoChevronUpOutline : IoChevronDownOutline
+    : IoSwapVerticalOutline;
+  const ariaSort = isActive
+    ? activeSort.direction === "asc" ? "ascending" : "descending"
+    : "none";
+
+  return (
+    <th
+      className={`px-4 py-3 ${align === "right" ? "text-right" : "text-left"}`}
+      aria-sort={ariaSort}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex w-full items-center gap-1.5 rounded-md text-xs font-semibold uppercase tracking-wide text-slate-500 transition hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-200 ${align === "right" ? "justify-end" : "justify-start"}`}
+      >
+        <span>{label}</span>
+        <Icon className={`h-3.5 w-3.5 ${isActive ? "text-blue-700" : "text-slate-400"}`} aria-hidden="true" />
+      </button>
+    </th>
+  );
+};
 
 const InfoOptionList = ({ items }) => (
   <div className="space-y-2">
@@ -311,11 +366,53 @@ const lineItemStatusFilterOptions = [
   { value: "voided", label: "Voided" },
 ];
 
+const statementStatusFilterOptions = [
+  { value: "active", label: "Active" },
+  { value: "open", label: "Open" },
+  { value: "draft", label: "Draft" },
+  { value: "approved", label: "Approved" },
+  { value: "paid", label: "Paid" },
+  { value: "unpaid", label: "Unpaid" },
+  { value: "voided", label: "Voided" },
+  { value: "all", label: "All Statuses" },
+];
+
+const statementSortOptions = [
+  { value: "startDate-desc", key: "startDate", direction: "desc", label: "Period Start Newest" },
+  { value: "startDate-asc", key: "startDate", direction: "asc", label: "Period Start Oldest" },
+  { value: "statementReference-asc", key: "statementReference", direction: "asc", label: "Statement A-Z" },
+  { value: "technicianName-asc", key: "technicianName", direction: "asc", label: "Technician A-Z" },
+  { value: "status-asc", key: "status", direction: "asc", label: "Status" },
+  { value: "totalCents-desc", key: "totalCents", direction: "desc", label: "Total High-Low" },
+  { value: "totalCents-asc", key: "totalCents", direction: "asc", label: "Total Low-High" },
+  { value: "lineItems-desc", key: "lineItems", direction: "desc", label: "Line Items High-Low" },
+  { value: "createdAt-desc", key: "createdAt", direction: "desc", label: "Created Newest" },
+  { value: "paidAt-desc", key: "paidAt", direction: "desc", label: "Paid Newest" },
+];
+
 const defaultLineItemFilters = () => ({
   technicianId: "",
   status: "active",
   search: "",
 });
+
+const defaultStatementFilters = () => ({
+  technicianId: "",
+  status: "active",
+  search: "",
+});
+
+const defaultStatementSort = () => ({
+  key: "startDate",
+  direction: "desc",
+});
+
+const statementSortOptionValue = (sort = defaultStatementSort()) => `${sort.key}-${sort.direction}`;
+
+const parseStatementSortOption = (value) => {
+  const option = statementSortOptions.find((item) => item.value === value);
+  return option ? { key: option.key, direction: option.direction } : defaultStatementSort();
+};
 
 const defaultStopPayCategories = [
   {
@@ -643,6 +740,121 @@ const isLineItemApproved = (item) =>
 
 const isLineItemVoided = (item) => Boolean(item?.voidedAt) || item?.calculationStatus === "voided";
 
+const isStatementPaid = (statement) => Boolean(statement?.paidAt) || statement?.status === "paid";
+
+const isStatementVoided = (statement) => Boolean(statement?.voidedAt) || statement?.status === "voided";
+
+const isStatementApproved = (statement) =>
+  Boolean(statement?.approvedAt) || statement?.status === "approved" || isStatementPaid(statement);
+
+const normalizedStatementStatus = (statement = {}) => {
+  if (isStatementVoided(statement)) return "voided";
+  if (isStatementPaid(statement)) return "paid";
+  if (isStatementApproved(statement)) return "approved";
+  return statement.status || "draft";
+};
+
+const statementMatchesStatusFilter = (statement = {}, filter = "active") => {
+  const status = normalizedStatementStatus(statement);
+  if (filter === "all") return true;
+  if (filter === "active") return status !== "voided";
+  if (filter === "open") return ["draft", "approved"].includes(status);
+  if (filter === "unpaid") return status !== "paid" && status !== "voided";
+  return status === filter;
+};
+
+const statementLinkedLineCount = (statement = {}, lineItems = []) => {
+  const lineIds = new Set(Array.isArray(statement.lineItemIds) ? statement.lineItemIds.filter(Boolean) : []);
+  if (!statement.id) return lineIds.size;
+
+  lineItems
+    .filter((item) => item.payStatementId === statement.id)
+    .forEach((item) => lineIds.add(item.id));
+
+  return lineIds.size;
+};
+
+const statementMatchesSearch = (statement = {}, search = "") => {
+  const queryValue = search.trim().toLowerCase();
+  if (!queryValue) return true;
+
+  return [
+    statement.statementReference,
+    statement.statementNumber,
+    statement.technicianName,
+    statement.workerType,
+    statusLabel(normalizedStatementStatus(statement)),
+    statement.paymentReference,
+    statement.externalReferenceId,
+    statement.paidNotes,
+    statement.notes,
+    shortDate(statement.startDate),
+    shortDate(statement.endDate),
+    statement.id,
+  ]
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(queryValue));
+};
+
+const statementStatusRank = {
+  draft: 1,
+  approved: 2,
+  paid: 3,
+  voided: 4,
+};
+
+const statementSortValue = (statement = {}, key = "startDate", lineItems = []) => {
+  switch (key) {
+    case "statementReference":
+      return String(statement.statementReference || statement.statementNumber || statement.id || "").toLowerCase();
+    case "technicianName":
+      return String(statement.technicianName || "").toLowerCase();
+    case "status":
+      return statementStatusRank[normalizedStatementStatus(statement)] || 99;
+    case "lineItems":
+      return statementLinkedLineCount(statement, lineItems);
+    case "totalCents":
+      return Number(statement.totalCents ?? statement.subtotalCents ?? 0);
+    case "endDate":
+      return dateFromValue(statement.endDate)?.getTime() || 0;
+    case "createdAt":
+      return dateFromValue(statement.createdAt)?.getTime() || 0;
+    case "paidAt":
+      return dateFromValue(statement.paidAt)?.getTime() || 0;
+    case "startDate":
+    default:
+      return dateFromValue(statement.startDate)?.getTime() || 0;
+  }
+};
+
+const compareStatementSortValues = (left, right) => {
+  if (typeof left === "number" || typeof right === "number") {
+    return Number(left || 0) - Number(right || 0);
+  }
+
+  return String(left || "").localeCompare(String(right || ""));
+};
+
+const compareStatements = (left = {}, right = {}, sort = defaultStatementSort(), lineItems = []) => {
+  const direction = sort.direction === "asc" ? 1 : -1;
+  const primaryCompare = compareStatementSortValues(
+    statementSortValue(left, sort.key, lineItems),
+    statementSortValue(right, sort.key, lineItems)
+  );
+
+  if (primaryCompare !== 0) return primaryCompare * direction;
+
+  const startDateCompare =
+    (dateFromValue(right.startDate)?.getTime() || 0) -
+    (dateFromValue(left.startDate)?.getTime() || 0);
+  if (startDateCompare !== 0) return startDateCompare;
+
+  return String(left.statementReference || left.id || "").localeCompare(String(right.statementReference || right.id || ""));
+};
+
+const defaultStatementSortDirectionForKey = (key) =>
+  ["startDate", "endDate", "lineItems", "totalCents", "createdAt", "paidAt"].includes(key) ? "desc" : "asc";
+
 const isActiveCompanyServiceStopType = (type = {}) =>
   type?.isActive !== false &&
   !["archived", "deleted", "inactive"].includes(String(type?.status || "").trim().toLowerCase());
@@ -705,17 +917,17 @@ const Payroll = ({ mode = "payroll" }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [startDate, setStartDate] = useState(() => {
-    const date = new Date();
-    date.setDate(date.getDate() - 30);
-    return isoDate(date);
+    return currentWeekDateRange().startDate;
   });
-  const [endDate, setEndDate] = useState(() => isoDate(new Date()));
+  const [endDate, setEndDate] = useState(() => currentWeekDateRange().endDate);
   const [lineItems, setLineItems] = useState([]);
   const [lineItemPage, setLineItemPage] = useState(0);
   const [lineItemHasNextPage, setLineItemHasNextPage] = useState(false);
   const [lineItemFilters, setLineItemFilters] = useState(defaultLineItemFilters);
   const lineItemPageCursorsRef = useRef([]);
   const [statements, setStatements] = useState([]);
+  const [statementFilters, setStatementFilters] = useState(defaultStatementFilters);
+  const [statementSort, setStatementSort] = useState(defaultStatementSort);
   const [settingsForm, setSettingsForm] = useState(() => defaultPaySettings(""));
   const [companyStopPayBuckets, setCompanyStopPayBuckets] = useState([]);
   const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
@@ -792,6 +1004,8 @@ const Payroll = ({ mode = "payroll" }) => {
       setLineItemFilters(defaultLineItemFilters());
       lineItemPageCursorsRef.current = [];
       setStatements([]);
+      setStatementFilters(defaultStatementFilters());
+      setStatementSort(defaultStatementSort());
       setSettingsForm(defaultPaySettings(""));
       setCompanyStopPayBuckets([]);
       setCompanyServiceStopTypes([]);
@@ -1075,6 +1289,48 @@ const Payroll = ({ mode = "payroll" }) => {
   const lineItemsForStatement = (statement) => {
     const ids = new Set(Array.isArray(statement.lineItemIds) ? statement.lineItemIds : []);
     return lineItems.filter((item) => ids.has(item.id) || item.payStatementId === statement.id);
+  };
+
+  const visibleStatements = useMemo(() => {
+    return statements
+      .filter((statement) => statementMatchesStatusFilter(statement, statementFilters.status))
+      .filter((statement) => !statementFilters.technicianId || statement.technicianId === statementFilters.technicianId)
+      .filter((statement) => statementMatchesSearch(statement, statementFilters.search))
+      .sort((left, right) => compareStatements(left, right, statementSort, lineItems));
+  }, [statements, statementFilters, statementSort, lineItems]);
+
+  const activeStatementFilterCount = [
+    statementFilters.technicianId,
+    statementFilters.status !== "active" ? statementFilters.status : "",
+    statementFilters.search.trim(),
+  ].filter(Boolean).length;
+
+  const updateStatementFilter = (key, value) => {
+    setStatementFilters((filters) => ({
+      ...filters,
+      [key]: value,
+    }));
+  };
+
+  const clearStatementFilters = () => {
+    setStatementFilters(defaultStatementFilters());
+    setStatementSort(defaultStatementSort());
+  };
+
+  const handleStatementSort = (key) => {
+    setStatementSort((sort) => {
+      if (sort.key === key) {
+        return {
+          key,
+          direction: sort.direction === "asc" ? "desc" : "asc",
+        };
+      }
+
+      return {
+        key,
+        direction: defaultStatementSortDirectionForKey(key),
+      };
+    });
   };
 
   const fetchLineItemsByIds = async (ids = []) => {
@@ -3085,35 +3341,105 @@ const Payroll = ({ mode = "payroll" }) => {
         </section>
 
         <section>
-          <div className="mb-3">
-            <h2 className="text-lg font-bold text-slate-900">Statements</h2>
-            <p className="mt-1 text-sm text-slate-500">Draft, approved, and paid statements for this pay period.</p>
+          <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Statements</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Showing {visibleStatements.length} of {statements.length} statement{statements.length === 1 ? "" : "s"} for this pay period.
+              </p>
+            </div>
+            {activeStatementFilterCount > 0 || statementSortOptionValue(statementSort) !== statementSortOptionValue(defaultStatementSort()) ? (
+              <button
+                type="button"
+                onClick={clearStatementFilters}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Clear Filters
+              </button>
+            ) : null}
+          </div>
+
+          <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="grid gap-3 lg:grid-cols-[minmax(10rem,14rem)_minmax(10rem,14rem)_minmax(14rem,1fr)_minmax(12rem,16rem)] lg:items-end">
+              <label className="text-sm font-semibold text-slate-700">
+                Technician
+                <select
+                  value={statementFilters.technicianId}
+                  onChange={(event) => updateStatementFilter("technicianId", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
+                  <option value="">All Technicians</option>
+                  {companyUsers.map((worker) => {
+                    const workerId = worker.userId || worker.id || worker.docId || "";
+                    if (!workerId) return null;
+                    return (
+                      <option key={workerId} value={workerId}>
+                        {worker.userName || worker.name || worker.displayName || workerId}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Status
+                <select
+                  value={statementFilters.status}
+                  onChange={(event) => updateStatementFilter("status", event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
+                  {statementStatusFilterOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Search
+                <input
+                  type="search"
+                  value={statementFilters.search}
+                  onChange={(event) => updateStatementFilter("search", event.target.value)}
+                  placeholder="Statement, worker, payment ref, notes"
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Sort
+                <select
+                  value={statementSortOptionValue(statementSort)}
+                  onChange={(event) => setStatementSort(parseStatementSortOption(event.target.value))}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
+                  {statementSortOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
 
           {statements.length === 0 ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No pay statements found for this date range.</div>
+          ) : visibleStatements.length === 0 ? (
+            <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No pay statements match the current filters.</div>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-4 py-3">Statement</th>
-                    <th className="px-4 py-3">Technician</th>
-                    <th className="px-4 py-3">Period</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3 text-right">Line Items</th>
-                    <th className="px-4 py-3 text-right">Total</th>
+                    <SortableHeader label="Statement" sortKey="statementReference" activeSort={statementSort} onSort={handleStatementSort} />
+                    <SortableHeader label="Technician" sortKey="technicianName" activeSort={statementSort} onSort={handleStatementSort} />
+                    <SortableHeader label="Period" sortKey="startDate" activeSort={statementSort} onSort={handleStatementSort} />
+                    <SortableHeader label="Status" sortKey="status" activeSort={statementSort} onSort={handleStatementSort} />
+                    <SortableHeader label="Line Items" sortKey="lineItems" activeSort={statementSort} onSort={handleStatementSort} align="right" />
+                    <SortableHeader label="Total" sortKey="totalCents" activeSort={statementSort} onSort={handleStatementSort} align="right" />
                     <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {statements.map((statement) => {
-                    const isPaid = Boolean(statement.paidAt) || statement.status === "paid";
-                    const isApproved = Boolean(statement.approvedAt) || statement.status === "approved" || isPaid;
-                    const linkedLines = lineItemsForStatement(statement);
-                    const linkedLineCount = Array.isArray(statement.lineItemIds) && statement.lineItemIds.length > 0
-                      ? statement.lineItemIds.length
-                      : linkedLines.length;
+                  {visibleStatements.map((statement) => {
+                    const isPaid = isStatementPaid(statement);
+                    const isApproved = isStatementApproved(statement);
+                    const linkedLineCount = statementLinkedLineCount(statement, lineItems);
 
                     return (
                       <tr key={statement.id}>

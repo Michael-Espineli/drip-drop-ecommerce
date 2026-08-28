@@ -4,17 +4,19 @@ import { collection, doc, getDoc, getDocs, updateDoc } from "firebase/firestore"
 import {
   ArrowLeftIcon,
   CheckIcon,
+  MinusIcon,
   PencilSquareIcon,
   ShieldCheckIcon,
+  Squares2X2Icon,
   SwatchIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import {
+  OFFERED_WORK_PERMISSION_ID,
   companyPermissionCategoryGroups,
   getCategorySelectionState,
-  getPermissionSelectionState,
   normalizePermissionSelection,
   togglePermissionCategorySelection,
   togglePermissionSelection,
@@ -29,6 +31,194 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const safeColorValue = (value) =>
   /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#0ea5e9";
+
+const permissionActionColumns = [
+  { key: "view", label: "View", helper: "Open or see this area" },
+  { key: "create", label: "Create", helper: "Add new records" },
+  { key: "update", label: "Update", helper: "Change existing records" },
+  { key: "delete", label: "Delete", helper: "Remove records" },
+  { key: "special", label: "Special", helper: "Workflow-specific actions" },
+];
+
+const actionPrefixColumnMap = [
+  ["Create", "create"],
+  ["Schedule", "create"],
+  ["Update", "update"],
+  ["Edit", "update"],
+  ["Delete", "delete"],
+];
+
+const labelPrefixes = [
+  "Create",
+  "Schedule",
+  "Update",
+  "Edit",
+  "Delete",
+  "Respond",
+  "Split",
+  "Incentivize",
+  "Approve",
+  "View All",
+  "Accept",
+];
+
+const getPermissionActionColumnKey = (permission) => {
+  const permissionName = permission?.name || "";
+  const match = actionPrefixColumnMap.find(([prefix]) =>
+    permissionName.toLowerCase().startsWith(`${prefix.toLowerCase()} `)
+  );
+
+  return match?.[1] || "special";
+};
+
+const getStandalonePermissionColumnKey = (permission) => {
+  const permissionName = permission?.name || "";
+  if (/^view(?: all)?\s/i.test(permissionName)) return "view";
+  return getPermissionActionColumnKey(permission);
+};
+
+const normalizeLabelText = (value = "") =>
+  value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const formatCompactPermissionLabel = (permission, parent, fallbackLabel) => {
+  const permissionName = permission?.name || fallbackLabel;
+  if (permission?.id && permission.id === parent?.id) return fallbackLabel;
+
+  const matchedPrefix = labelPrefixes.find((prefix) =>
+    permissionName.toLowerCase().startsWith(`${prefix.toLowerCase()} `)
+  );
+
+  if (!matchedPrefix) return fallbackLabel;
+
+  const remainder = permissionName.slice(matchedPrefix.length).trim();
+  if (!remainder || normalizeLabelText(remainder) === normalizeLabelText(parent?.name)) {
+    return matchedPrefix;
+  }
+
+  return remainder;
+};
+
+const categoryAnchorId = (category = "") =>
+  `role-permissions-${category.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+
+const getCategoryPermissionCount = (categoryGroup, selectedIds = []) =>
+  categoryGroup.permissions.filter((permission) => selectedIds.includes(permission.id)).length;
+
+const createEmptyPermissionCells = () =>
+  permissionActionColumns.reduce((acc, column) => {
+    acc[column.key] = [];
+    return acc;
+  }, {});
+
+const createPermissionRow = ({
+  id,
+  label,
+  description,
+  parentPermission,
+  permissions,
+  cells,
+  isSubRow = false,
+}) => ({
+  id,
+  label,
+  description,
+  parentPermission,
+  permissions,
+  cells,
+  isSubRow,
+  totalCount: permissions.length,
+});
+
+const getStandardPermissionRow = (group) => {
+  const cells = createEmptyPermissionCells();
+
+  if (group.children.length === 0) {
+    cells[getStandalonePermissionColumnKey(group.parent)].push(group.parent);
+  } else {
+    cells.view.push(group.parent);
+
+    group.children.forEach((child) => {
+      cells[getPermissionActionColumnKey(child)].push(child);
+    });
+  }
+
+  return createPermissionRow({
+    id: group.parent.id,
+    label: group.parent.name,
+    description: group.parent.description,
+    parentPermission: group.parent,
+    permissions: [group.parent, ...group.children],
+    cells,
+  });
+};
+
+const getOfferedWorkRows = (group) => {
+  const standardChildren = group.children.filter(
+    (child) => getPermissionActionColumnKey(child) !== "special"
+  );
+  const specialChildren = group.children.filter(
+    (child) => getPermissionActionColumnKey(child) === "special"
+  );
+
+  const mainCells = createEmptyPermissionCells();
+  mainCells.view.push(group.parent);
+  standardChildren.forEach((child) => {
+    mainCells[getPermissionActionColumnKey(child)].push(child);
+  });
+
+  return [
+    createPermissionRow({
+      id: group.parent.id,
+      label: group.parent.name,
+      description: group.parent.description,
+      parentPermission: group.parent,
+      permissions: [group.parent, ...standardChildren],
+      cells: mainCells,
+    }),
+    ...specialChildren.map((child) => {
+      const childCells = createEmptyPermissionCells();
+      childCells.special.push(child);
+
+      return createPermissionRow({
+        id: child.id,
+        label: child.name,
+        description: child.description,
+        parentPermission: group.parent,
+        permissions: [child],
+        cells: childCells,
+        isSubRow: true,
+      });
+    }),
+  ];
+};
+
+const getPermissionRows = (categoryGroup) =>
+  categoryGroup.groups.flatMap((group) => {
+    if (group.parent.id === OFFERED_WORK_PERMISSION_ID) {
+      return getOfferedWorkRows(group);
+    }
+
+    return getStandardPermissionRow(group);
+  });
+
+const getAllPermissionRowsByCategory = () =>
+  companyPermissionCategoryGroups.map((categoryGroup) => ({
+    categoryGroup,
+    rows: getPermissionRows(categoryGroup),
+  }));
+
+const getRoleScopeLabel = (tags = []) => {
+  const normalizedTags = normalizeCustomerTags(tags);
+  if (normalizedTags.length === 0) return "All customer tags";
+  if (normalizedTags.length === 1) return "1 customer tag";
+  return `${normalizedTags.length} customer tags`;
+};
+
+const getDashboardScopeLabel = (scopes) => {
+  const normalizedScopes = normalizeDashboardScopeAccess(scopes);
+  if (normalizedScopes.length === 1) return "1 dashboard view";
+  return `${normalizedScopes.length} dashboard views`;
+};
 
 const RoleDetails = () => {
   const { recentlySelectedCompany, companyRole, setCompanyRole } = useContext(Context);
@@ -210,76 +400,88 @@ const RoleDetails = () => {
   return (
     <div className="min-h-screen w-full bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
       <div className="w-full space-y-6">
-        <div className="flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-start gap-4">
-            <div
-              className="mt-1 flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-white shadow-sm"
-              style={{ backgroundColor: formData.color || role.color || "#0ea5e9" }}
-            >
-              <ShieldCheckIcon className="h-6 w-6" />
-            </div>
-
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              {editMode ? (
-                <input
-                  type="text"
-                  name="name"
-                  value={formData.name || ""}
-                  onChange={handleInputChange}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-2xl font-semibold tracking-tight text-slate-950 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:w-[520px]"
-                />
+              <div className="flex flex-wrap items-center gap-2">
+                <Link to="/company/roles" className="app-back-link">
+                  <ArrowLeftIcon className="h-4 w-4" />
+                  Back to Roles
+                </Link>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                  {selectedPermissionIds.length} permissions
+                </span>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                  {getDashboardScopeLabel(formData.dashboardScopeAccess)}
+                </span>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                  {getRoleScopeLabel(formData.customerTagAccess)}
+                </span>
+              </div>
+
+              <div className="mt-3 flex min-w-0 items-start gap-4">
+                <div
+                  className="mt-1 flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-white shadow-sm"
+                  style={{ backgroundColor: safeColorValue(formData.color || role.color) }}
+                >
+                  <ShieldCheckIcon className="h-6 w-6" />
+                </div>
+
+                <div className="min-w-0">
+                  {editMode ? (
+                    <input
+                      type="text"
+                      name="name"
+                      value={formData.name || ""}
+                      onChange={handleInputChange}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-2xl font-semibold tracking-tight text-slate-950 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:w-[520px]"
+                    />
+                  ) : (
+                    <h1 className="truncate text-3xl font-bold tracking-tight text-slate-950">
+                      {role.name}
+                    </h1>
+                  )}
+                  <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                    {editMode
+                      ? "Update the role profile and adjust access by category, row, or workflow action."
+                      : role.description || "Review this role's permission coverage, customer visibility, and dashboard access."}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              {!editMode ? (
+                can("864") && (
+                  <button
+                    onClick={() => setEditMode(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                  >
+                    <PencilSquareIcon className="h-4 w-4" />
+                    Edit Role
+                  </button>
+                )
               ) : (
-                <h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">
-                  {role.name}
-                </h1>
+                <>
+                  <button
+                    onClick={handleSave}
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                  >
+                    <CheckIcon className="h-4 w-4" />
+                    Save Role
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                    Cancel
+                  </button>
+                </>
               )}
-              <p className="mt-1 max-w-3xl text-sm text-slate-500">
-                {editMode
-                  ? "Update the role details, select categories, or tune individual permission groups."
-                  : role.description || "Review assigned permissions by category."}
-              </p>
             </div>
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {!editMode ? (
-              can("864") && (
-                <button
-                  onClick={() => setEditMode(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                >
-                  <PencilSquareIcon className="h-4 w-4" />
-                  Edit
-                </button>
-              )
-            ) : (
-              <>
-                <button
-                  onClick={handleSave}
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
-                >
-                  <CheckIcon className="h-4 w-4" />
-                  Save
-                </button>
-                <button
-                  onClick={handleCancel}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                >
-                  <XMarkIcon className="h-4 w-4" />
-                  Cancel
-                </button>
-              </>
-            )}
-
-            <Link
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-              to="/company/roles"
-            >
-              <ArrowLeftIcon className="h-4 w-4" />
-              Roles
-            </Link>
-          </div>
-        </div>
+        </section>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
           <aside className="space-y-4">
@@ -334,19 +536,7 @@ const RoleDetails = () => {
               )}
             </section>
 
-            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-semibold uppercase text-slate-500">Coverage</h2>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <Metric label="Selected" value={selectedPermissionIds.length} />
-                <Metric
-                  label="Available"
-                  value={companyPermissionCategoryGroups.reduce(
-                    (total, group) => total + group.permissions.length,
-                    0
-                  )}
-                />
-              </div>
-            </section>
+            <PermissionCoverageSection selectedIds={selectedPermissionIds} />
 
             <CustomerTagAccessSection
               editMode={editMode}
@@ -366,43 +556,12 @@ const RoleDetails = () => {
             />
           </aside>
 
-          <main className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-2 border-b border-slate-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Permissions</h2>
-                <p className="text-sm text-slate-500">
-                  {editMode
-                    ? "Use category controls for broad access, or select view and action permissions one by one."
-                    : "Assigned access is organized by category and permission group."}
-                </p>
-              </div>
-
-              <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-600">
-                <SwatchIcon className="h-4 w-4" />
-                {selectedPermissionIds.length} selected
-              </div>
-            </div>
-
-            <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {companyPermissionCategoryGroups.map((categoryGroup) =>
-                editMode ? (
-                  <EditablePermissionCategory
-                    key={categoryGroup.category}
-                    categoryGroup={categoryGroup}
-                    selectedIds={selectedPermissionIds}
-                    onToggleCategory={handleCategoryChange}
-                    onTogglePermission={handlePermissionChange}
-                  />
-                ) : (
-                  <ReadOnlyPermissionCategory
-                    key={categoryGroup.category}
-                    categoryGroup={categoryGroup}
-                    selectedIds={selectedPermissionIds}
-                  />
-                )
-              )}
-            </div>
-          </main>
+          <PermissionMatrixPanel
+            editMode={editMode}
+            selectedIds={selectedPermissionIds}
+            onToggleCategory={handleCategoryChange}
+            onTogglePermission={handlePermissionChange}
+          />
         </div>
       </div>
     </div>
@@ -430,6 +589,57 @@ const Metric = ({ label, value }) => (
     <div className="text-xs font-semibold uppercase text-slate-500">{label}</div>
   </div>
 );
+
+const PermissionCoverageSection = ({ selectedIds }) => {
+  const totalPermissions = companyPermissionCategoryGroups.reduce(
+    (total, group) => total + group.permissions.length,
+    0
+  );
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-2">
+        <Squares2X2Icon className="h-4 w-4 text-slate-500" />
+        <h2 className="text-sm font-semibold uppercase text-slate-500">Permission Coverage</h2>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <Metric label="Selected" value={selectedIds.length} />
+        <Metric label="Available" value={totalPermissions} />
+      </div>
+
+      <div className="mt-5 space-y-2">
+        {companyPermissionCategoryGroups.map((categoryGroup) => {
+          const selectedCount = getCategoryPermissionCount(categoryGroup, selectedIds);
+          const percent = categoryGroup.permissions.length
+            ? Math.round((selectedCount / categoryGroup.permissions.length) * 100)
+            : 0;
+
+          return (
+            <a
+              key={categoryGroup.category}
+              href={`#${categoryAnchorId(categoryGroup.category)}`}
+              className="group block rounded-lg border border-transparent px-2 py-2 transition hover:border-slate-200 hover:bg-slate-50"
+            >
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-semibold text-slate-800">{categoryGroup.category}</span>
+                <span className="shrink-0 text-xs font-semibold text-slate-500">
+                  {selectedCount}/{categoryGroup.permissions.length}
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-all"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
 
 const CustomerTagAccessSection = ({
   editMode,
@@ -602,166 +812,238 @@ const DashboardScopeAccessSection = ({
   );
 };
 
-const EditablePermissionCategory = ({
-  categoryGroup,
+const PermissionMatrixPanel = ({
+  editMode,
   selectedIds,
   onToggleCategory,
   onTogglePermission,
 }) => {
+  const rowsByCategory = getAllPermissionRowsByCategory();
+
+  return (
+    <main className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-950">Permissions Matrix</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {editMode
+              ? "Turn on an entire category or tune each access level across the row."
+              : "Scan what this role can view, create, update, delete, and do through special workflows."}
+          </p>
+        </div>
+
+        <div className="inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-600">
+          <SwatchIcon className="h-4 w-4" />
+          {selectedIds.length} selected
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="min-w-[940px] table-fixed text-left">
+          <colgroup>
+            <col className="w-[30%]" />
+            {permissionActionColumns.map((column) => (
+              <col key={column.key} className={column.key === "special" ? "w-[22%]" : "w-[12%]"} />
+            ))}
+          </colgroup>
+          <thead className="border-b border-slate-200 bg-slate-100">
+            <tr>
+              <th scope="col" className="px-5 py-3 text-xs font-semibold uppercase text-slate-500">
+                Area
+              </th>
+              {permissionActionColumns.map((column) => (
+                <th key={column.key} scope="col" className="px-4 py-3 align-top">
+                  <span className="block text-xs font-semibold uppercase text-slate-600">{column.label}</span>
+                  <span className="mt-1 block text-[11px] font-medium normal-case leading-4 text-slate-400">
+                    {column.helper}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200 bg-white">
+            {rowsByCategory.map(({ categoryGroup, rows }) => (
+              <React.Fragment key={categoryGroup.category}>
+                <PermissionMatrixCategoryDivider
+                  categoryGroup={categoryGroup}
+                  editMode={editMode}
+                  selectedIds={selectedIds}
+                  onToggleCategory={onToggleCategory}
+                />
+                {rows.map((row) => (
+                  <PermissionMatrixRow
+                    key={row.id}
+                    row={row}
+                    editMode={editMode}
+                    selectedIds={selectedIds}
+                    onTogglePermission={onTogglePermission}
+                  />
+                ))}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </main>
+  );
+};
+
+const PermissionMatrixCategoryDivider = ({
+  categoryGroup,
+  editMode,
+  selectedIds,
+  onToggleCategory,
+}) => {
   const state = getCategorySelectionState(categoryGroup, selectedIds);
-  const selectedCount = categoryGroup.permissions.filter((permission) =>
+  const selectedCount = getCategoryPermissionCount(categoryGroup, selectedIds);
+
+  return (
+    <tr id={categoryAnchorId(categoryGroup.category)} className="scroll-mt-6 bg-slate-50">
+      <th colSpan={permissionActionColumns.length + 1} scope="rowgroup" className="px-5 py-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-slate-950">{categoryGroup.category}</h3>
+            <p className="mt-1 text-sm font-normal text-slate-500">
+              {selectedCount} of {categoryGroup.permissions.length} permissions enabled
+            </p>
+          </div>
+
+          {editMode ? (
+            <button
+              type="button"
+              onClick={() => onToggleCategory(categoryGroup.category)}
+              className={`inline-flex w-fit items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                state === "selected"
+                  ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+                  : "bg-slate-900 text-white hover:bg-slate-800"
+              }`}
+            >
+              {state === "selected" ? <XMarkIcon className="h-4 w-4" /> : <CheckIcon className="h-4 w-4" />}
+              {state === "selected" ? "Clear Category" : "Allow Category"}
+            </button>
+          ) : null}
+        </div>
+      </th>
+    </tr>
+  );
+};
+
+const PermissionMatrixRow = ({ row, editMode, selectedIds, onTogglePermission }) => {
+  const selectedCount = row.permissions.filter((permission) =>
     selectedIds.includes(permission.id)
   ).length;
 
   return (
-    <section className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
-        <div>
-          <h3 className="font-semibold text-slate-900">{categoryGroup.category}</h3>
-          <p className="text-xs text-slate-500">
-            {selectedCount}/{categoryGroup.permissions.length} selected
-          </p>
+    <tr className={selectedCount > 0 ? "bg-white" : "bg-slate-50/60"}>
+      <th scope="row" className="px-5 py-3 align-top">
+        <div className={row.isSubRow ? "border-l-2 border-slate-200 pl-3" : ""}>
+          <div className={`font-semibold leading-5 ${row.isSubRow ? "text-slate-700" : "text-slate-900"}`}>
+            {row.label}
+          </div>
+          {row.description ? (
+            <div className="mt-1 text-xs font-normal leading-5 text-slate-500">
+              {row.description}
+            </div>
+          ) : null}
+          <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+            {selectedCount}/{row.totalCount} enabled
+          </div>
         </div>
+      </th>
 
-        <button
-          type="button"
-          onClick={() => onToggleCategory(categoryGroup.category)}
-          className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
-            state === "selected"
-              ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
-              : "bg-slate-900 text-white hover:bg-slate-800"
-          }`}
-        >
-          {state === "selected" ? "Clear" : "Select All"}
-        </button>
-      </div>
-
-      <div className="space-y-3 p-3">
-        {categoryGroup.groups.map((group) => (
-          <PermissionGroupEditor
-            key={group.parent.id}
-            group={group}
+      {permissionActionColumns.map((column) => (
+        <td key={column.key} className="px-4 py-3 align-top">
+          <PermissionMatrixCell
+            permissions={row.cells[column.key]}
+            parent={row.parentPermission}
+            column={column}
+            editMode={editMode}
             selectedIds={selectedIds}
             onTogglePermission={onTogglePermission}
           />
-        ))}
-      </div>
-    </section>
+        </td>
+      ))}
+    </tr>
   );
 };
 
-const PermissionGroupEditor = ({ group, selectedIds, onTogglePermission }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-3">
-    <PermissionCheckRow
-      permission={group.parent}
-      selectedIds={selectedIds}
-      onTogglePermission={onTogglePermission}
-      isParent={group.children.length > 0}
-    />
-
-    {group.children.length > 0 ? (
-      <div className="mt-3 space-y-2 border-l border-slate-200 pl-4">
-        {group.children.map((child) => (
-          <PermissionCheckRow
-            key={child.id}
-            permission={child}
-            selectedIds={selectedIds}
-            onTogglePermission={onTogglePermission}
-            compact
-          />
-        ))}
-      </div>
-    ) : null}
-  </div>
-);
-
-const PermissionCheckRow = ({ permission, selectedIds, onTogglePermission, isParent = false, compact = false }) => {
-  const state = getPermissionSelectionState(permission, selectedIds);
-  const isChecked = state === "selected";
-  const isPartial = state === "partial";
+const PermissionMatrixCell = ({
+  permissions,
+  parent,
+  column,
+  editMode,
+  selectedIds,
+  onTogglePermission,
+}) => {
+  if (permissions.length === 0) {
+    return (
+      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-50 text-slate-300">
+        <MinusIcon className="h-4 w-4" />
+      </span>
+    );
+  }
 
   return (
-    <label
-      htmlFor={`perm-${permission.id}`}
-      className={`flex cursor-pointer items-start gap-3 rounded-lg px-2 py-2 transition hover:bg-slate-50 ${
-        isPartial ? "bg-blue-50" : ""
+    <div className="flex flex-wrap gap-1.5">
+      {permissions.map((permission) => {
+        const selected = selectedIds.includes(permission.id);
+        const label = column.key === "view"
+          ? "View"
+          : formatCompactPermissionLabel(permission, parent, column.label);
+
+        return (
+          <PermissionMatrixToken
+            key={permission.id}
+            permission={permission}
+            label={label}
+            selected={selected}
+            editMode={editMode}
+            onTogglePermission={onTogglePermission}
+          />
+        );
+      })}
+    </div>
+  );
+};
+
+const PermissionMatrixToken = ({
+  permission,
+  label,
+  selected,
+  editMode,
+  onTogglePermission,
+}) => {
+  const classes = selected
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : "border-slate-200 bg-white text-slate-500";
+
+  if (!editMode) {
+    return (
+      <span
+        title={permission.description || permission.name}
+        className={`inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${classes}`}
+      >
+        {selected ? <CheckIcon className="h-3.5 w-3.5 shrink-0" /> : <XMarkIcon className="h-3.5 w-3.5 shrink-0 text-slate-300" />}
+        <span className="min-w-0 break-words leading-4">{label}</span>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onTogglePermission(permission.id)}
+      title={permission.description || permission.name}
+      aria-pressed={selected}
+      className={`inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition ${
+        selected
+          ? "border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-700"
+          : "border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
       }`}
     >
-      <input
-        type="checkbox"
-        id={`perm-${permission.id}`}
-        checked={isChecked}
-        onChange={() => onTogglePermission(permission.id)}
-        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-      />
-      <div className="min-w-0 flex-1">
-        <div className={`text-sm font-semibold ${compact ? "text-slate-700" : "text-slate-900"}`}>
-          {permission.name}
-          {isPartial ? <span className="ml-2 text-xs font-semibold text-blue-600">Partial</span> : null}
-        </div>
-        {permission.description ? (
-          <div className="mt-0.5 text-xs text-slate-500">{permission.description}</div>
-        ) : null}
-      </div>
-      {isParent ? (
-        <span className="mt-0.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
-          View
-        </span>
-      ) : null}
-    </label>
-  );
-};
-
-const ReadOnlyPermissionCategory = ({ categoryGroup, selectedIds }) => {
-  const selectedGroups = categoryGroup.groups
-    .map((group) => ({
-      ...group,
-      parentSelected: selectedIds.includes(group.parent.id),
-      selectedChildren: group.children.filter((child) => selectedIds.includes(child.id)),
-    }))
-    .filter((group) => group.parentSelected || group.selectedChildren.length > 0);
-
-  return (
-    <section className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
-        <h3 className="font-semibold text-slate-900">{categoryGroup.category}</h3>
-        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-          {selectedGroups.length} groups
-        </span>
-      </div>
-
-      <div className="space-y-3 p-3">
-        {selectedGroups.length > 0 ? (
-          selectedGroups.map((group) => (
-            <div key={group.parent.id} className="rounded-lg border border-slate-200 bg-white p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="font-semibold text-slate-900">{group.parent.name}</div>
-                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                  {group.parentSelected ? "View" : "Actions"}
-                </span>
-              </div>
-
-              {group.selectedChildren.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {group.selectedChildren.map((child) => (
-                    <span
-                      key={child.id}
-                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700"
-                    >
-                      {child.name}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ))
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
-            No permissions assigned in this category.
-          </div>
-        )}
-      </div>
-    </section>
+      {selected ? <CheckIcon className="h-3.5 w-3.5 shrink-0" /> : <XMarkIcon className="h-3.5 w-3.5 shrink-0 text-slate-300" />}
+      <span className="min-w-0 break-words leading-4">{label}</span>
+    </button>
   );
 };
 

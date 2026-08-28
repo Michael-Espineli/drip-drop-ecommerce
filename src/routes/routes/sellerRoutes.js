@@ -1,5 +1,8 @@
 import { lazy } from "react";
 import { Navigate } from "react-router-dom";
+import {
+    FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
+} from "../../utils/companyPermissions";
 
 const Home = lazy(() => import("../../views/Home"))
 const ProfilePage = lazy(() => import("../../views/company/ProfilePage"))
@@ -1434,6 +1437,10 @@ export const sellerRoutes = [
         element: <ScheduleEstimate />,
         role: 'Company',
     }, {
+        path: '/company/estimates/:agreementId',
+        element: <SalesAgreementDetail detailMode="estimate" />,
+        role: 'Company',
+    }, {
         path: '/company/sales',
         element: <Sales />,
         role: 'Company',
@@ -1509,11 +1516,13 @@ export const sellerRoutes = [
         path: '/company/sales/agreements/new',
         element: <CreateSalesAgreement />,
         role: 'Company',
+        permissionIds: ['400', FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID],
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/agreements/:agreementId',
         element: <SalesAgreementDetail />,
         role: 'Company',
+        permissionIds: ['400', FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID],
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/reviews/:companyId',

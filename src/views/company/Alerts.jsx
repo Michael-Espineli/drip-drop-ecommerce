@@ -26,6 +26,7 @@ import {
   ALERT_STATUS,
   alertBelongsToCompany,
   alertDisplayTime,
+  alertIsArchived,
   alertIsScheduled,
   alertIsUnread,
   alertNeedsAttention,
@@ -40,7 +41,6 @@ const filters = [
   { id: "active", label: "Active" },
   { id: "unread", label: "Unread" },
   { id: "scheduled", label: "Scheduled" },
-  { id: "archived", label: "Dismissed" },
 ];
 
 const emptyAlertForm = () => ({
@@ -76,7 +76,7 @@ const severityTone = (severity) => {
 };
 
 const statusTone = (alert) => {
-  if (alert.status === ALERT_STATUS.archived) return "border-slate-200 bg-slate-50 text-slate-500";
+  if (alertIsArchived(alert)) return "border-slate-200 bg-slate-50 text-slate-500";
   if (alertIsScheduled(alert)) return "border-purple-200 bg-purple-50 text-purple-700";
   if (alertNeedsAttention(alert)) return "border-amber-200 bg-amber-50 text-amber-700";
   if (alertIsUnread(alert)) return "border-blue-200 bg-blue-50 text-blue-700";
@@ -84,7 +84,7 @@ const statusTone = (alert) => {
 };
 
 const statusLabel = (alert) => {
-  if (alert.status === ALERT_STATUS.archived) return "Dismissed";
+  if (alertIsArchived(alert)) return "Dismissed";
   if (alertIsScheduled(alert)) return "Scheduled";
   if (alertNeedsAttention(alert)) return "Active";
   if (alertIsUnread(alert)) return "Unread";
@@ -212,7 +212,7 @@ const Alerts = () => {
     active: alerts.filter((alert) => alertNeedsAttention(alert)).length,
     unread: alerts.filter(alertIsUnread).length,
     scheduled: alerts.filter((alert) => alertIsScheduled(alert)).length,
-    critical: alerts.filter((alert) => alert.status !== ALERT_STATUS.archived && alert.severity === ALERT_SEVERITY.critical).length,
+    critical: alerts.filter((alert) => !alertIsArchived(alert) && alert.severity === ALERT_SEVERITY.critical).length,
   }), [alerts]);
 
   const filteredAlerts = useMemo(() => {
@@ -220,11 +220,10 @@ const Alerts = () => {
 
     return alerts
       .filter((alert) => {
-        if (filter === "all") return true;
+        if (alertIsArchived(alert)) return false;
         if (filter === "active" && !alertNeedsAttention(alert)) return false;
         if (filter === "unread" && !alertIsUnread(alert)) return false;
         if (filter === "scheduled" && !alertIsScheduled(alert)) return false;
-        if (filter === "archived" && alert.status !== ALERT_STATUS.archived) return false;
 
         if (!search) return true;
 
@@ -626,7 +625,7 @@ const Alerts = () => {
                             Open
                           </Link>
                         )}
-                        {alert.status !== ALERT_STATUS.read && alert.status !== ALERT_STATUS.archived && (
+                        {alert.status !== ALERT_STATUS.read && !alertIsArchived(alert) && (
                           <button
                             type="button"
                             onClick={() => updateAlertStatus(alert, ALERT_STATUS.read)}
@@ -636,7 +635,7 @@ const Alerts = () => {
                             Read
                           </button>
                         )}
-                        {alert.status !== ALERT_STATUS.archived && (
+                        {!alertIsArchived(alert) && (
                           <button
                             type="button"
                             onClick={() => updateAlertStatus(alert, ALERT_STATUS.archived)}
@@ -644,15 +643,6 @@ const Alerts = () => {
                           >
                             <MdNotificationsOff className="h-4 w-4" />
                             Dismiss
-                          </button>
-                        )}
-                        {alert.status === ALERT_STATUS.archived && (
-                          <button
-                            type="button"
-                            onClick={() => updateAlertStatus(alert, ALERT_STATUS.unread)}
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                          >
-                            Reopen
                           </button>
                         )}
                       </div>

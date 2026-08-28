@@ -701,6 +701,9 @@ const CreateNewPurchase = () => {
           storeItems: arrayUnion(item.name),
           storeItemsIds: arrayUnion(itemId),
           vendorItemIds: arrayUnion(itemId),
+          active: true,
+          availableForPartPurchase: true,
+          partPurchaseAvailable: true,
           dateUpdated: now,
           updatedAt: now,
         });

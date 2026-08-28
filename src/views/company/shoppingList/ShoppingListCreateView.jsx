@@ -35,6 +35,7 @@ import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../util
 import {
     getProductDisplayName,
     getProductSellPriceCents,
+    isProductAvailableForPartPurchase,
     productCatalogCollectionRef,
 } from "../../../utils/productCatalog";
 
@@ -256,10 +257,14 @@ const ShoppingListCreateView = () => {
                 const productId = data.id || docSnap.id;
                 const name = getProductDisplayName({ ...data, id: productId });
                 const sellPrice = getProductSellPriceCents(data);
+                const availableForPartPurchase = isProductAvailableForPartPurchase(data);
 
                 return {
                     ...data,
                     id: productId,
+                    active: data.active !== false,
+                    availableForPartPurchase,
+                    partPurchaseAvailable: availableForPartPurchase,
                     name,
                     description: data.description || "",
                     genericItemId: productId,

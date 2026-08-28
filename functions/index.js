@@ -235,6 +235,91 @@ const createClientSalesAgreementSetupAlert = async ({ agreementId, agreement }) 
   return alertId;
 };
 
+const createCompanyRepairRequestCreatedAlert = async ({ companyId, repairRequestId, repairRequest = {} }) => {
+  if (!companyId || !repairRequestId) return '';
+
+  const alertId = `repair_request_created_${repairRequestId}`;
+  const companyWebPath = `/company/repair-requests/detail/${repairRequestId}`;
+  const customerName = salesWorkflowFirstText(repairRequest.customerName);
+  const recordTitle = customerName || 'Repair Request';
+  const requesterName = salesWorkflowFirstText(
+    repairRequest.requesterName,
+    repairRequest.createdByName,
+    repairRequest.userName,
+    'A team member'
+  );
+  const description = salesWorkflowFirstText(repairRequest.description, repairRequest.notes);
+  const message = [
+    `${requesterName} created a repair request${customerName ? ` for ${customerName}` : ''}.`,
+    description,
+  ].filter(Boolean).join(' ');
+  const createdDate = repairRequest.date || repairRequest.createdAt || admin.firestore.FieldValue.serverTimestamp();
+
+  await db.collection('companies').doc(companyId).collection('alerts').doc(alertId).set({
+    id: alertId,
+    companyId,
+    recipientCompanyId: companyId,
+    title: 'New repair request',
+    name: 'New repair request',
+    message,
+    description: message,
+    status: 'unread',
+    read: false,
+    severity: 'warning',
+    type: 'repair_request_created',
+    source: 'repairRequests',
+    sourceId: repairRequestId,
+    route: companyWebPath,
+    category: 'repairRequest',
+    hasItem: true,
+    itemId: repairRequestId,
+    itemName: recordTitle,
+    targetScope: 'team',
+    deliveryTargets: ['web', 'ios'],
+    channels: {
+      dashboard: true,
+      ios: true,
+      push: true,
+    },
+    relatedEntity: {
+      type: 'repairRequest',
+      id: repairRequestId,
+      label: recordTitle,
+      companyId,
+      collectionPath: `companies/${companyId}/repairRequests`,
+      webPath: companyWebPath,
+      companyWebPath,
+      clientWebPath: '',
+    },
+    share: {
+      type: 'repairRequest',
+      recordId: repairRequestId,
+      title: recordTitle,
+      subtitle: description || 'New repair request',
+      companyId,
+      customerId: repairRequest.customerId || '',
+      customerUserId: repairRequest.customerUserId || repairRequest.homeownerId || repairRequest.homeownerUserId || '',
+      collectionPath: `companies/${companyId}/repairRequests`,
+      webPath: companyWebPath,
+      companyWebPath,
+      clientWebPath: '',
+      mobileRoute: 'repairRequest',
+      audience: 'company',
+    },
+    customerId: repairRequest.customerId || '',
+    customerName,
+    requesterId: repairRequest.requesterId || repairRequest.userId || '',
+    requesterName,
+    repairRequestStatus: repairRequest.status || '',
+    repairRequestCreatedAt: createdDate,
+    date: createdDate,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return alertId;
+};
+
 // =========================================================================
 //   CORRECTED AUTOMATED FUNCTION: Create Stripe customer on new user signup
 // =========================================================================
@@ -390,6 +475,7 @@ exports.verifyConnectedAccountBillingReadiness = connectedAcctFunc.verifyConnect
 exports.acceptSalesServiceAgreement = connectedAcctFunc.acceptSalesServiceAgreement;
 exports.acceptPublicSalesServiceAgreement = connectedAcctFunc.acceptPublicSalesServiceAgreement;
 exports.rejectSalesServiceAgreement = connectedAcctFunc.rejectSalesServiceAgreement;
+exports.rejectPublicSalesServiceAgreement = connectedAcctFunc.rejectPublicSalesServiceAgreement;
 exports.deleteSalesAgreement = connectedAcctFunc.deleteSalesAgreement;
 exports.createSalesBillingSubscriptionCheckoutSession = connectedAcctFunc.createSalesBillingSubscriptionCheckoutSession;
 exports.syncSalesBillingSubscriptionFromStripe = connectedAcctFunc.syncSalesBillingSubscriptionFromStripe;
@@ -592,6 +678,21 @@ exports.onSalesAgreementWorkflowNotifications = functions1.firestore
         notificationWorkflowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     }
+
+    return null;
+  });
+
+exports.onCompanyRepairRequestCreatedNotification = functions1.firestore
+  .document("/companies/{companyId}/repairRequests/{repairRequestId}")
+  .onCreate(async (snap, context) => {
+    const { companyId, repairRequestId } = context.params;
+    const repairRequest = snap.data() || {};
+
+    await createCompanyRepairRequestCreatedAlert({
+      companyId,
+      repairRequestId,
+      repairRequest,
+    });
 
     return null;
   });

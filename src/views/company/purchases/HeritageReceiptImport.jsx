@@ -914,6 +914,9 @@ const HeritageReceiptImport = () => {
             storeItems: arrayUnion(databaseItem?.name || line.name || itemId),
             storeItemsIds: arrayUnion(itemId),
             vendorItemIds: arrayUnion(itemId),
+            active: true,
+            availableForPartPurchase: true,
+            partPurchaseAvailable: true,
             dateUpdated: now,
             updatedAt: now,
           });

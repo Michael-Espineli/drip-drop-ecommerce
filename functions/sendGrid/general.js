@@ -956,6 +956,13 @@ const buildServiceAgreementTemplateData = ({
         : Array.isArray(agreement.solutionOptions)
             ? agreement.solutionOptions
             : [];
+    const agreementIsJobEstimate = normalizeFrequencyKey(agreement.sourceType) === "oneoffjob" ||
+        agreement.jobId ||
+        agreement.workOrderId ||
+        agreement.rateType === "oneTime" ||
+        agreement.serviceCadence === "oneTime";
+    const documentLabel = agreementIsJobEstimate ? "Estimate" : "Service Agreement";
+    const documentLabelLower = agreementIsJobEstimate ? "estimate" : "service agreement";
     const terms = buildAgreementTerms(agreement);
     const includedChemicalKeywords = normalizeAgreementList(agreement.includedChemicalKeywords);
     const includedChemicalIds = normalizeAgreementList(agreement.includedChemicalIds);
@@ -965,17 +972,20 @@ const buildServiceAgreementTemplateData = ({
     const customerPurchasedChemicalIds = normalizeAgreementList(agreement.customerPurchasedChemicalIds);
 
     return {
-        subject: `${companyName} Service Agreement`,
-        preHeader: "Your pool service agreement is ready to review.",
+        subject: `${companyName} ${documentLabel}`,
+        preHeader: `Your pool ${documentLabelLower} is ready to review.`,
         customer: agreement.customerName || "Customer",
         companyName,
-        agreementTitle: agreement.title || "Service Agreement",
+        agreementTitle: agreement.title || documentLabel,
+        documentTitle: agreement.title || documentLabel,
+        documentLabel,
+        documentLabelLower,
         agreementNumber: agreement.id || "",
         agreementStatus: labelize(agreement.status || "sent"),
         agreementUrl,
         reviewRequiresAccount: false,
         acceptanceRequiresAccount: false,
-        reviewAccessText: "No account is required to review the agreement from this email link.",
+        reviewAccessText: `No account is required to review the ${documentLabelLower} from this email link.`,
         accountAccessText: customerAccess.hasLinkedCustomerAccount
             ? "Sign in to your homeowner account when you want portal access and billing setup."
             : "Create or connect a homeowner account when you want portal access and billing setup.",
@@ -986,7 +996,7 @@ const buildServiceAgreementTemplateData = ({
         inspectionReportTitle,
         inspectionReportCtaLabel: "View Inspection Report",
         inspectionReportSummary: includeInspectionReport
-            ? "The company included the site inspection report gathered before preparing this service agreement."
+            ? `The company included the site inspection report gathered before preparing this ${documentLabelLower}.`
             : "",
         sentDate: formatDate(new Date()),
         expiresAt: formatDate(agreement.expiresAt),
@@ -1052,7 +1062,7 @@ const buildServiceAgreementTemplateData = ({
             totalAmount: formatCurrency(item.totalAmountCents)
         })),
         termsSummary: agreement.termsTemplateName
-            ? `This agreement uses the ${agreement.termsTemplateName} terms template.`
+            ? `This ${documentLabelLower} uses the ${agreement.termsTemplateName} terms template.`
             : "",
         terms,
         companyPhone: companyData.phoneNumber || companyData.phone || "",
@@ -1571,12 +1581,26 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
     }
 
     const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
-    if (!lineItems.length) {
-        throw new HttpsError("failed-precondition", "Agreement needs at least one line item before sending.");
+    const planOptions = Array.isArray(agreement.planOptions) && agreement.planOptions.length
+        ? agreement.planOptions
+        : Array.isArray(agreement.solutionOptions)
+            ? agreement.solutionOptions
+            : [];
+    const hasPricedPlanOption = planOptions.some((option) => (
+        Number(option.totalAmountCents || option.rateAmountCents || 0) > 0 ||
+        (Array.isArray(option.lineItems) && option.lineItems.length > 0)
+    ));
+    const agreementIsJobEstimate = normalizeFrequencyKey(agreement.sourceType) === "oneoffjob" ||
+        agreement.jobId ||
+        agreement.workOrderId ||
+        agreement.rateType === "oneTime" ||
+        agreement.serviceCadence === "oneTime";
+    if (!lineItems.length && !hasPricedPlanOption) {
+        throw new HttpsError("failed-precondition", `${agreementIsJobEstimate ? "Estimate" : "Agreement"} needs at least one line item or plan option before sending.`);
     }
 
     if (!agreement.terms && !(Array.isArray(agreement.termsList) && agreement.termsList.length)) {
-        throw new HttpsError("failed-precondition", "Agreement needs terms before sending.");
+        throw new HttpsError("failed-precondition", `${agreementIsJobEstimate ? "Estimate" : "Agreement"} needs terms before sending.`);
     }
 
     const companyRef = db.collection("companies").doc(companyId);

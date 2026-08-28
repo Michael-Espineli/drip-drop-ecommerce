@@ -3,6 +3,11 @@ import {
   ChemicalBillingTreatment,
   classifyAgreementChemicalBilling,
 } from './chemicalBilling';
+import {
+  AgreementBillingType,
+  getAgreementBillingType,
+} from './agreementRouting';
+import { serviceStopIsRecurringRoute } from '../serviceStops/operationsServiceStops';
 
 export const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -73,6 +78,9 @@ export const normalizeIdList = (...values) =>
   Array.from(new Set(
     values.flatMap((value) => {
       if (Array.isArray(value)) return value;
+      if (value && typeof value === 'object') {
+        return [value.id, value.value, value.docId, value.internalId].filter(Boolean);
+      }
       return String(value || '')
         .split(',')
         .map((item) => item.trim())
@@ -249,9 +257,14 @@ const billingIntervalDays = (record = {}) => {
   return 30.4375 * count;
 };
 
+const isRecurringPnlAgreement = (agreement = {}) => (
+  getAgreementBillingType(agreement) === AgreementBillingType.recurring
+);
+
 export const agreementRevenueCentsForRange = (agreement = {}, startDate, endDate) => {
   if (isInactiveAgreementStatus(agreement.status)) return 0;
   if (agreement.pnlIncludeInReports === false) return 0;
+  if (!isRecurringPnlAgreement(agreement)) return 0;
 
   const amountCents = agreementAmountCents(agreement);
   if (!amountCents) return 0;
@@ -709,6 +722,7 @@ const agreementForPnlCost = (agreements = [], record = {}, value) => {
   return agreements
     .filter((agreement) => (
       !isInactiveAgreementStatus(agreement.status) &&
+      isRecurringPnlAgreement(agreement) &&
       agreementAppliesToRecord(agreement, record) &&
       agreementActiveForDate(agreement, date)
     ))
@@ -960,6 +974,7 @@ export const buildPnlViewerMatrix = ({
   const stopDataByServiceStopId = new Map();
   const pools = new Map();
   const actualPayServiceStopIds = new Set();
+  const recurringServiceAgreements = serviceAgreements.filter(isRecurringPnlAgreement);
   const { byId: serviceStopTypesById, byName: serviceStopTypesByName } = serviceStopTypeLookup(companyServiceStopTypes);
 
   bodiesOfWater
@@ -1104,6 +1119,12 @@ export const buildPnlViewerMatrix = ({
     const share = Math.round(Number(amountCents || 0) / targets.length);
     targets.forEach((descriptor) => addToMonth(descriptor, monthIndex, key, share));
   };
+  const isRecurringServiceRecord = (record = {}, linkedServiceStop = {}) => (
+    serviceStopIsRecurringRoute(record) ||
+    serviceStopIsRecurringRoute(linkedServiceStop) ||
+    reportStatusKey(record.sourceType) === 'recurringservice' ||
+    reportStatusKey(linkedServiceStop.sourceType) === 'recurringservice'
+  );
 
   const descriptorsForServiceStop = (serviceStop = {}, fallback = {}) => {
     if (fallback.bodyOfWaterId || serviceStop.bodyOfWaterId) {
@@ -1218,7 +1239,7 @@ export const buildPnlViewerMatrix = ({
     }];
   };
 
-  serviceAgreements.forEach((agreement) => {
+  recurringServiceAgreements.forEach((agreement) => {
     const locationIds = agreementServiceLocationIds(agreement);
     const descriptors = locationIds.length
       ? locationIds.flatMap((serviceLocationId) =>
@@ -1245,6 +1266,8 @@ export const buildPnlViewerMatrix = ({
 
   stopData.forEach((stop, index) => {
     const serviceStop = serviceStopsById.get(String(stop.serviceStopId || '')) || {};
+    if (!isRecurringServiceRecord(stop, serviceStop)) return;
+
     const descriptor = poolDescriptor({
       bodyOfWaterId: stop.bodyOfWaterId || serviceStop.bodyOfWaterId,
       serviceLocationId: stop.serviceLocationId || serviceStop.serviceLocationId,
@@ -1274,7 +1297,7 @@ export const buildPnlViewerMatrix = ({
         bodyOfWaterId: stop.bodyOfWaterId || serviceStop.bodyOfWaterId,
         date: stop.date || serviceStop.serviceDate || serviceStop.date,
       };
-      const costAgreement = agreementForPnlCost(serviceAgreements, costRecord, costRecord.date);
+      const costAgreement = agreementForPnlCost(recurringServiceAgreements, costRecord, costRecord.date);
       const billing = costAgreement
         ? classifyAgreementChemicalBilling({ agreement: costAgreement, record: costRecord, linkedRecord: template })
         : null;
@@ -1304,6 +1327,8 @@ export const buildPnlViewerMatrix = ({
 
     const lineServiceStopId = String(firstPresent(line.serviceStopId, line.serviceStopID, line.stopId) || '').trim();
     const serviceStop = serviceStopsById.get(lineServiceStopId) || {};
+    if (!isRecurringServiceRecord(line, serviceStop)) return;
+
     if (lineServiceStopId) actualPayServiceStopIds.add(lineServiceStopId);
 
     const descriptors = descriptorsForServiceStop(serviceStop, {
@@ -1320,6 +1345,7 @@ export const buildPnlViewerMatrix = ({
   serviceStops.forEach((serviceStop) => {
     const serviceStopId = String(serviceStop.id || serviceStop.serviceStopId || '');
     if (!serviceStopId || actualPayServiceStopIds.has(serviceStopId)) return;
+    if (!isRecurringServiceRecord(serviceStop)) return;
     const monthIndex = monthIndexForDate(firstPresent(serviceStop.completedDate, serviceStop.serviceDate, serviceStop.date, serviceStop.createdAt), months);
     if (monthIndex < 0) return;
 
@@ -1342,7 +1368,7 @@ export const buildPnlViewerMatrix = ({
     distributeAmount(descriptorsForServiceStop(serviceStop), monthIndex, 'laborCents', laborCents);
   });
 
-  const historyByGroupId = serviceAgreements.reduce((map, agreement) => {
+  const historyByGroupId = recurringServiceAgreements.reduce((map, agreement) => {
     const groupId = agreementHistoryGroupId(agreement);
     if (!groupId) return map;
     if (!map.has(groupId)) map.set(groupId, []);

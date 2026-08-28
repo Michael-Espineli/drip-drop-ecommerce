@@ -1,7 +1,10 @@
 export const JOB_OPERATION_STATUS = {
   draft: "Draft",
+  estimatePending: "Estimate Pending",
   unscheduled: "Unscheduled",
   scheduled: "Scheduled",
+  inProgress: "In Progress",
+  waitingForParts: "Waiting for Parts",
   finished: "Finished",
 };
 

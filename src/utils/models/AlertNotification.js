@@ -153,18 +153,22 @@ export const mergeAlertNotifications = (alerts = []) => {
   return Array.from(byKey.values());
 };
 
+export const alertIsArchived = (alert = {}) => (
+  String(alert.status || "").trim().toLowerCase() === ALERT_STATUS.archived
+);
+
 export const alertIsUnread = (alert = {}) => (
-  alert.status !== ALERT_STATUS.archived &&
+  !alertIsArchived(alert) &&
   (alert.status === ALERT_STATUS.unread || alert.read === false || (!alert.status && !alert.readAt))
 );
 
 export const alertIsScheduled = (alert = {}, now = new Date()) => {
   const scheduledFor = toDate(alert.scheduledFor || alert.deliveryAt || alert.dueAt);
-  return Boolean(scheduledFor && scheduledFor > now && alert.status !== ALERT_STATUS.archived);
+  return Boolean(scheduledFor && scheduledFor > now && !alertIsArchived(alert));
 };
 
 export const alertNeedsAttention = (alert = {}, now = new Date()) => {
-  if (alert.status === ALERT_STATUS.archived) return false;
+  if (alertIsArchived(alert)) return false;
 
   const scheduledFor = toDate(alert.scheduledFor || alert.deliveryAt || alert.dueAt);
   return alertIsUnread(alert) && (!scheduledFor || scheduledFor <= now);

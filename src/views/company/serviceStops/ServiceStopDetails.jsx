@@ -8,11 +8,13 @@ import {
     query,
     where,
     addDoc,
+    setDoc,
     updateDoc,
     arrayUnion,
     writeBatch,
     Timestamp,
     orderBy,
+    serverTimestamp,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../../../utils/config";
@@ -31,9 +33,24 @@ import {
 } from "../../../utils/stopData";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
+    FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID,
+    FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID,
+    FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID,
+    FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
+} from "../../../utils/companyPermissions";
+import {
     SERVICE_STOP_TYPE_USE_CASES,
     normalizeServiceStopTypeBucket,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
+import {
+    DEFAULT_JOB_PLAN_TIER,
+    JOB_PLAN_STATUS,
+    JOB_PLAN_TIER_OPTIONS,
+    getJobPlanRecommendationDisplay,
+    getJobPlanRecommendationLabel,
+    jobPlanId,
+    normalizeJobPlanTier,
+} from "../../../utils/models/JobPlan";
 import { salesCollectionNames } from "../../../utils/models/Sales";
 import {
     agreementDisplayTitle,
@@ -288,6 +305,19 @@ const centsCurrency = (amountCents = 0) => new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
 }).format((Number(amountCents) || 0) / 100);
+
+const centsToMoneyInput = (amountCents = 0) => {
+    const cents = Number(amountCents || 0);
+    return cents > 0 ? (cents / 100).toFixed(2) : "";
+};
+
+const moneyInputToCents = (value) => Math.round((Number(value) || 0) * 100);
+
+const fieldAgreementRateTypeOptions = [
+    { value: "perMonth", label: "Monthly Service" },
+    { value: "perVisit", label: "Per Visit" },
+    { value: "oneTime", label: "One-Time Startup" },
+];
 
 const formatDateText = (value) => {
     const date = getDateValue(value);
@@ -1000,6 +1030,19 @@ const ServiceStopDetails = () => {
     const [loadingServiceAgreements, setLoadingServiceAgreements] = useState(false);
     const [showConnectAgreementModal, setShowConnectAgreementModal] = useState(false);
     const [connectingAgreementId, setConnectingAgreementId] = useState("");
+    const [serviceAgreementRecommendationForm, setServiceAgreementRecommendationForm] = useState({
+        price: "",
+        rateType: "perMonth",
+        notes: "",
+    });
+    const [savingServiceAgreementRecommendation, setSavingServiceAgreementRecommendation] = useState(false);
+    const [jobPlanForm, setJobPlanForm] = useState({
+        price: "",
+        title: "",
+        planTier: DEFAULT_JOB_PLAN_TIER,
+        notes: "",
+    });
+    const [savingFieldJobPlan, setSavingFieldJobPlan] = useState(false);
 
     const [showAddTask, setShowAddTask] = useState(false);
     const [savingTask, setSavingTask] = useState(false);
@@ -1226,6 +1269,38 @@ const ServiceStopDetails = () => {
 
         fetchServiceStopDetails();
     }, [recentlySelectedCompany, serviceStopId]);
+
+    useEffect(() => {
+        if (!serviceStop) return;
+
+        const workflow = serviceStop.fieldEstimateWorkflow || {};
+        const initialSurveyRecommendation = workflow.initialSurveyRecommendation || workflow.serviceAgreementRecommendation || {};
+        const recommendedServiceAgreementPriceCents = Number(
+            initialSurveyRecommendation.recommendedPriceCents ??
+            serviceStop.recommendedServiceAgreementPriceCents ??
+            serviceStop.fieldRecommendedServiceAgreementPriceCents ??
+            0
+        );
+        setServiceAgreementRecommendationForm({
+            price: centsToMoneyInput(recommendedServiceAgreementPriceCents),
+            rateType: initialSurveyRecommendation.rateType || serviceStop.recommendedServiceAgreementRateType || "perMonth",
+            notes: initialSurveyRecommendation.notes || serviceStop.recommendedServiceAgreementNotes || "",
+        });
+
+        const jobEstimatePlan = workflow.jobEstimatePlan || {};
+        const recommendedJobPlanPriceCents = Number(
+            jobEstimatePlan.recommendedPriceCents ??
+            serviceStop.recommendedJobEstimatePriceCents ??
+            serviceStop.fieldJobPlanRecommendedPriceCents ??
+            0
+        );
+        setJobPlanForm({
+            price: centsToMoneyInput(recommendedJobPlanPriceCents),
+            title: jobEstimatePlan.title || serviceStop.fieldJobPlanTitle || "",
+            planTier: normalizeJobPlanTier(jobEstimatePlan.planTier || serviceStop.fieldJobPlanTier || DEFAULT_JOB_PLAN_TIER),
+            notes: jobEstimatePlan.notes || serviceStop.fieldJobPlanNotes || "",
+        });
+    }, [serviceStop, serviceStopId]);
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -1541,6 +1616,21 @@ const ServiceStopDetails = () => {
     }, [serviceLocation, serviceStop, serviceStopAddressText]);
     const serviceStopBucket = useMemo(() => getServiceStopBucket(serviceStop), [serviceStop]);
     const isServiceAgreementEstimate = serviceStopBucket.id === SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate;
+    const isJobEstimateStop = serviceStopBucket.id === SERVICE_STOP_TYPE_USE_CASES.jobEstimate;
+    const initialSurveyRecommendation = serviceStop?.fieldEstimateWorkflow?.initialSurveyRecommendation || {};
+    const savedServiceAgreementPriceCents = Number(
+        initialSurveyRecommendation.recommendedPriceCents ||
+        serviceStop?.recommendedServiceAgreementPriceCents ||
+        serviceStop?.fieldRecommendedServiceAgreementPriceCents ||
+        0
+    );
+    const jobEstimatePlanRecommendation = serviceStop?.fieldEstimateWorkflow?.jobEstimatePlan || {};
+    const savedJobPlanPriceCents = Number(
+        jobEstimatePlanRecommendation.recommendedPriceCents ||
+        serviceStop?.recommendedJobEstimatePriceCents ||
+        serviceStop?.fieldJobPlanRecommendedPriceCents ||
+        0
+    );
     const serviceAgreementSurveyDraftPath = useMemo(() => {
         const params = new URLSearchParams();
         if (serviceStop?.leadId) params.set("leadId", serviceStop.leadId);
@@ -1550,6 +1640,15 @@ const ServiceStopDetails = () => {
 
         return `/company/sales/agreements/new${params.toString() ? `?${params.toString()}` : ""}`;
     }, [serviceStop, serviceStopId]);
+    const connectedServiceAgreementSendPath = connectedServiceAgreement?.id
+        ? `/company/sales/agreements/${connectedServiceAgreement.id}?send=1&fromServiceStopId=${encodeURIComponent(serviceStopId)}`
+        : "";
+    const jobEstimatePlannedPath = serviceStop?.jobId
+        ? `/company/jobs/detail/${serviceStop.jobId}/Planned`
+        : "";
+    const jobEstimateBillingPath = serviceStop?.jobId
+        ? `/company/jobs/detail/${serviceStop.jobId}/Billing`
+        : "";
     const handleConnectAgreement = async (agreement) => {
         if (!serviceStopId || !agreement?.id) return;
 
@@ -1938,6 +2037,423 @@ const ServiceStopDetails = () => {
         companyUserAccess?.uid,
     ].filter(Boolean)), [companyUserAccess, dataBaseUser, user?.uid]);
     const canManagePartWorkflow = can("244") || currentCompanyUserIds.has(serviceStop?.techId || "");
+    const activeCompanyUserId = [...currentCompanyUserIds][0] || "";
+    const activeCompanyUserName =
+        userDisplayName(companyUserAccess) ||
+        userDisplayName(dataBaseUser) ||
+        user?.displayName ||
+        user?.email ||
+        "Company user";
+    const canRecommendInitialSurveyPrice =
+        can(FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID) ||
+        can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
+        can("622") ||
+        can("400");
+    const canRunFieldAgreementWorkflow =
+        can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
+        can("400");
+    const canBuildFieldJobEstimatePlan =
+        can(FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID) ||
+        can("24") ||
+        can("400");
+    const canSendFieldJobEstimate =
+        can(FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID) ||
+        can("622") ||
+        can("400");
+    const canBuildJobEstimateStopScope = Boolean(isJobEstimateStop && canBuildFieldJobEstimatePlan);
+    const canEditServiceStopTasks = can("244") || canBuildJobEstimateStopScope;
+    const canCreateFieldEstimateParts = canManagePartWorkflow || canBuildJobEstimateStopScope;
+    const requireServiceStopTaskEdit = () => {
+        if (canEditServiceStopTasks) return true;
+        return requirePermission(
+            isJobEstimateStop ? FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID : "244",
+            isJobEstimateStop ? "build job estimate plans" : "update service stops"
+        );
+    };
+    const requireFieldEstimatePartCreate = () => {
+        if (canCreateFieldEstimateParts) return true;
+        return requirePermission(
+            isJobEstimateStop ? FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID : "244",
+            isJobEstimateStop ? "add products to this field estimate" : "manage part approvals"
+        );
+    };
+
+    const updateServiceAgreementRecommendationField = (field, value) => {
+        setServiceAgreementRecommendationForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const updateJobPlanField = (field, value) => {
+        setJobPlanForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const saveServiceAgreementRecommendation = async (event) => {
+        event?.preventDefault();
+        if (!canRecommendInitialSurveyPrice) {
+            toast.error("Your role cannot recommend initial survey pricing.");
+            return;
+        }
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
+
+        const recommendedPriceCents = moneyInputToCents(serviceAgreementRecommendationForm.price);
+        if (!recommendedPriceCents) {
+            toast.error("Enter the recommended price before saving.");
+            return;
+        }
+
+        const now = new Date();
+        const recommendation = {
+            recommendedPriceCents,
+            rateType: serviceAgreementRecommendationForm.rateType || "perMonth",
+            notes: serviceAgreementRecommendationForm.notes.trim(),
+            recommendedByUserId: activeCompanyUserId,
+            recommendedByUserName: activeCompanyUserName,
+        };
+
+        try {
+            setSavingServiceAgreementRecommendation(true);
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId), {
+                "fieldEstimateWorkflow.initialSurveyRecommendation": {
+                    ...recommendation,
+                    recommendedAt: serverTimestamp(),
+                },
+                recommendedServiceAgreementPriceCents: recommendedPriceCents,
+                recommendedServiceAgreementRateType: recommendation.rateType,
+                recommendedServiceAgreementNotes: recommendation.notes,
+                recommendedServiceAgreementByUserId: activeCompanyUserId,
+                recommendedServiceAgreementByUserName: activeCompanyUserName,
+                recommendedServiceAgreementAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            });
+
+            setServiceStop((current) => ({
+                ...current,
+                fieldEstimateWorkflow: {
+                    ...(current?.fieldEstimateWorkflow || {}),
+                    initialSurveyRecommendation: {
+                        ...recommendation,
+                        recommendedAt: now,
+                    },
+                },
+                recommendedServiceAgreementPriceCents: recommendedPriceCents,
+                recommendedServiceAgreementRateType: recommendation.rateType,
+                recommendedServiceAgreementNotes: recommendation.notes,
+            }));
+            toast.success("Initial survey price saved.");
+        } catch (error) {
+            console.error("Failed to save initial survey price:", error);
+            toast.error("Failed to save the recommended price.");
+        } finally {
+            setSavingServiceAgreementRecommendation(false);
+        }
+    };
+
+    const buildFieldJobPlanSnapshot = ({ planId, jobData, totalAmountCents }) => {
+        const planTier = normalizeJobPlanTier(jobPlanForm.planTier || DEFAULT_JOB_PLAN_TIER);
+        const planTierLabel = getJobPlanRecommendationLabel(planTier);
+        const title = jobPlanForm.title.trim() || `${serviceStop.customerName || "Customer"} Field Estimate Plan`;
+        const description = jobPlanForm.notes.trim() || technicianServiceNotes || serviceStop.description || "";
+        const nowMillis = Date.now();
+        const taskSnapshots = (taskList || []).map((task, index) => ({
+            id: task.jobTaskId?.id || task.jobTaskId || task.id || `field_task_${index + 1}`,
+            sourceServiceStopTaskId: task.id || "",
+            sortOrder: index,
+            name: task.name || `Task ${index + 1}`,
+            type: canonicalJobTaskType(task.type || ""),
+            status: task.status || "",
+            estimatedTime: Number(task.estimatedTime || 0),
+            estimatedMinutes: Number(task.estimatedTime || 0),
+            contractedRate: Number(task.contractedRate || 0),
+            plannedLaborCostCents: Number(task.contractedRate || 0),
+            customerApproval: Boolean(task.customerApproval),
+            bodyOfWaterId: task.bodyOfWaterId || "",
+            equipmentId: task.equipmentId || "",
+            dataBaseItemId: taskDataBaseItemIdFor(task),
+            serviceStopId,
+        }));
+        const materialSnapshots = (serviceStopShoppingItems || []).map((item, index) => {
+            const quantity = Math.max(Number(item.quantity || item.quantityString || 1), 0) || 1;
+            const totalPriceCents = partApprovalTotalPriceCents(item) || Number(item.plannedTotalPriceCents || item.totalPriceCents || 0);
+            const totalCostCents = Number(item.plannedTotalCostCents || item.totalCostCents || item.cost || 0);
+
+            return {
+                id: item.id || `field_material_${index + 1}`,
+                sourceServiceStopId: serviceStopId,
+                name: item.name || item.itemName || item.dbItemName || `Product ${index + 1}`,
+                description: item.description || "",
+                quantity,
+                plannedTotalCostCents: totalCostCents,
+                plannedTotalPriceCents: totalPriceCents,
+                customerApprovalRequired: Boolean(item.customerApprovalRequired || item.partApprovalRequestId || item.approvalRequestId),
+                customerApprovalStatus: item.customerApprovalStatus || item.approvalStatus || item.status || "",
+                shoppingListItemId: item.id || "",
+            };
+        });
+        const materialPriceCents = materialSnapshots.reduce((total, item) => total + Number(item.plannedTotalPriceCents || 0), 0);
+        const materialCostCents = materialSnapshots.reduce((total, item) => total + Number(item.plannedTotalCostCents || 0), 0);
+        const taskLaborCostCents = taskSnapshots.reduce((total, task) => total + Number(task.plannedLaborCostCents || 0), 0);
+        const laborPriceCents = Math.max(totalAmountCents - materialPriceCents, 0);
+        const estimatedMinutes = Number(serviceStop.estimatedDuration || serviceStop.duration || 0) ||
+            taskSnapshots.reduce((total, task) => total + Number(task.estimatedMinutes || 0), 0);
+        const plannedStopSnapshot = {
+            id: serviceStopId,
+            sourceServiceStopId: serviceStopId,
+            name: serviceStop.serviceStopTypeName || serviceStop.type || "Job Estimate Visit",
+            serviceStopTypeName: serviceStop.serviceStopTypeName || serviceStop.type || "",
+            estimatedMinutes,
+            plannedLaborCostCents: taskLaborCostCents,
+            taskIds: taskSnapshots.map((task) => task.id).filter(Boolean),
+        };
+        const laborLineItems = [
+            {
+                id: `${planId}_field_labor`,
+                name: title,
+                description,
+                quantity: 1,
+                unitPriceCents: laborPriceCents,
+                totalPriceCents: laborPriceCents,
+                internalCostCents: taskLaborCostCents,
+                taskIds: taskSnapshots.map((task) => task.id).filter(Boolean),
+            },
+        ];
+        const estimateLineItems = [
+            {
+                id: `${planId}_field_estimate_total`,
+                name: title,
+                description: [
+                    description,
+                    taskSnapshots.length ? `${taskSnapshots.length} task${taskSnapshots.length === 1 ? "" : "s"}` : "",
+                    materialSnapshots.length ? `${materialSnapshots.length} product${materialSnapshots.length === 1 ? "" : "s"}` : "",
+                ].filter(Boolean).join(" | "),
+                quantity: 1,
+                unitAmountCents: totalAmountCents,
+                totalAmountCents,
+                amount: totalAmountCents,
+                type: "service",
+                sourceType: "fieldServiceStop",
+                sourceId: serviceStopId,
+                metadata: {
+                    serviceStopId,
+                    jobId: serviceStop.jobId || "",
+                    createdFrom: "serviceStopFieldEstimateWorkspace",
+                },
+            },
+        ];
+        const projectedProfitCents = totalAmountCents - taskLaborCostCents - materialCostCents;
+        const profitMarginPercent = totalAmountCents > 0
+            ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
+            : 0;
+
+        return {
+            id: planId,
+            planId,
+            solutionId: planId,
+            companyId: recentlySelectedCompany,
+            jobId: serviceStop.jobId || "",
+            jobInternalId: serviceStop.jobInternalId || jobData.internalId || "",
+            customerId: serviceStop.customerId || jobData.customerId || "",
+            customerName: serviceStop.customerName || jobData.customerName || "",
+            serviceLocationId: serviceStop.serviceLocationId || jobData.serviceLocationId || "",
+            serviceLocationName: serviceStop.serviceLocationName || jobData.serviceLocationName || "",
+            sourceType: "fieldServiceStop",
+            sourceServiceStopId: serviceStopId,
+            title,
+            name: title,
+            planName: title,
+            description,
+            status: JOB_PLAN_STATUS.DRAFT,
+            planTier,
+            planTierLabel,
+            solutionTier: planTier,
+            solutionTierLabel: planTierLabel,
+            recommendationRank: planTier,
+            recommendationRankLabel: planTierLabel,
+            isAccepted: false,
+            isActivePlan: true,
+            rateAmountCents: totalAmountCents,
+            totalAmountCents,
+            subtotalAmountCents: totalAmountCents,
+            laborCostCents: taskLaborCostCents,
+            plannedLaborCostCents: taskLaborCostCents,
+            materialCostCents,
+            materialPriceCents,
+            internalCostCents: taskLaborCostCents + materialCostCents,
+            projectedProfitCents,
+            profitMarginPercent,
+            scopeOfWork: {
+                title,
+                customerDescription: description,
+                issueDescription: jobData.description || serviceStop.description || "",
+                taskSummaries: taskSnapshots,
+                plannedStopSummaries: [plannedStopSnapshot],
+                laborLineSummaries: laborLineItems,
+                materialSummaries: materialSnapshots,
+                counts: {
+                    tasks: taskSnapshots.length,
+                    plannedServiceStops: 1,
+                    laborLineItems: laborLineItems.length,
+                    shoppingItems: materialSnapshots.length,
+                    lineItems: estimateLineItems.length,
+                },
+            },
+            costSummary: {
+                plannedLaborCostCents: taskLaborCostCents,
+                plannedLaborLineCostCents: taskLaborCostCents,
+                plannedLaborLinePriceCents: laborPriceCents,
+                plannedLaborPriceCents: laborPriceCents,
+                plannedTaskLaborCents: taskLaborCostCents,
+                plannedMaterialCostCents: materialCostCents,
+                plannedMaterialPriceCents: materialPriceCents,
+                internalCostCents: taskLaborCostCents + materialCostCents,
+            },
+            billingSummary: {
+                pricingSource: "fieldTechnicianRecommendation",
+                lineItemCount: estimateLineItems.length,
+                subtotalAmountCents: totalAmountCents,
+                totalAmountCents,
+                plannedLaborPriceCents: laborPriceCents,
+                projectedProfitCents,
+                profitMarginPercent,
+            },
+            tasks: taskSnapshots,
+            plannedServiceStops: [plannedStopSnapshot],
+            laborLineItems,
+            estimateLaborLineItems: laborLineItems,
+            shoppingItems: materialSnapshots,
+            lineItems: estimateLineItems,
+            estimateLineItems,
+            taskCount: taskSnapshots.length,
+            plannedStopCount: 1,
+            laborLineCount: laborLineItems.length,
+            materialCount: materialSnapshots.length,
+            createdAt: serverTimestamp(),
+            createdAtMillis: nowMillis,
+            createdByUserId: activeCompanyUserId,
+            createdByUserName: activeCompanyUserName,
+            updatedAt: serverTimestamp(),
+            updatedAtMillis: nowMillis,
+            updatedByUserId: activeCompanyUserId,
+            updatedByUserName: activeCompanyUserName,
+        };
+    };
+
+    const saveFieldJobPlan = async (event) => {
+        event?.preventDefault();
+        if (!canBuildFieldJobEstimatePlan) {
+            toast.error("Your role cannot build field job estimate plans.");
+            return;
+        }
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop?.jobId) {
+            toast.error("This service stop is not linked to a job estimate.");
+            return;
+        }
+
+        const recommendedPriceCents = moneyInputToCents(jobPlanForm.price);
+        if (!recommendedPriceCents) {
+            toast.error("Enter the recommended job price before saving the plan.");
+            return;
+        }
+
+        const planId = jobPlanId();
+        const planTier = normalizeJobPlanTier(jobPlanForm.planTier || DEFAULT_JOB_PLAN_TIER);
+        const planTierLabel = getJobPlanRecommendationLabel(planTier);
+        const now = new Date();
+
+        try {
+            setSavingFieldJobPlan(true);
+            const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", serviceStop.jobId);
+            const jobSnap = await getDoc(jobRef);
+            const jobData = jobSnap.exists() ? { id: jobSnap.id, ...jobSnap.data() } : {};
+            const plan = buildFieldJobPlanSnapshot({
+                planId,
+                jobData,
+                totalAmountCents: recommendedPriceCents,
+            });
+
+            const planRef = doc(db, "companies", recentlySelectedCompany, "workOrders", serviceStop.jobId, "plans", planId);
+            await setDoc(planRef, plan, { merge: true });
+
+            const jobUpdates = {
+                activePlanId: planId,
+                activeSolutionId: planId,
+                activePlanTier: planTier,
+                activePlanTierLabel: planTierLabel,
+                activeSolutionTier: planTier,
+                activeSolutionTierLabel: planTierLabel,
+                activePlanRecommendationRank: planTier,
+                activePlanRecommendationRankLabel: planTierLabel,
+                planSelectionStatus: JOB_PLAN_STATUS.DRAFT,
+                solutionSelectionStatus: JOB_PLAN_STATUS.DRAFT,
+                rate: recommendedPriceCents,
+                estimateTotalCents: recommendedPriceCents,
+                estimateSubtotalCents: recommendedPriceCents,
+                estimateLineItems: plan.estimateLineItems,
+                estimateLaborLineItems: plan.estimateLaborLineItems,
+                fieldEstimatePlanId: planId,
+                fieldEstimateServiceStopId: serviceStopId,
+                updatedAt: serverTimestamp(),
+                updatedAtMillis: Date.now(),
+            };
+            await updateDoc(jobRef, jobUpdates);
+
+            const serviceStopUpdates = {
+                "fieldEstimateWorkflow.jobEstimatePlan": {
+                    planId,
+                    title: plan.title,
+                    notes: plan.description,
+                    recommendedPriceCents,
+                    planTier,
+                    planTierLabel,
+                    savedAt: serverTimestamp(),
+                    savedByUserId: activeCompanyUserId,
+                    savedByUserName: activeCompanyUserName,
+                },
+                recommendedJobEstimatePriceCents: recommendedPriceCents,
+                fieldJobPlanRecommendedPriceCents: recommendedPriceCents,
+                fieldJobPlanTitle: plan.title,
+                fieldJobPlanNotes: plan.description,
+                fieldJobPlanTier: planTier,
+                fieldJobPlanId: planId,
+                updatedAt: serverTimestamp(),
+            };
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId), serviceStopUpdates);
+
+            setServiceStop((current) => ({
+                ...current,
+                fieldEstimateWorkflow: {
+                    ...(current?.fieldEstimateWorkflow || {}),
+                    jobEstimatePlan: {
+                        planId,
+                        title: plan.title,
+                        notes: plan.description,
+                        recommendedPriceCents,
+                        planTier,
+                        planTierLabel,
+                        savedAt: now,
+                        savedByUserId: activeCompanyUserId,
+                        savedByUserName: activeCompanyUserName,
+                    },
+                },
+                recommendedJobEstimatePriceCents: recommendedPriceCents,
+                fieldJobPlanRecommendedPriceCents: recommendedPriceCents,
+                fieldJobPlanTitle: plan.title,
+                fieldJobPlanNotes: plan.description,
+                fieldJobPlanTier: planTier,
+                fieldJobPlanId: planId,
+            }));
+            toast.success("Field job plan saved.");
+        } catch (error) {
+            console.error("Failed to save field job plan:", error);
+            toast.error("Failed to save the field job plan.");
+        } finally {
+            setSavingFieldJobPlan(false);
+        }
+    };
 
     const syncActiveRouteForServiceStops = async ({ date, techId, techName }) => {
         if (!recentlySelectedCompany || !date || !techId) return null;
@@ -2521,10 +3037,7 @@ const ServiceStopDetails = () => {
     });
 
     const markApprovalApprovedInPerson = async (approval) => {
-        if (!canManagePartWorkflow) {
-            toast.error("Only the assigned technician or an admin can approve this part from the stop.");
-            return;
-        }
+        if (!requireFieldEstimatePartCreate()) return;
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !approval?.id) return;
 
         try {
@@ -2764,7 +3277,7 @@ const ServiceStopDetails = () => {
 
     const saveNewTask = async (e) => {
         e.preventDefault();
-        if (!requirePermission("244", "update service stops")) return;
+        if (!requireServiceStopTaskEdit()) return;
 
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
 
@@ -2779,6 +3292,14 @@ const ServiceStopDetails = () => {
         }
 
         const newTaskType = canonicalJobTaskType(newTask.type);
+        if (!can("244") && isFinishedStatus(newTask.status)) {
+            toast.error("Your role can add estimate tasks, but cannot finish service-stop work.");
+            return;
+        }
+        if (!can("244") && newTask.addToRecurringServiceStop) {
+            toast.error("Your role can add estimate tasks, but cannot update recurring service stops.");
+            return;
+        }
         const selectedEquipment = newTask.equipmentId ? equipmentById.get(newTask.equipmentId) || null : null;
         const resolvedBodyOfWaterId =
             newTask.bodyOfWaterId ||
@@ -2948,7 +3469,9 @@ const ServiceStopDetails = () => {
             }
 
             const nextTasks = [createdTask, ...taskList];
-            await updateServiceStopStatusFromTasks(nextTasks);
+            if (can("244")) {
+                await updateServiceStopStatusFromTasks(nextTasks);
+            }
             setTaskList(nextTasks);
             toast.success("Task added");
             setShowAddTask(false);
@@ -3144,6 +3667,259 @@ const ServiceStopDetails = () => {
             setDeleting(false);
             setShowDeleteConfirm(false);
         }
+    };
+
+    const shouldShowFieldEstimateWorkspace = isServiceAgreementEstimate || isJobEstimateStop;
+    const savedJobPlanTier = normalizeJobPlanTier(
+        jobEstimatePlanRecommendation.planTier || serviceStop?.fieldJobPlanTier || jobPlanForm.planTier || DEFAULT_JOB_PLAN_TIER
+    );
+    const savedAgreementRateTypeLabel = fieldAgreementRateTypeOptions.find((option) =>
+        option.value === (initialSurveyRecommendation.rateType || serviceStop?.recommendedServiceAgreementRateType || serviceAgreementRecommendationForm.rateType)
+    )?.label || "Service";
+
+    const renderFieldEstimateWorkspace = () => {
+        if (!shouldShowFieldEstimateWorkspace) return null;
+
+        return (
+            <div className="rounded-lg border border-blue-200 bg-white p-4 shadow-sm lg:col-span-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Field Estimate Workspace</p>
+                        <h3 className="mt-1 text-xl font-bold text-slate-900">
+                            {isServiceAgreementEstimate ? "Initial Survey" : "Job Estimate"}
+                        </h3>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        {isServiceAgreementEstimate && savedServiceAgreementPriceCents > 0 && (
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                                {centsCurrency(savedServiceAgreementPriceCents)} {savedAgreementRateTypeLabel}
+                            </span>
+                        )}
+                        {isJobEstimateStop && savedJobPlanPriceCents > 0 && (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">
+                                {centsCurrency(savedJobPlanPriceCents)} Plan
+                            </span>
+                        )}
+                    </div>
+                </div>
+
+                <div className={`mt-4 grid grid-cols-1 gap-4 ${isServiceAgreementEstimate && isJobEstimateStop ? "xl:grid-cols-2" : ""}`}>
+                    {isServiceAgreementEstimate && (
+                        <form onSubmit={saveServiceAgreementRecommendation} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <h4 className="font-bold text-slate-900">Service Agreement Price</h4>
+                                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                                        {initialSurveyRecommendation.recommendedByUserName
+                                            ? `Recommended by ${initialSurveyRecommendation.recommendedByUserName}`
+                                            : "No recommendation saved"}
+                                    </p>
+                                </div>
+                                {connectedServiceAgreement?.id && (
+                                    <Link
+                                        to={`/company/sales/agreements/${connectedServiceAgreement.id}`}
+                                        className="rounded-md border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                                    >
+                                        Agreement
+                                    </Link>
+                                )}
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
+                                <label className="block">
+                                    <span className="text-sm font-semibold text-slate-700">Recommended Price</span>
+                                    <div className="mt-1 flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
+                                        <span className="text-sm font-bold text-slate-500">$</span>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={serviceAgreementRecommendationForm.price}
+                                            onChange={(event) => updateServiceAgreementRecommendationField("price", event.target.value)}
+                                            disabled={!canRecommendInitialSurveyPrice || savingServiceAgreementRecommendation}
+                                            className="min-w-0 flex-1 border-0 bg-transparent px-2 py-0 text-sm font-semibold text-slate-900 outline-none disabled:text-slate-400"
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                </label>
+
+                                <label className="block">
+                                    <span className="text-sm font-semibold text-slate-700">Rate</span>
+                                    <select
+                                        value={serviceAgreementRecommendationForm.rateType}
+                                        onChange={(event) => updateServiceAgreementRecommendationField("rateType", event.target.value)}
+                                        disabled={!canRecommendInitialSurveyPrice || savingServiceAgreementRecommendation}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
+                                    >
+                                        {fieldAgreementRateTypeOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
+
+                            <label className="mt-3 block">
+                                <span className="text-sm font-semibold text-slate-700">Field Notes</span>
+                                <textarea
+                                    value={serviceAgreementRecommendationForm.notes}
+                                    onChange={(event) => updateServiceAgreementRecommendationField("notes", event.target.value)}
+                                    disabled={!canRecommendInitialSurveyPrice || savingServiceAgreementRecommendation}
+                                    rows={3}
+                                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
+                                    placeholder="Included services, startup work, chemistry concerns, access notes"
+                                />
+                            </label>
+
+                            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                                {canRecommendInitialSurveyPrice && (
+                                    <button
+                                        type="submit"
+                                        disabled={savingServiceAgreementRecommendation}
+                                        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {savingServiceAgreementRecommendation ? "Saving..." : "Save Recommendation"}
+                                    </button>
+                                )}
+                                {canRunFieldAgreementWorkflow && (
+                                    <Link
+                                        to={serviceAgreementSurveyDraftPath}
+                                        className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
+                                    >
+                                        Create Agreement
+                                    </Link>
+                                )}
+                                {canRunFieldAgreementWorkflow && connectedServiceAgreementSendPath && (
+                                    <Link
+                                        to={connectedServiceAgreementSendPath}
+                                        className="inline-flex items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                    >
+                                        Send Agreement
+                                    </Link>
+                                )}
+                            </div>
+                        </form>
+                    )}
+
+                    {isJobEstimateStop && (
+                        <form onSubmit={saveFieldJobPlan} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <h4 className="font-bold text-slate-900">Job Estimate Plan</h4>
+                                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                                        {jobEstimatePlanRecommendation.planId
+                                            ? `Saved plan ${jobEstimatePlanRecommendation.planId}`
+                                            : `${taskList.length} task${taskList.length === 1 ? "" : "s"} and ${serviceStopShoppingItems.length} part${serviceStopShoppingItems.length === 1 ? "" : "s"}`}
+                                    </p>
+                                </div>
+                                <span className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600">
+                                    {getJobPlanRecommendationDisplay(savedJobPlanTier)}
+                                </span>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_170px]">
+                                <label className="block">
+                                    <span className="text-sm font-semibold text-slate-700">Recommended Job Price</span>
+                                    <div className="mt-1 flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
+                                        <span className="text-sm font-bold text-slate-500">$</span>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={jobPlanForm.price}
+                                            onChange={(event) => updateJobPlanField("price", event.target.value)}
+                                            disabled={!canBuildFieldJobEstimatePlan || savingFieldJobPlan}
+                                            className="min-w-0 flex-1 border-0 bg-transparent px-2 py-0 text-sm font-semibold text-slate-900 outline-none disabled:text-slate-400"
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                </label>
+
+                                <label className="block">
+                                    <span className="text-sm font-semibold text-slate-700">Recommendation</span>
+                                    <select
+                                        value={jobPlanForm.planTier}
+                                        onChange={(event) => updateJobPlanField("planTier", Number(event.target.value))}
+                                        disabled={!canBuildFieldJobEstimatePlan || savingFieldJobPlan}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
+                                    >
+                                        {JOB_PLAN_TIER_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {getJobPlanRecommendationDisplay(option.value)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
+
+                            <label className="mt-3 block">
+                                <span className="text-sm font-semibold text-slate-700">Plan Name</span>
+                                <input
+                                    type="text"
+                                    value={jobPlanForm.title}
+                                    onChange={(event) => updateJobPlanField("title", event.target.value)}
+                                    disabled={!canBuildFieldJobEstimatePlan || savingFieldJobPlan}
+                                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
+                                    placeholder="Repair existing system"
+                                />
+                            </label>
+
+                            <label className="mt-3 block">
+                                <span className="text-sm font-semibold text-slate-700">Plan Notes</span>
+                                <textarea
+                                    value={jobPlanForm.notes}
+                                    onChange={(event) => updateJobPlanField("notes", event.target.value)}
+                                    disabled={!canBuildFieldJobEstimatePlan || savingFieldJobPlan}
+                                    rows={3}
+                                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
+                                    placeholder="Parts needed, labor scope, customer-facing recommendation"
+                                />
+                            </label>
+
+                            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tasks</p>
+                                    <p className="mt-1 font-bold text-slate-900">{taskList.length}</p>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Parts</p>
+                                    <p className="mt-1 font-bold text-slate-900">{serviceStopShoppingItems.length}</p>
+                                </div>
+                            </div>
+
+                            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                                {canBuildFieldJobEstimatePlan && (
+                                    <button
+                                        type="submit"
+                                        disabled={savingFieldJobPlan}
+                                        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {savingFieldJobPlan ? "Saving..." : "Save Field Plan"}
+                                    </button>
+                                )}
+                                {jobEstimatePlannedPath && (
+                                    <Link
+                                        to={jobEstimatePlannedPath}
+                                        className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
+                                    >
+                                        Review Plan
+                                    </Link>
+                                )}
+                                {canSendFieldJobEstimate && jobEstimateBillingPath && (
+                                    <Link
+                                        to={jobEstimateBillingPath}
+                                        className="inline-flex items-center justify-center rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100"
+                                    >
+                                        Send Estimate
+                                    </Link>
+                                )}
+                            </div>
+                        </form>
+                    )}
+                </div>
+            </div>
+        );
     };
 
     if (loading) {
@@ -3345,6 +4121,8 @@ const ServiceStopDetails = () => {
                             )}
                     </div>
 
+                    {renderFieldEstimateWorkspace()}
+
                     <div className="lg:col-span-2 space-y-6">
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -3354,7 +4132,7 @@ const ServiceStopDetails = () => {
                                         Request customer approval for replacement parts and deliver approved items for this stop.
                                     </p>
                                 </div>
-                                {canManagePartWorkflow && (
+                                {canCreateFieldEstimateParts && (
                                     <button
                                         type="button"
                                         onClick={() => setShowPartApprovalModal(true)}
@@ -3421,7 +4199,7 @@ const ServiceStopDetails = () => {
                                                                 >
                                                                     Copy Customer Link
                                                                 </button>
-                                                                {pending && canManagePartWorkflow && (
+                                                                {pending && canCreateFieldEstimateParts && (
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => markApprovalApprovedInPerson(approval)}
@@ -3536,12 +4314,20 @@ const ServiceStopDetails = () => {
                                         >
                                             {connectedServiceAgreement?.id ? "Change Agreement" : "Connect Agreement"}
                                         </button>
-                                        {can("612") && (
+                                        {canRunFieldAgreementWorkflow && (
                                             <Link
                                                 to={serviceAgreementSurveyDraftPath}
                                                 className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
                                             >
                                                 Create Service Agreement
+                                            </Link>
+                                        )}
+                                        {canRunFieldAgreementWorkflow && connectedServiceAgreementSendPath && (
+                                            <Link
+                                                to={connectedServiceAgreementSendPath}
+                                                className="inline-flex items-center justify-center rounded-md border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                                            >
+                                                Send Agreement
                                             </Link>
                                         )}
                                         <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
@@ -4212,7 +4998,7 @@ const ServiceStopDetails = () => {
                                     </p>
                                 </div>
 
-                                {can("244") && (
+                                {canEditServiceStopTasks && (
                                     <button
                                         type="button"
                                         onClick={() => setShowAddTask(true)}
@@ -4224,7 +5010,7 @@ const ServiceStopDetails = () => {
                                 )}
                             </div>
 
-                            {showAddTask && can("244") && (
+                            {showAddTask && canEditServiceStopTasks && (
                                 <form
                                     onSubmit={saveNewTask}
                                     className="mb-6 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
@@ -4433,7 +5219,7 @@ const ServiceStopDetails = () => {
                                         Customer approved
                                     </label>
 
-                                    {!!serviceStop.recurringServiceStopId && (
+                                    {!!serviceStop.recurringServiceStopId && can("244") && (
                                         <label className="flex items-center gap-2 text-sm text-slate-700">
                                             <input
                                                 type="checkbox"

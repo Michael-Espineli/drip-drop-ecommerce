@@ -129,6 +129,38 @@ const blankLineItem = () => ({
   metadata: {},
 });
 
+const fieldRecommendationFromServiceStop = (serviceStop = {}) => {
+  const workflow = serviceStop.fieldEstimateWorkflow || {};
+  const recommendation = workflow.initialSurveyRecommendation || workflow.serviceAgreementRecommendation || {};
+  const recommendedPriceCents = Number(
+    recommendation.recommendedPriceCents ??
+    serviceStop.recommendedServiceAgreementPriceCents ??
+    serviceStop.fieldRecommendedServiceAgreementPriceCents ??
+    0
+  );
+
+  return {
+    recommendedPriceCents,
+    rateType: recommendation.rateType || serviceStop.recommendedServiceAgreementRateType || '',
+    notes: recommendation.notes || serviceStop.recommendedServiceAgreementNotes || '',
+    recommendedByUserName: recommendation.recommendedByUserName || serviceStop.recommendedServiceAgreementByUserName || '',
+  };
+};
+
+const lineItemDraftFromFieldRecommendation = (recommendation = {}, sourceServiceStopId = '') => ({
+  ...blankLineItem(),
+  sourceType: 'fieldServiceStopRecommendation',
+  sourceId: sourceServiceStopId,
+  name: 'Recommended Service Plan',
+  description: recommendation.notes || 'Field recommended service agreement price',
+  unitAmount: centsToInput(recommendation.recommendedPriceCents),
+  type: 'service',
+  metadata: {
+    sourceServiceStopId,
+    recommendedByUserName: recommendation.recommendedByUserName || '',
+  },
+});
+
 const lineItemUnitAmountCents = (item = {}) => (
   item.unitAmount === undefined ? Number(item.unitAmountCents || 0) : moneyInputToCents(item.unitAmount)
 );
@@ -718,6 +750,9 @@ const CreateSalesAgreement = () => {
         ? `${customerName} Service Agreement`
         : '';
     const description = sourceLead?.serviceDescription || sourceServiceStop?.description || '';
+    const fieldRecommendation = fieldRecommendationFromServiceStop(sourceServiceStop || {});
+    const recommendationRateType = fieldRecommendation.rateType || '';
+    const oneTimeRecommendation = recommendationRateType === 'oneTime';
 
     setForm((current) => ({
       ...current,
@@ -727,8 +762,18 @@ const CreateSalesAgreement = () => {
         ? current.serviceLocationIds
         : serviceLocationId ? [serviceLocationId] : [],
       title: current.title || title,
-      description: current.description || description,
+      description: current.description || [description, fieldRecommendation.notes].filter(Boolean).join('\n\n'),
+      rateType: recommendationRateType || current.rateType,
+      billingFrequency: oneTimeRecommendation ? 'oneTime' : current.billingFrequency,
+      serviceCadence: oneTimeRecommendation ? 'oneTime' : current.serviceCadence,
     }));
+    if (fieldRecommendation.recommendedPriceCents > 0) {
+      setLineItems((current) => (
+        current.length
+          ? current
+          : [lineItemDraftFromFieldRecommendation(fieldRecommendation, sourceServiceStopId)]
+      ));
+    }
     setSourcePrefillApplied(true);
   }, [
     customers,

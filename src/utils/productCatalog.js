@@ -34,6 +34,18 @@ export const getProductSellPriceCents = (product = {}) =>
 
 export const getVendorItemCostCents = (vendorItem = {}) => Number(vendorItem.rate || vendorItem.cost || 0);
 
+export const isProductAvailableForPartPurchase = (product = {}) =>
+  product.availableForPartPurchase ??
+  product.partPurchaseAvailable ??
+  product.availableForPurchase ??
+  product.active !== false;
+
+export const productPartPurchaseAvailabilityFields = (product = {}) => ({
+  active: product.active ?? true,
+  availableForPartPurchase: isProductAvailableForPartPurchase(product),
+  partPurchaseAvailable: isProductAvailableForPartPurchase(product),
+});
+
 export const productOptionSearchText = (product = {}) =>
   [
     product.id,
@@ -89,7 +101,11 @@ export const buildProductFromVendorItem = ({
     vendorItemIds: vendorItemId ? [vendorItemId] : [],
     preferredVendorItemId: vendorItemId,
     source,
-    active: true,
+    ...productPartPurchaseAvailabilityFields({
+      active: overrides.active,
+      availableForPartPurchase: overrides.availableForPartPurchase ?? true,
+      partPurchaseAvailable: overrides.partPurchaseAvailable ?? true,
+    }),
   };
 };
 
@@ -103,6 +119,9 @@ export const buildVendorItemProductPatch = (product = {}, now = new Date()) => {
     genericItemId: productId,
     genericItemName: productName,
     dateUpdated: now,
+    active: true,
+    availableForPartPurchase: true,
+    partPurchaseAvailable: true,
   };
 };
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { addDoc, collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, Timestamp, where } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc, Timestamp, where } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
@@ -15,6 +15,7 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
+import { v4 as uuidv4 } from "uuid";
 import { Context } from "../../../context/AuthContext";
 import { db, storage } from "../../../utils/config";
 import { estimateServiceStopPaySummary } from "../../../utils/payroll/payEstimate";
@@ -30,6 +31,11 @@ import {
   ChemicalBillingTreatment,
   classifyAgreementChemicalBilling,
 } from "../../../utils/sales/chemicalBilling";
+import {
+  AgreementBillingType,
+  getAgreementBillingType,
+} from "../../../utils/sales/agreementRouting";
+import { serviceStopIsRecurringRoute } from "../../../utils/serviceStops/operationsServiceStops";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 
 const reportCategories = [
@@ -44,7 +50,7 @@ const reportCatalog = [
   { value: "readings", label: "Readings & Dosages Summary", status: "Ready", source: "stopData readings and dosages", category: "operations" },
   { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
   { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by user or customer", category: "performance" },
-  { value: "pnlPerPool", label: "PNL Per Service Location", status: "Ready", source: "service agreements by location, labor, chemicals", category: "performance" },
+  { value: "pnlPerPool", label: "PNL Per Service Location", status: "Ready", source: "recurring service agreements by location, labor, chemicals", category: "performance" },
   { value: "pipeline", label: "Pipeline", status: "Ready", source: "customerPipeline, lead sources, lost and fired reasons", category: "marketing" },
   { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages", category: "operations" },
   { value: "waste", label: "Waste", status: "Ready", source: "linked dosages and purchased items", category: "performance" },
@@ -54,7 +60,7 @@ const reportCatalog = [
   { value: "purchases", label: "Purchases", status: "Ready", source: "purchasedItems and database items", category: "finance" },
   { value: "payroll", label: "Payroll", status: "Ready", source: "technician payroll line items", category: "finance" },
   { value: "futurePayroll", label: "Future Payroll", status: "Ready", source: "unpaid payroll and scheduled service stop estimates", category: "finance" },
-  { value: "pnl", label: "P.N.L.", status: "Ready", source: "service agreements, jobs, purchases, payroll", category: "finance" },
+  { value: "pnl", label: "P.N.L.", status: "Ready", source: "recurring service agreements, jobs, purchases, payroll", category: "finance" },
   { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs", category: "finance" },
 ];
 
@@ -517,6 +523,9 @@ const normalizeIdList = (...values) =>
   Array.from(new Set(
     values.flatMap((value) => {
       if (Array.isArray(value)) return value;
+      if (value && typeof value === "object") {
+        return [value.id, value.value, value.docId, value.internalId].filter(Boolean);
+      }
       return String(value || "")
         .split(",")
         .map((item) => item.trim())
@@ -945,9 +954,14 @@ const agreementAmountCents = (agreement = {}) => {
   }, 0);
 };
 
+const isRecurringPnlAgreement = (agreement = {}) => (
+  getAgreementBillingType(agreement) === AgreementBillingType.recurring
+);
+
 const agreementRevenueCentsForRange = (agreement = {}, startDate, endDate) => {
   if (isInactiveAgreementStatus(agreement.status)) return 0;
   if (agreement.pnlIncludeInReports === false) return 0;
+  if (!isRecurringPnlAgreement(agreement)) return 0;
   const amountCents = agreementAmountCents(agreement);
   if (!amountCents) return 0;
 
@@ -1137,6 +1151,7 @@ const agreementForPnlCost = (agreements = [], record = {}, value) => {
   return agreements
     .filter((agreement) => (
       !isInactiveAgreementStatus(agreement.status) &&
+      isRecurringPnlAgreement(agreement) &&
       agreementAppliesToRecord(agreement, record) &&
       agreementActiveForDate(agreement, date)
     ))
@@ -1649,6 +1664,10 @@ const performanceReviewsRef = (companyId, companyUserId) => (
   collection(db, "companyUserPerformanceReviews", companyId, "companyUsers", companyUserId, "reviews")
 );
 
+const customerNotesDocRef = (companyId, customerId, noteId) => (
+  doc(db, "companies", companyId, "customers", customerId, "notes", noteId)
+);
+
 const matchingIndividualSummaryRows = (section = {}, group = {}) => {
   const groupId = normalizeLookupValue(group.id);
   const groupName = normalizeLookupValue(group.name);
@@ -1740,6 +1759,60 @@ const individualPerformanceNoteText = (reportData, group) => {
     rows.length > 10 ? `- ${rows.length - 10} more row(s) included in the attached report.` : "",
     "",
     "Attached report includes only this technician's performance data.",
+  ].filter((line) => line !== "").join("\n");
+};
+
+const customerReferencesForPerformanceRows = (rows = []) => {
+  const references = new Map();
+
+  rows.forEach((row) => {
+    const customerId = String(row.customerId || "").trim();
+    if (!customerId || customerId === "no-customer") return;
+
+    const current = references.get(customerId) || {
+      customerId,
+      customerName: row.customer || "",
+      serviceLocationId: "",
+      bodyOfWaterId: "",
+      bodyOfWaterName: "",
+      rows: [],
+    };
+
+    const serviceLocationId = String(row.serviceLocationId || "").trim();
+    const bodyOfWaterId = String(row.bodyOfWaterId || "").trim();
+
+    references.set(customerId, {
+      ...current,
+      customerName: current.customerName || row.customer || "",
+      serviceLocationId: current.serviceLocationId || serviceLocationId,
+      bodyOfWaterId: current.bodyOfWaterId || bodyOfWaterId,
+      bodyOfWaterName: current.bodyOfWaterName || row.pool || "",
+      rows: [...current.rows, row],
+    });
+  });
+
+  return [...references.values()];
+};
+
+const individualCustomerPerformanceNoteText = (reportData, group, customerReference) => {
+  const rows = Array.isArray(customerReference?.rows) ? customerReference.rows : [];
+  const dateRange = (reportData.stats || []).find((stat) => stat.label === "Date Range")?.value;
+  const technicianName = group.technicianName || group.name || "Technician";
+  const detailLines = rows.slice(0, 10).map((row) => [
+    `- ${row.date || "No date"}`,
+    row.pool,
+    row.reading || row.standard,
+    row.value,
+    row.rule,
+  ].filter(Boolean).join(" | "));
+
+  return [
+    `Performance note copied from ${technicianName}'s reading performance report.`,
+    dateRange ? `Date range: ${dateRange}` : "",
+    "",
+    "Customer-specific details:",
+    ...(detailLines.length ? detailLines : ["- No customer-specific detail rows were available."]),
+    rows.length > 10 ? `- ${rows.length - 10} more row(s) included in the technician report.` : "",
   ].filter((line) => line !== "").join("\n");
 };
 
@@ -2357,8 +2430,11 @@ const buildReadingPerformanceReport = ({
       id: `${stop.id || stop.serviceStopId || `stop-${stopIndex}`}-${standard.id}-${reading.id || failureIndex}`,
       sortTime: readingDate ? readingDate.getTime() : 0,
       date: shortDate(stop.date),
+      customerId,
       customer: customerName,
+      bodyOfWaterId,
       pool: poolName,
+      serviceLocationId: stop.serviceLocationId || serviceStop.serviceLocationId || bodyOfWater.serviceLocationId || "",
       worker: workerName,
       standard: standard.rule,
       reading: reading.name || standard.readingName,
@@ -2481,6 +2557,7 @@ const buildReadingPerformanceReport = ({
       const detailRows = [...performance.detailRows]
         .sort((a, b) => b.sortTime - a.sortTime)
         .map(({ sortTime, ...row }) => row);
+      const customerReferences = customerReferencesForPerformanceRows(detailRows);
 
       return {
         id: group.id,
@@ -2518,6 +2595,7 @@ const buildReadingPerformanceReport = ({
           "Failing Readings": performance.totalFailingReadings,
         },
         rows: mode === "summary" ? [anyStandardRow, ...standardRows] : detailRows,
+        customerReferences,
       };
     })
     .sort((a, b) => (
@@ -3274,7 +3352,13 @@ const buildFuturePayrollReport = ({
   );
   const serviceStopTypesById = new Map();
   const serviceStopTypesByName = new Map();
-  const idValue = (value) => String(value || "").trim();
+  const idValue = (value) => {
+    if (!value) return "";
+    if (typeof value === "object") {
+      return String(value.id || value.value || value.docId || value.internalId || "").trim();
+    }
+    return String(value).trim();
+  };
   const keyValue = (value) => idValue(value).toLowerCase();
 
   companyServiceStopTypes.forEach((type) => {
@@ -3877,10 +3961,43 @@ const buildPnlPerPoolReport = ({
   const actualPayServiceStopIds = new Set();
   const serviceStopTypesById = new Map();
   const serviceStopTypesByName = new Map();
+  const recurringServiceStopIds = new Set();
   const agreementLocationAuditRows = [];
 
-  const idValue = (value) => String(value || "").trim();
+  const idValue = (value) => {
+    if (!value) return "";
+    if (typeof value === "object") {
+      return String(value.id || value.value || value.docId || value.internalId || "").trim();
+    }
+    return String(value).trim();
+  };
   const keyValue = (value) => idValue(value).toLowerCase();
+  const compareRowsByNetDescending = (left, right) => (
+    right.netCents - left.netCents ||
+    left.customer.localeCompare(right.customer) ||
+    left.serviceLocation.localeCompare(right.serviceLocation) ||
+    left.pool.localeCompare(right.pool)
+  );
+  const compareRowsByNetAscending = (left, right) => (
+    left.netCents - right.netCents ||
+    left.customer.localeCompare(right.customer) ||
+    left.serviceLocation.localeCompare(right.serviceLocation) ||
+    left.pool.localeCompare(right.pool)
+  );
+  const recurringIdsForRecord = (record = {}) => normalizeIdList(
+    record.recurringServiceStopId,
+    record.recurringStopId,
+    record.rssId,
+    reportStatusKey(record.sourceType) === "recurringservice" ? record.sourceId : ""
+  );
+  const isRecurringServiceRecord = (record = {}, linkedServiceStop = {}) => (
+    serviceStopIsRecurringRoute(record) ||
+    serviceStopIsRecurringRoute(linkedServiceStop) ||
+    reportStatusKey(record.sourceType) === "recurringservice" ||
+    reportStatusKey(linkedServiceStop.sourceType) === "recurringservice" ||
+    [...recurringIdsForRecord(record), ...recurringIdsForRecord(linkedServiceStop)]
+      .some((recurringId) => recurringServiceStopIds.has(recurringId))
+  );
 
   serviceLocations.forEach((location) => {
     ["id", "serviceLocationId", "locationId", "internalId"].forEach((field) => {
@@ -4009,6 +4126,8 @@ const buildPnlPerPoolReport = ({
 
   recurringServiceStops.forEach((recurringStop) => {
     indexByIds(recurringStopsById, recurringStop, ["id", "recurringServiceStopId", "rssId", "internalId"]);
+    normalizeIdList(recurringStop.id, recurringStop.recurringServiceStopId, recurringStop.rssId, recurringStop.internalId)
+      .forEach((recurringId) => recurringServiceStopIds.add(recurringId));
   });
 
   stopData.forEach((stop, index) => {
@@ -4383,6 +4502,8 @@ const buildPnlPerPoolReport = ({
 
   stopData.forEach((stop, index) => {
     const serviceStop = serviceStopsById.get(String(stop.serviceStopId || "")) || {};
+    if (!isRecurringServiceRecord(stop, serviceStop)) return;
+
     const descriptor = serviceLocationDescriptor({
       bodyOfWaterId: stop.bodyOfWaterId || serviceStop.bodyOfWaterId,
       serviceLocationId: stop.serviceLocationId || serviceStop.serviceLocationId,
@@ -4465,6 +4586,8 @@ const buildPnlPerPoolReport = ({
 
     const lineServiceStopId = idValue(firstPresent(line.serviceStopId, line.serviceStopID, line.stopId));
     const serviceStop = serviceStopsById.get(lineServiceStopId) || {};
+    if (!isRecurringServiceRecord(line, serviceStop)) return;
+
     if (lineServiceStopId) actualPayServiceStopIds.add(lineServiceStopId);
 
     const descriptors = descriptorsForServiceStop(serviceStop, {
@@ -4490,6 +4613,7 @@ const buildPnlPerPoolReport = ({
   serviceStops.forEach((serviceStop) => {
     const serviceStopId = String(serviceStop.id || serviceStop.serviceStopId || "");
     if (!serviceStopId || actualPayServiceStopIds.has(serviceStopId)) return;
+    if (!isRecurringServiceRecord(serviceStop)) return;
 
     const estimatedPay = estimateServiceStopPaySummary({
       companyId,
@@ -4545,7 +4669,7 @@ const buildPnlPerPoolReport = ({
         detailRows: pool.detailRows.sort((left, right) => left.sortTime - right.sortTime),
       };
     })
-    .sort((left, right) => left.netCents - right.netCents || left.customer.localeCompare(right.customer) || left.pool.localeCompare(right.pool));
+    .sort(compareRowsByNetDescending);
 
   const totals = poolRows.reduce((result, row) => ({
     revenueCents: result.revenueCents + row.revenueCents,
@@ -4605,6 +4729,7 @@ const buildPnlPerPoolReport = ({
         "Direct Cost": moneyFromCents(groupTotals.costCents),
         Net: moneyFromCents(groupTotals.netCents),
       },
+      sortNetCents: groupTotals.netCents,
       footerRow: {
         customer: "Total",
         serviceLocation: "",
@@ -4620,7 +4745,7 @@ const buildPnlPerPoolReport = ({
         targetRateCents: targetRateCentsFor(groupTotals.costCents),
       },
     };
-  }).sort((left, right) => left.name.localeCompare(right.name));
+  }).sort((left, right) => right.sortNetCents - left.sortNetCents || left.name.localeCompare(right.name));
 
   const detailGroups = poolRows.map((row) => ({
     id: row.id,
@@ -4645,6 +4770,7 @@ const buildPnlPerPoolReport = ({
 
   const watchlistRows = poolRows
     .filter((row) => row.netCents < 0 || row.revenueCents === 0 || (row.revenueCents > 0 && row.netCents / row.revenueCents < 0.35))
+    .sort(compareRowsByNetAscending)
     .slice(0, 20);
 
   return {
@@ -5298,12 +5424,18 @@ const IndividualUsersExportSection = ({
   onCreateAllPerformanceNotes,
   creatingPerformanceNoteGroupId,
   isCreatingAllPerformanceNotes,
+  copyPerformanceNotesToCustomerNotes,
+  onCopyPerformanceNotesToCustomerNotesChange,
 }) => {
   const isEligible = reportData?.reportType === "readingPerformance" && reportData.performanceView === "users";
   if (!isEligible) return null;
 
   const groups = reportData.groups || [];
   const matchedGroups = groups.filter((group) => Boolean(group.companyUserId));
+  const customerReferenceCount = matchedGroups.reduce(
+    (total, group) => total + (group.customerReferences?.length || 0),
+    0
+  );
   const buttonClass = (accent) =>
     `inline-flex items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${accent === "dark"
       ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
@@ -5318,6 +5450,19 @@ const IndividualUsersExportSection = ({
         <h3 className="text-sm font-bold text-slate-900">Export Individual Users</h3>
         <p className="mt-1 text-xs text-slate-600">Export or attach one technician's report without including everyone else's scores.</p>
       </div>
+
+      <label className="mt-3 flex items-start gap-2 rounded-md border border-blue-100 bg-white p-2 text-xs font-semibold text-slate-700">
+        <input
+          type="checkbox"
+          checked={copyPerformanceNotesToCustomerNotes}
+          onChange={(event) => onCopyPerformanceNotesToCustomerNotesChange(event.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+        />
+        <span>
+          Copy referenced customers to Customer Notes
+          {customerReferenceCount ? ` (${customerReferenceCount})` : ""}
+        </span>
+      </label>
 
       <button
         type="button"
@@ -5437,6 +5582,7 @@ const Reports = () => {
   const [activeCustomReportTitle, setActiveCustomReportTitle] = useState("");
   const [creatingPerformanceNoteGroupId, setCreatingPerformanceNoteGroupId] = useState("");
   const [isCreatingAllPerformanceNotes, setIsCreatingAllPerformanceNotes] = useState(false);
+  const [copyPerformanceNotesToCustomerNotes, setCopyPerformanceNotesToCustomerNotes] = useState(false);
 
   const selectedReport = useMemo(
     () => reportCatalog.find((report) => report.value === reportType) || reportCatalog[0],
@@ -5728,9 +5874,80 @@ const Reports = () => {
     );
   };
 
-  const createPerformanceNoteFromReportGroup = async (group) => {
+  const createCustomerNotesForPerformanceGroup = async ({
+    group,
+    reportTimestamp,
+    nowMillis,
+    reviewerName,
+    performanceReviewId,
+    attachedReport,
+    attachment,
+  }) => {
+    const customerReferences = Array.isArray(group.customerReferences) ? group.customerReferences : [];
+    const validReferences = customerReferences.filter((reference) => reference.customerId);
+
+    if (!validReferences.length) return 0;
+
+    await Promise.all(validReferences.map(async (reference) => {
+      const rows = Array.isArray(reference.rows) ? reference.rows : [];
+      const noteId = `comp_cus_note_${uuidv4()}`;
+      const bodyOfWaterIds = Array.from(new Set(rows.map((row) => String(row.bodyOfWaterId || "").trim()).filter(Boolean)));
+      const bodyOfWaterNames = Array.from(new Set(rows.map((row) => String(row.pool || "").trim()).filter(Boolean)));
+      const serviceLocationIds = Array.from(new Set(rows.map((row) => String(row.serviceLocationId || "").trim()).filter(Boolean)));
+      const serviceStopIds = Array.from(new Set(rows.map((row) => String(row.serviceStop || "").trim()).filter((id) => id && id !== "-")));
+      const noteText = individualCustomerPerformanceNoteText(reportData, group, reference);
+
+      await setDoc(customerNotesDocRef(recentlySelectedCompany, reference.customerId, noteId), {
+        id: noteId,
+        companyId: recentlySelectedCompany,
+        customerId: reference.customerId,
+        customerName: reference.customerName || "",
+        bodyOfWaterId: bodyOfWaterIds.length === 1 ? bodyOfWaterIds[0] : "",
+        bodyOfWaterName: bodyOfWaterNames.length === 1 ? bodyOfWaterNames[0] : "",
+        serviceLocationId: serviceLocationIds.length === 1 ? serviceLocationIds[0] : "",
+        userId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+        userName: reviewerName,
+        authorId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+        authorName: reviewerName,
+        note: noteText,
+        comment: noteText,
+        audience: "office",
+        visibility: "office",
+        resolved: false,
+        date: reportTimestamp,
+        dateMillis: nowMillis,
+        createdAt: serverTimestamp(),
+        createdAtMillis: nowMillis,
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: nowMillis,
+        source: "readingPerformanceReport",
+        sourceReport: {
+          type: "readingPerformance",
+          title: reportData.title || "",
+          groupId: group.id,
+          performanceReviewId,
+          generatedAt: reportTimestamp,
+        },
+        references: {
+          companyUserId: group.companyUserId || "",
+          technicianUserId: group.technicianUserId || "",
+          technicianName: group.technicianName || group.name || "",
+          serviceStops: serviceStopIds,
+          bodyOfWaterIds,
+          serviceLocationIds,
+        },
+        attachedReports: [attachedReport],
+        attachments: [attachment],
+      });
+    }));
+
+    return validReferences.length;
+  };
+
+  const createPerformanceNoteFromReportGroup = async (group, { copyToCustomerNotes = false } = {}) => {
     const individualReport = individualReportDataForGroup(reportData, group);
     const now = new Date();
+    const nowMillis = now.getTime();
     const reportTimestamp = Timestamp.fromDate(now);
     const fileBaseName = `${safeFilePart(individualReport.title)}_${format(now, "yyyy-MM-dd_HH-mm")}_${now.getTime()}`;
     const fileName = `${fileBaseName}.html`;
@@ -5780,7 +5997,7 @@ const Reports = () => {
       attachedAt: reportTimestamp,
     };
 
-    await addDoc(performanceReviewsRef(recentlySelectedCompany, group.companyUserId), {
+    const performanceReviewRef = await addDoc(performanceReviewsRef(recentlySelectedCompany, group.companyUserId), {
       type: "observation",
       title: individualReport.title,
       note: individualPerformanceNoteText(reportData, group),
@@ -5810,6 +6027,23 @@ const Reports = () => {
         generatedAt: reportTimestamp,
       },
     });
+
+    const customerNotesCreated = copyToCustomerNotes
+      ? await createCustomerNotesForPerformanceGroup({
+        group,
+        reportTimestamp,
+        nowMillis,
+        reviewerName,
+        performanceReviewId: performanceReviewRef.id,
+        attachedReport,
+        attachment,
+      })
+      : 0;
+
+    return {
+      performanceReviewId: performanceReviewRef.id,
+      customerNotesCreated,
+    };
   };
 
   const handleCreatePerformanceNoteFromGroup = async (group) => {
@@ -5830,8 +6064,13 @@ const Reports = () => {
     const toastId = toast.loading(`Creating performance note for ${group.technicianName || group.name}...`);
 
     try {
-      await createPerformanceNoteFromReportGroup(group);
-      toast.success(`Performance note created for ${group.technicianName || group.name}.`, { id: toastId });
+      const result = await createPerformanceNoteFromReportGroup(group, {
+        copyToCustomerNotes: copyPerformanceNotesToCustomerNotes,
+      });
+      const customerNoteText = result.customerNotesCreated
+        ? ` ${result.customerNotesCreated} customer note${result.customerNotesCreated === 1 ? "" : "s"} created.`
+        : "";
+      toast.success(`Performance note created for ${group.technicianName || group.name}.${customerNoteText}`, { id: toastId });
     } catch (error) {
       console.error("Error creating performance note from report:", error);
       toast.error(`Could not create performance note: ${error.message}`, { id: toastId });
@@ -5859,6 +6098,7 @@ const Reports = () => {
     setIsCreatingAllPerformanceNotes(true);
     const toastId = toast.loading(`Creating performance notes for ${matchedGroups.length} technicians...`);
     const failures = [];
+    let customerNotesCreated = 0;
 
     try {
       for (let index = 0; index < matchedGroups.length; index += 1) {
@@ -5867,7 +6107,10 @@ const Reports = () => {
         toast.loading(`Creating ${index + 1} of ${matchedGroups.length}: ${group.technicianName || group.name}`, { id: toastId });
 
         try {
-          await createPerformanceNoteFromReportGroup(group);
+          const result = await createPerformanceNoteFromReportGroup(group, {
+            copyToCustomerNotes: copyPerformanceNotesToCustomerNotes,
+          });
+          customerNotesCreated += result.customerNotesCreated || 0;
         } catch (error) {
           console.error("Error creating bulk performance note from report:", error);
           failures.push({ group, error });
@@ -5875,10 +6118,13 @@ const Reports = () => {
       }
 
       const createdCount = matchedGroups.length - failures.length;
+      const customerNoteText = customerNotesCreated
+        ? ` ${customerNotesCreated} customer note${customerNotesCreated === 1 ? "" : "s"} created.`
+        : "";
       if (failures.length) {
-        toast.error(`Created ${createdCount} performance notes. ${failures.length} failed.`, { id: toastId });
+        toast.error(`Created ${createdCount} performance notes.${customerNoteText} ${failures.length} failed.`, { id: toastId });
       } else {
-        toast.success(`Created performance notes for ${createdCount} technicians.`, { id: toastId });
+        toast.success(`Created performance notes for ${createdCount} technicians.${customerNoteText}`, { id: toastId });
       }
     } finally {
       setCreatingPerformanceNoteGroupId("");
@@ -6475,6 +6721,8 @@ const Reports = () => {
                   onCreateAllPerformanceNotes={handleCreateAllPerformanceNotesFromGroups}
                   creatingPerformanceNoteGroupId={creatingPerformanceNoteGroupId}
                   isCreatingAllPerformanceNotes={isCreatingAllPerformanceNotes}
+                  copyPerformanceNotesToCustomerNotes={copyPerformanceNotesToCustomerNotes}
+                  onCopyPerformanceNotesToCustomerNotesChange={setCopyPerformanceNotesToCustomerNotes}
                 />
               </div>
             </div>

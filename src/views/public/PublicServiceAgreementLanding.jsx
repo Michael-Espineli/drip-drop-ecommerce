@@ -102,7 +102,9 @@ const PublicServiceAgreementLanding = () => {
   const [acceptedAutopayNotice, setAcceptedAutopayNotice] = useState(false);
   const [signatureName, setSignatureName] = useState('');
   const [acceptanceNote, setAcceptanceNote] = useState('');
+  const [responseNote, setResponseNote] = useState('');
   const [accepting, setAccepting] = useState(false);
+  const [responding, setResponding] = useState('');
   const [selectedPlanId, setSelectedPlanId] = useState('');
 
   useEffect(() => {
@@ -170,7 +172,19 @@ const PublicServiceAgreementLanding = () => {
   );
   const termsList = Array.isArray(agreement?.termsList) ? agreement.termsList : [];
   const statusKey = normalizeStatus(agreement?.status);
+  const isJobEstimate = Boolean(
+    normalizeStatus(agreement?.sourceType) === 'oneoffjob' ||
+    agreement?.jobId ||
+    agreement?.workOrderId ||
+    agreement?.rateType === 'oneTime' ||
+    agreement?.serviceCadence === 'oneTime'
+  );
+  const documentLabel = isJobEstimate ? 'Estimate' : 'Service Agreement';
+  const documentLabelLower = isJobEstimate ? 'estimate' : 'agreement';
   const isAccepted = statusKey === normalizeStatus(SalesAgreementStatus.accepted);
+  const isRejected = statusKey === normalizeStatus(SalesAgreementStatus.rejected);
+  const customerResponseType = agreement?.customerResponseType || '';
+  const customerRequestedChanges = isRejected && customerResponseType === 'changesRequested';
   const isClosed = ['canceled', 'rejected', 'expired', 'superseded'].includes(statusKey);
   const redirectParam = encodeURIComponent(`${location.pathname}${location.search || ''}`);
   const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
@@ -213,7 +227,7 @@ const PublicServiceAgreementLanding = () => {
     if (!agreement || accepting || isAccepted || isClosed) return;
 
     if (!acceptedTerms || !acceptedPricing || !acceptedAutopayNotice) {
-      toast.error('Confirm the agreement terms, pricing, and recurring payment authorization.');
+      toast.error(`Confirm the ${documentLabelLower} terms, pricing, and payment authorization.`);
       return;
     }
 
@@ -239,7 +253,7 @@ const PublicServiceAgreementLanding = () => {
         selectedSolutionId: selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId || '',
       });
 
-      toast.success('Service agreement accepted.');
+      toast.success(`${documentLabel} accepted.`);
       const billingSkipped = result.data?.billingSkipped === true;
       const billingSkippedReason = result.data?.billingSkippedReason || '';
       setAgreement((current) => ({
@@ -267,10 +281,48 @@ const PublicServiceAgreementLanding = () => {
         customerCanPayImmediately: result.data?.customerCanPayImmediately === true,
       }));
     } catch (acceptError) {
-      console.error('Unable to accept public service agreement', acceptError);
-      toast.error(acceptError.message || 'Failed to accept service agreement.');
+      console.error('Unable to accept public sales document', acceptError);
+      toast.error(acceptError.message || `Failed to accept ${documentLabelLower}.`);
     } finally {
       setAccepting(false);
+    }
+  };
+
+  const respondToEstimate = async (responseType) => {
+    if (!agreement || responding || accepting || isAccepted || isClosed) return;
+
+    if (responseType === 'changesRequested' && responseNote.trim().length < 3) {
+      toast.error('Add a short note about what you would like changed.');
+      return;
+    }
+
+    setResponding(responseType);
+
+    try {
+      const rejectPublicAgreement = httpsCallable(functions, 'rejectPublicSalesServiceAgreement');
+      await rejectPublicAgreement({
+        agreementId: agreement.id,
+        email: emailParam || agreement.email || '',
+        accessToken,
+        responseType,
+        rejectionNote: responseNote.trim(),
+      });
+
+      toast.success(responseType === 'changesRequested' ? 'Change request sent.' : 'Estimate declined.');
+      setAgreement((current) => ({
+        ...(current || agreement),
+        status: SalesAgreementStatus.rejected,
+        rejectedAt: new Date().toISOString(),
+        rejectedByEmail: emailParam || agreement.email || '',
+        rejectedSource: 'emailLink',
+        rejectedNote: responseNote.trim(),
+        customerResponseType: responseType,
+      }));
+    } catch (responseError) {
+      console.error('Unable to respond to public service agreement', responseError);
+      toast.error(responseError.message || 'Failed to send your response.');
+    } finally {
+      setResponding('');
     }
   };
 
@@ -278,7 +330,7 @@ const PublicServiceAgreementLanding = () => {
     return (
       <div className="min-h-screen bg-slate-50 p-6">
         <div className="mx-auto max-w-3xl rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
-          Loading service agreement...
+          Loading {documentLabelLower}...
         </div>
       </div>
     );
@@ -289,9 +341,9 @@ const PublicServiceAgreementLanding = () => {
       <div className="min-h-screen bg-slate-50 p-6">
         <div className="mx-auto max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-8 text-center shadow-sm">
           <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-amber-500" />
-          <h1 className="mt-3 text-xl font-bold text-amber-950">We could not verify this agreement link</h1>
+          <h1 className="mt-3 text-xl font-bold text-amber-950">We could not verify this review link</h1>
           <p className="mt-2 text-sm text-amber-800">
-            {error || 'Open the latest service agreement email link, or sign in with the recipient account.'}
+            {error || 'Open the latest estimate or service agreement email link, or sign in with the recipient account.'}
           </p>
           <div className="mt-5 flex flex-col justify-center gap-2 sm:flex-row">
             <Link
@@ -318,10 +370,10 @@ const PublicServiceAgreementLanding = () => {
         <section className="mb-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-sm font-bold uppercase tracking-wide text-blue-700">Private Service Agreement Link</p>
-              <h1 className="mt-2 text-3xl font-bold text-slate-950">{agreement.title || 'Service Agreement'}</h1>
+              <p className="text-sm font-bold uppercase tracking-wide text-blue-700">Private {documentLabel} Link</p>
+              <h1 className="mt-2 text-3xl font-bold text-slate-950">{agreement.title || documentLabel}</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                {agreement.companyName || 'Your pool company'} sent this agreement to {agreement.email || emailParam || 'this email address'}.
+                {agreement.companyName || 'Your pool company'} sent this {documentLabelLower} to {agreement.email || emailParam || 'this email address'}.
                 This link is only intended for the recipient of the email.
               </p>
             </div>
@@ -334,7 +386,7 @@ const PublicServiceAgreementLanding = () => {
             <div className="flex items-start gap-3">
               <CheckCircleIcon className="mt-0.5 h-5 w-5 flex-none" />
               <div>
-                <p className="font-bold">Agreement accepted</p>
+                <p className="font-bold">{documentLabel} accepted</p>
                 <p className="mt-1">
                   Accepted {formatDate(agreement.acceptedAt)} by {agreement.acceptedByEmail || agreement.customerName || 'the email recipient'}.
                 </p>
@@ -343,10 +395,31 @@ const PublicServiceAgreementLanding = () => {
           </div>
         )}
 
+        {isRejected && (
+          <div className="mb-5 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+            <div className="flex items-start gap-3">
+              <ExclamationTriangleIcon className="mt-0.5 h-5 w-5 flex-none" />
+              <div>
+                <p className="font-bold">
+                  {customerRequestedChanges ? 'Change request sent' : 'Estimate declined'}
+                </p>
+                <p className="mt-1">
+                  {customerRequestedChanges
+                    ? 'The company received your requested changes and can follow up with a revised estimate.'
+                    : 'The company received your response.'}
+                </p>
+                {agreement.rejectedNote && (
+                  <p className="mt-2 whitespace-pre-wrap">{agreement.rejectedNote}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
           <p className="font-bold">Reviewing from the email</p>
           <p className="mt-1">
-            You can review and accept this agreement here without creating an account. Create or sign in to a homeowner account afterward for portal access and billing setup.
+            You can review and accept this {documentLabelLower} here without creating an account. Create or sign in to a homeowner account afterward for portal access and billing setup.
           </p>
         </div>
 
@@ -356,7 +429,7 @@ const PublicServiceAgreementLanding = () => {
               <div className="border-b border-slate-200 p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <h2 className="text-lg font-bold text-slate-950">Agreement Summary</h2>
+                    <h2 className="text-lg font-bold text-slate-950">{documentLabel} Summary</h2>
                     <p className="mt-1 text-sm text-slate-500">{agreement.description || 'Review the service and billing terms below.'}</p>
                   </div>
                   <DocumentTextIcon className="h-6 w-6 text-slate-400" />
@@ -365,10 +438,14 @@ const PublicServiceAgreementLanding = () => {
 
               <dl className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-5">
                 <Field label="Total" value={formatCurrency(displayTotalAmountCents)} />
-                <Field label="Service Frequency" value={formatServiceFrequency(agreement)} />
-                <Field label="Billing Frequency" value={formatBillingFrequency(agreement)} />
+                {isJobEstimate ? (
+                  <Field label="Plan Options" value={String(planOptions.length || 1)} />
+                ) : (
+                  <Field label="Service Frequency" value={formatServiceFrequency(agreement)} />
+                )}
+                <Field label={isJobEstimate ? 'Billing Type' : 'Billing Frequency'} value={isJobEstimate ? 'One Time' : formatBillingFrequency(agreement)} />
                 <Field label="Payment Terms" value={labelize(agreement.paymentTerms)} />
-                <Field label="Start Date" value={formatDate(agreement.startDate)} />
+                <Field label={isJobEstimate ? 'Review By' : 'Start Date'} value={formatDate(isJobEstimate ? agreement.expiresAt : agreement.startDate)} />
               </dl>
             </section>
 
@@ -377,7 +454,7 @@ const PublicServiceAgreementLanding = () => {
                 <h2 className="text-lg font-bold text-slate-950">Inspection Report</h2>
                 <p className="mt-1 text-sm text-slate-600">
                   {hasInspectionReport
-                    ? 'The company included the site inspection report gathered before preparing this agreement.'
+                    ? `The company included the site inspection report gathered before preparing this ${documentLabelLower}.`
                     : 'The company selected the inspection report option, but no linked report is available yet.'}
                 </p>
                 {hasInspectionReport && (
@@ -465,30 +542,32 @@ const PublicServiceAgreementLanding = () => {
               </div>
             </section>
 
-            <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="border-b border-slate-200 p-5">
-                <h2 className="text-lg font-bold text-slate-950">Chemical Billing</h2>
-              </div>
+            {!isJobEstimate && (
+              <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 p-5">
+                  <h2 className="text-lg font-bold text-slate-950">Chemical Billing</h2>
+                </div>
 
-              <dl className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
-                <Field label="Treatment" value={chemicalBillingLabel(agreement)} />
-                {listDisplay(agreement.separatelyBilledChemicalKeywords) && (
-                  <Field label="Billed Separately" value={listDisplay(agreement.separatelyBilledChemicalKeywords)} />
-                )}
-                {listDisplay(agreement.includedChemicalKeywords) && (
-                  <Field label="Included Chemicals" value={listDisplay(agreement.includedChemicalKeywords)} />
-                )}
-                {listDisplay(agreement.customerPurchasedChemicalKeywords) && (
-                  <Field label="Customer Purchased" value={listDisplay(agreement.customerPurchasedChemicalKeywords)} />
-                )}
-                {agreement.chemicalBillingNotes && (
-                  <div className="sm:col-span-2">
-                    <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">Notes</dt>
-                    <dd className="mt-1 whitespace-pre-wrap text-sm font-semibold text-slate-950">{agreement.chemicalBillingNotes}</dd>
-                  </div>
-                )}
-              </dl>
-            </section>
+                <dl className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+                  <Field label="Treatment" value={chemicalBillingLabel(agreement)} />
+                  {listDisplay(agreement.separatelyBilledChemicalKeywords) && (
+                    <Field label="Billed Separately" value={listDisplay(agreement.separatelyBilledChemicalKeywords)} />
+                  )}
+                  {listDisplay(agreement.includedChemicalKeywords) && (
+                    <Field label="Included Chemicals" value={listDisplay(agreement.includedChemicalKeywords)} />
+                  )}
+                  {listDisplay(agreement.customerPurchasedChemicalKeywords) && (
+                    <Field label="Customer Purchased" value={listDisplay(agreement.customerPurchasedChemicalKeywords)} />
+                  )}
+                  {agreement.chemicalBillingNotes && (
+                    <div className="sm:col-span-2">
+                      <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">Notes</dt>
+                      <dd className="mt-1 whitespace-pre-wrap text-sm font-semibold text-slate-950">{agreement.chemicalBillingNotes}</dd>
+                    </div>
+                  )}
+                </dl>
+              </section>
+            )}
 
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
               <div className="border-b border-slate-200 p-5">
@@ -563,7 +642,7 @@ const PublicServiceAgreementLanding = () => {
                       className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                     />
                     <span className="text-slate-700">
-                      I reviewed the agreement, pricing, and terms.
+                      I reviewed the {documentLabelLower}, pricing, and terms.
                     </span>
                   </label>
 
@@ -587,7 +666,9 @@ const PublicServiceAgreementLanding = () => {
                       className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                     />
                     <span className="text-slate-700">
-                      I understand this agreement can be used to set up recurring online billing.
+                      {isJobEstimate
+                        ? 'I understand the accepted estimate can be invoiced after the work is complete.'
+                        : 'I understand this agreement can be used to set up recurring online billing.'}
                     </span>
                   </label>
 
@@ -606,18 +687,52 @@ const PublicServiceAgreementLanding = () => {
                   <button
                     type="button"
                     onClick={acceptAgreement}
-                    disabled={accepting}
+                    disabled={accepting || Boolean(responding)}
                     className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <CheckCircleIcon className="h-5 w-5" />
-                    {accepting ? 'Accepting...' : 'Accept Agreement'}
+                    {accepting ? 'Accepting...' : `Accept ${documentLabel}`}
                   </button>
+
+                  <div className="rounded-md border border-slate-200 bg-white p-3">
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="responseNote">
+                      Questions or requested changes
+                      <textarea
+                        id="responseNote"
+                        value={responseNote}
+                        onChange={(event) => setResponseNote(event.target.value)}
+                        className="mt-1 h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        placeholder="Tell the company what you would like changed, or why you are declining."
+                      />
+                    </label>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => respondToEstimate('changesRequested')}
+                        disabled={accepting || Boolean(responding)}
+                        className="inline-flex justify-center rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {responding === 'changesRequested' ? 'Sending...' : 'Request Changes'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => respondToEstimate('rejected')}
+                        disabled={accepting || Boolean(responding)}
+                        className="inline-flex justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-bold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {responding === 'rejected' ? 'Sending...' : 'Decline Estimate'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
               {isClosed && (
                 <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                  This agreement is no longer available for acceptance.
+                  {customerRequestedChanges
+                    ? 'Your change request has been sent to the company.'
+                    : `This ${documentLabelLower} is no longer available for acceptance.`}
                 </div>
               )}
             </section>

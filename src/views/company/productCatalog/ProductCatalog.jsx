@@ -19,6 +19,7 @@ import {
   buildProductFromVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
+  isProductAvailableForPartPurchase,
   productCatalogCollectionRef,
   productCatalogDocRef,
 } from "../../../utils/productCatalog";
@@ -143,6 +144,8 @@ const ProductCatalog = () => {
       UOM: data.UOM || data.uom || "",
       sellPrice: Number(data.sellPrice ?? data.billingRate ?? data.defaultSellPrice ?? 0),
       billable: Boolean(data.billable),
+      active: data.active !== false,
+      availableForPartPurchase: isProductAvailableForPartPurchase(data),
     };
   };
 
@@ -510,6 +513,9 @@ const ProductCatalog = () => {
                       <td className="px-5 py-3 text-sm text-slate-700">
                         <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.billable ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
                           {product.billable ? "Billable" : "Not Billable"}
+                        </span>
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.availableForPartPurchase ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
+                          {product.availableForPartPurchase ? "Part Purchase" : "Unavailable"}
                         </span>
                       </td>
                       <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(getProductSellPriceCents(product))}</td>

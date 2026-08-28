@@ -18,7 +18,7 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { format } from "date-fns";
-import { TrashIcon } from "@heroicons/react/24/outline";
+import { TrashIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import { removeRecurringServiceStopFromPlannedRoutes } from "../../../utils/recurringRouteSync";
 import { appConfirm } from "../../../utils/appDialog";
@@ -134,6 +134,7 @@ const RecurringServiceStopDetails = () => {
   const [pastServiceStopList, setPastServiceStopList] = useState([]);
   const [recurringServiceStopTasks, setRecurringServiceStopTasks] = useState([]);
   const [taskGroupOptions, setTaskGroupOptions] = useState([]);
+  const [taskGroupModalOpen, setTaskGroupModalOpen] = useState(false);
   const [selectedTaskTemplate, setSelectedTaskTemplate] = useState(null);
   const [applyingTaskTemplate, setApplyingTaskTemplate] = useState(false);
   const [durationHistory, setDurationHistory] = useState([]);
@@ -300,6 +301,7 @@ const RecurringServiceStopDetails = () => {
       "&:hover": { borderColor: state.isFocused ? "#2563EB" : "#9CA3AF" },
     }),
     menu: (base) => ({ ...base, borderRadius: 12, overflow: "hidden" }),
+    menuPortal: (base) => ({ ...base, zIndex: 70 }),
   };
 
   useEffect(() => {
@@ -1405,6 +1407,17 @@ const RecurringServiceStopDetails = () => {
     }
   };
 
+  const openTaskGroupModal = () => {
+    setSelectedTaskTemplate(null);
+    setTaskGroupModalOpen(true);
+  };
+
+  const closeTaskGroupModal = () => {
+    if (applyingTaskTemplate) return;
+    setTaskGroupModalOpen(false);
+    setSelectedTaskTemplate(null);
+  };
+
   const applySelectedTaskTemplate = async () => {
     if (!recentlySelectedCompany || !recurringServiceStopId || !selectedTaskTemplate) return;
 
@@ -1426,6 +1439,7 @@ const RecurringServiceStopDetails = () => {
         ...current,
       ]);
       setSelectedTaskTemplate(null);
+      setTaskGroupModalOpen(false);
       toast.success(
         `${result.recurringTasks.length} task${result.recurringTasks.length === 1 ? "" : "s"} added to ${result.futureStopCount} future service stop${result.futureStopCount === 1 ? "" : "s"}`
       );
@@ -1498,6 +1512,71 @@ const RecurringServiceStopDetails = () => {
       </div>
     </section>
   );
+
+  const TaskGroupPickerModal = () => {
+    if (!taskGroupModalOpen) return null;
+
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4">
+        <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+            <div>
+              <h3 className="text-lg font-bold text-slate-950">Add Task Group</h3>
+              <p className="mt-1 text-sm text-slate-500">Select a reusable task group to add to this recurring stop and its future service stops.</p>
+            </div>
+            <button
+              type="button"
+              onClick={closeTaskGroupModal}
+              disabled={applyingTaskTemplate}
+              className="rounded-md border border-slate-300 bg-white p-2 text-slate-500 transition hover:bg-slate-50 disabled:opacity-50"
+              aria-label="Close task group picker"
+            >
+              <XMarkIcon className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="p-5">
+            <label className="block text-sm font-semibold text-slate-700">
+              Task Group
+              <div className="mt-2 font-normal">
+                <Select
+                  value={selectedTaskTemplate}
+                  options={taskGroupOptions}
+                  onChange={setSelectedTaskTemplate}
+                  isSearchable
+                  isClearable
+                  isDisabled={applyingTaskTemplate}
+                  placeholder={taskGroupOptions.length ? "Select task group" : "No task groups found"}
+                  theme={selectTheme}
+                  styles={selectStyles}
+                  menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+                />
+              </div>
+            </label>
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
+            <button
+              type="button"
+              onClick={closeTaskGroupModal}
+              disabled={applyingTaskTemplate}
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={applySelectedTaskTemplate}
+              disabled={!selectedTaskTemplate || applyingTaskTemplate}
+              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {applyingTaskTemplate ? "Adding..." : "Add Task Group"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -1722,26 +1801,7 @@ const RecurringServiceStopDetails = () => {
                   <p className="text-sm text-slate-600">Tasks configured for this recurring stop</p>
                 </div>
 
-                <div className="grid w-full gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-                  <Select
-                    value={selectedTaskTemplate}
-                    options={taskGroupOptions}
-                    onChange={setSelectedTaskTemplate}
-                    isSearchable
-                    isClearable
-                    isDisabled={applyingTaskTemplate}
-                    placeholder={taskGroupOptions.length ? "Select task template" : "No task templates found"}
-                    theme={selectTheme}
-                    styles={selectStyles}
-                  />
-                  <button
-                    type="button"
-                    onClick={applySelectedTaskTemplate}
-                    disabled={!selectedTaskTemplate || applyingTaskTemplate}
-                    className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                  >
-                    {applyingTaskTemplate ? "Applying..." : "Apply Template"}
-                  </button>
+                <div className="flex flex-wrap gap-2">
                   {!showAddTask && (
                     <button
                       type="button"
@@ -1751,6 +1811,14 @@ const RecurringServiceStopDetails = () => {
                       Add Task
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={openTaskGroupModal}
+                    disabled={applyingTaskTemplate}
+                    className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Add Task Group
+                  </button>
                 </div>
               </div>
 
@@ -2061,16 +2129,18 @@ const RecurringServiceStopDetails = () => {
                       <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
                         Duration
                       </th>
-                      <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-slate-600">
-                        Action
-                      </th>
+                      {edit && (
+                        <th className="p-4 text-right text-sm font-semibold uppercase tracking-wider text-slate-600">
+                          Action
+                        </th>
+                      )}
                     </tr>
                   </thead>
 
                   <tbody className="divide-y divide-slate-200">
                     {loadingDurationHistory ? (
                       <tr>
-                        <td colSpan={5} className="p-6 text-slate-500">
+                        <td colSpan={edit ? 5 : 4} className="p-6 text-slate-500">
                           Loading duration history...
                         </td>
                       </tr>
@@ -2096,21 +2166,25 @@ const RecurringServiceStopDetails = () => {
                           <td className="whitespace-nowrap p-4 font-medium text-slate-900">
                             {formatMinutes(point.durationMinutes)}
                           </td>
-                          <td className="whitespace-nowrap p-4">
-                            <button
-                              type="button"
-                              onClick={() => deleteDurationPoint(point)}
-                              disabled={durationActionInProgress}
-                              className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {durationAction === `delete-${point.id}` ? "Deleting..." : "Delete"}
-                            </button>
-                          </td>
+                          {edit && (
+                            <td className="whitespace-nowrap p-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => deleteDurationPoint(point)}
+                                disabled={durationActionInProgress}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                aria-label={`Delete ${formatMinutes(point.durationMinutes)} duration point`}
+                                title={durationAction === `delete-${point.id}` ? "Deleting duration point" : "Delete duration point"}
+                              >
+                                <TrashIcon className="h-4 w-4" />
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={5} className="p-6 text-slate-500">
+                        <td colSpan={edit ? 5 : 4} className="p-6 text-slate-500">
                           No duration history found.
                         </td>
                       </tr>
@@ -2152,6 +2226,7 @@ const RecurringServiceStopDetails = () => {
           </aside>
         </div>
       </div>
+      <TaskGroupPickerModal />
     </div>
   );
 };

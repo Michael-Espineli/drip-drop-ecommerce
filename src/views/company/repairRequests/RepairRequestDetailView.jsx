@@ -22,6 +22,7 @@ import {
   getRepairRequestPhotoUrl,
   uploadRepairRequestPhoto,
 } from '../../../utils/repairRequestPhotos';
+import { createCustomerNote } from '../../../utils/customerNotes';
 import {
   DEFAULT_SUGGESTED_WORK_TIER,
   SUGGESTED_WORK_STATUS,
@@ -69,6 +70,8 @@ const RepairRequestDetailView = () => {
   const [newComment, setNewComment] = useState("");
   const [addingComment, setAddingComment] = useState(false);
   const [commentFilter, setCommentFilter] = useState("All");
+  const [copyNewCommentToCustomerNotes, setCopyNewCommentToCustomerNotes] = useState(false);
+  const [copyingCommentToCustomerNoteId, setCopyingCommentToCustomerNoteId] = useState("");
   const repairRequestJobIdsKey = (repairRequest?.jobIds || []).join("|");
 
   const getRequestRef = (path = sourcePath) => (
@@ -182,6 +185,95 @@ const RepairRequestDetailView = () => {
       serviceLocationAddress: repairRequest.serviceLocationAddress || repairRequest.locationAddress || "",
     };
   }, [recentlySelectedCompany, repairRequest, sourcePath]);
+
+  const getRepairRequestCustomerName = () => (
+    repairRequest?.customerName ||
+    repairRequest?.requesterName ||
+    repairRequest?.name ||
+    "Customer"
+  );
+
+  const formatCommentDateLabel = (comment = {}) => {
+    const date = getDateValue(comment.date || comment.createdAt || comment.dateMillis || comment.createdAtMillis);
+    return date ? format(date, "MMM d, yyyy - h:mm a") : "";
+  };
+
+  const buildRepairRequestCommentCustomerNoteText = (comment = {}) => {
+    const commentText = String(comment.comment || comment.note || comment.text || "").trim();
+    const requestLabel = displayRecordReference(repairRequest, "Repair Request") || repairRequestId;
+    const contextLines = [
+      `Repair request comment copied from ${requestLabel}.`,
+      `Comment by: ${comment.userName || comment.authorName || "Unknown"}`,
+      formatCommentDateLabel(comment) ? `Comment date: ${formatCommentDateLabel(comment)}` : "",
+      `Customer: ${getRepairRequestCustomerName()}`,
+      repairRequest?.serviceLocationName || repairRequest?.locationName
+        ? `Location: ${repairRequest.serviceLocationName || repairRequest.locationName}`
+        : "",
+      repairRequest?.serviceLocationAddress || repairRequest?.locationAddress
+        ? `Address: ${repairRequest.serviceLocationAddress || repairRequest.locationAddress}`
+        : "",
+      repairRequest?.bodyOfWaterName ? `Body of water: ${repairRequest.bodyOfWaterName}` : "",
+      repairRequest?.equipmentName || repairRequest?.equipmentModel
+        ? `Equipment: ${repairRequest.equipmentName || repairRequest.equipmentModel}`
+        : "",
+    ].filter(Boolean);
+
+    return [...contextLines, "", commentText].join("\n");
+  };
+
+  const createCustomerNoteFromRepairRequestComment = async (comment = {}) => {
+    const commentText = String(comment.comment || comment.note || comment.text || "").trim();
+    const customerId = String(repairRequest?.customerId || "").trim();
+    const userId = getUserId();
+
+    if (!commentText) throw new Error("Comment text is required.");
+    if (!recentlySelectedCompany || !customerId) throw new Error("This repair request needs a customer before copying to customer notes.");
+    if (!userId) throw new Error("Missing signed-in user.");
+
+    return createCustomerNote({
+      db,
+      companyId: recentlySelectedCompany,
+      customerId,
+      customerName: getRepairRequestCustomerName(),
+      bodyOfWaterId: repairRequest?.bodyOfWaterId || "",
+      bodyOfWaterName: repairRequest?.bodyOfWaterName || "",
+      serviceLocationId: repairRequest?.serviceLocationId || repairRequest?.locationId || "",
+      userId,
+      userName: getAuditUserName(),
+      authorId: userId,
+      authorName: getAuditUserName(),
+      note: buildRepairRequestCommentCustomerNoteText(comment),
+      audience: "office",
+      visibility: "office",
+      source: "repairRequestComment",
+      sourceType: "repairRequestComment",
+      sourceId: comment.id || "",
+      sourcePath: comment.id
+        ? `${sourcePath === "homeowner" ? "homeownerRepairRequests" : `companies/${recentlySelectedCompany}/repairRequests`}/${repairRequestId}/comments/${comment.id}`
+        : `${sourcePath === "homeowner" ? "homeownerRepairRequests" : `companies/${recentlySelectedCompany}/repairRequests`}/${repairRequestId}/comments`,
+      repairRequestId: repairRequest.id || repairRequestId,
+      metadata: {
+        commentId: comment.id || "",
+        repairRequestSourcePath: sourcePath,
+        originalCommentAuthorName: comment.userName || comment.authorName || "",
+      },
+    });
+  };
+
+  const copyRepairRequestCommentToCustomerNotes = async (comment = {}) => {
+    if (!requirePermission("34", "copy repair request comments to customer notes")) return;
+
+    try {
+      setCopyingCommentToCustomerNoteId(comment.id || "comment");
+      await createCustomerNoteFromRepairRequestComment(comment);
+      appAlert("Comment copied to customer notes.");
+    } catch (error) {
+      console.error("Error copying repair request comment to customer notes:", error);
+      appAlert(error?.message || "Failed to copy comment to customer notes.");
+    } finally {
+      setCopyingCommentToCustomerNoteId("");
+    }
+  };
 
   useEffect(() => {
     const fetchRepairRequest = async () => {
@@ -485,6 +577,7 @@ const RepairRequestDetailView = () => {
   const addComment = async () => {
     const trimmedComment = newComment.trim();
     const userId = getUserId();
+    const shouldCopyToCustomerNotes = copyNewCommentToCustomerNotes && Boolean(repairRequest?.customerId);
 
     if (!requirePermission("34", "update repair requests")) return;
     if (!userId) {
@@ -495,6 +588,10 @@ const RepairRequestDetailView = () => {
       appAlert("Write a comment first.");
       return;
     }
+    if (copyNewCommentToCustomerNotes && !repairRequest?.customerId) {
+      appAlert("Attach this request to a customer before copying to customer notes.");
+      return;
+    }
     if (!recentlySelectedCompany || !repairRequest?.id || addingComment) return;
 
     try {
@@ -502,6 +599,7 @@ const RepairRequestDetailView = () => {
 
       const id = `rep_req_com_${uuidv4()}`;
       const authorName = getAuditUserName();
+      const dateMillis = Date.now();
       await setDoc(doc(getCommentsRef(), id), {
         id,
         repairRequestId: repairRequest.id,
@@ -511,13 +609,34 @@ const RepairRequestDetailView = () => {
         authorId: userId,
         authorName,
         date: serverTimestamp(),
-        dateMillis: Date.now(),
+        dateMillis,
         comment: trimmedComment,
         resolved: false,
         sourcePath,
       });
 
+      let copyFailed = false;
+      if (shouldCopyToCustomerNotes) {
+        try {
+          await createCustomerNoteFromRepairRequestComment({
+            id,
+            comment: trimmedComment,
+            userName: authorName,
+            authorName,
+            dateMillis,
+          });
+        } catch (copyError) {
+          copyFailed = true;
+          console.error("Error copying new repair request comment to customer notes:", copyError);
+          appAlert(copyError?.message || "Comment added, but the customer note copy failed.");
+        }
+      }
+
       setNewComment("");
+      if (!copyFailed && shouldCopyToCustomerNotes) setCopyNewCommentToCustomerNotes(false);
+      if (shouldCopyToCustomerNotes && !copyFailed) {
+        appAlert("Comment added and copied to customer notes.");
+      }
     } catch (error) {
       console.error("Error adding repair request comment:", error);
       appAlert("Failed to add comment.");
@@ -982,6 +1101,18 @@ const RepairRequestDetailView = () => {
                     value={newComment}
                     onChange={(event) => setNewComment(event.target.value)}
                   />
+                  {repairRequest.customerId && (
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-slate-300"
+                        checked={copyNewCommentToCustomerNotes}
+                        disabled={addingComment}
+                        onChange={(event) => setCopyNewCommentToCustomerNotes(event.target.checked)}
+                      />
+                      Add to Customer Notes
+                    </label>
+                  )}
                   <button
                     type="button"
                     onClick={addComment}
@@ -1007,6 +1138,8 @@ const RepairRequestDetailView = () => {
                   filteredComments.map((comment) => {
                     const dt = comment.date?.toDate?.() || null;
                     const when = dt ? format(dt, "MMM d, h:mm a") : "-";
+                    const canCopyCommentToCustomerNotes = Boolean(repairRequest.customerId && String(comment.comment || "").trim());
+                    const isCopyingComment = copyingCommentToCustomerNoteId === comment.id;
 
                     return (
                       <div key={comment.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1017,16 +1150,34 @@ const RepairRequestDetailView = () => {
                         <div className="mt-2 whitespace-pre-wrap text-xs text-slate-700">
                           {comment.comment}
                         </div>
-                        <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-600">
-                          <input
-                            type="checkbox"
-                            className="h-3.5 w-3.5"
-                            checked={!!comment.resolved}
-                            disabled={!can("34")}
-                            onChange={(event) => setCommentResolved(comment.id, event.target.checked)}
-                          />
-                          Resolved
-                        </label>
+                        <div className="mt-3 flex flex-wrap items-center gap-3">
+                          <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5"
+                              checked={!!comment.resolved}
+                              disabled={!can("34")}
+                              onChange={(event) => setCommentResolved(comment.id, event.target.checked)}
+                            />
+                            Resolved
+                          </label>
+                          {canCopyCommentToCustomerNotes && (
+                            <button
+                              type="button"
+                              onClick={() => copyRepairRequestCommentToCustomerNotes(comment)}
+                              disabled={!can("34") || isCopyingComment}
+                              title={can("34") ? "Copy this comment to the customer notes" : "You need permission to update repair requests"}
+                              className={[
+                                "rounded-md border px-2 py-1 text-xs font-semibold transition",
+                                can("34") && !isCopyingComment
+                                  ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                  : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400",
+                              ].join(" ")}
+                            >
+                              {isCopyingComment ? "Copying..." : "Copy to Customer Notes"}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     );
                   })

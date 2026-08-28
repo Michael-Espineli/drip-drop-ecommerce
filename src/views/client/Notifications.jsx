@@ -17,6 +17,7 @@ import { Context } from "../../context/AuthContext";
 import {
   ALERT_STATUS,
   alertDisplayTime,
+  alertIsArchived,
   alertIsScheduled,
   alertIsUnread,
   alertNeedsAttention,
@@ -34,18 +35,17 @@ const filters = [
   { id: "all", label: "All" },
   { id: "active", label: "Active" },
   { id: "unread", label: "Unread" },
-  { id: "archived", label: "Dismissed" },
 ];
 
 const statusTone = (alert) => {
-  if (alert.status === ALERT_STATUS.archived) return "border-slate-200 bg-slate-50 text-slate-500";
+  if (alertIsArchived(alert)) return "border-slate-200 bg-slate-50 text-slate-500";
   if (alertNeedsAttention(alert)) return "border-amber-200 bg-amber-50 text-amber-700";
   if (alertIsUnread(alert)) return "border-blue-200 bg-blue-50 text-blue-700";
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
 };
 
 const statusLabel = (alert) => {
-  if (alert.status === ALERT_STATUS.archived) return "Dismissed";
+  if (alertIsArchived(alert)) return "Dismissed";
   if (alertIsScheduled(alert)) return "Scheduled";
   if (alertNeedsAttention(alert)) return "Active";
   if (alertIsUnread(alert)) return "Unread";
@@ -106,7 +106,6 @@ const Notifications = () => {
   const stats = useMemo(() => ({
     active: alerts.filter(alertNeedsAttention).length,
     unread: alerts.filter(alertIsUnread).length,
-    archived: alerts.filter((alert) => alert.status === ALERT_STATUS.archived).length,
   }), [alerts]);
 
   const filteredAlerts = useMemo(() => {
@@ -114,9 +113,9 @@ const Notifications = () => {
 
     return alerts
       .filter((alert) => {
+        if (alertIsArchived(alert)) return false;
         if (filter === "active" && !alertNeedsAttention(alert)) return false;
         if (filter === "unread" && !alertIsUnread(alert)) return false;
-        if (filter === "archived" && alert.status !== ALERT_STATUS.archived) return false;
         if (!search) return true;
 
         return [
@@ -155,7 +154,7 @@ const Notifications = () => {
               <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Client</p>
               <h1 className="mt-2 text-2xl font-bold text-slate-950">Notification Center</h1>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="grid grid-cols-2 gap-2 text-center">
               <div className="rounded-md bg-amber-50 px-3 py-2 text-amber-700">
                 <p className="text-lg font-bold">{stats.active}</p>
                 <p className="text-xs font-semibold">Active</p>
@@ -163,10 +162,6 @@ const Notifications = () => {
               <div className="rounded-md bg-blue-50 px-3 py-2 text-blue-700">
                 <p className="text-lg font-bold">{stats.unread}</p>
                 <p className="text-xs font-semibold">Unread</p>
-              </div>
-              <div className="rounded-md bg-slate-100 px-3 py-2 text-slate-600">
-                <p className="text-lg font-bold">{stats.archived}</p>
-                <p className="text-xs font-semibold">Dismissed</p>
               </div>
             </div>
           </div>
@@ -233,7 +228,7 @@ const Notifications = () => {
                           Open
                         </Link>
                       )}
-                      {alert.status !== ALERT_STATUS.read && alert.status !== ALERT_STATUS.archived && (
+                      {alert.status !== ALERT_STATUS.read && !alertIsArchived(alert) && (
                         <button
                           type="button"
                           onClick={() => updateAlertStatus(alert, ALERT_STATUS.read)}
@@ -243,7 +238,7 @@ const Notifications = () => {
                           Read
                         </button>
                       )}
-                      {alert.status !== ALERT_STATUS.archived && (
+                      {!alertIsArchived(alert) && (
                         <button
                           type="button"
                           onClick={() => updateAlertStatus(alert, ALERT_STATUS.archived)}

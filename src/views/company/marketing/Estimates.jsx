@@ -130,6 +130,56 @@ const getAgreementAmountCents = (agreement) => {
   return getLineItemsTotalCents(agreement.lineItems);
 };
 
+const planOptionId = (option = {}) => String(option.planId || option.solutionId || option.id || '').trim();
+
+const planOptionTitle = (option = {}) => (
+  [option.planTierLabel || option.solutionTierLabel, option.title || option.name || option.planName]
+    .filter(Boolean)
+    .join(' - ') || 'Plan Option'
+);
+
+const getPlanOptionAmountCents = (option = {}) => {
+  const directAmount = Number(option.totalAmountCents || option.rateAmountCents || 0);
+  if (directAmount) return directAmount;
+  return getLineItemsTotalCents(option.lineItems);
+};
+
+const planOptionsForAgreement = (agreement = {}) => (
+  Array.isArray(agreement.planOptions) && agreement.planOptions.length
+    ? agreement.planOptions
+    : Array.isArray(agreement.solutionOptions)
+      ? agreement.solutionOptions
+      : []
+);
+
+const selectedPlanIdForAgreement = (agreement = {}) => String(
+  agreement.acceptedPlanId ||
+  agreement.acceptedSolutionId ||
+  agreement.selectedPlanId ||
+  agreement.selectedSolutionId ||
+  agreement.defaultPlanId ||
+  agreement.defaultSolutionId ||
+  ''
+).trim();
+
+const planAmountLabelForAgreement = (agreement = {}) => {
+  const options = planOptionsForAgreement(agreement);
+  if (options.length <= 1) return formatCurrency(getAgreementAmountCents(agreement));
+
+  const amounts = options
+    .map(getPlanOptionAmountCents)
+    .filter((amount) => Number.isFinite(amount) && amount > 0);
+
+  if (!amounts.length) return formatCurrency(getAgreementAmountCents(agreement));
+
+  const minAmount = Math.min(...amounts);
+  const maxAmount = Math.max(...amounts);
+
+  return minAmount === maxAmount
+    ? formatCurrency(minAmount)
+    : `${formatCurrency(minAmount)} - ${formatCurrency(maxAmount)}`;
+};
+
 const getContractAmountCents = (contract) => {
   const lineItemsTotal = getLineItemsTotalCents(contract.lineItems);
   if (lineItemsTotal) return lineItemsTotal;
@@ -161,14 +211,14 @@ const cadenceLabelForRecurringContract = (contract) => {
 
 const actionLinksForRow = (row) => {
   if (row.sourceCollection === salesCollectionNames.agreements) {
-    const agreementLink = `/company/sales/agreements/${row.id}`;
-
-    if (row.estimateCategory === 'job' && row.jobId) {
+    if (row.estimateCategory === 'job') {
       return {
-        primary: { to: `/company/jobs/detail/${row.jobId}`, label: 'Open Job' },
-        secondary: { to: agreementLink, label: 'Agreement' },
+        primary: { to: `/company/estimates/${row.id}`, label: 'Open Estimate' },
+        secondary: row.jobId ? { to: `/company/jobs/detail/${row.jobId}`, label: 'Open Job' } : null,
       };
     }
+
+    const agreementLink = `/company/sales/agreements/${row.id}`;
 
     return {
       primary: { to: agreementLink, label: 'Open Agreement' },
@@ -214,11 +264,19 @@ const normalizeSalesAgreement = (docSnap) => {
     data.rateType === 'oneTime' ||
     data.serviceCadence === 'oneTime' ||
     Boolean(jobId);
+  const planOptions = planOptionsForAgreement(data);
+  const selectedPlanId = selectedPlanIdForAgreement(data);
+  const selectedPlan = planOptions.find((option) => planOptionId(option) === selectedPlanId) || planOptions[0] || null;
+  const acceptedPlanTitle = data.acceptedPlanTitle || data.acceptedSolutionTitle || (
+    data.acceptedPlanId || data.acceptedSolutionId
+      ? planOptionTitle(selectedPlan)
+      : ''
+  );
 
   return {
     id: docSnap.id,
     sourceCollection: salesCollectionNames.agreements,
-    sourceLabel: 'Sales Agreement',
+    sourceLabel: isJobEstimate ? 'Plan Estimate' : 'Sales Agreement',
     estimateCategory: isJobEstimate ? 'job' : 'service',
     cadenceType: isJobEstimate ? 'oneTime' : 'recurring',
     kindLabel: isJobEstimate ? 'Job Estimate' : 'Service Agreement',
@@ -228,12 +286,16 @@ const normalizeSalesAgreement = (docSnap) => {
     customerDetail: data.email || data.termsTemplateName || (data.id ? 'Sales agreement' : ''),
     status: data.status || 'draft',
     statusKey: normalizeStatus(data.status || 'draft'),
-    amountCents: getAgreementAmountCents(data),
+    amountCents: selectedPlan ? getPlanOptionAmountCents(selectedPlan) || getAgreementAmountCents(data) : getAgreementAmountCents(data),
+    amountLabel: isJobEstimate ? planAmountLabelForAgreement(data) : formatCurrency(getAgreementAmountCents(data)),
     updatedAt: data.updatedAt || data.sentAt || data.createdAt || null,
     sentAt: data.sentAt || null,
     acceptBy: data.expiresAt || null,
     jobId: isJobEstimate ? jobId : '',
     leadId: data.leadId || '',
+    planOptionCount: planOptions.length,
+    selectedPlanTitle: selectedPlan ? planOptionTitle(selectedPlan) : '',
+    acceptedPlanTitle,
     searchText: [
       data.title,
       data.customerName,
@@ -243,6 +305,7 @@ const normalizeSalesAgreement = (docSnap) => {
       data.sourceType,
       data.sourceId,
       data.jobId,
+      ...planOptions.map(planOptionTitle),
     ].join(' '),
     raw: data,
   };
@@ -359,6 +422,16 @@ const EstimatesTable = ({ rows, loading }) => {
                 <td className="px-5 py-4 align-top">
                   <p className="font-semibold text-slate-950">{row.title}</p>
                   <p className="mt-1 text-xs text-slate-500">{row.sourceLabel}</p>
+                  {row.planOptionCount > 1 && (
+                    <p className="mt-1 text-xs font-semibold text-blue-700">
+                      {row.planOptionCount} plan options
+                      {row.acceptedPlanTitle
+                        ? ` - accepted: ${row.acceptedPlanTitle}`
+                        : row.selectedPlanTitle
+                          ? ` - default: ${row.selectedPlanTitle}`
+                          : ''}
+                    </p>
+                  )}
                 </td>
                 <td className="px-5 py-4 align-top">
                   <p className="font-medium text-slate-900">{row.customerName}</p>
@@ -368,7 +441,7 @@ const EstimatesTable = ({ rows, loading }) => {
                   <TypeBadge row={row} />
                 </td>
                 <td className="px-5 py-4 align-top font-semibold text-slate-950">
-                  {formatCurrency(row.amountCents)}
+                  {row.amountLabel || formatCurrency(row.amountCents)}
                 </td>
                 <td className="px-5 py-4 align-top">
                   <StatusBadge status={row.status} />
