@@ -1,7 +1,9 @@
 import { lazy } from "react";
 import { Navigate } from "react-router-dom";
 import {
+    CREATE_SERVICE_AGREEMENTS_PERMISSION_ID,
     FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
+    SERVICE_AGREEMENTS_PERMISSION_ID,
 } from "../../utils/companyPermissions";
 
 const Home = lazy(() => import("../../views/Home"))
@@ -527,7 +529,19 @@ export const sellerRoutes = [
         role: 'Company',
         permissionId: '850',
     }, {
+        path: '/company/product-catalog/:productId',
+        element: <ProductCatalog />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
+    }, {
         path: '/company/settings/product-catalog',
+        element: <ProductCatalog />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '850',
+    }, {
+        path: '/company/settings/product-catalog/:productId',
         element: <ProductCatalog />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
@@ -1501,28 +1515,31 @@ export const sellerRoutes = [
         path: '/company/sales/agreements',
         element: <SalesAgreements />,
         role: 'Company',
+        permissionIds: ['400', SERVICE_AGREEMENTS_PERMISSION_ID],
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/agreements/needs-routing',
         element: <SalesAgreements routingQueueOnly />,
         role: 'Company',
+        permissionIds: ['400', SERVICE_AGREEMENTS_PERMISSION_ID],
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/agreements/active-customers-without-service-agreements',
         element: <ActiveCustomersWithoutCoverage mode="serviceAgreements" />,
         role: 'Company',
+        permissionIds: ['400', SERVICE_AGREEMENTS_PERMISSION_ID],
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/agreements/new',
         element: <CreateSalesAgreement />,
         role: 'Company',
-        permissionIds: ['400', FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID],
+        permissionIds: ['400', CREATE_SERVICE_AGREEMENTS_PERMISSION_ID, FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID],
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/agreements/:agreementId',
         element: <SalesAgreementDetail />,
         role: 'Company',
-        permissionIds: ['400', FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID],
+        permissionIds: ['400', SERVICE_AGREEMENTS_PERMISSION_ID, FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID],
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/reviews/:companyId',

@@ -33,10 +33,11 @@ import {
 } from "../../../utils/stopData";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
-    FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID,
+    CREATE_SERVICE_AGREEMENTS_PERMISSION_ID,
     FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID,
     FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID,
     FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
+    SEND_SERVICE_AGREEMENTS_PERMISSION_ID,
 } from "../../../utils/companyPermissions";
 import {
     SERVICE_STOP_TYPE_USE_CASES,
@@ -69,7 +70,7 @@ import {
 import { SHOPPING_LIST_STATUS } from "../../../utils/shoppingListStatus";
 import { createAndSendShoppingItemInstallInvoice } from "../../../utils/sales/shoppingItemInvoiceAutomation";
 import { isFilterEquipment } from "../../../utils/models/Equipment";
-import { PaperAirplaneIcon, PrinterIcon } from "@heroicons/react/24/outline";
+import { PaperAirplaneIcon, PrinterIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import ShareItemButton from "../../components/share/ShareItemButton";
 import ConnectAgreementModal from "../marketing/ConnectAgreementModal";
 import {
@@ -184,7 +185,7 @@ const sameDay = (left, right) => {
 };
 
 const isFinishedStatus = (status) => {
-    const normalized = String(status || "").toLowerCase();
+    const normalized = String(status || "").trim().toLowerCase();
     return ["finished", "completed", "done", "complete"].includes(normalized);
 };
 
@@ -976,6 +977,19 @@ const SurveyPhotoGrid = ({ photos = [], title }) => {
     );
 };
 
+const SurveyRowMetric = ({ label, value }) => {
+    const text = displayText(value);
+
+    return (
+        <div className="min-w-0">
+            <p className="text-[11px] font-bold uppercase text-slate-500">{label}</p>
+            <p className="mt-1 truncate text-sm font-medium text-slate-800" title={text}>
+                {text}
+            </p>
+        </div>
+    );
+};
+
 const ServiceStopDetails = () => {
     const {
         recentlySelectedCompany,
@@ -1615,6 +1629,7 @@ const ServiceStopDetails = () => {
         };
     }, [serviceLocation, serviceStop, serviceStopAddressText]);
     const serviceStopBucket = useMemo(() => getServiceStopBucket(serviceStop), [serviceStop]);
+    const serviceStopDeleteLocked = isServiceStopFinished(serviceStop);
     const isServiceAgreementEstimate = serviceStopBucket.id === SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate;
     const isJobEstimateStop = serviceStopBucket.id === SERVICE_STOP_TYPE_USE_CASES.jobEstimate;
     const initialSurveyRecommendation = serviceStop?.fieldEstimateWorkflow?.initialSurveyRecommendation || {};
@@ -2044,12 +2059,12 @@ const ServiceStopDetails = () => {
         user?.displayName ||
         user?.email ||
         "Company user";
-    const canRecommendInitialSurveyPrice =
-        can(FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID) ||
+    const canCreateFieldServiceAgreement =
+        can(CREATE_SERVICE_AGREEMENTS_PERMISSION_ID) ||
         can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
-        can("622") ||
         can("400");
-    const canRunFieldAgreementWorkflow =
+    const canSendFieldServiceAgreement =
+        can(SEND_SERVICE_AGREEMENTS_PERMISSION_ID) ||
         can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
         can("400");
     const canBuildFieldJobEstimatePlan =
@@ -2094,10 +2109,6 @@ const ServiceStopDetails = () => {
 
     const saveServiceAgreementRecommendation = async (event) => {
         event?.preventDefault();
-        if (!canRecommendInitialSurveyPrice) {
-            toast.error("Your role cannot recommend initial survey pricing.");
-            return;
-        }
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
 
         const recommendedPriceCents = moneyInputToCents(serviceAgreementRecommendationForm.price);
@@ -3560,17 +3571,29 @@ const ServiceStopDetails = () => {
         if (!requirePermission("246", "delete service stops")) return;
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
 
+        const serviceStopRef = doc(
+            db,
+            "companies",
+            recentlySelectedCompany,
+            "serviceStops",
+            serviceStopId
+        );
+
         try {
+            const latestServiceStopSnap = await getDoc(serviceStopRef);
+            const latestServiceStop = latestServiceStopSnap.exists()
+                ? { id: latestServiceStopSnap.id, ...latestServiceStopSnap.data() }
+                : serviceStop;
+
+            if (isServiceStopFinished(latestServiceStop)) {
+                toast.error("Finished service stops cannot be deleted.");
+                setShowDeleteConfirm(false);
+                return;
+            }
+
             setDeleting(true);
 
             const batch = writeBatch(db);
-            const serviceStopRef = doc(
-                db,
-                "companies",
-                recentlySelectedCompany,
-                "serviceStops",
-                serviceStopId
-            );
 
             const taskSnapshot = await getDocs(
                 collection(
@@ -3736,7 +3759,7 @@ const ServiceStopDetails = () => {
                                             step="0.01"
                                             value={serviceAgreementRecommendationForm.price}
                                             onChange={(event) => updateServiceAgreementRecommendationField("price", event.target.value)}
-                                            disabled={!canRecommendInitialSurveyPrice || savingServiceAgreementRecommendation}
+                                            disabled={savingServiceAgreementRecommendation}
                                             className="min-w-0 flex-1 border-0 bg-transparent px-2 py-0 text-sm font-semibold text-slate-900 outline-none disabled:text-slate-400"
                                             placeholder="0.00"
                                         />
@@ -3748,7 +3771,7 @@ const ServiceStopDetails = () => {
                                     <select
                                         value={serviceAgreementRecommendationForm.rateType}
                                         onChange={(event) => updateServiceAgreementRecommendationField("rateType", event.target.value)}
-                                        disabled={!canRecommendInitialSurveyPrice || savingServiceAgreementRecommendation}
+                                        disabled={savingServiceAgreementRecommendation}
                                         className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
                                     >
                                         {fieldAgreementRateTypeOptions.map((option) => (
@@ -3765,7 +3788,7 @@ const ServiceStopDetails = () => {
                                 <textarea
                                     value={serviceAgreementRecommendationForm.notes}
                                     onChange={(event) => updateServiceAgreementRecommendationField("notes", event.target.value)}
-                                    disabled={!canRecommendInitialSurveyPrice || savingServiceAgreementRecommendation}
+                                    disabled={savingServiceAgreementRecommendation}
                                     rows={3}
                                     className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
                                     placeholder="Included services, startup work, chemistry concerns, access notes"
@@ -3773,16 +3796,14 @@ const ServiceStopDetails = () => {
                             </label>
 
                             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                                {canRecommendInitialSurveyPrice && (
-                                    <button
-                                        type="submit"
-                                        disabled={savingServiceAgreementRecommendation}
-                                        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        {savingServiceAgreementRecommendation ? "Saving..." : "Save Recommendation"}
-                                    </button>
-                                )}
-                                {canRunFieldAgreementWorkflow && (
+                                <button
+                                    type="submit"
+                                    disabled={savingServiceAgreementRecommendation}
+                                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {savingServiceAgreementRecommendation ? "Saving..." : "Save Recommendation"}
+                                </button>
+                                {canCreateFieldServiceAgreement && (
                                     <Link
                                         to={serviceAgreementSurveyDraftPath}
                                         className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
@@ -3790,7 +3811,7 @@ const ServiceStopDetails = () => {
                                         Create Agreement
                                     </Link>
                                 )}
-                                {canRunFieldAgreementWorkflow && connectedServiceAgreementSendPath && (
+                                {canSendFieldServiceAgreement && connectedServiceAgreementSendPath && (
                                     <Link
                                         to={connectedServiceAgreementSendPath}
                                         className="inline-flex items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
@@ -3998,15 +4019,6 @@ const ServiceStopDetails = () => {
                             >
                                 <PaperAirplaneIcon className="h-4 w-4" />
                                 {sendingServiceReport ? "Sending..." : "Send Report"}
-                            </button>
-                        )}
-                        {editEnabled && can("246") && (
-                            <button
-                                type="button"
-                                onClick={() => setShowDeleteConfirm(true)}
-                                className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
-                            >
-                                Delete
                             </button>
                         )}
                     </div>
@@ -4314,7 +4326,7 @@ const ServiceStopDetails = () => {
                                         >
                                             {connectedServiceAgreement?.id ? "Change Agreement" : "Connect Agreement"}
                                         </button>
-                                        {canRunFieldAgreementWorkflow && (
+                                        {canCreateFieldServiceAgreement && (
                                             <Link
                                                 to={serviceAgreementSurveyDraftPath}
                                                 className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
@@ -4322,7 +4334,7 @@ const ServiceStopDetails = () => {
                                                 Create Service Agreement
                                             </Link>
                                         )}
-                                        {canRunFieldAgreementWorkflow && connectedServiceAgreementSendPath && (
+                                        {canSendFieldServiceAgreement && connectedServiceAgreementSendPath && (
                                             <Link
                                                 to={connectedServiceAgreementSendPath}
                                                 className="inline-flex items-center justify-center rounded-md border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
@@ -4389,34 +4401,45 @@ const ServiceStopDetails = () => {
                                         <span className="text-xs font-semibold text-slate-500">{bodiesOfWater.length}</span>
                                     </div>
                                     {bodiesOfWater.length ? (
-                                        <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                            {bodiesOfWater.map((body) => (
-                                                <div key={body.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div>
-                                                            <p className="font-semibold text-slate-900">{getBodyOfWaterTitle(body)}</p>
-                                                            <p className="mt-1 text-sm text-slate-500">{displayText(body.type || body.bodyOfWaterType || body.waterType, "Pool")}</p>
+                                        <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                            {bodiesOfWater.map((body) => {
+                                                const bodyTitle = getBodyOfWaterTitle(body);
+                                                const bodyType = displayText(body.type || body.bodyOfWaterType || body.waterType, "Pool");
+                                                const bodyStatus = displayText(body.status || body.operationStatus, "Active");
+                                                const bodyNotes = body.notes || body.description;
+
+                                                return (
+                                                    <div key={body.id || bodyTitle} className="border-b border-slate-200 px-4 py-4 last:border-b-0">
+                                                        <div className="grid gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2.4fr)_auto] lg:items-start">
+                                                            <div className="min-w-0">
+                                                                <p className="truncate font-semibold text-slate-900" title={bodyTitle}>
+                                                                    {bodyTitle}
+                                                                </p>
+                                                                <p className="mt-1 text-sm text-slate-500">{bodyType}</p>
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4">
+                                                                <SurveyRowMetric label="Material" value={body.material || body.surfaceMaterial} />
+                                                                <SurveyRowMetric label="Shape" value={body.shape} />
+                                                                <SurveyRowMetric label="Gallons" value={body.gallons || body.capacityGallons || body.volume} />
+                                                                <SurveyRowMetric label="Sanitizer" value={body.sanitizer || body.sanitizerType} />
+                                                                <SurveyRowMetric label="Length" value={body.length} />
+                                                                <SurveyRowMetric label="Width" value={body.width} />
+                                                                <SurveyRowMetric label="Shallow Depth" value={body.shallowEndDepth || body.shallowDepth} />
+                                                                <SurveyRowMetric label="Deep Depth" value={body.deepEndDepth || body.deepDepth} />
+                                                            </div>
+                                                            <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                                                {bodyStatus}
+                                                            </span>
                                                         </div>
-                                                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
-                                                            {displayText(body.status || body.operationStatus, "Active")}
-                                                        </span>
+                                                        {bodyNotes && (
+                                                            <p className="mt-3 whitespace-pre-line border-t border-slate-100 pt-3 text-sm leading-6 text-slate-700">
+                                                                {bodyNotes}
+                                                            </p>
+                                                        )}
+                                                        <SurveyPhotoGrid title="Water Photos" photos={body.photoUrls || body.photos || body.bodyOfWaterPhotos || []} />
                                                     </div>
-                                                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                                                        <Field label="Material" value={body.material || body.surfaceMaterial} />
-                                                        <Field label="Shape" value={body.shape} />
-                                                        <Field label="Gallons" value={body.gallons || body.capacityGallons || body.volume} />
-                                                        <Field label="Sanitizer" value={body.sanitizer || body.sanitizerType} />
-                                                        <Field label="Length" value={body.length} />
-                                                        <Field label="Width" value={body.width} />
-                                                        <Field label="Shallow Depth" value={body.shallowEndDepth || body.shallowDepth} />
-                                                        <Field label="Deep Depth" value={body.deepEndDepth || body.deepDepth} />
-                                                    </div>
-                                                    {(body.notes || body.description) && (
-                                                        <p className="mt-4 whitespace-pre-line text-sm leading-6 text-slate-700">{body.notes || body.description}</p>
-                                                    )}
-                                                    <SurveyPhotoGrid title="Water Photos" photos={body.photoUrls || body.photos || body.bodyOfWaterPhotos || []} />
-                                                </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
                                     ) : (
                                         <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
@@ -4431,36 +4454,48 @@ const ServiceStopDetails = () => {
                                         <span className="text-xs font-semibold text-slate-500">{equipmentList.length}</span>
                                     </div>
                                     {equipmentList.length ? (
-                                        <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                            {equipmentList.map((equipment) => (
-                                                <div key={equipment.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div>
-                                                            <p className="font-semibold text-slate-900">{getEquipmentTitle(equipment)}</p>
-                                                            <p className="mt-1 text-sm text-slate-500">{displayText(equipment.type || equipment.equipmentType, "Equipment")}</p>
+                                        <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                            {equipmentList.map((equipment) => {
+                                                const equipmentTitle = getEquipmentTitle(equipment);
+                                                const equipmentType = displayText(equipment.type || equipment.equipmentType, "Equipment");
+                                                const equipmentStatus = displayText(
+                                                    equipment.status || equipment.operationStatus || equipment.equipmentStatus,
+                                                    "Operational"
+                                                );
+                                                const equipmentNotes = equipment.notes || equipment.serviceNotes || equipment.recommendationNotes;
+
+                                                return (
+                                                    <div key={equipment.id || equipmentTitle} className="border-b border-slate-200 px-4 py-4 last:border-b-0">
+                                                        <div className="grid gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2.4fr)_auto] lg:items-start">
+                                                            <div className="min-w-0">
+                                                                <p className="truncate font-semibold text-slate-900" title={equipmentTitle}>
+                                                                    {equipmentTitle}
+                                                                </p>
+                                                                <p className="mt-1 text-sm text-slate-500">{equipmentType}</p>
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4">
+                                                                <SurveyRowMetric label="Make" value={equipment.make || equipment.manufacturer} />
+                                                                <SurveyRowMetric label="Model" value={equipment.model} />
+                                                                <SurveyRowMetric label="Catalog Match" value={equipment.catalogMatchName || equipment.catalogMatch || equipment.catalogModelName} />
+                                                                <SurveyRowMetric label="Needs Service" value={firstPresent(equipment.needsService, equipment.needsRepair, false)} />
+                                                                <SurveyRowMetric label="Last Service" value={formatDateText(equipment.lastServiceDate || equipment.lastServicedAt)} />
+                                                                <SurveyRowMetric label="Next Service" value={formatDateText(equipment.nextServiceDate || equipment.nextScheduledServiceDate)} />
+                                                                <SurveyRowMetric label="Clean Pressure" value={firstPresent(equipment.cleanFilterPressure, equipment.cleanPressure)} />
+                                                                <SurveyRowMetric label="Current Pressure" value={firstPresent(equipment.currentFilterPressure, equipment.currentPressure)} />
+                                                            </div>
+                                                            <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                                                {equipmentStatus}
+                                                            </span>
                                                         </div>
-                                                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
-                                                            {displayText(equipment.status || equipment.operationStatus || equipment.equipmentStatus, "Operational")}
-                                                        </span>
+                                                        {equipmentNotes && (
+                                                            <p className="mt-3 whitespace-pre-line border-t border-slate-100 pt-3 text-sm leading-6 text-slate-700">
+                                                                {equipmentNotes}
+                                                            </p>
+                                                        )}
+                                                        <SurveyPhotoGrid title="Equipment Photos" photos={equipment.photoUrls || equipment.photos || equipment.equipmentPhotos || []} />
                                                     </div>
-                                                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                                                        <Field label="Make" value={equipment.make || equipment.manufacturer} />
-                                                        <Field label="Model" value={equipment.model} />
-                                                        <Field label="Catalog Match" value={equipment.catalogMatchName || equipment.catalogMatch || equipment.catalogModelName} />
-                                                        <Field label="Needs Service" value={displayText(equipment.needsService || equipment.needsRepair, "No")} />
-                                                        <Field label="Last Service" value={formatDateText(equipment.lastServiceDate || equipment.lastServicedAt)} />
-                                                        <Field label="Next Service" value={formatDateText(equipment.nextServiceDate || equipment.nextScheduledServiceDate)} />
-                                                        <Field label="Clean Pressure" value={equipment.cleanFilterPressure || equipment.cleanPressure} />
-                                                        <Field label="Current Pressure" value={equipment.currentFilterPressure || equipment.currentPressure} />
-                                                    </div>
-                                                    {(equipment.notes || equipment.serviceNotes || equipment.recommendationNotes) && (
-                                                        <p className="mt-4 whitespace-pre-line text-sm leading-6 text-slate-700">
-                                                            {equipment.notes || equipment.serviceNotes || equipment.recommendationNotes}
-                                                        </p>
-                                                    )}
-                                                    <SurveyPhotoGrid title="Equipment Photos" photos={equipment.photoUrls || equipment.photos || equipment.equipmentPhotos || []} />
-                                                </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
                                     ) : (
                                         <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
@@ -4883,112 +4918,6 @@ const ServiceStopDetails = () => {
                     </div>
 
                     <div className="space-y-6">
-                        {(can("244") || can("246")) && (
-                            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <h3 className="text-xl font-bold text-slate-800">Admin Edit</h3>
-                                        <p className="text-sm text-slate-600">Scheduling, technician, description, and completion controls</p>
-                                    </div>
-                                    {editEnabled && (
-                                        <button
-                                            type="button"
-                                            onClick={() => toggleEditEnabled(false)}
-                                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                                        >
-                                            Done
-                                        </button>
-                                    )}
-                                </div>
-
-                                {editEnabled ? (
-                                    <div className="mt-5 space-y-4">
-                                        {can("244") && (
-                                            <form onSubmit={saveServiceStopEdits} className="space-y-4">
-                                                <div>
-                                                    <label className="block text-sm font-semibold text-slate-600 mb-1">
-                                                        Scheduled Date
-                                                    </label>
-                                                    <input
-                                                        type="date"
-                                                        value={editForm.serviceDate}
-                                                        onChange={(event) => handleEditFieldChange("serviceDate", event.target.value)}
-                                                        className="w-full rounded-md border border-slate-300 px-3 py-2"
-                                                    />
-                                                </div>
-
-                                                <div>
-                                                    <label className="block text-sm font-semibold text-slate-600 mb-1">
-                                                        Technician
-                                                    </label>
-                                                    <select
-                                                        value={editForm.techId}
-                                                        onChange={(event) => handleEditFieldChange("techId", event.target.value)}
-                                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
-                                                    >
-                                                        <option value="">Select technician</option>
-                                                        {companyUsers.map((user) => (
-                                                            <option key={user.id} value={user.userId}>
-                                                                {user.label}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-
-                                                <label className="block">
-                                                    <span className="block text-sm font-semibold text-slate-600 mb-1">
-                                                        Description
-                                                    </span>
-                                                    <textarea
-                                                        value={editForm.description}
-                                                        onChange={(event) => handleEditFieldChange("description", event.target.value)}
-                                                        rows={4}
-                                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                                        placeholder="Service stop description"
-                                                    />
-                                                </label>
-
-                                                <button
-                                                    type="submit"
-                                                    disabled={savingEdit}
-                                                    className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    {savingEdit ? "Saving..." : "Save Changes"}
-                                                </button>
-                                            </form>
-                                        )}
-
-                                        <div className="grid grid-cols-1 gap-3">
-                                            {can("244") && (
-                                                <button
-                                                    type="button"
-                                                    onClick={openManualFinishConfirm}
-                                                    disabled={finishingStop || (isServiceStopFinished(serviceStop) && isFinishedStatus(serviceStop.operationStatus))}
-                                                    className="rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    {finishingStop ? "Finishing..." : "Finish Service Stop Manually"}
-                                                </button>
-                                            )}
-
-                                            {can("246") && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowDeleteConfirm(true)}
-                                                    className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
-                                                >
-                                                    Delete Service Stop
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                                        Select Edit at the top to change scheduling, finish manually, or delete this stop.
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="mb-4 flex items-start justify-between gap-3">
                                 <div>
@@ -5385,6 +5314,123 @@ const ServiceStopDetails = () => {
                 onConnect={handleConnectAgreement}
                 serviceStop={serviceStop}
             />
+            {editEnabled && (can("244") || can("246")) && (
+                <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 p-4">
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="service-stop-admin-edit-title"
+                        className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-2xl"
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                            <div>
+                                <h3 id="service-stop-admin-edit-title" className="text-xl font-bold text-slate-900">
+                                    Admin Edit
+                                </h3>
+                                <p className="mt-1 text-sm text-slate-600">
+                                    Scheduling, technician, description, and completion controls
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => toggleEditEnabled(false)}
+                                disabled={savingEdit}
+                                aria-label="Close admin edit"
+                                title="Close admin edit"
+                                className="rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <XMarkIcon className="h-5 w-5" />
+                            </button>
+                        </div>
+
+                        <div className="max-h-[calc(100vh-10rem)] overflow-y-auto px-5 py-5">
+                            {can("244") && (
+                                <form onSubmit={saveServiceStopEdits} className="space-y-4">
+                                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                        <div>
+                                            <label className="mb-1 block text-sm font-semibold text-slate-600">
+                                                Scheduled Date
+                                            </label>
+                                            <input
+                                                type="date"
+                                                value={editForm.serviceDate}
+                                                onChange={(event) => handleEditFieldChange("serviceDate", event.target.value)}
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="mb-1 block text-sm font-semibold text-slate-600">
+                                                Technician
+                                            </label>
+                                            <select
+                                                value={editForm.techId}
+                                                onChange={(event) => handleEditFieldChange("techId", event.target.value)}
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+                                            >
+                                                <option value="">Select technician</option>
+                                                {companyUsers.map((user) => (
+                                                    <option key={user.id} value={user.userId}>
+                                                        {user.label}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <label className="block">
+                                        <span className="mb-1 block text-sm font-semibold text-slate-600">
+                                            Description
+                                        </span>
+                                        <textarea
+                                            value={editForm.description}
+                                            onChange={(event) => handleEditFieldChange("description", event.target.value)}
+                                            rows={4}
+                                            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                                            placeholder="Service stop description"
+                                        />
+                                    </label>
+
+                                    <div className="flex justify-end">
+                                        <button
+                                            type="submit"
+                                            disabled={savingEdit}
+                                            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {savingEdit ? "Saving..." : "Save Changes"}
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
+
+                            <div className={`${can("244") ? "mt-5 border-t border-slate-200 pt-5" : ""} grid grid-cols-1 gap-3 sm:grid-cols-2`}>
+                                {can("244") && (
+                                    <button
+                                        type="button"
+                                        onClick={openManualFinishConfirm}
+                                        disabled={finishingStop || (isServiceStopFinished(serviceStop) && isFinishedStatus(serviceStop.operationStatus))}
+                                        className="rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {finishingStop ? "Finishing..." : "Finish Service Stop Manually"}
+                                    </button>
+                                )}
+
+                                {can("246") && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowDeleteConfirm(true)}
+                                        disabled={serviceStopDeleteLocked}
+                                        title={serviceStopDeleteLocked ? "Finished service stops cannot be deleted." : "Delete service stop"}
+                                        className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Delete Service Stop
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
             {showFinishConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
                     <div className="w-full max-w-xl rounded-lg bg-white p-5 shadow-2xl">
@@ -5478,7 +5524,9 @@ const ServiceStopDetails = () => {
                     <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
                         <h3 className="text-xl font-bold text-slate-900">Delete Service Stop</h3>
                         <p className="mt-3 text-sm text-slate-600">
-                            This will delete this service stop and its tasks/readings history. This cannot be undone.
+                            {serviceStopDeleteLocked
+                                ? "Finished service stops cannot be deleted."
+                                : "This will delete this service stop and its tasks/readings history. This cannot be undone."}
                         </p>
                         <div className="mt-6 flex justify-end gap-3">
                             <button
@@ -5492,7 +5540,7 @@ const ServiceStopDetails = () => {
                             <button
                                 type="button"
                                 onClick={handleDeleteServiceStop}
-                                disabled={deleting}
+                                disabled={deleting || serviceStopDeleteLocked}
                                 className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
                             >
                                 {deleting ? "Deleting..." : "Delete"}

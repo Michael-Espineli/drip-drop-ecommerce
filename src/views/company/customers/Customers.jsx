@@ -269,6 +269,7 @@ export default function Customers() {
     const [mergePreview, setMergePreview] = useState(null);
     const [mergeLoading, setMergeLoading] = useState(false);
     const [merging, setMerging] = useState(false);
+    const [customerNoteCounts, setCustomerNoteCounts] = useState({});
     const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
     const visibleCustomers = useMemo(
@@ -450,6 +451,45 @@ export default function Customers() {
         });
         setFilteredCustomers(filtered);
     }, [searchTerm, statusFilter, selectedTags, visibleCustomers]);
+
+    useEffect(() => {
+        const fetchCustomerNoteCounts = async () => {
+            if (!recentlySelectedCompany || filteredCustomers.length === 0) {
+                setCustomerNoteCounts({});
+                return;
+            }
+
+            try {
+                const countsArray = await Promise.all(
+                    filteredCustomers.map(async (customer) => {
+                        const notesRef = collection(
+                            db,
+                            'companies',
+                            recentlySelectedCompany,
+                            'customers',
+                            customer.id,
+                            'notes'
+                        );
+                        const unresolvedNotesQuery = query(notesRef, where('resolved', '==', false));
+                        const snap = await getDocs(unresolvedNotesQuery);
+
+                        return {
+                            customerId: customer.id,
+                            count: snap.size,
+                        };
+                    })
+                );
+                setCustomerNoteCounts(countsArray.reduce((acc, item) => {
+                    acc[item.customerId] = item.count;
+                    return acc;
+                }, {}));
+            } catch (error) {
+                console.error('Error fetching customer note counts: ', error);
+            }
+        };
+
+        fetchCustomerNoteCounts();
+    }, [filteredCustomers, recentlySelectedCompany]);
 
     const toggleTagFilter = (tag) => {
         setSelectedTags((currentTags) =>
@@ -972,7 +1012,14 @@ export default function Customers() {
                                             className="cursor-pointer transition hover:bg-slate-50"
                                         >
                                             <td className="px-5 py-3">
-                                                <p className="text-sm font-semibold text-slate-900">{getCustomerDisplayName(customer)}</p>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <p className="text-sm font-semibold text-slate-900">{getCustomerDisplayName(customer)}</p>
+                                                    {(customerNoteCounts[customer.id] || 0) > 0 && (
+                                                        <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800">
+                                                            {customerNoteCounts[customer.id]} unresolved {customerNoteCounts[customer.id] === 1 ? 'note' : 'notes'}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
                                             <td className="px-5 py-3">
                                                 <p className="text-sm text-slate-800">{getCustomerEmail(customer)}</p>

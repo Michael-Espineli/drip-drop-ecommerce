@@ -25,6 +25,8 @@ const salesCollectionNames = {
   billingSubscriptions: 'salesBillingSubscriptions',
   catalogItems: 'salesCatalogItems',
 };
+const FINANCE_PERMISSION_ID = '400';
+const DELETE_SERVICE_AGREEMENTS_PERMISSION_ID = '436';
 
 const timestampFromStripeSeconds = (seconds) => (
   seconds ? admin.firestore.Timestamp.fromMillis(seconds * 1000) : null
@@ -301,6 +303,37 @@ const userHasCompanyAccess = async (uid, companyId) => {
     .get();
 
   return accessDoc.exists;
+};
+
+const userHasAnyCompanyPermission = async (uid, companyId, permissionIds = []) => {
+  if (!uid || !companyId) return false;
+
+  const accessDoc = await db
+    .collection('users')
+    .doc(uid)
+    .collection('userAccess')
+    .doc(companyId)
+    .get();
+
+  if (!accessDoc.exists) return false;
+
+  const roleId = String(accessDoc.data()?.roleId || '').trim();
+  if (!roleId) return true;
+
+  const roleDoc = await db
+    .collection('companies')
+    .doc(companyId)
+    .collection('roles')
+    .doc(roleId)
+    .get();
+
+  if (!roleDoc.exists) return true;
+
+  const permissionIdList = roleDoc.data()?.permissionIdList;
+  if (!Array.isArray(permissionIdList)) return true;
+
+  const selectedIds = permissionIdList.map(String);
+  return permissionIds.map(String).some((permissionId) => selectedIds.includes(permissionId));
 };
 
 const userCanAccessSalesRecord = async ({ auth, record }) => {
@@ -2754,9 +2787,12 @@ exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('permission-denied', 'This service agreement belongs to another company.');
   }
 
-  const hasAccess = await userHasCompanyAccess(callableAuth.uid, companyId);
+  const hasAccess = await userHasAnyCompanyPermission(callableAuth.uid, companyId, [
+    FINANCE_PERMISSION_ID,
+    DELETE_SERVICE_AGREEMENTS_PERMISSION_ID,
+  ]);
   if (!hasAccess) {
-    throw new functions.https.HttpsError('permission-denied', 'You do not have access to delete service agreements for this company.');
+    throw new functions.https.HttpsError('permission-denied', 'You do not have permission to delete service agreements for this company.');
   }
 
   const subscriptionsToDelete = new Map();

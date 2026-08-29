@@ -46,12 +46,18 @@ import {
     SalesCatalogSourceType,
 } from "../../../utils/models/Sales";
 import { appAlert } from "../../../utils/appDialog";
-import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+    filterCompanyUserAdminOptions,
+    getCompanyUserDisplayName,
+    isActiveCompanyUser,
+    sortCompanyUsersByName,
+} from "../../../utils/companyUsers";
 import {
     canonicalJobTaskType,
     taskTypeRequiresBodyOfWater,
     taskTypeRequiresEquipment,
 } from "../../../utils/jobTaskTypes";
+import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
 
 const selectStyles = {
     control: (base, state) => ({
@@ -149,6 +155,15 @@ const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriorit
     DEFAULT_ISSUE_PRIORITY
 );
 
+const templateIntentMatches = (template = {}, intent = "") => {
+    const searchable = `${template.name || ""} ${template.type || ""} ${template.jobType || ""} ${template.description || ""}`.toLowerCase();
+    if (intent === "repair") return searchable.includes("repair");
+    if (intent === "maintenance") {
+        return searchable.includes("maintenance") || searchable.includes("service");
+    }
+    return false;
+};
+
 const itemRequiresEquipmentContext = (item = {}) => (
     templateContextValues(item).some((value) => taskTypeRequiresEquipment(value))
 );
@@ -224,6 +239,14 @@ const getLaborLineTaskIds = (line = {}) => laborLineIdArray(
             : line.laborLineTaskIds
 );
 
+const getLaborLinePlannedStopIds = (line = {}) => laborLineIdArray(
+    line.plannedServiceStopTemplateIds?.length
+        ? line.plannedServiceStopTemplateIds
+        : line.plannedServiceStopIds?.length
+            ? line.plannedServiceStopIds
+            : line.laborLinePlannedServiceStopIds
+);
+
 const laborLineTotalPriceCents = (line = {}) => {
     const quantity = Math.max(Number(line.quantity || line.defaultQuantity || 1) || 1, 1);
     const explicitTotal = line.totalPriceCents ?? line.totalAmountCents ?? line.amount ?? line.price;
@@ -274,11 +297,6 @@ const getAssignedWorkOrderAdminName = (companyUser = {}) => (
     ""
 );
 
-const isLikelyAdminUser = (companyUser = {}) => {
-    const searchable = `${companyUser.roleName || ""} ${companyUser.role || ""} ${companyUser.workerType || ""}`.toLowerCase();
-    return ["owner", "admin", "manager", "office"].some((term) => searchable.includes(term));
-};
-
 const buildCompanyUserOption = (docSnap) => {
     const data = docSnap.data();
     const id = data.id || docSnap.id;
@@ -300,6 +318,17 @@ const BasicWorkOrderCreate = () => {
     const location = useLocation();
     const [searchParams] = useSearchParams();
     const equipmentContext = location.state?.equipmentContext || null;
+    const customerContext = location.state?.customerContext || null;
+    const repairRequest = location.state?.repairRequest || null;
+    const repairRequestSourcePath =
+        location.state?.repairRequestSourcePath ||
+        repairRequest?.sourcePath ||
+        "company";
+    const defaultDescriptionFromState = location.state?.defaultDescription || "";
+    const jobIntent = location.state?.jobIntent || equipmentContext?.jobIntent || "";
+    const createdFromCustomerDetail = Boolean(location.state?.createdFromCustomerDetail);
+    const createdFromEquipmentCard = Boolean(location.state?.createdFromEquipmentCard);
+    const createdFromEquipmentDetail = Boolean(location.state?.createdFromEquipmentDetail);
     const {
         recentlySelectedCompany,
         recentlySelectedCompanyName,
@@ -426,12 +455,16 @@ const BasicWorkOrderCreate = () => {
 
     const assigneeOptions = useMemo(() => (
         companyUsers
-            .filter((companyUser) => String(companyUser.status || "Active").toLowerCase() !== "inactive")
+            .filter(isActiveCompanyUser)
             .map((companyUser) => ({
                 ...companyUser,
                 value: companyUser.userId,
                 label: companyUser.label || companyUser.userName || getCompanyUserDisplayName(companyUser),
             }))
+    ), [companyUsers]);
+
+    const adminOptions = useMemo(() => (
+        filterCompanyUserAdminOptions(companyUsers)
     ), [companyUsers]);
 
     const selectedAssigneeRegionalTags = useMemo(
@@ -499,9 +532,8 @@ const BasicWorkOrderCreate = () => {
 
         const assigneeTags = getCustomerTagAccessList(selectedAssignee).map((tag) => tag.toLowerCase());
         if (assigneeTags.length > 0) {
-            const regionalAdmin = companyUsers.find((companyUser) => {
+            const regionalAdmin = adminOptions.find((companyUser) => {
                 if (getCompanyUserId(companyUser) === getCompanyUserId(selectedAssignee)) return false;
-                if (!isLikelyAdminUser(companyUser)) return false;
 
                 const adminTags = getCustomerTagAccessList(companyUser).map((tag) => tag.toLowerCase());
                 return adminTags.some((tag) => assigneeTags.includes(tag));
@@ -517,18 +549,29 @@ const BasicWorkOrderCreate = () => {
         }
 
         if (companyDefaults.defaultAdminId) {
-            const defaultAdmin = companyUsers.find((companyUser) => (
+            const defaultAdmin = adminOptions.find((companyUser) => (
                 companyUser.userId === companyDefaults.defaultAdminId || companyUser.id === companyDefaults.defaultAdminId
             ));
+            if (defaultAdmin) {
+                return {
+                    id: defaultAdmin.userId || defaultAdmin.id,
+                    name: defaultAdmin.userName || defaultAdmin.label || companyDefaults.defaultAdminName || "Default Admin",
+                    source: "Company default",
+                };
+            }
+        }
+
+        const defaultAdmin = adminOptions[0];
+        if (defaultAdmin) {
             return {
-                id: companyDefaults.defaultAdminId,
-                name: defaultAdmin?.userName || companyDefaults.defaultAdminName || "Default Admin",
-                source: "Company default",
+                id: defaultAdmin.userId || defaultAdmin.id,
+                name: defaultAdmin.userName || defaultAdmin.label || getCompanyUserDisplayName(defaultAdmin),
+                source: "Admin filter default",
             };
         }
 
         return null;
-    }, [companyDefaults.defaultAdminId, companyDefaults.defaultAdminName, companyUsers, selectedAssignee]);
+    }, [adminOptions, companyDefaults.defaultAdminId, companyDefaults.defaultAdminName, companyUsers, selectedAssignee]);
 
     const templateGeneratedPriceCents = useMemo(() => {
         if (!selectedTemplate) return 0;
@@ -645,18 +688,48 @@ const BasicWorkOrderCreate = () => {
     }, [currentCompanyUser, selectedAssignee]);
 
     useEffect(() => {
-        const templateId = searchParams.get("templateId");
-        if (!templateId || !templateOptions.length || selectedTemplate) return;
-        const matchedTemplate = templateOptions.find((template) => template.id === templateId);
-        if (matchedTemplate) setSelectedTemplate(matchedTemplate);
-    }, [searchParams, selectedTemplate, templateOptions]);
+        const equipmentName = equipmentContext?.equipmentName || selectedEquipmentName || "equipment";
+        const intentDescription = equipmentContext?.equipmentId && jobIntent
+            ? `${jobIntent === "repair" ? "Repair" : "Maintenance"} for ${equipmentName}`
+            : "";
+        const nextDescription =
+            defaultDescriptionFromState ||
+            repairRequest?.description ||
+            equipmentContext?.description ||
+            intentDescription;
+
+        if (nextDescription) {
+            setDescription((current) => current || nextDescription);
+        }
+    }, [
+        defaultDescriptionFromState,
+        equipmentContext,
+        jobIntent,
+        repairRequest?.description,
+        selectedEquipmentName,
+    ]);
 
     useEffect(() => {
-        const customerId = searchParams.get("customerId") || equipmentContext?.customerId || "";
+        const templateId = searchParams.get("templateId");
+        if ((!templateId && !jobIntent) || !templateOptions.length || selectedTemplate) return;
+        const matchedTemplate = templateId
+            ? templateOptions.find((template) => template.id === templateId)
+            : templateOptions.find((template) => templateIntentMatches(template, jobIntent)) || templateOptions[0];
+        if (matchedTemplate) setSelectedTemplate(matchedTemplate);
+    }, [jobIntent, searchParams, selectedTemplate, templateOptions]);
+
+    useEffect(() => {
+        const customerId =
+            searchParams.get("customerId") ||
+            customerContext?.customerId ||
+            customerContext?.id ||
+            repairRequest?.customerId ||
+            equipmentContext?.customerId ||
+            "";
         if (!customerId || !customerOptions.length || selectedCustomer) return;
         const matchedCustomer = customerOptions.find((customer) => customer.id === customerId);
         if (matchedCustomer) setSelectedCustomer(matchedCustomer);
-    }, [customerOptions, equipmentContext, searchParams, selectedCustomer]);
+    }, [customerContext, customerOptions, equipmentContext, repairRequest?.customerId, searchParams, selectedCustomer]);
 
     useEffect(() => {
         if (!selectedCustomer?.id || !recentlySelectedCompany) {
@@ -686,7 +759,14 @@ const BasicWorkOrderCreate = () => {
                 }));
                 setServiceLocations(locations);
 
-                const queryLocationId = searchParams.get("locationId") || equipmentContext?.serviceLocationId || "";
+                const queryLocationId =
+                    searchParams.get("locationId") ||
+                    customerContext?.serviceLocationId ||
+                    customerContext?.locationId ||
+                    repairRequest?.serviceLocationId ||
+                    repairRequest?.locationId ||
+                    equipmentContext?.serviceLocationId ||
+                    "";
                 const preferredLocation = locations.find((location) => location.id === queryLocationId) || locations[0] || null;
                 setSelectedServiceLocation(preferredLocation ? {
                     ...preferredLocation,
@@ -704,7 +784,7 @@ const BasicWorkOrderCreate = () => {
         return () => {
             cancelled = true;
         };
-    }, [equipmentContext, recentlySelectedCompany, searchParams, selectedCustomer]);
+    }, [customerContext, equipmentContext, recentlySelectedCompany, repairRequest, searchParams, selectedCustomer]);
 
     useEffect(() => {
         if (!selectedServiceLocation?.id || !recentlySelectedCompany) {
@@ -750,8 +830,18 @@ const BasicWorkOrderCreate = () => {
                 setBodyOfWaterList(bodies);
                 setEquipmentList(equipment);
 
-                const initialBodyOfWaterId = searchParams.get("bodyOfWaterId") || equipmentContext?.bodyOfWaterId || "";
-                const initialEquipmentId = searchParams.get("equipmentId") || equipmentContext?.equipmentId || "";
+                const initialBodyOfWaterId =
+                    searchParams.get("bodyOfWaterId") ||
+                    customerContext?.bodyOfWaterId ||
+                    repairRequest?.bodyOfWaterId ||
+                    equipmentContext?.bodyOfWaterId ||
+                    "";
+                const initialEquipmentId =
+                    searchParams.get("equipmentId") ||
+                    customerContext?.equipmentId ||
+                    repairRequest?.equipmentId ||
+                    equipmentContext?.equipmentId ||
+                    "";
 
                 setSelectedBodyOfWater((current) => {
                     const matchedInitial = initialBodyOfWaterId
@@ -795,7 +885,7 @@ const BasicWorkOrderCreate = () => {
         return () => {
             cancelled = true;
         };
-    }, [equipmentContext, recentlySelectedCompany, searchParams, selectedServiceLocation]);
+    }, [customerContext, equipmentContext, recentlySelectedCompany, repairRequest, searchParams, selectedServiceLocation]);
 
     useEffect(() => {
         if (!selectedEquipment?.bodyOfWaterId || !bodyOfWaterOptions.length) return;
@@ -989,12 +1079,14 @@ const BasicWorkOrderCreate = () => {
         }];
     };
 
-    const normalizeTemplateLaborLineForJob = (line, jobId, planId, taskIdMap, index) => {
+    const normalizeTemplateLaborLineForJob = (line, jobId, planId, taskIdMap, plannedStopIdMap, index) => {
         const quantity = Math.max(Number(line.quantity || line.defaultQuantity || 1) || 1, 1);
         const totalPriceCents = laborLineTotalPriceCents(line);
         const unitPriceCents = laborLineUnitPriceCents(line);
         const sourceTaskIds = getLaborLineTaskIds(line);
         const taskIds = sourceTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean);
+        const sourcePlannedStopIds = getLaborLinePlannedStopIds(line);
+        const plannedServiceStopIds = sourcePlannedStopIds.map((stopId) => plannedStopIdMap[stopId]).filter(Boolean);
         const catalogItemId = laborLineCatalogItemId(line);
         const id = `comp_job_labor_line_${uuidv4()}`;
 
@@ -1015,10 +1107,10 @@ const BasicWorkOrderCreate = () => {
             internalCostCents: laborLineInternalCostCents(line),
             taskIds,
             laborLineTaskIds: taskIds,
-            plannedServiceStopIds: [],
-            laborLinePlannedServiceStopIds: [],
+            plannedServiceStopIds,
+            laborLinePlannedServiceStopIds: plannedServiceStopIds,
             sourceTemplateTaskIds: sourceTaskIds,
-            sourceTemplatePlannedServiceStopIds: [],
+            sourceTemplatePlannedServiceStopIds: sourcePlannedStopIds,
             equipmentId: line.equipmentId || selectedEquipmentId,
             serviceLocationId: selectedServiceLocation?.id || "",
             bodyOfWaterId: line.bodyOfWaterId || resolvedBodyOfWaterId,
@@ -1110,7 +1202,7 @@ const BasicWorkOrderCreate = () => {
                     billingLaborPriceCents: amount,
                     internalLaborCostCents: Number(line.internalCostCents || 0),
                     taskIds: line.taskIds || [],
-                    plannedServiceStopIds: [],
+                    plannedServiceStopIds: line.plannedServiceStopIds || [],
                     equipmentId: line.equipmentId || "",
                     serviceLocationId: line.serviceLocationId || "",
                     bodyOfWaterId: line.bodyOfWaterId || "",
@@ -1593,9 +1685,13 @@ const BasicWorkOrderCreate = () => {
                 [task.id]: normalizedTasks[index]?.id,
             }), {});
             const normalizedPlannedStops = buildPlannedStopsForJob(jobId, planId, taskIdMap, normalizedTasks);
+            const plannedStopIdMap = normalizedPlannedStops.reduce((map, stop) => ({
+                ...map,
+                [stop.sourceTemplatePlannedStopId || stop.id]: stop.id,
+            }), {});
             const normalizedLaborLineItems = mode === "template"
                 ? templateDetails.laborLineItems.map((line, index) => (
-                    normalizeTemplateLaborLineForJob(line, jobId, planId, taskIdMap, index)
+                    normalizeTemplateLaborLineForJob(line, jobId, planId, taskIdMap, plannedStopIdMap, index)
                 ))
                 : [];
             const normalizedShoppingItems = mode === "template"
@@ -1685,10 +1781,18 @@ const BasicWorkOrderCreate = () => {
                 invoiceRef: "",
                 invoiceType: null,
                 invoiceNotes: "",
+                repairRequestId: repairRequest?.id || "",
+                repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
                 sourceTemplateId: selectedTemplate?.id || "",
                 sourceTemplateName: selectedTemplate?.name || "",
                 createdFromBasicWorkOrderForm: true,
+                createdFromCustomerDetail,
+                createdFromEquipmentCard,
+                createdFromEquipmentDetail,
                 basicWorkOrderMode: mode,
+                equipmentContext: equipmentContext || null,
+                customerContext: customerContext || null,
+                jobIntent,
                 assignedTechId: selectedAssignee.userId,
                 assignedTechName: selectedAssignee.userName,
                 assignedCompanyUserId: selectedAssignee.id,
@@ -1719,6 +1823,18 @@ const BasicWorkOrderCreate = () => {
                 await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item);
             }
 
+            if (repairRequest?.id) {
+                const repairRequestRef = repairRequestSourcePath === "homeowner"
+                    ? doc(db, "homeownerRepairRequests", repairRequest.id)
+                    : doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequest.id);
+
+                await updateDoc(repairRequestRef, {
+                    jobIds: arrayUnion(jobId),
+                    status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
+                    updatedAt: serverTimestamp(),
+                });
+            }
+
             const preferredPlannedStop = normalizedPlannedStops[0] || null;
             const scheduledStop = await createScheduledServiceStop({
                 jobId,
@@ -1736,40 +1852,48 @@ const BasicWorkOrderCreate = () => {
                 jobInternalId: nextInternalId,
                 eventType: "Created",
                 title: "Basic work order created",
-                description: selectedTemplate?.name
-                    ? `Created from technician template: ${selectedTemplate.name}`
-                    : "Created from the basic custom work order form.",
+                description: repairRequest?.id
+                    ? `Created from repair request: ${repairRequest.description || repairRequest.id}`
+                    : selectedTemplate?.name
+                        ? `Created from technician template: ${selectedTemplate.name}`
+                        : "Created from the basic custom work order form.",
                 changes: [
                     { field: "adminName", label: "Admin", before: "-", after: resolvedAdmin.name || "-" },
                     { field: "assignedTechName", label: "Technician", before: "-", after: selectedAssignee.userName || "-" },
-	                    { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
-	                    { field: "serviceLocationName", label: "Service Location", before: "-", after: selectedServiceLocation.label || "-" },
-                        ...(resolvedBodyOfWaterName
-                            ? [{ field: "bodyOfWaterName", label: "Body Of Water", before: "-", after: resolvedBodyOfWaterName }]
-                            : []),
-                        ...(selectedEquipmentName
-                            ? [{ field: "equipmentName", label: "Equipment", before: "-", after: selectedEquipmentName }]
-                            : []),
-	                    { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
-                        { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
-	                    { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(starterPlanRecord.totalAmountCents || generatedPriceCents) },
-	                ],
-	                metadata: {
+                    { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
+                    { field: "serviceLocationName", label: "Service Location", before: "-", after: selectedServiceLocation.label || "-" },
+                    ...(resolvedBodyOfWaterName
+                        ? [{ field: "bodyOfWaterName", label: "Body Of Water", before: "-", after: resolvedBodyOfWaterName }]
+                        : []),
+                    ...(selectedEquipmentName
+                        ? [{ field: "equipmentName", label: "Equipment", before: "-", after: selectedEquipmentName }]
+                        : []),
+                    { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
+                    { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
+                    { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(starterPlanRecord.totalAmountCents || generatedPriceCents) },
+                ],
+                metadata: {
                     sourceTemplateId: selectedTemplate?.id || "",
                     sourceTemplateName: selectedTemplate?.name || "",
+                    repairRequestId: repairRequest?.id || "",
+                    repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
                     starterPlanId: planId,
                     activePlanId: planId,
                     activeSolutionId: planId,
-	                    scheduledServiceStopId: scheduledStop.stopId,
-	                    scheduledServiceStopInternalId: scheduledStop.serviceStopInternalId,
-                        bodyOfWaterId: resolvedBodyOfWaterId,
-                        bodyOfWaterName: resolvedBodyOfWaterName,
-                        equipmentId: selectedEquipmentId,
-                        equipmentName: selectedEquipmentName,
-                        laborLineCount: normalizedLaborLineItems.length,
-	                    createdFromBasicWorkOrderForm: true,
-	                    basicWorkOrderMode: mode,
-	                    adminAssignmentSource: resolvedAdmin.source,
+                    scheduledServiceStopId: scheduledStop.stopId,
+                    scheduledServiceStopInternalId: scheduledStop.serviceStopInternalId,
+                    bodyOfWaterId: resolvedBodyOfWaterId,
+                    bodyOfWaterName: resolvedBodyOfWaterName,
+                    equipmentId: selectedEquipmentId,
+                    equipmentName: selectedEquipmentName,
+                    laborLineCount: normalizedLaborLineItems.length,
+                    createdFromBasicWorkOrderForm: true,
+                    createdFromCustomerDetail,
+                    createdFromEquipmentCard,
+                    createdFromEquipmentDetail,
+                    basicWorkOrderMode: mode,
+                    jobIntent,
+                    adminAssignmentSource: resolvedAdmin.source,
                 },
                 severity: "success",
                 actorUserId: createdByUserId || "",

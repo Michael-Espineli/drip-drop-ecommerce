@@ -85,7 +85,13 @@ import {
   updateTermsTemplate,
 } from '../../../utils/terms/termsTemplateFirestore';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
-import { FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID } from '../../../utils/companyPermissions';
+import {
+  DELETE_SERVICE_AGREEMENTS_PERMISSION_ID,
+  FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
+  SEND_SERVICE_AGREEMENTS_PERMISSION_ID,
+  SERVICE_AGREEMENTS_PERMISSION_ID,
+  UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID,
+} from '../../../utils/companyPermissions';
 import { appConfirm } from '../../../utils/appDialog';
 import ShareItemButton from '../../components/share/ShareItemButton';
 
@@ -143,8 +149,6 @@ const labelize = (value) => {
 };
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-
-const SALES_PERMISSION_ID = '400';
 
 const isPermissionDeniedError = (error) => (
   error?.code === 'permission-denied' ||
@@ -1392,8 +1396,21 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
     stripeConnectedAccountId,
     user,
   } = useContext(Context);
-  const { can, requirePermission } = useCompanyPermissions();
-  const canUseFieldAgreementWorkflow = can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) || can('400');
+  const { can, requirePermission, permissionsReady } = useCompanyPermissions();
+  const canViewServiceAgreements =
+    can(SERVICE_AGREEMENTS_PERMISSION_ID) ||
+    can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
+    can('400');
+  const canSendServiceAgreements =
+    can(SEND_SERVICE_AGREEMENTS_PERMISSION_ID) ||
+    can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
+    can('400');
+  const canEditServiceAgreements =
+    can(UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID) ||
+    can('400');
+  const canDeleteServiceAgreements =
+    can(DELETE_SERVICE_AGREEMENTS_PERMISSION_ID) ||
+    can('400');
   const [agreement, setAgreement] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1442,6 +1459,18 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       return undefined;
     }
 
+    if (!permissionsReady) {
+      setLoading(true);
+      return undefined;
+    }
+
+    if (!canViewServiceAgreements) {
+      setAgreement(null);
+      setLoading(false);
+      setError(`You do not have permission to view ${detailMode === 'estimate' ? 'estimates' : 'service agreements'}.`);
+      return undefined;
+    }
+
     setLoading(true);
     setError('');
 
@@ -1464,7 +1493,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
         setLoading(false);
       }
     );
-  }, [agreementId]);
+  }, [agreementId, canViewServiceAgreements, detailMode, permissionsReady]);
 
   useEffect(() => {
     if (!agreement?.id) {
@@ -1843,7 +1872,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
   const canSend = Boolean(
     agreement &&
     user &&
-    canUseFieldAgreementWorkflow &&
+    canSendServiceAgreements &&
     !companyMismatch &&
     !editing &&
     readinessItems
@@ -1861,7 +1890,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
   if (agreement && !user) {
     sendEmailDisabledReasons.push(`You must be signed in to send this ${documentLabelLower}.`);
   }
-  if (agreement && user && !canUseFieldAgreementWorkflow) {
+  if (agreement && user && !canSendServiceAgreements) {
     sendEmailDisabledReasons.push(`Your role cannot send ${documentPluralLabel.toLowerCase()}.`);
   }
   if (companyMismatch) {
@@ -2220,7 +2249,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
   };
 
   const sendAgreementEmail = async ({ primaryEmail, additionalEmails = [] } = {}) => {
-    if (!canUseFieldAgreementWorkflow) {
+    if (!canSendServiceAgreements) {
       toast.error(`Your role cannot send ${documentPluralLabel.toLowerCase()}.`);
       return;
     }
@@ -2291,6 +2320,10 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
 
   const openEditor = () => {
     if (!agreement) return;
+    if (!canEditServiceAgreements) {
+      toast.error(`Your role cannot edit ${documentPluralLabel.toLowerCase()}.`);
+      return;
+    }
     setEditDraft(createEditDraft(agreement));
     setEditing(true);
   };
@@ -2630,6 +2663,10 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
 
   const saveEdit = async () => {
     if (!agreement || !editDraft) return;
+    if (!canEditServiceAgreements) {
+      toast.error(`Your role cannot edit ${documentPluralLabel.toLowerCase()}.`);
+      return;
+    }
 
     const nextLineItems = (editDraft.lineItems || [])
       .map((item) => {
@@ -2783,8 +2820,10 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
 
   const deleteAgreement = async () => {
     if (!agreement || deleteConfirmation.trim().toUpperCase() !== 'DELETE') return;
-    if (!requirePermission(SALES_PERMISSION_ID, `delete ${documentPluralLabel.toLowerCase()}`)) return;
-
+    if (!canDeleteServiceAgreements) {
+      toast.error(`Your role cannot delete ${documentPluralLabel.toLowerCase()}.`);
+      return;
+    }
     const selectedCompanyId = String(recentlySelectedCompany || '').trim();
     const agreementCompanyId = salesRecordCompanyId(agreement);
     const agreementOwnershipIssue = !selectedCompanyId
@@ -3202,7 +3241,8 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                 <button
                   type="button"
                   onClick={openEditor}
-                  disabled={!agreement || companyMismatch || savingEdit}
+                  disabled={!agreement || companyMismatch || savingEdit || !canEditServiceAgreements}
+                  title={!canEditServiceAgreements ? `Your role cannot edit ${documentPluralLabel.toLowerCase()}.` : ''}
                   className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaEdit className="text-xs" />
@@ -4676,7 +4716,8 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                   setConfirmingDelete(true);
                   setDeleteConfirmation('');
                 }}
-                disabled={!agreement || companyMismatch || deleting || savingEdit}
+                disabled={!agreement || companyMismatch || deleting || savingEdit || !canDeleteServiceAgreements}
+                title={!canDeleteServiceAgreements ? `Your role cannot delete ${documentPluralLabel.toLowerCase()}.` : ''}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 sm:mr-auto"
               >
                 <FaTrash className="text-xs" />
@@ -4694,7 +4735,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
               <button
                 type="button"
                 onClick={saveEdit}
-                disabled={savingEdit || applyingTermsTemplate || updatingTermsTemplate || savingCatalogItem}
+                disabled={savingEdit || applyingTermsTemplate || updatingTermsTemplate || savingCatalogItem || !canEditServiceAgreements}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FaSave className="text-xs" />

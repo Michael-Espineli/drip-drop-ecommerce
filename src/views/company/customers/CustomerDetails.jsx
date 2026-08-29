@@ -5,10 +5,13 @@ import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs
 import { httpsCallable } from 'firebase/functions';
 import { v4 as uuidv4 } from 'uuid';
 import {
+    AdjustmentsHorizontalIcon,
     ArrowsPointingInIcon,
     ArrowsPointingOutIcon,
     BriefcaseIcon,
+    CheckIcon,
     ClipboardDocumentIcon,
+    DocumentTextIcon,
     DocumentDuplicateIcon,
     EllipsisVerticalIcon,
     EnvelopeIcon,
@@ -16,6 +19,7 @@ import {
     PencilSquareIcon,
     PlusIcon,
     PresentationChartLineIcon,
+    TrashIcon,
     WrenchScrewdriverIcon,
     XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -80,6 +84,12 @@ import {
 import { deleteEquipmentWithSubcollections } from '../../../utils/equipmentDelete';
 import { endCustomerPipelineRowsForInactiveCustomer } from '../../../utils/customerPipeline';
 import ShareItemButton from '../../components/share/ShareItemButton';
+import CreateJobFlowLauncher from '../jobs/CreateJobFlowLauncher';
+import {
+    CREATE_JOBS_PERMISSION_ID,
+    CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
+    SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
+} from '../../../utils/companyPermissions';
 
 const customerSections = [
     { id: 'profile', label: 'Profile', helper: 'Contact, billing, notes, and account status' },
@@ -987,175 +997,29 @@ const TimelineEventTable = ({ events }) => (
 // Profile Tab
 const ProfileTab = ({
     customer,
-    onCustomerUpdate,
-    onDeleteCustomer,
-    onCustomerInactiveCascade,
-    onCustomerActiveCascade,
+    isEditing,
+    formData = customer,
+    newTag,
+    onInputChange,
+    onCheckboxChange,
+    onBillingAddressChange,
+    onNewTagChange,
+    onAddTag,
+    onRemoveTag,
 }) => {
-    const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
-    const { can, requirePermission } = useCompanyPermissions();
-    const db = getFirestore();
-    const [isEditing, setIsEditing] = useState(false);
-    const [formData, setFormData] = useState(customer);
-    const [newTag, setNewTag] = useState('');
-
-    useEffect(() => setFormData(customer), [customer]);
-
-    const handleInputChange = e => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-    const handleCheckboxChange = e => setFormData(prev => ({ ...prev, [e.target.name]: e.target.checked }));
-    const handleBillingAddressChange = e => setFormData(prev => ({ ...prev, billingAddress: { ...prev.billingAddress, [e.target.name]: e.target.value } }));
-
-    const handleAddTag = () => {
-        const tagToAdd = normalizeCustomerTag(newTag);
-        if (!tagToAdd) return;
-
-        setFormData((prev) => ({
-            ...prev,
-            tags: normalizeCustomerTags([...(prev.tags || []), tagToAdd]),
-        }));
-        setNewTag('');
-    };
-
-    const handleRemoveTag = (tagToRemove) => {
-        setFormData((prev) => ({
-            ...prev,
-            tags: normalizeCustomerTags(prev.tags).filter((tag) => tag !== tagToRemove),
-        }));
-    };
-
-    const handleSave = async () => {
-        if (!requirePermission("14", "update customer details")) return;
-
-        const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id);
-        const normalizedTags = normalizeCustomerTags(formData.tags);
-        const normalizedCustomer = normalizeCustomerForFirestore({
-            ...formData,
-            tags: normalizedTags,
-        });
-        const payload = {
-            ...formData,
-            ...normalizedCustomer,
-            tags: normalizedTags,
-        };
-        const customerDisplayName = getCustomerDisplayName(payload);
-        payload.customerName = customerDisplayName;
-        payload.name = customerDisplayName;
-        const wasActive = (customer.active ?? customer.isActive ?? true) !== false;
-        const nextActive = (payload.active ?? payload.isActive ?? true) !== false;
-        const shouldCascadeInactive = wasActive && !nextActive;
-        const shouldCascadeActive = !wasActive && nextActive;
-        const shouldSyncCustomerName = !customerDisplayNamesMatch(getCustomerDisplayName(customer), customerDisplayName);
-
-        try {
-            await updateDoc(customerRef, payload);
-            const inactiveCascadeCounts = shouldCascadeInactive
-                ? await onCustomerInactiveCascade?.()
-                : null;
-            const activeCascadeCounts = shouldCascadeActive
-                ? await onCustomerActiveCascade?.()
-                : null;
-            const pipelineRowsEnded = shouldCascadeInactive
-                ? await endCustomerPipelineRowsForInactiveCustomer({
-                    companyId: recentlySelectedCompany,
-                    customerId: customer.id,
-                    reason: 'Customer marked inactive from customer profile',
-                    actorId: user?.uid || '',
-                    actorName: `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() || user?.displayName || user?.email || '',
-                })
-                : 0;
-
-            let nameCascadeResult = null;
-            let nameCascadeFailed = false;
-            if (shouldSyncCustomerName) {
-                try {
-                    const syncCustomerNameReferences = httpsCallable(functions, 'syncCustomerNameReferencesForCustomer');
-                    const authPayload = await getCallableAuthPayload();
-                    const result = await syncCustomerNameReferences({
-                        ...authPayload,
-                        auth: authPayload,
-                        companyId: recentlySelectedCompany,
-                        customerId: customer.id,
-                    });
-                    nameCascadeResult = result.data || null;
-                } catch (cascadeError) {
-                    nameCascadeFailed = true;
-                    console.error('Failed to sync customer name references.', cascadeError);
-                }
-            }
-
-            if (nameCascadeFailed) {
-                toast.error('Customer saved, but linked record name sync failed. Background sync may still update those records shortly.');
-            } else {
-                const successMessage = inactiveCascadeCounts
-                    ? `Customer details updated. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`
-                    : activeCascadeCounts
-                        ? `Customer details updated. ${activeCascadeCounts.serviceLocations} service locations, ${activeCascadeCounts.bodiesOfWater} bodies of water, and ${activeCascadeCounts.equipment} equipment records were restored. ${activeCascadeCounts.skippedEquipment} uninstalled equipment record(s) were left inactive.`
-                        : nameCascadeResult?.writeCount > 0
-                            ? `Customer details updated. ${nameCascadeResult.writeCount} linked record(s) were synced to the new name.`
-                            : 'Customer details updated!';
-
-                toast.success(successMessage);
-            }
-            onCustomerUpdate?.(payload);
-            setIsEditing(false);
-        } catch (error) {
-            console.error('Failed to update customer.', error);
-            toast.error('Failed to update customer.');
-        }
-    };
-
     return (
         <div className="space-y-8">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-8">
-                    <InfoCard
-                        title="Contact Information"
-                        actions={can("14") && (
-                            isEditing ? (
-                                <div className="flex flex-wrap items-center justify-end gap-2">
-                                    {can("16") && (
-                                        <button
-                                            onClick={onDeleteCustomer}
-                                            className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100"
-                                            type="button"
-                                        >
-                                            Delete
-                                        </button>
-                                    )}
-                                    <button
-                                        onClick={() => setIsEditing(false)}
-                                        className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
-                                        type="button"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={handleSave}
-                                        className="rounded-md border border-transparent bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700"
-                                        type="button"
-                                    >
-                                        Save
-                                    </button>
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={() => setIsEditing(true)}
-                                    className="text-sm font-semibold text-blue-600 hover:text-blue-800"
-                                    type="button"
-                                >
-                                    Edit
-                                </button>
-                            )
-                        )}
-                    >
+                    <InfoCard title="Contact Information">
                         {isEditing ? (
                             <div className="space-y-4">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <input name="firstName" value={formData.firstName} onChange={handleInputChange} placeholder="First Name" className="w-full px-3 py-2 border rounded-md" />
-                                    <input name="lastName" value={formData.lastName} onChange={handleInputChange} placeholder="Last Name" className="w-full px-3 py-2 border rounded-md" />
+                                    <input name="firstName" value={formData.firstName} onChange={onInputChange} placeholder="First Name" className="w-full px-3 py-2 border rounded-md" />
+                                    <input name="lastName" value={formData.lastName} onChange={onInputChange} placeholder="Last Name" className="w-full px-3 py-2 border rounded-md" />
                                 </div>
-                                <input type="email" name="email" value={formData.email} onChange={handleInputChange} placeholder="Email" className="w-full px-3 py-2 border rounded-md" />
-                                <input name="phoneNumber" value={formData.phoneNumber} onChange={handleInputChange} placeholder="Phone Number" className="w-full px-3 py-2 border rounded-md" />
+                                <input type="email" name="email" value={formData.email} onChange={onInputChange} placeholder="Email" className="w-full px-3 py-2 border rounded-md" />
+                                <input name="phoneNumber" value={formData.phoneNumber} onChange={onInputChange} placeholder="Phone Number" className="w-full px-3 py-2 border rounded-md" />
                             </div>
                         ) : (
                             <dl className="space-y-2">
@@ -1166,7 +1030,7 @@ const ProfileTab = ({
                         )}
                     </InfoCard>
                     <InfoCard title="Notes">
-                        <textarea name="notes" value={isEditing ? formData.notes : customer.notes} onChange={handleInputChange} rows="6" className="w-full px-3 py-2 border rounded-md" readOnly={!isEditing}></textarea>
+                        <textarea name="notes" value={isEditing ? formData.notes : customer.notes} onChange={onInputChange} rows="6" className="w-full px-3 py-2 border rounded-md" readOnly={!isEditing}></textarea>
                     </InfoCard>
                     <InfoCard title="Tags">
                         {isEditing ? (
@@ -1174,11 +1038,11 @@ const ProfileTab = ({
                                 <div className="flex gap-2">
                                     <input
                                         value={newTag}
-                                        onChange={(event) => setNewTag(event.target.value)}
+                                        onChange={(event) => onNewTagChange(event.target.value)}
                                         onKeyDown={(event) => {
                                             if (event.key === 'Enter') {
                                                 event.preventDefault();
-                                                handleAddTag();
+                                                onAddTag();
                                             }
                                         }}
                                         placeholder="Add tag, e.g. R1"
@@ -1186,7 +1050,7 @@ const ProfileTab = ({
                                     />
                                     <button
                                         type="button"
-                                        onClick={handleAddTag}
+                                        onClick={onAddTag}
                                         className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
                                     >
                                         Add
@@ -1197,7 +1061,7 @@ const ProfileTab = ({
                                         <button
                                             key={tag}
                                             type="button"
-                                            onClick={() => handleRemoveTag(tag)}
+                                            onClick={() => onRemoveTag(tag)}
                                             className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
                                         >
                                             {tag} x
@@ -1226,11 +1090,11 @@ const ProfileTab = ({
                     <InfoCard title="Billing Address">
                         {isEditing ? (
                             <div className="space-y-4">
-                                <input name="streetAddress" value={formData.billingAddress?.streetAddress} onChange={handleBillingAddressChange} placeholder="Street" className="w-full px-3 py-2 border rounded-md" />
-                                <input name="city" value={formData.billingAddress?.city} onChange={handleBillingAddressChange} placeholder="City" className="w-full px-3 py-2 border rounded-md" />
+                                <input name="streetAddress" value={formData.billingAddress?.streetAddress} onChange={onBillingAddressChange} placeholder="Street" className="w-full px-3 py-2 border rounded-md" />
+                                <input name="city" value={formData.billingAddress?.city} onChange={onBillingAddressChange} placeholder="City" className="w-full px-3 py-2 border rounded-md" />
                                 <div className="grid grid-cols-2 gap-4">
-                                    <input name="state" value={formData.billingAddress?.state} onChange={handleBillingAddressChange} placeholder="State" className="w-full px-3 py-2 border rounded-md" />
-                                    <input name="zip" value={formData.billingAddress?.zip} onChange={handleBillingAddressChange} placeholder="ZIP Code" className="w-full px-3 py-2 border rounded-md" />
+                                    <input name="state" value={formData.billingAddress?.state} onChange={onBillingAddressChange} placeholder="State" className="w-full px-3 py-2 border rounded-md" />
+                                    <input name="zip" value={formData.billingAddress?.zip} onChange={onBillingAddressChange} placeholder="ZIP Code" className="w-full px-3 py-2 border rounded-md" />
                                 </div>
                             </div>
                         ) : (
@@ -1247,7 +1111,7 @@ const ProfileTab = ({
                                     type="checkbox"
                                     name="active"
                                     checked={formData.active === true}
-                                    onChange={handleCheckboxChange}
+                                    onChange={onCheckboxChange}
                                     className="h-4 w-4 rounded border-slate-300 text-blue-600"
                                 />
                                 Active customer
@@ -1343,6 +1207,31 @@ const ServiceLocationsTab = ({ customer }) => {
         notes: '',
     });
 
+    const fetchCustomerContacts = useCallback(async () => {
+        if (!recentlySelectedCompany || !customer.id) {
+            setCustomerContacts([]);
+            return [];
+        }
+
+        setContactsLoading(true);
+        try {
+            const contactsSnap = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'contacts'));
+            const contacts = contactsSnap.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+            setCustomerContacts(contacts);
+            return contacts;
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to load customer contacts.');
+            return [];
+        } finally {
+            setContactsLoading(false);
+        }
+    }, [customer.id, db, recentlySelectedCompany]);
+
+    useEffect(() => {
+        fetchCustomerContacts();
+    }, [fetchCustomerContacts]);
+
     const populateContactFields = (contact = {}) => {
         setLocationForm((prev) => ({
             ...prev,
@@ -1355,43 +1244,30 @@ const ServiceLocationsTab = ({ customer }) => {
     };
 
     const loadCustomerContacts = async (preferredContact = {}) => {
-        if (!recentlySelectedCompany || !customer.id) return;
+        const contacts = await fetchCustomerContacts();
+        const preferredId = preferredContact?.id;
+        const preferredHasDetails = Boolean(
+            preferredContact?.id ||
+            preferredContact?.name ||
+            preferredContact?.email ||
+            preferredContact?.phoneNumber ||
+            preferredContact?.phone ||
+            preferredContact?.notes
+        );
+        const matchedContact = contacts.find((contact) => contact.id === preferredId);
 
-        setContactsLoading(true);
-        try {
-            const contactsSnap = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'contacts'));
-            const contacts = contactsSnap.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
-            setCustomerContacts(contacts);
-
-            const preferredId = preferredContact?.id;
-            const preferredHasDetails = Boolean(
-                preferredContact?.id ||
-                preferredContact?.name ||
-                preferredContact?.email ||
-                preferredContact?.phoneNumber ||
-                preferredContact?.phone ||
-                preferredContact?.notes
-            );
-            const matchedContact = contacts.find((contact) => contact.id === preferredId);
-
-            if (matchedContact) {
-                setContactMode('existing');
-                setSelectedContactId(matchedContact.id);
-                populateContactFields(matchedContact);
-            } else if (!preferredHasDetails && contacts.length > 0) {
-                setContactMode('existing');
-                setSelectedContactId(contacts[0].id);
-                populateContactFields(contacts[0]);
-            } else {
-                setContactMode('new');
-                setSelectedContactId('');
-                populateContactFields(preferredHasDetails ? preferredContact : getDefaultNewContact());
-            }
-        } catch (error) {
-            console.error(error);
-            toast.error('Failed to load customer contacts.');
-        } finally {
-            setContactsLoading(false);
+        if (matchedContact) {
+            setContactMode('existing');
+            setSelectedContactId(matchedContact.id);
+            populateContactFields(matchedContact);
+        } else if (!preferredHasDetails && contacts.length > 0) {
+            setContactMode('existing');
+            setSelectedContactId(contacts[0].id);
+            populateContactFields(contacts[0]);
+        } else {
+            setContactMode('new');
+            setSelectedContactId('');
+            populateContactFields(preferredHasDetails ? preferredContact : getDefaultNewContact());
         }
     };
 
@@ -1612,6 +1488,51 @@ const ServiceLocationsTab = ({ customer }) => {
         }
     };
 
+    const assignContactToSelectedLocation = async (contact) => {
+        if (!selectedLocation?.id || !recentlySelectedCompany) return;
+        if (!requirePermission("44", "update service locations")) return;
+
+        let normalizedMainContact = normalizeContact(contact);
+        if (!normalizedMainContact.id) {
+            normalizedMainContact = {
+                ...normalizedMainContact,
+                id: "com_cus_con_" + uuidv4(),
+            };
+        }
+
+        setSavingLocation(true);
+        try {
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', selectedLocation.id),
+                {
+                    mainContact: normalizedMainContact,
+                    updatedAt: serverTimestamp(),
+                }
+            );
+            await setDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'contacts', normalizedMainContact.id),
+                normalizedMainContact,
+                { merge: true }
+            );
+            setCustomerContacts((currentContacts) => {
+                const exists = currentContacts.some((currentContact) => currentContact.id === normalizedMainContact.id);
+                return exists
+                    ? currentContacts.map((currentContact) => currentContact.id === normalizedMainContact.id ? normalizedMainContact : currentContact)
+                    : [...currentContacts, normalizedMainContact];
+            });
+            updateSelectedLocationState({
+                ...selectedLocation,
+                mainContact: normalizedMainContact,
+            });
+            toast.success('Main contact updated.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to update main contact.');
+        } finally {
+            setSavingLocation(false);
+        }
+    };
+
     const handleDeleteLocation = async () => {
         if (!selectedLocation?.id || !recentlySelectedCompany) return;
         const confirmed = await appConfirm({
@@ -1723,10 +1644,184 @@ const ServiceLocationsTab = ({ customer }) => {
     };
 
     const selectedLocationPhotos = Array.isArray(selectedLocation?.photoUrls) ? selectedLocation.photoUrls : [];
+    const selectedLocationMainContactId = selectedLocation?.mainContact?.id || '';
+    const selectedLocationContact = normalizeContact(selectedLocation?.mainContact || {});
+    const selectedContactMissingFromAccount = Boolean(
+        selectedLocationContact.id &&
+        !customerContacts.some((contact) => contact.id === selectedLocationContact.id)
+    );
+    const displayedCustomerContacts = selectedContactMissingFromAccount
+        ? [{ ...selectedLocationContact, savedOnlyOnLocation: true }, ...customerContacts]
+        : customerContacts;
+    const getContactAssignedLocations = (contactId) => (
+        contactId
+            ? locations.filter((location) => location.mainContact?.id === contactId)
+            : []
+    );
+
+    const locationPhotoGallery = selectedLocation ? (
+        <InfoCard compact title="Location Photos">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-slate-500">
+                    {selectedLocationPhotos.length > 0
+                        ? `${selectedLocationPhotos.length} saved photo${selectedLocationPhotos.length > 1 ? 's' : ''}`
+                        : 'No location photos uploaded.'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                    <label
+                        htmlFor={`location-photo-upload-${selectedLocation.id}`}
+                        className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                    >
+                        Select Photos
+                        <input
+                            id={`location-photo-upload-${selectedLocation.id}`}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="sr-only"
+                            onChange={handleLocationPhotoSelection}
+                        />
+                    </label>
+                    <button
+                        type="button"
+                        onClick={handleUploadLocationPhotos}
+                        disabled={!locationPhotoFiles.length || uploadingLocationPhotos}
+                        className={[
+                            "rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                            locationPhotoFiles.length && !uploadingLocationPhotos
+                                ? "bg-blue-600 text-white hover:bg-blue-700"
+                                : "cursor-not-allowed bg-slate-100 text-slate-400",
+                        ].join(" ")}
+                    >
+                        {uploadingLocationPhotos ? 'Uploading...' : 'Upload'}
+                    </button>
+                </div>
+            </div>
+            {locationPhotoFiles.length > 0 && (
+                <p className="text-xs font-semibold text-slate-500">
+                    {locationPhotoFiles.length} file{locationPhotoFiles.length > 1 ? 's' : ''} selected
+                </p>
+            )}
+            {selectedLocationPhotos.length > 0 && (
+                <div
+                    className="grid gap-3"
+                    style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))' }}
+                >
+                    {selectedLocationPhotos.map((photo, index) => {
+                        const photoSrc = getServiceLocationPhotoUrl(photo);
+                        const photoAlt = photo?.description || photo?.name || `Location photo ${index + 1}`;
+
+                        return photoSrc ? (
+                            <a
+                                key={`${photoSrc}-${index}`}
+                                href={photoSrc}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="group block overflow-hidden rounded-lg border border-slate-200 bg-slate-100 shadow-sm transition hover:border-blue-200"
+                            >
+                                <img
+                                    src={photoSrc}
+                                    alt={photoAlt}
+                                    className="aspect-[4/3] w-full object-cover transition duration-200 group-hover:scale-105"
+                                />
+                            </a>
+                        ) : null;
+                    })}
+                </div>
+            )}
+        </InfoCard>
+    ) : null;
+
+    const customerContactsPanel = (
+        <InfoCard
+            compact
+            title="Customer Contacts"
+            actions={selectedLocation && (
+                <button
+                    type="button"
+                    onClick={startEditLocation}
+                    disabled={savingLocation}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Manage
+                </button>
+            )}
+        >
+            {contactsLoading ? (
+                <p className="text-sm text-slate-500">Loading contacts...</p>
+            ) : displayedCustomerContacts.length > 0 ? (
+                <div className="space-y-2">
+                    {displayedCustomerContacts.map((contact) => {
+                        const assignedLocations = getContactAssignedLocations(contact.id);
+                        const isMainForSelectedLocation = Boolean(
+                            selectedLocation &&
+                            contact.id &&
+                            selectedLocationMainContactId === contact.id
+                        );
+
+                        return (
+                            <div
+                                key={contact.id || `${contact.name}-${contact.email}`}
+                                className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                            >
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <p className="font-semibold text-slate-900">{contact.name || 'Unnamed Contact'}</p>
+                                            {isMainForSelectedLocation && (
+                                                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                                                    Main here
+                                                </span>
+                                            )}
+                                            {contact.savedOnlyOnLocation && (
+                                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                                    Location only
+                                                </span>
+                                            )}
+                                        </div>
+                                        <p className="mt-1 text-xs text-slate-600">
+                                            {[contact.email, contact.phoneNumber || contact.phone].filter(Boolean).join(' | ') || 'No contact details saved'}
+                                        </p>
+                                        {contact.notes && (
+                                            <p className="mt-2 line-clamp-2 whitespace-pre-wrap text-xs text-slate-500">
+                                                {contact.notes}
+                                            </p>
+                                        )}
+                                        {assignedLocations.length > 0 && (
+                                            <p className="mt-2 text-xs font-medium text-slate-500">
+                                                Assigned to {assignedLocations.map((location) => location.nickName || location.address?.streetAddress || 'Service location').join(', ')}
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    {selectedLocation && !editingLocation && !isMainForSelectedLocation && (
+                                        <button
+                                            type="button"
+                                            onClick={() => assignContactToSelectedLocation(contact)}
+                                            disabled={savingLocation}
+                                            className="inline-flex flex-none items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                        >
+                                            Set Main
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            ) : (
+                <p className="text-sm text-slate-500">No saved customer contacts yet.</p>
+            )}
+        </InfoCard>
+    );
 
     return (
-        <div className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[minmax(440px,560px)_minmax(0,1fr)] lg:items-start lg:gap-5">
-            <div className="space-y-3 sm:space-y-4">
+        <div className="space-y-3 sm:space-y-4">
+            <div
+                className="grid gap-3 sm:gap-4"
+                style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 460px), 1fr))' }}
+            >
+                <div className="space-y-3 sm:space-y-4">
                 <InfoCard
                     title="Service Locations"
                     compact
@@ -2053,84 +2148,19 @@ const ServiceLocationsTab = ({ customer }) => {
                             </div>
                         )}
 
-                        <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-                            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                    Location Photos
-                                </p>
-                                <div className="flex flex-wrap gap-2">
-                                    <label
-                                        htmlFor={`location-photo-upload-${selectedLocation.id}`}
-                                        className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                                    >
-                                        Select Photos
-                                        <input
-                                            id={`location-photo-upload-${selectedLocation.id}`}
-                                            type="file"
-                                            accept="image/*"
-                                            multiple
-                                            className="sr-only"
-                                            onChange={handleLocationPhotoSelection}
-                                        />
-                                    </label>
-                                    <button
-                                        type="button"
-                                        onClick={handleUploadLocationPhotos}
-                                        disabled={!locationPhotoFiles.length || uploadingLocationPhotos}
-                                        className={[
-                                            "rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition",
-                                            locationPhotoFiles.length && !uploadingLocationPhotos
-                                                ? "bg-blue-600 text-white hover:bg-blue-700"
-                                                : "cursor-not-allowed bg-slate-100 text-slate-400",
-                                        ].join(" ")}
-                                    >
-                                        {uploadingLocationPhotos ? 'Uploading...' : 'Upload'}
-                                    </button>
-                                </div>
-                            </div>
-                            {locationPhotoFiles.length > 0 && (
-                                <p className="mb-2 text-xs font-semibold text-slate-500">
-                                    {locationPhotoFiles.length} file{locationPhotoFiles.length > 1 ? 's' : ''} selected
-                                </p>
-                            )}
-                            {selectedLocationPhotos.length > 0 ? (
-                                <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                                    {selectedLocationPhotos.map((photo, index) => {
-                                        const photoSrc = getServiceLocationPhotoUrl(photo);
-                                        const photoAlt = photo?.description || photo?.name || `Location photo ${index + 1}`;
-
-                                        return photoSrc ? (
-                                            <a
-                                                key={`${photoSrc}-${index}`}
-                                                href={photoSrc}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="group block overflow-hidden rounded-lg border border-slate-200 bg-slate-100 shadow-sm transition hover:border-blue-200"
-                                            >
-                                                <img
-                                                    src={photoSrc}
-                                                    alt={photoAlt}
-                                                    className="aspect-square w-full object-cover transition duration-200 group-hover:scale-105"
-                                                />
-                                            </a>
-                                        ) : null;
-                                    })}
-                                </div>
-                            ) : (
-                                <p className="text-sm text-slate-500">No location photos uploaded.</p>
-                            )}
-                        </div>
-
                     </InfoCard>
                 }
+                {customerContactsPanel}
                 {selectedLocation && <RecentServiceHistoryCard location={selectedLocation} />}
 
             </div>
-            <div className="min-w-0 space-y-3 sm:space-y-4">
-                {selectedLocation && <LocationDetails location={selectedLocation} customer={customer} customerId={customer.id} />}
+                <div className="min-w-0 space-y-3 sm:space-y-4">
+                    {selectedLocation && <LocationDetails location={selectedLocation} customer={customer} customerId={customer.id} />}
+                </div>
+
+
             </div>
-
-
+            {locationPhotoGallery}
         </div>
     );
 };
@@ -2230,6 +2260,10 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
     const navigate = useNavigate();
+    const canScheduleTemplateWorkOrders =
+        can(CREATE_JOBS_PERMISSION_ID) ||
+        can(CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID) ||
+        can(SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID);
 
     useEffect(() => {
         const fetchDetails = async () => {
@@ -2829,11 +2863,34 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
     });
 
     const createEquipmentJobFromCard = (eq, jobIntent) => {
-        navigate('/company/jobs/createNew', {
+        const params = new URLSearchParams({
+            customerId,
+            locationId: eq.serviceLocationId || location.id,
+        });
+
+        if (eq.bodyOfWaterId) params.set('bodyOfWaterId', eq.bodyOfWaterId);
+        if (eq.id) params.set('equipmentId', eq.id);
+
+        navigate(`/company/jobs/basic-create?${params.toString()}`, {
             state: {
                 equipmentContext: buildEquipmentContext(eq, jobIntent),
+                customerContext: {
+                    customerId,
+                    customerName: getCustomerName(customer) || eq.customerName || '',
+                    serviceLocationId: eq.serviceLocationId || location.id,
+                    bodyOfWaterId: eq.bodyOfWaterId || '',
+                    equipmentId: eq.id || '',
+                },
+                createdFromCustomerDetail: true,
+                createdFromEquipmentCard: true,
                 jobIntent,
             },
+        });
+    };
+
+    const openEquipmentDetailAction = (eq, equipmentAction) => {
+        navigate(`/company/equipment/detail/${eq.id}`, {
+            state: { equipmentAction },
         });
     };
 
@@ -2850,10 +2907,16 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         });
     };
 
-    return (<div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
-        <div className="lg:col-span-2">
+    return (<div
+        className="grid gap-3 sm:gap-4"
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))' }}
+    >
+        <div className="col-span-full">
             <InfoCard compact title="Schedule Service Stop">
-                <div className="grid gap-2 md:grid-cols-3">
+                <div
+                    className="grid gap-2"
+                    style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' }}
+                >
                     {standaloneServiceStopLinks.map((item) => (
                         <Link
                             key={item.category}
@@ -2902,7 +2965,10 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                     </span>
                                 </div>
 
-                                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                <div
+                                    className="mt-3 grid gap-2"
+                                    style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))' }}
+                                >
                                     <div className="rounded-lg bg-slate-50 px-3 py-2 border border-slate-100">
                                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Material
@@ -3140,6 +3206,28 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                                                         onClick={() => startEquipmentEdit(eq)}
                                                                     />
                                                                     <QuickActionMenuItem
+                                                                        label="Edit Notes"
+                                                                        icon={DocumentTextIcon}
+                                                                        onClick={() => startEquipmentEdit(eq)}
+                                                                    />
+                                                                    <QuickActionMenuItem
+                                                                        label="Update Status"
+                                                                        icon={AdjustmentsHorizontalIcon}
+                                                                        onClick={() => startEquipmentEdit(eq)}
+                                                                    />
+                                                                    <QuickActionMenuItem
+                                                                        label="Record Maintenance"
+                                                                        icon={WrenchScrewdriverIcon}
+                                                                        tone="emerald"
+                                                                        onClick={() => openEquipmentDetailAction(eq, 'recordMaintenance')}
+                                                                    />
+                                                                    <QuickActionMenuItem
+                                                                        label="Record Repair"
+                                                                        icon={WrenchScrewdriverIcon}
+                                                                        tone="amber"
+                                                                        onClick={() => openEquipmentDetailAction(eq, 'recordRepair')}
+                                                                    />
+                                                                    <QuickActionMenuItem
                                                                         label="Move Equipment"
                                                                         icon={ArrowsPointingOutIcon}
                                                                         onClick={() => startEquipmentMove(eq)}
@@ -3154,16 +3242,16 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                                                     onClick={() => createEquipmentRepairRequestFromCard(eq)}
                                                                 />
                                                             )}
-                                                            {can("22") && (
+                                                            {canScheduleTemplateWorkOrders && (
                                                                 <>
                                                                     <QuickActionMenuItem
-                                                                        label="Create Maintenance Job"
+                                                                        label="Schedule Maintenance"
                                                                         icon={BriefcaseIcon}
                                                                         tone="emerald"
                                                                         onClick={() => createEquipmentJobFromCard(eq, 'maintenance')}
                                                                     />
                                                                     <QuickActionMenuItem
-                                                                        label="Create Repair Job"
+                                                                        label="Schedule Repair"
                                                                         icon={BriefcaseIcon}
                                                                         tone="amber"
                                                                         onClick={() => createEquipmentJobFromCard(eq, 'repair')}
@@ -3921,7 +4009,23 @@ const WorkOrdersTab = ({ customer }) => {
     }, [customer.id, recentlySelectedCompany, db]);
 
     return (
-        <InfoCard compact title="Jobs" actions={<Link to={`/company/jobs/createNew/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm">+ Add</Link>}>
+        <InfoCard
+            compact
+            title="Jobs"
+            actions={(
+                <CreateJobFlowLauncher
+                    buttonLabel="+ Add"
+                    buttonClassName="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm"
+                    customerId={customer.id}
+                    contextState={{
+                        customerContext: {
+                            customerId: customer.id,
+                            customerName: getCustomerName(customer),
+                        },
+                    }}
+                />
+            )}
+        >
             {loading ? <ClipLoader size={20} /> : (
                 <ul className="divide-y divide-gray-200">
                     {workOrders.map(order => (
@@ -5111,7 +5215,25 @@ export default function CustomerDetails() {
     const [accessDenied, setAccessDenied] = useState(false);
     const [customerInviteLink, setCustomerInviteLink] = useState('');
     const [creatingInviteLink, setCreatingInviteLink] = useState(false);
+    const [isProfileEditing, setIsProfileEditing] = useState(false);
+    const [profileFormData, setProfileFormData] = useState(null);
+    const [profileNewTag, setProfileNewTag] = useState('');
+    const [savingProfile, setSavingProfile] = useState(false);
     const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
+
+    useEffect(() => {
+        if (!customer) {
+            setProfileFormData(null);
+            setProfileNewTag('');
+            setIsProfileEditing(false);
+            return;
+        }
+
+        if (!isProfileEditing) {
+            setProfileFormData(customer);
+            setProfileNewTag('');
+        }
+    }, [customer, isProfileEditing]);
 
     useEffect(() => {
         setActiveTab(getInitialTab(tab));
@@ -5194,6 +5316,165 @@ export default function CustomerDetails() {
     const handleTabChange = (nextTab) => {
         setActiveTab(nextTab);
         navigate(`/company/customers/details/${customerId}/${nextTab}`);
+    };
+
+    const handleProfileInputChange = (event) => {
+        const { name, value } = event.target;
+        setProfileFormData((prev) => ({
+            ...(prev || customer || {}),
+            [name]: value,
+        }));
+    };
+
+    const handleProfileCheckboxChange = (event) => {
+        const { name, checked } = event.target;
+        setProfileFormData((prev) => ({
+            ...(prev || customer || {}),
+            [name]: checked,
+        }));
+    };
+
+    const handleProfileBillingAddressChange = (event) => {
+        const { name, value } = event.target;
+        setProfileFormData((prev) => {
+            const current = prev || customer || {};
+            return {
+                ...current,
+                billingAddress: {
+                    ...(current.billingAddress || {}),
+                    [name]: value,
+                },
+            };
+        });
+    };
+
+    const handleAddProfileTag = () => {
+        const tagToAdd = normalizeCustomerTag(profileNewTag);
+        if (!tagToAdd) return;
+
+        setProfileFormData((prev) => {
+            const current = prev || customer || {};
+            return {
+                ...current,
+                tags: normalizeCustomerTags([...(current.tags || []), tagToAdd]),
+            };
+        });
+        setProfileNewTag('');
+    };
+
+    const handleRemoveProfileTag = (tagToRemove) => {
+        setProfileFormData((prev) => {
+            const current = prev || customer || {};
+            return {
+                ...current,
+                tags: normalizeCustomerTags(current.tags).filter((tag) => tag !== tagToRemove),
+            };
+        });
+    };
+
+    const startProfileEdit = () => {
+        if (!customer) return;
+        setProfileFormData(customer);
+        setProfileNewTag('');
+        if (activeTab !== 'profile') {
+            handleTabChange('profile');
+        }
+        setIsProfileEditing(true);
+    };
+
+    const cancelProfileEdit = () => {
+        if (savingProfile) return;
+        setProfileFormData(customer);
+        setProfileNewTag('');
+        setIsProfileEditing(false);
+    };
+
+    const handleSaveProfile = async () => {
+        if (!requirePermission("14", "update customer details")) return;
+        if (!recentlySelectedCompany || !customer?.id) return;
+
+        const editableProfile = profileFormData || customer;
+        const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id);
+        const normalizedTags = normalizeCustomerTags(editableProfile.tags);
+        const normalizedCustomer = normalizeCustomerForFirestore({
+            ...editableProfile,
+            tags: normalizedTags,
+        });
+        const payload = {
+            ...editableProfile,
+            ...normalizedCustomer,
+            tags: normalizedTags,
+        };
+        const customerDisplayName = getCustomerDisplayName(payload);
+        payload.customerName = customerDisplayName;
+        payload.name = customerDisplayName;
+        const wasActive = (customer.active ?? customer.isActive ?? true) !== false;
+        const nextActive = (payload.active ?? payload.isActive ?? true) !== false;
+        const shouldCascadeInactive = wasActive && !nextActive;
+        const shouldCascadeActive = !wasActive && nextActive;
+        const shouldSyncCustomerName = !customerDisplayNamesMatch(getCustomerDisplayName(customer), customerDisplayName);
+
+        setSavingProfile(true);
+        try {
+            await updateDoc(customerRef, payload);
+            const inactiveCascadeCounts = shouldCascadeInactive
+                ? await deactivateCustomerRelations()
+                : null;
+            const activeCascadeCounts = shouldCascadeActive
+                ? await reactivateCustomerRelations()
+                : null;
+            const pipelineRowsEnded = shouldCascadeInactive
+                ? await endCustomerPipelineRowsForInactiveCustomer({
+                    companyId: recentlySelectedCompany,
+                    customerId: customer.id,
+                    reason: 'Customer marked inactive from customer profile',
+                    actorId: user?.uid || '',
+                    actorName: `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() || user?.displayName || user?.email || '',
+                })
+                : 0;
+
+            let nameCascadeResult = null;
+            let nameCascadeFailed = false;
+            if (shouldSyncCustomerName) {
+                try {
+                    const syncCustomerNameReferences = httpsCallable(functions, 'syncCustomerNameReferencesForCustomer');
+                    const authPayload = await getCallableAuthPayload();
+                    const result = await syncCustomerNameReferences({
+                        ...authPayload,
+                        auth: authPayload,
+                        companyId: recentlySelectedCompany,
+                        customerId: customer.id,
+                    });
+                    nameCascadeResult = result.data || null;
+                } catch (cascadeError) {
+                    nameCascadeFailed = true;
+                    console.error('Failed to sync customer name references.', cascadeError);
+                }
+            }
+
+            if (nameCascadeFailed) {
+                toast.error('Customer saved, but linked record name sync failed. Background sync may still update those records shortly.');
+            } else {
+                const successMessage = inactiveCascadeCounts
+                    ? `Customer details updated. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`
+                    : activeCascadeCounts
+                        ? `Customer details updated. ${activeCascadeCounts.serviceLocations} service locations, ${activeCascadeCounts.bodiesOfWater} bodies of water, and ${activeCascadeCounts.equipment} equipment records were restored. ${activeCascadeCounts.skippedEquipment} uninstalled equipment record(s) were left inactive.`
+                        : nameCascadeResult?.writeCount > 0
+                            ? `Customer details updated. ${nameCascadeResult.writeCount} linked record(s) were synced to the new name.`
+                            : 'Customer details updated!';
+
+                toast.success(successMessage);
+            }
+            setCustomer((prev) => ({ ...prev, ...payload }));
+            setProfileFormData(payload);
+            setProfileNewTag('');
+            setIsProfileEditing(false);
+        } catch (error) {
+            console.error('Failed to update customer.', error);
+            toast.error('Failed to update customer.');
+        } finally {
+            setSavingProfile(false);
+        }
     };
 
     const uniqueDocsByPath = (docs) => Array.from(
@@ -5479,6 +5760,50 @@ export default function CustomerDetails() {
         customer.billingAddress?.state || customer.billingState,
         customer.billingAddress?.zip || customer.billingZip,
     ].filter(Boolean).join(', ');
+    const profileHeaderActions = can("14") ? (
+        isProfileEditing ? (
+            <div className="flex flex-wrap items-center gap-2">
+                {can("16") && (
+                    <button
+                        onClick={() => setShowDeleteModal(true)}
+                        disabled={savingProfile}
+                        className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        type="button"
+                    >
+                        <TrashIcon className="h-4 w-4" />
+                        Delete
+                    </button>
+                )}
+                <button
+                    onClick={cancelProfileEdit}
+                    disabled={savingProfile}
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                >
+                    <XMarkIcon className="h-4 w-4" />
+                    Cancel
+                </button>
+                <button
+                    onClick={handleSaveProfile}
+                    disabled={savingProfile}
+                    className="inline-flex items-center gap-2 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                >
+                    <CheckIcon className="h-4 w-4" />
+                    {savingProfile ? 'Saving...' : 'Save'}
+                </button>
+            </div>
+        ) : (
+            <button
+                onClick={startProfileEdit}
+                className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                type="button"
+            >
+                <PencilSquareIcon className="h-4 w-4" />
+                Edit
+            </button>
+        )
+    ) : null;
 
     const ModalShell = ({ title, children, onClose, footer }) => (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
@@ -5534,6 +5859,7 @@ export default function CustomerDetails() {
                         </div>
 
                         <div className="flex flex-wrap gap-2">
+                            {profileHeaderActions}
                             <ShareItemButton
                                 type="customer"
                                 recordId={customerId}
@@ -5586,7 +5912,7 @@ export default function CustomerDetails() {
                     </div>
                 </section>
 
-                <section className="grid gap-4 lg:grid-cols-[450px_minmax(0,1fr)] lg:gap-6">
+                <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] xl:gap-6">
                     <aside className="space-y-4">
                         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
                             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
@@ -5680,10 +6006,15 @@ export default function CustomerDetails() {
                         {activeTab === 'profile' && (
                             <ProfileTab
                                 customer={customer}
-                                onCustomerUpdate={(updates) => setCustomer((prev) => ({ ...prev, ...updates }))}
-                                onDeleteCustomer={() => setShowDeleteModal(true)}
-                                onCustomerInactiveCascade={deactivateCustomerRelations}
-                                onCustomerActiveCascade={reactivateCustomerRelations}
+                                isEditing={isProfileEditing}
+                                formData={profileFormData || customer}
+                                newTag={profileNewTag}
+                                onInputChange={handleProfileInputChange}
+                                onCheckboxChange={handleProfileCheckboxChange}
+                                onBillingAddressChange={handleProfileBillingAddressChange}
+                                onNewTagChange={setProfileNewTag}
+                                onAddTag={handleAddProfileTag}
+                                onRemoveTag={handleRemoveProfileTag}
                             />
                         )}
                         {activeTab === 'locations' && <ServiceLocationsTab customer={customer} />}

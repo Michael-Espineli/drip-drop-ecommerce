@@ -26,6 +26,13 @@ describe("jobStatusFilters", () => {
         billingStatus: "Accepted",
       })).toBe(false);
     });
+
+    it("does not count canceled jobs with draft billing as draft operations", () => {
+      expect(isDraftOperationJob({
+        operationStatus: "Canceled",
+        billingStatus: "Draft",
+      })).toBe(false);
+    });
   });
 
   it("does not treat finished paid jobs as outstanding", () => {
@@ -39,6 +46,13 @@ describe("jobStatusFilters", () => {
     expect(isFinishedOutstandingJob({
       operationStatus: "Finished",
       billingStatus: "Customer Resolved",
+    })).toBe(false);
+  });
+
+  it("does not treat canceled jobs as outstanding", () => {
+    expect(isFinishedOutstandingJob({
+      operationStatus: "Finished",
+      billingStatus: "Canceled",
     })).toBe(false);
   });
 
@@ -60,6 +74,13 @@ describe("jobStatusFilters", () => {
     it("does not count accepted jobs waiting for parts", () => {
       expect(isAcceptedNotScheduledJob({
         operationStatus: "Waiting for Parts",
+        billingStatus: "Accepted",
+      })).toBe(false);
+    });
+
+    it("does not count canceled jobs even when billing is accepted", () => {
+      expect(isAcceptedNotScheduledJob({
+        operationStatus: "Canceled",
         billingStatus: "Accepted",
       })).toBe(false);
     });

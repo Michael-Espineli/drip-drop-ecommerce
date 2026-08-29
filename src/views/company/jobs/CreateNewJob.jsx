@@ -33,8 +33,8 @@ import {
 } from "../../../utils/models/SuggestedWork";
 import {
     DEFAULT_ISSUE_PRIORITY,
-    DEFAULT_JOB_PLAN_TIER,
     ISSUE_PRIORITY_OPTIONS,
+    JOB_PLAN_TIER,
     JOB_PLAN_STATUS,
     JOB_PLAN_TIER_OPTIONS,
     getIssuePriorityLabel,
@@ -50,7 +50,11 @@ import {
 } from "../../../utils/models/Sales";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
 import { itemPhotoFieldsFromSource } from "../../../utils/itemPhotos";
-import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+    filterCompanyUserAdminOptions,
+    getCompanyUserDisplayName,
+    sortCompanyUsersByName,
+} from "../../../utils/companyUsers";
 import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
 import {
     EQUIPMENT_DATABASE_CATEGORY,
@@ -154,6 +158,8 @@ const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriorit
     DEFAULT_ISSUE_PRIORITY
 );
 
+const DEFAULT_STARTER_PLAN_TIER = JOB_PLAN_TIER.MINIMUM_REPAIR;
+
 const laborLineIdValue = (value) => {
     if (!value) return "";
     if (typeof value === "string") return value;
@@ -180,6 +186,14 @@ const getLaborLineTaskIds = (line = {}) => laborLineIdArray(
         : line.taskIds?.length
             ? line.taskIds
             : line.laborLineTaskIds
+);
+
+const getLaborLinePlannedStopIds = (line = {}) => laborLineIdArray(
+    line.plannedServiceStopTemplateIds?.length
+        ? line.plannedServiceStopTemplateIds
+        : line.plannedServiceStopIds?.length
+            ? line.plannedServiceStopIds
+            : line.laborLinePlannedServiceStopIds
 );
 
 const laborLineQuantityNumber = (value) => {
@@ -236,9 +250,13 @@ const CreateNewJob = () => {
         repairRequest?.sourcePath ||
         "company";
     const equipmentContext = location.state?.equipmentContext || null;
+    const customerContext = location.state?.customerContext || null;
     const leadContext = location.state?.leadContext || null;
     const leadSourcePath = location.state?.leadSourcePath || (leadContext?.id ? "homeownerServiceRequests" : "");
     const jobIntent = location.state?.jobIntent || equipmentContext?.jobIntent || "";
+    const createdFromCustomerDetail = Boolean(location.state?.createdFromCustomerDetail);
+    const createdFromEquipmentCard = Boolean(location.state?.createdFromEquipmentCard);
+    const createdFromEquipmentDetail = Boolean(location.state?.createdFromEquipmentDetail);
     const startingTemplateFromState =
         location.state?.startingTemplate ||
         location.state?.jobTemplate ||
@@ -289,7 +307,7 @@ const CreateNewJob = () => {
     const [issuePriorityLevel, setIssuePriorityLevel] = useState(
         normalizeIssuePriority(suggestedWork?.priorityLevel || suggestedWork?.solutionTier || DEFAULT_ISSUE_PRIORITY)
     );
-    const [starterPlanTier, setStarterPlanTier] = useState(DEFAULT_JOB_PLAN_TIER);
+    const [starterPlanTier, setStarterPlanTier] = useState(DEFAULT_STARTER_PLAN_TIER);
 
     const [taskList, setTaskList] = useState([]);
     const [plannedServiceStops, setPlannedServiceStops] = useState([]);
@@ -661,6 +679,8 @@ const CreateNewJob = () => {
             id: `comp_job_plan_stop_${uuidv4()}`,
             companyId: recentlySelectedCompany,
             jobId,
+            sourceTemplateId: stop.sourceTemplateId || selectedTemplate?.id || "",
+            sourceTemplatePlannedStopId: stop.sourceTemplatePlannedStopId || stop.sourcePlannedStopId || stop.id || "",
 
             name: stop.name || stop.serviceStopTypeName || "Planned Stop",
             description: stop.description || "",
@@ -681,6 +701,9 @@ const CreateNewJob = () => {
                     ? Number(stop.plannedLaborCostCents)
                     : null,
             plannedLaborNotes: stop.plannedLaborNotes || "",
+            equipmentId: stop.equipmentId || "",
+            serviceLocationId: stop.serviceLocationId || "",
+            bodyOfWaterId: stop.bodyOfWaterId || "",
 
             createdAt: Timestamp.fromDate(new Date()),
             createdByUserId: createdByUserId || "",
@@ -743,7 +766,7 @@ const CreateNewJob = () => {
                     billingLaborPriceCents: amount,
                     internalLaborCostCents: Number(line.internalCostCents || 0),
                     taskIds: line.taskIds || [],
-                    plannedServiceStopIds: [],
+                    plannedServiceStopIds: line.plannedServiceStopIds || [],
                     taxable: Boolean(line.taxable),
                     stripeConnectedAccountId: line.stripeConnectedAccountId || "",
                     stripeProductId: line.stripeProductId || "",
@@ -1068,21 +1091,28 @@ const CreateNewJob = () => {
                     getDocs(query(collection(db, "companies", recentlySelectedCompany, "jobTemplates"))),
                 ]);
 
-                const admins = sortCompanyUsersByName(adminsSnap.docs.map((docSnap) => {
+                const companyUserOptions = sortCompanyUsersByName(adminsSnap.docs.map((docSnap) => {
                     const data = docSnap.data();
                     const name = getCompanyUserDisplayName(data, "Admin");
+                    const id = data.id || docSnap.id;
+                    const userId = data.userId || data.uid || id;
 
                     return {
                         ...data,
-                        id: data.id || docSnap.id,
-                        userId: data.userId || data.id || docSnap.id,
+                        id,
+                        userId,
                         userName: name,
                         label: `${name}${data.roleName ? ` — ${data.roleName}` : ""}`,
-                        value: data.id || docSnap.id,
+                        value: userId,
                     };
                 }));
+                const admins = filterCompanyUserAdminOptions(companyUserOptions);
 
                 setAdminList(admins);
+                setSelectedAdmin((currentAdmin) => {
+                    const currentAdminId = currentAdmin?.userId || currentAdmin?.id || "";
+                    return admins.find((admin) => admin.userId === currentAdminId || admin.id === currentAdminId) || admins[0] || null;
+                });
 
                 const customers = customersSnap.docs.map((docSnap) => {
                     const data = docSnap.data();
@@ -1247,14 +1277,20 @@ const CreateNewJob = () => {
     useEffect(() => {
         if (!customerList.length) return;
 
-        const initialCustomerId = customerIdParam || repairRequest?.customerId || suggestedWork?.customerId || equipmentContext?.customerId;
+        const initialCustomerId =
+            customerIdParam ||
+            customerContext?.customerId ||
+            customerContext?.id ||
+            repairRequest?.customerId ||
+            suggestedWork?.customerId ||
+            equipmentContext?.customerId;
         if (!initialCustomerId) return;
 
         const matchedCustomer = customerList.find((customer) => customer.id === initialCustomerId);
         if (matchedCustomer) {
             setSelectedCustomer(matchedCustomer);
         }
-    }, [customerList, customerIdParam, repairRequest, suggestedWork, equipmentContext]);
+    }, [customerContext, customerList, customerIdParam, repairRequest, suggestedWork, equipmentContext]);
 
     useEffect(() => {
         if (repairRequest?.description) {
@@ -1325,6 +1361,8 @@ const CreateNewJob = () => {
                     repairRequest?.locationId ||
                     repairRequest?.serviceLocationId ||
                     suggestedWork?.serviceLocationId ||
+                    customerContext?.serviceLocationId ||
+                    customerContext?.locationId ||
                     equipmentContext?.serviceLocationId;
 
                 if (initialLocationId) {
@@ -1344,7 +1382,7 @@ const CreateNewJob = () => {
         };
 
         fetchServiceLocations();
-    }, [selectedCustomer, recentlySelectedCompany, locationIdParam, repairRequest, suggestedWork, equipmentContext]);
+    }, [selectedCustomer, recentlySelectedCompany, locationIdParam, repairRequest, suggestedWork, customerContext, equipmentContext]);
 
     useEffect(() => {
         if (!selectedServiceLocation || !recentlySelectedCompany) {
@@ -1401,13 +1439,21 @@ const CreateNewJob = () => {
                 setBodyOfWaterList(bodies);
                 setEquipmentList(equipment);
 
-                const initialBodyOfWaterId = repairRequest?.bodyOfWaterId || suggestedWork?.bodyOfWaterId || equipmentContext?.bodyOfWaterId;
+                const initialBodyOfWaterId =
+                    customerContext?.bodyOfWaterId ||
+                    repairRequest?.bodyOfWaterId ||
+                    suggestedWork?.bodyOfWaterId ||
+                    equipmentContext?.bodyOfWaterId;
                 if (initialBodyOfWaterId) {
                     const matchedBody = bodies.find((item) => item.id === initialBodyOfWaterId);
                     if (matchedBody) setSelectedBodyOfWater(matchedBody);
                 }
 
-                const initialEquipmentId = repairRequest?.equipmentId || suggestedWork?.equipmentId || equipmentContext?.equipmentId;
+                const initialEquipmentId =
+                    customerContext?.equipmentId ||
+                    repairRequest?.equipmentId ||
+                    suggestedWork?.equipmentId ||
+                    equipmentContext?.equipmentId;
                 if (initialEquipmentId) {
                     const matchedEquipment = equipment.find((item) => item.id === initialEquipmentId);
                     if (matchedEquipment) setSelectedEquipment(matchedEquipment);
@@ -1418,7 +1464,7 @@ const CreateNewJob = () => {
         };
 
         fetchLocationDetails();
-    }, [selectedServiceLocation, recentlySelectedCompany, repairRequest, suggestedWork, equipmentContext]);
+    }, [selectedServiceLocation, recentlySelectedCompany, customerContext, repairRequest, suggestedWork, equipmentContext]);
 
     useEffect(() => {
         if (!selectedEquipment?.bodyOfWaterId || !bodyOfWaterList.length) return;
@@ -1512,14 +1558,15 @@ const CreateNewJob = () => {
                 templateTasks.map((task, index) => [task.id, copiedTasks[index].id])
             );
 
-            const copiedStops = plannedStopsSnap.docs.map((docSnap) =>
-                normalizePlannedStopForJob(
-                    {
-                        ...docSnap.data(),
-                        id: docSnap.data().id || docSnap.id,
-                    },
-                    taskIdMap
-                )
+            const templatePlannedStops = plannedStopsSnap.docs.map((docSnap) => ({
+                ...docSnap.data(),
+                id: docSnap.data().id || docSnap.id,
+            }));
+            const copiedStops = templatePlannedStops.map((plannedStop) =>
+                normalizePlannedStopForJob(plannedStop, taskIdMap)
+            );
+            const plannedStopIdMap = Object.fromEntries(
+                templatePlannedStops.map((plannedStop, index) => [plannedStop.id, copiedStops[index]?.id])
             );
             const copiedLaborLines = laborLinesSnap.docs
                 .map((docSnap) => ({
@@ -1529,7 +1576,9 @@ const CreateNewJob = () => {
                 .map((line, index) => {
                     const quantity = laborLineQuantityNumber(line.quantity || line.defaultQuantity || 1);
                     const sourceTaskIds = getLaborLineTaskIds(line);
+                    const sourcePlannedStopIds = getLaborLinePlannedStopIds(line);
                     const taskIds = sourceTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean);
+                    const plannedServiceStopIds = sourcePlannedStopIds.map((stopId) => plannedStopIdMap[stopId]).filter(Boolean);
                     const catalogItemId = laborLineCatalogItemId(line);
                     const laborLineId = `comp_job_labor_line_${uuidv4()}`;
 
@@ -1549,10 +1598,10 @@ const CreateNewJob = () => {
                         unitCostCents: laborLineInternalCostCents(line),
                         taskIds,
                         laborLineTaskIds: taskIds,
-                        plannedServiceStopIds: [],
-                        laborLinePlannedServiceStopIds: [],
+                        plannedServiceStopIds,
+                        laborLinePlannedServiceStopIds: plannedServiceStopIds,
                         sourceTemplateTaskIds: sourceTaskIds,
-                        sourceTemplatePlannedServiceStopIds: [],
+                        sourceTemplatePlannedServiceStopIds: sourcePlannedStopIds,
                         salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
                         billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
                         sourceType: line.sourceType || SalesCatalogSourceType.manual,
@@ -1874,6 +1923,9 @@ const CreateNewJob = () => {
                 createdByUserId: plannedStop.createdByUserId || createdByUserId || "",
                 sourcePlanId: starterPlanId,
                 sourceSolutionId: starterPlanId,
+                serviceLocationId: plannedStop.serviceLocationId || selectedServiceLocation.id || "",
+                bodyOfWaterId: plannedStop.bodyOfWaterId || resolvedBodyOfWaterId,
+                equipmentId: plannedStop.equipmentId || selectedEquipment?.id || "",
             }));
             const normalizedTasks = taskList.map((task) =>
                 normalizeJobTask(task, {
@@ -1920,8 +1972,11 @@ const CreateNewJob = () => {
                     unitCostCents: laborLineInternalCostCents(line),
                     taskIds: getLaborLineTaskIds(line),
                     laborLineTaskIds: getLaborLineTaskIds(line),
-                    plannedServiceStopIds: [],
-                    laborLinePlannedServiceStopIds: [],
+                    plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+                    laborLinePlannedServiceStopIds: getLaborLinePlannedStopIds(line),
+                    equipmentId: line.equipmentId || selectedEquipment?.id || "",
+                    serviceLocationId: line.serviceLocationId || selectedServiceLocation.id || "",
+                    bodyOfWaterId: line.bodyOfWaterId || resolvedBodyOfWaterId,
                     salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
                     billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
                     sourceType: line.sourceType || SalesCatalogSourceType.manual,
@@ -2036,7 +2091,15 @@ const CreateNewJob = () => {
                 bodyOfWaterId: resolvedBodyOfWaterId,
                 bodyOfWaterName: selectedBodyOfWater?.label || selectedBodyOfWater?.name || selectedEquipment?.bodyOfWaterName || "",
                 equipmentId: selectedEquipment?.id || "",
+                equipmentIds: selectedEquipment?.id ? [selectedEquipment.id] : [],
+                companyEquipmentIds: selectedEquipment?.id ? [selectedEquipment.id] : [],
                 equipmentName: selectedEquipment?.label || "",
+                equipmentContext: equipmentContext || null,
+                customerContext: customerContext || null,
+                jobIntent,
+                createdFromCustomerDetail,
+                createdFromEquipmentCard,
+                createdFromEquipmentDetail,
                 repairRequestId: repairRequest?.id || "",
                 repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
                 suggestedWorkId: suggestedWork?.id || "",
@@ -2200,6 +2263,12 @@ const CreateNewJob = () => {
                         suggestedWorkId: suggestedWork?.id || "",
                         leadId: leadContext?.id || "",
                         leadSourcePath: leadContext?.id ? leadSourcePath : "",
+                        equipmentId: selectedEquipment?.id || "",
+                        bodyOfWaterId: resolvedBodyOfWaterId,
+                        jobIntent,
+                        createdFromCustomerDetail,
+                        createdFromEquipmentCard,
+                        createdFromEquipmentDetail,
                     },
                     severity: "success",
                     actorUserId: createdByUserId || "",

@@ -486,7 +486,7 @@ const RoleDetails = () => {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
           <aside className="space-y-4">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-semibold uppercase text-slate-500">Role Details</h2>
+              <SectionHeader title="Role Details" />
 
               {editMode ? (
                 <div className="mt-4 space-y-4">
@@ -590,6 +590,13 @@ const Metric = ({ label, value }) => (
   </div>
 );
 
+const SectionHeader = ({ title, icon: Icon }) => (
+  <div className="flex items-center gap-2 rounded-md bg-slate-800 px-3 py-2 text-white">
+    {Icon ? <Icon className="h-4 w-4 shrink-0 text-slate-200" /> : null}
+    <h2 className="text-sm font-semibold uppercase text-white">{title}</h2>
+  </div>
+);
+
 const PermissionCoverageSection = ({ selectedIds }) => {
   const totalPermissions = companyPermissionCategoryGroups.reduce(
     (total, group) => total + group.permissions.length,
@@ -598,10 +605,7 @@ const PermissionCoverageSection = ({ selectedIds }) => {
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-2">
-        <Squares2X2Icon className="h-4 w-4 text-slate-500" />
-        <h2 className="text-sm font-semibold uppercase text-slate-500">Permission Coverage</h2>
-      </div>
+      <SectionHeader title="Permission Coverage" icon={Squares2X2Icon} />
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <Metric label="Selected" value={selectedIds.length} />
@@ -657,9 +661,9 @@ const CustomerTagAccessSection = ({
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold uppercase text-slate-500">Customer Tag Visibility</h2>
-          <p className="mt-1 text-sm text-slate-500">
+        <div className="min-w-0 flex-1">
+          <SectionHeader title="Customer Tag Visibility" />
+          <p className="mt-3 text-sm text-slate-500">
             {normalizedSelectedTags.length
               ? "This role can only view customers with at least one selected tag."
               : "No tag restriction. This role can view all customers allowed by its customer permission."}
@@ -754,8 +758,8 @@ const DashboardScopeAccessSection = ({
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div>
-        <h2 className="text-sm font-semibold uppercase text-slate-500">Dashboard Views</h2>
-        <p className="mt-1 text-sm text-slate-500">
+        <SectionHeader title="Dashboard Views" />
+        <p className="mt-3 text-sm text-slate-500">
           Choose which dashboard scopes this role can open.
         </p>
       </div>
@@ -821,18 +825,18 @@ const PermissionMatrixPanel = ({
   const rowsByCategory = getAllPermissionRowsByCategory();
 
   return (
-    <main className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
+    <main className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-700 bg-slate-800 px-5 py-4 text-white sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-slate-950">Permissions Matrix</h2>
-          <p className="mt-1 text-sm text-slate-500">
+          <h2 className="text-lg font-semibold text-white">Permissions Matrix</h2>
+          <p className="mt-1 text-sm text-slate-200">
             {editMode
               ? "Turn on an entire category or tune each access level across the row."
               : "Scan what this role can view, create, update, delete, and do through special workflows."}
           </p>
         </div>
 
-        <div className="inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-600">
+        <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-sm font-semibold text-slate-100">
           <SwatchIcon className="h-4 w-4" />
           {selectedIds.length} selected
         </div>
@@ -898,12 +902,12 @@ const PermissionMatrixCategoryDivider = ({
   const selectedCount = getCategoryPermissionCount(categoryGroup, selectedIds);
 
   return (
-    <tr id={categoryAnchorId(categoryGroup.category)} className="scroll-mt-6 bg-slate-50">
-      <th colSpan={permissionActionColumns.length + 1} scope="rowgroup" className="px-5 py-4">
+    <tr id={categoryAnchorId(categoryGroup.category)} className="scroll-mt-6 bg-slate-800">
+      <th colSpan={permissionActionColumns.length + 1} scope="rowgroup" className="px-5 py-4 text-white">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="text-base font-semibold text-slate-950">{categoryGroup.category}</h3>
-            <p className="mt-1 text-sm font-normal text-slate-500">
+            <h3 className="text-base font-semibold text-white">{categoryGroup.category}</h3>
+            <p className="mt-1 text-sm font-normal text-slate-200">
               {selectedCount} of {categoryGroup.permissions.length} permissions enabled
             </p>
           </div>
@@ -914,8 +918,8 @@ const PermissionMatrixCategoryDivider = ({
               onClick={() => onToggleCategory(categoryGroup.category)}
               className={`inline-flex w-fit items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
                 state === "selected"
-                  ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
-                  : "bg-slate-900 text-white hover:bg-slate-800"
+                  ? "border border-white/25 bg-slate-700 text-white hover:bg-slate-600"
+                  : "bg-white text-slate-900 hover:bg-slate-100"
               }`}
             >
               {state === "selected" ? <XMarkIcon className="h-4 w-4" /> : <CheckIcon className="h-4 w-4" />}

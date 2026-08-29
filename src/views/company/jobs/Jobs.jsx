@@ -79,7 +79,8 @@ const OPERATION_STATUS_OPTIONS = [
     "Scheduled",
     "Waiting for Parts",
     "In Progress",
-    "Finished"
+    "Finished",
+    JOB_OPERATION_STATUS.canceled
 ];
 
 const BILLING_STATUS_OPTIONS = [
@@ -91,6 +92,7 @@ const BILLING_STATUS_OPTIONS = [
     "Paid",
     "Comped",
     JOB_BILLING_STATUS.customerResolved,
+    JOB_BILLING_STATUS.canceled,
     "Expired",
     "Rejected"
 ];
@@ -265,6 +267,24 @@ const buildCompanyUserFilterOption = (docSnap) => {
         value: primaryId,
         alternateIds: Array.from(adminFilterIdSet(alternateIds)),
     };
+};
+
+const findCompanyUserOptionById = (options = [], value) => {
+    const normalizedValue = normalizeAdminFilterId(value);
+    if (!normalizedValue) return null;
+
+    return options.find((option) => {
+        const ids = adminFilterIdSet([
+            option.value,
+            option.id,
+            option.userId,
+            option.companyUserId,
+            option.companyUserDocId,
+            ...(option.alternateIds || []),
+        ]);
+
+        return ids.has(normalizedValue);
+    }) || null;
 };
 
 const getJobProfitCents = (job = {}) => Number(job.rate || 0) - Number(job.laborCost || 0);
@@ -477,6 +497,8 @@ const Jobs = () => {
     const [selectedJobIds, setSelectedJobIds] = useState(() => new Set());
     const [bulkOperationStatus, setBulkOperationStatus] = useState("");
     const [bulkBillingStatus, setBulkBillingStatus] = useState("");
+    const [bulkPriorityLevel, setBulkPriorityLevel] = useState("");
+    const [bulkAdminId, setBulkAdminId] = useState("");
     const [bulkUpdating, setBulkUpdating] = useState(false);
     const [customFiltersActive, setCustomFiltersActive] = useState(false);
     const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
@@ -770,6 +792,18 @@ const Jobs = () => {
         [visibleJobs, selectedJobIds]
     );
 
+    const selectedBulkAdmin = useMemo(
+        () => findCompanyUserOptionById(companyUserOptions, bulkAdminId),
+        [bulkAdminId, companyUserOptions]
+    );
+
+    const hasBulkJobUpdates = Boolean(
+        bulkOperationStatus ||
+        bulkBillingStatus ||
+        bulkPriorityLevel ||
+        bulkAdminId
+    );
+
     const allVisibleJobsSelected = visibleJobs.length > 0 &&
         visibleJobs.every((job) => selectedJobIds.has(job.id));
 
@@ -807,6 +841,8 @@ const Jobs = () => {
         setSelectedJobIds(new Set());
         setBulkOperationStatus("");
         setBulkBillingStatus("");
+        setBulkPriorityLevel("");
+        setBulkAdminId("");
     }, []);
 
     const fetchAllJobs = useCallback(async () => {
@@ -1046,7 +1082,7 @@ const Jobs = () => {
         setSortBy(`${nextSortKey}-${DEFAULT_SORT_DIRECTIONS[nextSortKey] || "asc"}`);
     };
 
-    const handleApplyBatchStatusUpdate = async () => {
+    const handleApplyBatchJobUpdate = async () => {
         if (!requirePermission("24", "update jobs")) return;
 
         if (selectedJobs.length === 0) {
@@ -1059,19 +1095,26 @@ const Jobs = () => {
             return;
         }
 
-        if (!bulkOperationStatus && !bulkBillingStatus) {
-            toast.error("Choose at least one status to update.");
+        if (!hasBulkJobUpdates) {
+            toast.error("Choose at least one field to update.");
+            return;
+        }
+
+        if (bulkAdminId && !selectedBulkAdmin) {
+            toast.error("Choose a valid admin before updating jobs.");
             return;
         }
 
         const selectedLabels = [
             bulkOperationStatus ? `operation status to ${bulkOperationStatus}` : null,
             bulkBillingStatus ? `billing status to ${bulkBillingStatus}` : null,
+            bulkPriorityLevel ? `priority to ${getIssuePriorityLabel(bulkPriorityLevel)}` : null,
+            selectedBulkAdmin ? `admin to ${selectedBulkAdmin.name || selectedBulkAdmin.userName || "Admin"}` : null,
         ].filter(Boolean);
 
         const ok = await appConfirm({
             title: "Update Selected Jobs",
-            message: `Update ${selectedJobs.length} selected job${selectedJobs.length === 1 ? "" : "s"}: ${selectedLabels.join(" and ")}?`,
+            message: `Update ${selectedJobs.length} selected job${selectedJobs.length === 1 ? "" : "s"}: ${selectedLabels.join(", ")}?`,
             confirmLabel: "Update Jobs",
         });
 
@@ -1096,6 +1139,23 @@ const Jobs = () => {
                 updates.billingStatus = bulkBillingStatus;
             }
 
+            if (bulkPriorityLevel) {
+                const nextPriorityLevel = normalizeIssuePriority(bulkPriorityLevel);
+                const nextPriorityLabel = getIssuePriorityLabel(nextPriorityLevel);
+
+                updates.issuePriorityLevel = nextPriorityLevel;
+                updates.issuePriorityLabel = nextPriorityLabel;
+                updates.priorityLevel = nextPriorityLevel;
+                updates.priorityLabel = nextPriorityLabel;
+                updates.solutionTier = nextPriorityLevel;
+                updates.solutionTierLabel = nextPriorityLabel;
+            }
+
+            if (bulkAdminId && selectedBulkAdmin) {
+                updates.adminId = selectedBulkAdmin.id || selectedBulkAdmin.userId || selectedBulkAdmin.value || bulkAdminId;
+                updates.adminName = selectedBulkAdmin.name || selectedBulkAdmin.userName || "Admin";
+            }
+
             const writeChunkSize = 450;
 
             for (let index = 0; index < selectedJobs.length; index += writeChunkSize) {
@@ -1116,7 +1176,7 @@ const Jobs = () => {
             await Promise.all([fetchJobs(), fetchAllJobs()]);
             toast.success("Selected jobs updated.", { id: toastId });
         } catch (error) {
-            console.error("Error applying batch job status update:", error);
+            console.error("Error applying batch job update:", error);
             toast.error(error?.message || "Failed to update selected jobs.", { id: toastId });
         } finally {
             setBulkUpdating(false);
@@ -1180,6 +1240,7 @@ const Jobs = () => {
                 return "bg-blue-50 text-blue-700";
             case "Waiting for Parts":
                 return "bg-violet-50 text-violet-700";
+            case JOB_BILLING_STATUS.canceled:
             case "Expired":
                 return "bg-slate-100 text-slate-700";
             default:
@@ -1860,7 +1921,7 @@ const Jobs = () => {
                                     </p>
                                 </div>
 
-                                <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 xl:max-w-2xl">
+                                <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:max-w-5xl">
                                     <label className="block">
                                         <span className="text-xs font-bold uppercase tracking-wide text-blue-900">
                                             Operation Status
@@ -1898,13 +1959,58 @@ const Jobs = () => {
                                             ))}
                                         </select>
                                     </label>
+
+                                    <label className="block">
+                                        <span className="text-xs font-bold uppercase tracking-wide text-blue-900">
+                                            Priority
+                                        </span>
+                                        <select
+                                            value={bulkPriorityLevel}
+                                            onChange={(event) => setBulkPriorityLevel(event.target.value)}
+                                            disabled={bulkUpdating}
+                                            className="mt-1 w-full rounded-md border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <option value="">Leave unchanged</option>
+                                            {ISSUE_PRIORITY_OPTIONS.map((option) => (
+                                                <option key={option.value} value={option.value}>
+                                                    {option.value} - {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    <label className="block">
+                                        <span className="text-xs font-bold uppercase tracking-wide text-blue-900">
+                                            Admin
+                                        </span>
+                                        <select
+                                            value={bulkAdminId}
+                                            onChange={(event) => setBulkAdminId(event.target.value)}
+                                            disabled={bulkUpdating || companyUserOptions.length === 0}
+                                            className="mt-1 w-full rounded-md border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <option value="">Leave unchanged</option>
+                                            {companyUserOptions.length === 0 ? (
+                                                <option value="__no_admins__" disabled>No admins available</option>
+                                            ) : (
+                                                companyUserOptions.map((adminOption) => (
+                                                    <option
+                                                        key={`${adminOption.value}-${adminOption.companyUserId || adminOption.id}`}
+                                                        value={adminOption.value}
+                                                    >
+                                                        {adminOption.label}
+                                                    </option>
+                                                ))
+                                            )}
+                                        </select>
+                                    </label>
                                 </div>
 
                                 <div className="flex flex-col gap-2 sm:flex-row xl:flex-none">
                                     <button
                                         type="button"
-                                        onClick={handleApplyBatchStatusUpdate}
-                                        disabled={bulkUpdating || (!bulkOperationStatus && !bulkBillingStatus)}
+                                        onClick={handleApplyBatchJobUpdate}
+                                        disabled={bulkUpdating || !hasBulkJobUpdates}
                                         className={getOutlinedButtonClass({ tone: "blue", className: "py-2.5 font-bold" })}
                                     >
                                         {bulkUpdating ? "Updating..." : "Update Selected"}

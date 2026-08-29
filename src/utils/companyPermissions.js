@@ -18,6 +18,11 @@ export const CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID = "27";
 export const CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID = "31";
 export const FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID = "72";
 export const FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID = "74";
+export const SERVICE_AGREEMENTS_PERMISSION_ID = "430";
+export const CREATE_SERVICE_AGREEMENTS_PERMISSION_ID = "432";
+export const UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID = "434";
+export const DELETE_SERVICE_AGREEMENTS_PERMISSION_ID = "436";
+export const SEND_SERVICE_AGREEMENTS_PERMISSION_ID = "438";
 export const FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID = "627";
 export const FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID = "628";
 export const BASIC_WORK_ORDER_PERMISSION_IDS = [
@@ -31,6 +36,7 @@ const webImplementedPermissionIds = new Set([
   "0", "10", "12", "14", "16", JOBS_PERMISSION_ID, CREATE_JOBS_PERMISSION_ID, SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID, UPDATE_JOBS_PERMISSION_ID, "26", CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID, EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID, CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "30", CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "32", "34", "36",
   "40", "42", "44", "50", "52", "54", "60", "62", "64", "66", FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID, FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID,
   "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID, OFFERED_WORK_PERMISSION_ID, CREATE_OFFERED_WORK_PERMISSION_ID, UPDATE_OFFERED_WORK_PERMISSION_ID, SPLIT_OFFERED_WORK_PERMISSION_ID, INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, APPROVE_OFFERED_WORK_PERMISSION_ID, VIEW_ALL_OFFERED_WORK_PERMISSION_ID, ACCEPT_OFFERED_WORK_PERMISSION_ID, "400", "420",
+  SERVICE_AGREEMENTS_PERMISSION_ID, CREATE_SERVICE_AGREEMENTS_PERMISSION_ID, UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID, DELETE_SERVICE_AGREEMENTS_PERMISSION_ID, SEND_SERVICE_AGREEMENTS_PERMISSION_ID,
   "600", "610", "612", "614", "620", "622", FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID, FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID, "630", "632", "634", "800", "810", "820", "822", "824", "826", "830",
   "840", "850", "852", "854", "856", "860", "864", "870", "880", "882", "884", "886", "890", "900", "910"
 ]);
@@ -111,6 +117,11 @@ const permissionCatalog = [
   { id: "414", name: "Update Finished Jobs", description: "", category: "Finance", ios: false, web: false },
   { id: "416", name: "Delete Finished Jobs", description: "", category: "Finance", ios: false, web: false },
   { id: "420", name: "Payroll Information", description: "Can view payroll setup, pay statements, and technician pay line items.", category: "Finance", ios: true, web: false },
+  { id: SERVICE_AGREEMENTS_PERMISSION_ID, name: "Service Agreements", description: "Can view service agreements.", category: "Finance", ios: true, web: false },
+  { id: CREATE_SERVICE_AGREEMENTS_PERMISSION_ID, name: "Create Service Agreements", description: "Can create service agreements.", category: "Finance", ios: false, web: false },
+  { id: UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID, name: "Update Service Agreements", description: "Can edit service agreements.", category: "Finance", ios: false, web: false },
+  { id: DELETE_SERVICE_AGREEMENTS_PERMISSION_ID, name: "Delete Service Agreements", description: "Can delete service agreements.", category: "Finance", ios: false, web: false },
+  { id: SEND_SERVICE_AGREEMENTS_PERMISSION_ID, name: "Send Service Agreements", description: "Can send service agreements to customers.", category: "Finance", ios: false, web: false },
   { id: "600", name: "Marketing", description: "", category: "Marketing", ios: false, web: false },
   { id: "610", name: "Leads", description: "", category: "Marketing", ios: false, web: false },
   { id: "612", name: "Respond Leads", description: "", category: "Marketing", ios: false, web: false },
@@ -121,7 +132,7 @@ const permissionCatalog = [
   { id: "624", name: "Update Estimates", description: "", category: "Marketing", ios: false, web: false },
   { id: "626", name: "Delete Estimates", description: "", category: "Marketing", ios: false, web: false },
   { id: FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID, name: "Recommend Initial Survey Price", description: "Can save a technician's recommended service agreement price from an initial survey service stop.", category: "Marketing", ios: false, web: false },
-  { id: FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID, name: "Create And Send Field Service Agreements", description: "Can open the field agreement draft/send flow from an initial survey without full finance access.", category: "Marketing", ios: false, web: false },
+  { id: FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID, name: "Send Service Agreements From Field", description: "Can create and send a service agreement from an initial survey in the field.", category: "Finance", ios: true, web: false },
   { id: "630", name: "Pipeline", description: "Can view the customer onboarding pipeline.", category: "Marketing", ios: false, web: false },
   { id: "632", name: "Create Pipeline", description: "Can sync leads and customers into the pipeline and add manual pipeline rows.", category: "Marketing", ios: false, web: false },
   { id: "634", name: "Update Pipeline", description: "Can update pipeline notes, manual signoffs, statuses, lead sources, and pipeline settings.", category: "Marketing", ios: false, web: false },
@@ -197,6 +208,10 @@ const permissionById = companyPermissions.reduce((acc, permission) => {
   return acc;
 }, {});
 
+const explicitPermissionParentIds = {
+  [FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID]: SERVICE_AGREEMENTS_PERMISSION_ID,
+};
+
 const permissionByNormalizedName = companyPermissions.reduce((acc, permission) => {
   acc[normalizePermissionName(permission.name)] = permission;
   return acc;
@@ -204,6 +219,9 @@ const permissionByNormalizedName = companyPermissions.reduce((acc, permission) =
 
 export const getPermissionParent = (permission) => {
   if (!permission) return null;
+
+  const explicitParentId = explicitPermissionParentIds[permission.id];
+  if (explicitParentId) return permissionById[explicitParentId] || null;
 
   const parentName = stripChildPermissionPrefix(permission.name);
   if (!parentName) return null;

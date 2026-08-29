@@ -63,6 +63,7 @@ import {
   salesCollectionNames,
   SalesAgreementSourceType,
 	  SalesAgreementStatus,
+  SalesInvoiceStatus,
 	  SalesCatalogBillingBehavior,
 	  SalesCatalogItem,
 	  SalesCatalogItemType,
@@ -100,6 +101,14 @@ import {
   normalizeJobPlanStatus,
 } from "../../../utils/models/JobPlan";
 import { appConfirm, appPrompt } from "../../../utils/appDialog";
+import {
+  TermsTemplateUseCase,
+  termsTemplateUseCaseLabel,
+} from "../../../utils/terms/termsTemplateAgreementDefaults";
+import {
+  getTerms,
+  listenTermsTemplates,
+} from "../../../utils/terms/termsTemplateFirestore";
 import { fetchCompanyVendors } from "../../../utils/vendors";
 import {
   CATEGORY_OPTIONS,
@@ -133,6 +142,7 @@ import {
 } from "../../../utils/jobStatusFilters";
 import {
   SERVICE_STOP_TYPE_USE_CASES,
+  resolveServiceStopTypeFields,
   serviceStopTypeMatchesUseCase,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
@@ -177,8 +187,18 @@ const clearSectionLoadingState = () =>
     return next;
   }, {});
 
-const TASK_STATUS_OPTIONS = ["Unassigned", "Scheduled", "In Progress", "Finished"];
+const TASK_STATUS_OPTIONS = ["Unassigned", "Scheduled", "In Progress", "Finished", "Canceled", "Rejected"];
 const isFinishedTaskStatus = (status = "") => String(status || "").trim().toLowerCase() === "finished";
+const isCanceledOrRejectedTaskStatus = (status = "") =>
+  ["canceled", "cancelled", "rejected"].includes(String(status || "").trim().toLowerCase());
+const isOpenTaskStatus = (status = "") =>
+  !isFinishedTaskStatus(status) && !isCanceledOrRejectedTaskStatus(status);
+const isFinishedRecordStatus = (status = "") =>
+  ["finished", "completed", "done", "complete"].includes(String(status || "").trim().toLowerCase());
+const isFinishedJobRecord = (record = {}) => (
+  isFinishedRecordStatus(record.operationStatus || record.status) ||
+  Boolean(record.finishedAt || record.completedAt)
+);
 const equipmentCompletionTypeFromJob = (job = {}) => {
   const intentText = [
     job.jobIntent,
@@ -291,6 +311,79 @@ const EMPTY_LABOR_LINE_FORM = {
   internalCost: "0",
   taskIds: [],
   plannedServiceStopIds: [],
+};
+
+const DEFAULT_ACTUAL_SERVICE_STOP_MODE = "jobVisit";
+const ACTUAL_SERVICE_STOP_SCHEDULE_MODES = [
+  {
+    id: "jobVisit",
+    title: "Scheduled Service Stop",
+    buttonLabel: "Service Stop",
+    helper: "Schedule a visit to perform accepted job work.",
+    useCase: SERVICE_STOP_TYPE_USE_CASES.jobVisit,
+    fallbackName: "Job Visit",
+    defaultOperationStatus: "Not Finished",
+    defaultBillingStatus: "Not Invoiced",
+    includeReadings: true,
+    includeDosages: true,
+  },
+  {
+    id: "jobEstimate",
+    title: "Job Estimate",
+    buttonLabel: "Job Estimate",
+    helper: "Schedule an estimate visit before the customer accepts a plan.",
+    useCase: SERVICE_STOP_TYPE_USE_CASES.jobEstimate,
+    fallbackName: "Job Estimate",
+    defaultOperationStatus: "Estimate Pending",
+    defaultBillingStatus: "Not Invoiced",
+    includeReadings: false,
+    includeDosages: false,
+  },
+];
+const SERVICE_STOP_OPERATION_STATUS_OPTIONS = [
+  "Not Finished",
+  "Scheduled",
+  "In Progress",
+  "Waiting For Parts",
+  "Finished",
+  "Canceled",
+];
+const SERVICE_STOP_BILLING_STATUS_OPTIONS = [
+  "Not Invoiced",
+  "Invoiced",
+  "Paid",
+  "Comped",
+  "Canceled",
+];
+const getActualServiceStopScheduleMode = (mode = DEFAULT_ACTUAL_SERVICE_STOP_MODE) =>
+  ACTUAL_SERVICE_STOP_SCHEDULE_MODES.find((option) => option.id === mode) ||
+  ACTUAL_SERVICE_STOP_SCHEDULE_MODES[0];
+const serviceStopDateInputValue = (value, fallback = format(new Date(), "yyyy-MM-dd")) => {
+  if (!value) return fallback;
+  const date = value?.toDate?.() || (value instanceof Date ? value : new Date(value));
+  return Number.isNaN(date?.getTime?.()) ? fallback : format(date, "yyyy-MM-dd");
+};
+const serviceStopDateFromInputValue = (value) => {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00`);
+  return Number.isNaN(date?.getTime?.()) ? null : date;
+};
+const createActualServiceStopForm = (mode = DEFAULT_ACTUAL_SERVICE_STOP_MODE) => {
+  const config = getActualServiceStopScheduleMode(mode);
+  return {
+    scheduleMode: config.id,
+    plannedServiceStopId: "",
+    serviceStopTypeId: "",
+    serviceDate: format(new Date(), "yyyy-MM-dd"),
+    techId: "",
+    estimatedDuration: "60",
+    description: "",
+    operationStatus: config.defaultOperationStatus,
+    billingStatus: config.defaultBillingStatus,
+    includeReadings: config.includeReadings,
+    includeDosages: config.includeDosages,
+    taskIds: [],
+  };
 };
 
 const EMPTY_SHOPPING_EDIT_FORM = {
@@ -902,6 +995,17 @@ const buildPlanEditorSnapshot = ({
   });
 };
 
+const termsTemplateUseCaseKey = (template = {}) =>
+  String(template.useCase || template.templateUseCase || template.category || "").trim();
+
+const isJobEstimateTermsTemplate = (template = {}) =>
+  termsTemplateUseCaseKey(template) === TermsTemplateUseCase.oneOffJob;
+
+const isSharedTermsTemplate = (template = {}) => {
+  const useCase = termsTemplateUseCaseKey(template);
+  return !useCase || useCase === TermsTemplateUseCase.custom;
+};
+
 const JobDetailView = () => {
   const { jobId, section } = useParams();
   const navigate = useNavigate();
@@ -1024,6 +1128,13 @@ const JobDetailView = () => {
 
   const [serviceStops, setServiceStops] = useState([]);
   const [showAllActualServiceStops, setShowAllActualServiceStops] = useState(false);
+  const [showScheduleServiceStopModal, setShowScheduleServiceStopModal] = useState(false);
+  const [scheduleServiceStopMode, setScheduleServiceStopMode] = useState("");
+  const [scheduleServiceStopForm, setScheduleServiceStopForm] = useState(() => createActualServiceStopForm());
+  const [savingScheduledServiceStop, setSavingScheduledServiceStop] = useState(false);
+  const [editingActualServiceStopId, setEditingActualServiceStopId] = useState("");
+  const [actualServiceStopEditForm, setActualServiceStopEditForm] = useState(() => createActualServiceStopForm());
+  const [savingActualServiceStopEdit, setSavingActualServiceStopEdit] = useState(false);
   const [plannedServiceStops, setPlannedServiceStops] = useState([]);
   const [newPlannedStop, setNewPlannedStop] = useState(false);
   const [editingPlannedStopId, setEditingPlannedStopId] = useState("");
@@ -1078,7 +1189,7 @@ const JobDetailView = () => {
 
   const billingStatusOptions = useMemo(
     () =>
-      ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid", "Comped", JOB_BILLING_STATUS.customerResolved, "Expired", "Rejected"].map((s) => ({
+      ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid", "Comped", JOB_BILLING_STATUS.customerResolved, JOB_BILLING_STATUS.canceled, "Expired", "Rejected"].map((s) => ({
         value: s,
         label: s,
       })),
@@ -1087,7 +1198,7 @@ const JobDetailView = () => {
 
   const operationStatusOptions = useMemo(
     () =>
-      ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress", "Waiting for Parts", "Finished"].map((s) => ({
+      ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress", "Waiting for Parts", "Finished", JOB_OPERATION_STATUS.canceled].map((s) => ({
         value: s,
         label: s,
       })),
@@ -1413,9 +1524,15 @@ const JobDetailView = () => {
     title: "",
     description: "",
     expiresAt: "",
+    termsTemplateId: "",
+    termsTemplateName: "",
+    termsTemplateDescription: "",
     terms: "",
     termsList: [],
   });
+  const [billingTermsTemplates, setBillingTermsTemplates] = useState([]);
+  const [loadingBillingTermsTemplates, setLoadingBillingTermsTemplates] = useState(false);
+  const [applyingBillingTermsTemplate, setApplyingBillingTermsTemplate] = useState(false);
   const [savingBillingEstimateDraft, setSavingBillingEstimateDraft] = useState(false);
   const [sendingEstimateEmail, setSendingEstimateEmail] = useState(false);
   const [sendingInvoiceEmail, setSendingInvoiceEmail] = useState(false);
@@ -1424,6 +1541,7 @@ const JobDetailView = () => {
   const [jobFinishTaskIds, setJobFinishTaskIds] = useState([]);
   const [jobFinishShoppingItemActions, setJobFinishShoppingItemActions] = useState({});
   const [markingJobInvoiced, setMarkingJobInvoiced] = useState(false);
+  const [cancelingJob, setCancelingJob] = useState(false);
   const [linkedSalesAgreement, setLinkedSalesAgreement] = useState(null);
   const [linkedSalesInvoice, setLinkedSalesInvoice] = useState(null);
   const [jobHistory, setJobHistory] = useState([]);
@@ -1512,6 +1630,18 @@ const JobDetailView = () => {
   const isJobExpired = String(job.billingStatus || "").trim().toLowerCase() === "expired";
   const isJobCustomerResolved = String(job.billingStatus || "").trim().toLowerCase() ===
     JOB_BILLING_STATUS.customerResolved.toLowerCase();
+  const isJobCanceled = (
+    String(job.billingStatus || "").trim().toLowerCase() === JOB_BILLING_STATUS.canceled.toLowerCase() ||
+    String(job.operationStatus || "").trim().toLowerCase() === JOB_OPERATION_STATUS.canceled.toLowerCase()
+  );
+  const isJobDeleteLocked = isFinishedJobRecord(job);
+  const jobActionInProgress = expiringJob || cancelingJob || resolvingCustomerHandledJob || deletingJob;
+  const terminalBillingStatuses = [
+    "Expired",
+    "Rejected",
+    JOB_BILLING_STATUS.customerResolved,
+    JOB_BILLING_STATUS.canceled,
+  ];
 
   const contractStatusOptions = useMemo(
     () => ["Draft", "Sent", "Viewed", "Accepted", "Rejected", "Expired", "Invoiced", "Paid"],
@@ -1569,6 +1699,12 @@ const JobDetailView = () => {
         description: "The customer took care of the issue; the job remains preserved for history and no company invoice is expected.",
       },
       {
+        status: JOB_BILLING_STATUS.canceled,
+        operation: JOB_OPERATION_STATUS.canceled,
+        title: "Canceled",
+        description: "The issue is closed without deleting the job and without creating suggested work.",
+      },
+      {
         status: "Expired",
         operation: "Estimate Pending",
         title: "Expired",
@@ -1606,6 +1742,8 @@ const JobDetailView = () => {
         return ["Draft", "Estimate", "Accepted"].includes(currentBillingStatus)
           ? "In Progress"
           : currentBillingStatus;
+      case JOB_OPERATION_STATUS.canceled:
+        return JOB_BILLING_STATUS.canceled;
       default:
         return currentBillingStatus;
     }
@@ -1637,6 +1775,8 @@ const JobDetailView = () => {
         return currentOperationStatus !== "Finished" ? "Estimate Pending" : currentOperationStatus;
       case "Rejected":
         return currentOperationStatus !== "Finished" ? "Estimate Pending" : currentOperationStatus;
+      case JOB_BILLING_STATUS.canceled:
+        return JOB_OPERATION_STATUS.canceled;
       default:
         return currentOperationStatus;
     }
@@ -1917,6 +2057,1059 @@ const JobDetailView = () => {
     }
   };
 
+  const addSnapshotToMap = (docsByPath, docSnap) => {
+    if (!docSnap?.exists?.()) return;
+    docsByPath.set(docSnap.ref.path, docSnap);
+  };
+
+  const collectUniqueSnapshots = async ({
+    refs = [],
+    queries = [],
+    label = "linked records",
+  } = {}) => {
+    const docsByPath = new Map();
+
+    await Promise.all([
+      ...refs.filter(Boolean).map(async (ref) => {
+        try {
+          addSnapshotToMap(docsByPath, await getDoc(ref));
+        } catch (error) {
+          console.warn(`[JobDetailView] Could not load ${label}`, error);
+        }
+      }),
+      ...queries.filter(Boolean).map(async (targetQuery) => {
+        try {
+          const snap = await getDocs(targetQuery);
+          snap.docs.forEach((docSnap) => addSnapshotToMap(docsByPath, docSnap));
+        } catch (error) {
+          console.warn(`[JobDetailView] Could not query ${label}`, error);
+        }
+      }),
+    ]);
+
+    return Array.from(docsByPath.values());
+  };
+
+  const uniqueIds = (...values) => Array.from(new Set(
+    values
+      .flat(Infinity)
+      .map(idValue)
+      .filter(Boolean)
+  ));
+
+  const jobReferenceQueries = (collectionRef, fields = ["jobId", "jobId.id", "workOrderId", "assignedJobId"]) =>
+    fields.map((field) => query(collectionRef, where(field, "==", jobId)));
+
+  const getLinkedServiceStopSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const serviceStopIds = uniqueIds(
+      job.serviceStopIds,
+      serviceStops.map((stop) => stop.id),
+      serviceStops.map((stop) => stop.serviceStopId)
+    );
+    const serviceStopsRef = collection(db, "companies", recentlySelectedCompany, "serviceStops");
+
+    return collectUniqueSnapshots({
+      refs: serviceStopIds.map((serviceStopId) =>
+        doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId)
+      ),
+      queries: jobReferenceQueries(serviceStopsRef),
+      label: "job service stops",
+    });
+  };
+
+  const getLinkedWorkOfferSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const workOfferIds = uniqueIds(workOffers.map((offer) => offer.id));
+    const workOffersRef = workOffersPath(recentlySelectedCompany);
+
+    return collectUniqueSnapshots({
+      refs: workOfferIds.map((offerId) =>
+        doc(db, "companies", recentlySelectedCompany, "workOffers", offerId)
+      ),
+      queries: [
+        ...jobReferenceQueries(workOffersRef, ["jobId", "workOrderId", "assignedJobId", "sourceJobId"]),
+        query(workOffersRef, where("sourceId", "==", jobId)),
+      ],
+      label: "job work offers",
+    });
+  };
+
+  const getLinkedShoppingListSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const shoppingItemIds = uniqueIds(shoppingList.map((item) => getFirestoreDocId(item)));
+    const shoppingRef = collection(db, "companies", recentlySelectedCompany, "shoppingList");
+
+    return collectUniqueSnapshots({
+      refs: shoppingItemIds.map((itemId) =>
+        doc(db, "companies", recentlySelectedCompany, "shoppingList", itemId)
+      ),
+      queries: [
+        ...jobReferenceQueries(shoppingRef, ["jobId", "workOrderId", "assignedJobId"]),
+        query(shoppingRef, where("prepKeys", "array-contains", `job:${jobId}`)),
+      ],
+      label: "job shopping items",
+    });
+  };
+
+  const getLinkedPurchasedItemSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const purchasedItemIds = uniqueIds(
+      purchasedItems.map((item) => getFirestoreDocId(item)),
+      job.purchasedItemsIds,
+      job.purchasedItemIds
+    );
+    const purchasedRef = purchasedItemsPath(recentlySelectedCompany);
+
+    return collectUniqueSnapshots({
+      refs: purchasedItemIds.map((itemId) =>
+        doc(db, "companies", recentlySelectedCompany, "purchasedItems", itemId)
+      ),
+      queries: jobReferenceQueries(purchasedRef, ["jobId", "workOrderId", "assignedJobId", "installationJobId"]),
+      label: "job purchased items",
+    });
+  };
+
+  const getLinkedPayLineItemSnapshots = (serviceStopSnapshots = []) => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const payLineIds = uniqueIds(actualPayLineItems.map((item) => getFirestoreDocId(item)));
+    const serviceStopIds = uniqueIds(serviceStopSnapshots.map((docSnap) => docSnap.id));
+    const payLinesRef = payLineItemsPath(recentlySelectedCompany);
+    const serviceStopQueries = [];
+
+    for (let i = 0; i < serviceStopIds.length; i += 10) {
+      const chunk = serviceStopIds.slice(i, i + 10);
+      if (chunk.length) {
+        serviceStopQueries.push(query(payLinesRef, where("serviceStopId", "in", chunk)));
+      }
+    }
+
+    return collectUniqueSnapshots({
+      refs: payLineIds.map((lineId) =>
+        doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", lineId)
+      ),
+      queries: [
+        ...jobReferenceQueries(payLinesRef, ["jobId", "workOrderId", "assignedJobId"]),
+        ...serviceStopQueries,
+      ],
+      label: "job pay line items",
+    });
+  };
+
+  const getLinkedSalesAgreementSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const agreementIds = uniqueIds(
+      selectedSalesAgreementId,
+      selectedSalesAgreement?.id,
+      linkedSalesAgreement?.id,
+      job.salesAgreementId,
+      job.salesEstimateAgreementId,
+      jobSalesAgreements.map((agreement) => agreement.id)
+    );
+    const agreementsRef = collection(db, salesCollectionNames.agreements);
+
+    return collectUniqueSnapshots({
+      refs: agreementIds.map((agreementId) =>
+        doc(db, salesCollectionNames.agreements, agreementId)
+      ),
+      queries: [
+        query(
+          agreementsRef,
+          where("companyId", "==", recentlySelectedCompany),
+          where("sourceType", "==", SalesAgreementSourceType.oneOffJob),
+          where("sourceId", "==", jobId)
+        ),
+        query(agreementsRef, where("companyId", "==", recentlySelectedCompany), where("jobId", "==", jobId)),
+        query(agreementsRef, where("companyId", "==", recentlySelectedCompany), where("workOrderId", "==", jobId)),
+      ],
+      label: "job sales agreements",
+    });
+  };
+
+  const getLinkedLegacyContractSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const contractIds = uniqueIds(
+      selectedContractId,
+      selectedContract?.id,
+      contracts.map((contract) => contract.id)
+    );
+    const contractsRef = collection(db, "contracts");
+
+    return collectUniqueSnapshots({
+      refs: contractIds.map((contractId) => doc(db, "contracts", contractId)),
+      queries: [
+        query(contractsRef, where("senderId", "==", recentlySelectedCompany), where("jobId", "==", jobId)),
+        query(contractsRef, where("companyId", "==", recentlySelectedCompany), where("jobId", "==", jobId)),
+        query(contractsRef, where("senderId", "==", recentlySelectedCompany), where("workOrderId", "==", jobId)),
+        query(contractsRef, where("companyId", "==", recentlySelectedCompany), where("workOrderId", "==", jobId)),
+      ],
+      label: "job legacy estimates",
+    });
+  };
+
+  const getLinkedSalesInvoiceSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const invoiceIds = uniqueIds(
+      linkedSalesInvoice?.id,
+      job.salesInvoiceId,
+      job.invoiceId,
+      job.invoiceRef,
+      selectedContract?.salesInvoiceId,
+      selectedContract?.invoiceId,
+      contracts.map((contract) => contract.salesInvoiceId || contract.invoiceId),
+      jobSalesAgreements.map((agreement) => agreement.salesInvoiceId || agreement.invoiceId)
+    );
+    const invoicesRef = collection(db, salesCollectionNames.invoices);
+
+    return collectUniqueSnapshots({
+      refs: invoiceIds.map((invoiceId) => doc(db, salesCollectionNames.invoices, invoiceId)),
+      queries: [
+        query(invoicesRef, where("companyId", "==", recentlySelectedCompany), where("jobId", "==", jobId)),
+        query(invoicesRef, where("companyId", "==", recentlySelectedCompany), where("workOrderId", "==", jobId)),
+        query(invoicesRef, where("companyId", "==", recentlySelectedCompany), where("sourceId", "==", jobId)),
+      ],
+      label: "job sales invoices",
+    });
+  };
+
+  const getLinkedSuggestedWorkSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const jobGeneratedSuggestedWorkId = suggestedWorkIdForSource("job", jobId);
+    const suggestedWorkIds = uniqueIds(
+      jobGeneratedSuggestedWorkId,
+      job.suggestedWorkId === jobGeneratedSuggestedWorkId ? job.suggestedWorkId : "",
+      job.sourceSuggestedWorkId === jobGeneratedSuggestedWorkId ? job.sourceSuggestedWorkId : ""
+    );
+    const suggestedWorkRef = collection(db, "companies", recentlySelectedCompany, "suggestedWork");
+
+    return collectUniqueSnapshots({
+      refs: suggestedWorkIds.map((suggestedWorkId) =>
+        doc(db, "companies", recentlySelectedCompany, "suggestedWork", suggestedWorkId)
+      ),
+      queries: [
+        query(suggestedWorkRef, where("jobId", "==", jobId)),
+        query(suggestedWorkRef, where("sourceId", "==", jobId)),
+      ],
+      label: "job suggested work",
+    });
+  };
+
+  const getLinkedCustomerJobSnapshots = () => {
+    if (!recentlySelectedCompany || !jobId) return [];
+
+    const customerId = job.customerId || customer.id || "";
+    if (!customerId) return [];
+
+    const customerRef = doc(db, "companies", recentlySelectedCompany, "customers", customerId);
+    const notesRef = collection(customerRef, "notes");
+    const outstandingWorkRef = collection(customerRef, "outstandingWork");
+
+    return collectUniqueSnapshots({
+      refs: [
+        doc(customerRef, "expiredJobs", jobId),
+        doc(customerRef, "customerResolvedJobs", jobId),
+      ],
+      queries: [
+        query(notesRef, where("jobId", "==", jobId)),
+        query(notesRef, where("sourceId", "==", jobId)),
+        query(outstandingWorkRef, where("jobId", "==", jobId)),
+        query(outstandingWorkRef, where("sourceId", "==", jobId)),
+      ],
+      label: "customer job timeline records",
+    });
+  };
+
+  const isFinishedServiceStopRecord = (stop = {}) => {
+    const normalizedStatus = String(stop.operationStatus || stop.status || "").trim().toLowerCase();
+    return (
+      ["finished", "completed", "done", "complete"].includes(normalizedStatus) ||
+      Boolean(stop.endTime || stop.finishedAt || stop.completedAt)
+    );
+  };
+
+  const removeServiceStopFromActiveRoutes = async (serviceStopId, serviceStop = {}) => {
+    if (!recentlySelectedCompany || !serviceStopId) return 0;
+
+    const routesSnapshot = await getDocs(
+      query(
+        collection(db, "companies", recentlySelectedCompany, "activeRoutes"),
+        where("serviceStopsIds", "array-contains", serviceStopId)
+      )
+    );
+
+    await Promise.all(routesSnapshot.docs.map((routeDoc) => {
+      const route = routeDoc.data() || {};
+      const remainingStopIds = (route.serviceStopsIds || []).filter((id) => id !== serviceStopId);
+      const wasFinished = isFinishedServiceStopRecord(serviceStop);
+      const finishedStops = Math.max(
+        0,
+        Math.min(
+          remainingStopIds.length,
+          Number(route.finishedStops || 0) - (wasFinished ? 1 : 0)
+        )
+      );
+
+      return updateDoc(routeDoc.ref, {
+        serviceStopsIds: remainingStopIds,
+        order: Array.isArray(route.order)
+          ? route.order
+            .filter((item) => (item.serviceStopId || item.id) !== serviceStopId)
+            .map((item, index) => ({ ...item, order: index + 1 }))
+          : [],
+        totalStops: remainingStopIds.length,
+        finishedStops,
+        status: remainingStopIds.length === 0
+          ? "Did Not Start"
+          : finishedStops === remainingStopIds.length
+            ? "Finished"
+            : finishedStops > 0
+              ? "In Progress"
+              : (route.status || "Did Not Start"),
+      });
+    }));
+
+    return routesSnapshot.size;
+  };
+
+  const deleteServiceStopWithRelations = async (serviceStopSnapshot) => {
+    if (!serviceStopSnapshot?.exists?.()) {
+      return { serviceStops: 0, serviceStopChildren: 0, activeRoutes: 0, skippedFinishedServiceStops: 0 };
+    }
+
+    const serviceStopId = serviceStopSnapshot.id;
+    const serviceStop = { id: serviceStopId, ...serviceStopSnapshot.data() };
+    if (isFinishedServiceStopRecord(serviceStop)) {
+      return { serviceStops: 0, serviceStopChildren: 0, activeRoutes: 0, skippedFinishedServiceStops: 1 };
+    }
+
+    const [taskSnapshot, storeSnapshot, historySnapshot, stopDataSnapshot] = await Promise.all([
+      getDocs(collection(serviceStopSnapshot.ref, "tasks")),
+      getDocs(collection(serviceStopSnapshot.ref, "stores")),
+      getDocs(collection(serviceStopSnapshot.ref, "history")),
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "stopData"), where("serviceStopId", "==", serviceStopId))),
+    ]);
+    const childDocs = [
+      ...taskSnapshot.docs,
+      ...storeSnapshot.docs,
+      ...historySnapshot.docs,
+      ...stopDataSnapshot.docs,
+    ];
+    const activeRoutes = await removeServiceStopFromActiveRoutes(serviceStopId, serviceStop);
+
+    await Promise.all([
+      ...childDocs.map((docSnap) => deleteDoc(docSnap.ref)),
+      deleteDoc(serviceStopSnapshot.ref),
+    ]);
+
+    return {
+      serviceStops: 1,
+      serviceStopChildren: childDocs.length,
+      activeRoutes,
+      skippedFinishedServiceStops: 0,
+    };
+  };
+
+  const updateJobTasksForTerminalStatus = async ({ taskStatus, reason, changedAtMillis }) => {
+    if (!recentlySelectedCompany || !jobId) return 0;
+
+    const taskSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks"));
+    const tasksToUpdate = taskSnapshot.docs.filter((taskDoc) => {
+      const task = taskDoc.data() || {};
+      return !isFinishedTaskStatus(task.status) && !isCanceledOrRejectedTaskStatus(task.status);
+    });
+
+    if (!tasksToUpdate.length) return 0;
+
+    const terminalFields = taskStatus === "Rejected"
+      ? {
+        rejectedAt: serverTimestamp(),
+        rejectedAtMillis: changedAtMillis,
+        rejectReason: reason,
+      }
+      : {
+        canceledAt: serverTimestamp(),
+        cancelledAt: serverTimestamp(),
+        canceledAtMillis: changedAtMillis,
+        cancelReason: reason,
+      };
+
+    await Promise.all(tasksToUpdate.map((taskDoc) =>
+      updateDoc(taskDoc.ref, {
+        status: taskStatus,
+        operationStatus: taskStatus,
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: changedAtMillis,
+        ...terminalFields,
+      })
+    ));
+
+    const updatedTaskIds = new Set(tasksToUpdate.map((taskDoc) => taskDoc.id));
+    setTaskList((current) =>
+      (current || []).map((task) =>
+        updatedTaskIds.has(task.id)
+          ? {
+            ...task,
+            status: taskStatus,
+            operationStatus: taskStatus,
+            updatedAt: new Date(changedAtMillis),
+            updatedAtMillis: changedAtMillis,
+          }
+          : task
+      )
+    );
+
+    return tasksToUpdate.length;
+  };
+
+  const updateLinkedServiceStopsForTerminalStatus = async ({
+    serviceStopSnapshots = [],
+    taskStatus,
+    reason,
+    changedAtMillis,
+  }) => {
+    const unfinishedStops = serviceStopSnapshots.filter((docSnap) =>
+      docSnap?.exists?.() && !isFinishedServiceStopRecord(docSnap.data() || {})
+    );
+
+    if (!unfinishedStops.length) {
+      return { serviceStops: 0, serviceStopTasks: 0, activeRoutes: 0 };
+    }
+
+    let serviceStopTasks = 0;
+    let activeRoutes = 0;
+    const updatedStopIds = new Set();
+
+    await Promise.all(unfinishedStops.map(async (stopSnap) => {
+      const serviceStopId = stopSnap.id;
+      const serviceStop = { id: serviceStopId, ...stopSnap.data() };
+      const taskSnapshot = await getDocs(collection(stopSnap.ref, "tasks"));
+      const tasksToUpdate = taskSnapshot.docs.filter((taskDoc) => {
+        const task = taskDoc.data() || {};
+        return !isFinishedTaskStatus(task.status) && !isCanceledOrRejectedTaskStatus(task.status);
+      });
+      const terminalFields = taskStatus === "Rejected"
+        ? {
+          rejectedAt: serverTimestamp(),
+          rejectedAtMillis: changedAtMillis,
+          rejectReason: reason,
+        }
+        : {
+          canceledAt: serverTimestamp(),
+          cancelledAt: serverTimestamp(),
+          canceledAtMillis: changedAtMillis,
+          cancelReason: reason,
+        };
+
+      activeRoutes += await removeServiceStopFromActiveRoutes(serviceStopId, serviceStop);
+
+      await Promise.all([
+        updateDoc(stopSnap.ref, {
+          operationStatus: "Canceled",
+          status: "Canceled",
+          billingStatus: "Canceled",
+          canceledAt: serverTimestamp(),
+          cancelledAt: serverTimestamp(),
+          canceledAtMillis: changedAtMillis,
+          cancelReason: reason,
+          updatedAt: serverTimestamp(),
+          updatedAtMillis: changedAtMillis,
+        }),
+        ...tasksToUpdate.map((taskDoc) =>
+          updateDoc(taskDoc.ref, {
+            status: taskStatus,
+            operationStatus: taskStatus,
+            updatedAt: serverTimestamp(),
+            updatedAtMillis: changedAtMillis,
+            ...terminalFields,
+          })
+        ),
+      ]);
+
+      serviceStopTasks += tasksToUpdate.length;
+      updatedStopIds.add(serviceStopId);
+    }));
+
+    setServiceStops((current) =>
+      (current || []).map((stop) =>
+        updatedStopIds.has(stop.id)
+          ? {
+            ...stop,
+            operationStatus: "Canceled",
+            status: "Canceled",
+            billingStatus: "Canceled",
+            canceledAt: new Date(changedAtMillis),
+            cancelledAt: new Date(changedAtMillis),
+            canceledAtMillis: changedAtMillis,
+            cancelReason: reason,
+            updatedAt: new Date(changedAtMillis),
+            updatedAtMillis: changedAtMillis,
+          }
+          : stop
+      )
+    );
+
+    return {
+      serviceStops: updatedStopIds.size,
+      serviceStopTasks,
+      activeRoutes,
+    };
+  };
+
+  const salesAgreementTargetStatusForTerminalAction = (agreement = {}, terminalAction = "canceled") => {
+    const currentStatusKey = String(agreement.status || "").trim().toLowerCase();
+    if (terminalAction === "rejected" && currentStatusKey !== SalesAgreementStatus.accepted) {
+      return SalesAgreementStatus.rejected;
+    }
+    if (terminalAction === "expired" && currentStatusKey !== SalesAgreementStatus.accepted) {
+      return SalesAgreementStatus.expired;
+    }
+    return SalesAgreementStatus.canceled;
+  };
+
+  const legacyContractTargetStatusForAgreementStatus = (status) => {
+    if (status === SalesAgreementStatus.rejected) return "Rejected";
+    if (status === SalesAgreementStatus.expired) return "Expired";
+    return "Canceled";
+  };
+
+  const updateSalesAgreementsForTerminalStatus = async ({
+    agreementSnapshots = [],
+    terminalAction,
+    reason,
+    changedAtMillis,
+  }) => {
+    const alreadyClosed = new Set(["canceled", "cancelled", "rejected", "expired", "superseded"]);
+    const actorId = getUserId() || "";
+    const actorName = getAuditUserName();
+    const updatesById = new Map();
+
+    await Promise.all(agreementSnapshots.map(async (agreementSnap) => {
+      const agreement = agreementSnap.data() || {};
+      const currentStatusKey = String(agreement.status || "").trim().toLowerCase();
+      const targetStatus = salesAgreementTargetStatusForTerminalAction(agreement, terminalAction);
+      if (alreadyClosed.has(currentStatusKey) && currentStatusKey !== "accepted") return;
+      if (currentStatusKey === targetStatus) return;
+
+      const statusFields = targetStatus === SalesAgreementStatus.rejected
+        ? {
+          rejectedAt: serverTimestamp(),
+          rejectedAtMillis: changedAtMillis,
+          rejectedByUserId: actorId,
+          rejectedByUserName: actorName,
+        }
+        : targetStatus === SalesAgreementStatus.expired
+          ? {
+            expiredAt: serverTimestamp(),
+            expiredAtMillis: changedAtMillis,
+            expiredByUserId: actorId,
+            expiredByUserName: actorName,
+          }
+          : {
+            canceledAt: serverTimestamp(),
+            cancelledAt: serverTimestamp(),
+            canceledAtMillis: changedAtMillis,
+            canceledByUserId: actorId,
+            canceledByUserName: actorName,
+          };
+
+      await updateDoc(agreementSnap.ref, {
+        status: targetStatus,
+        statusChangedAt: serverTimestamp(),
+        statusChangedAtMillis: changedAtMillis,
+        statusChangedByUserId: actorId,
+        statusChangedByUserName: actorName,
+        statusChangeReason: reason,
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: changedAtMillis,
+        ...statusFields,
+      });
+
+      updatesById.set(agreementSnap.id, {
+        status: targetStatus,
+        updatedAt: new Date(changedAtMillis),
+        updatedAtMillis: changedAtMillis,
+      });
+    }));
+
+    if (updatesById.size) {
+      setJobSalesAgreements((current) =>
+        (current || []).map((agreement) =>
+          updatesById.has(agreement.id)
+            ? { ...agreement, ...updatesById.get(agreement.id) }
+            : agreement
+        )
+      );
+      setLinkedSalesAgreement((current) =>
+        current?.id && updatesById.has(current.id)
+          ? { ...current, ...updatesById.get(current.id) }
+          : current
+      );
+    }
+
+    return updatesById.size;
+  };
+
+  const updateLegacyContractsForTerminalStatus = async ({
+    contractSnapshots = [],
+    terminalAction,
+    reason,
+    changedAtMillis,
+  }) => {
+    const alreadyClosed = new Set(["canceled", "cancelled", "rejected", "expired", "paid"]);
+    const actorId = getUserId() || "";
+    const actorName = getAuditUserName();
+    const updatesById = new Map();
+
+    await Promise.all(contractSnapshots.map(async (contractSnap) => {
+      const contract = contractSnap.data() || {};
+      const currentStatusKey = String(contract.status || "").trim().toLowerCase();
+      const targetAgreementStatus = salesAgreementTargetStatusForTerminalAction(contract, terminalAction);
+      const targetStatus = legacyContractTargetStatusForAgreementStatus(targetAgreementStatus);
+      if (alreadyClosed.has(currentStatusKey) && currentStatusKey !== "accepted") return;
+      if (currentStatusKey === targetStatus.toLowerCase()) return;
+
+      const statusFields = targetStatus === "Rejected"
+        ? {
+          rejectedAt: serverTimestamp(),
+          rejectedAtMillis: changedAtMillis,
+          rejectedByUserId: actorId,
+          rejectedByUserName: actorName,
+          receiverAcceptance: false,
+          receiverRejection: true,
+        }
+        : targetStatus === "Expired"
+          ? {
+            expiredAt: serverTimestamp(),
+            expiredAtMillis: changedAtMillis,
+            expiredByUserId: actorId,
+            expiredByUserName: actorName,
+          }
+          : {
+            canceledAt: serverTimestamp(),
+            cancelledAt: serverTimestamp(),
+            canceledAtMillis: changedAtMillis,
+            canceledByUserId: actorId,
+            canceledByUserName: actorName,
+          };
+
+      await updateDoc(contractSnap.ref, {
+        status: targetStatus,
+        statusChangedAt: serverTimestamp(),
+        statusChangedAtMillis: changedAtMillis,
+        statusChangedByUserId: actorId,
+        statusChangedByUserName: actorName,
+        statusChangeReason: reason,
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: changedAtMillis,
+        ...statusFields,
+      });
+
+      updatesById.set(contractSnap.id, {
+        status: targetStatus,
+        updatedAt: new Date(changedAtMillis),
+        updatedAtMillis: changedAtMillis,
+      });
+    }));
+
+    if (updatesById.size) {
+      setContracts((current) =>
+        (current || []).map((contract) =>
+          updatesById.has(contract.id)
+            ? { ...contract, ...updatesById.get(contract.id) }
+            : contract
+        )
+      );
+    }
+
+    return updatesById.size;
+  };
+
+  const updateWorkOffersForTerminalStatus = async ({
+    workOfferSnapshots = [],
+    terminalAction,
+    reason,
+    changedAtMillis,
+  }) => {
+    const finalStatuses = new Set(["rejected", "cancelled", "canceled", "expired", "completed"]);
+    const targetStatus =
+      terminalAction === "rejected"
+        ? "Rejected"
+        : terminalAction === "expired"
+          ? "Expired"
+          : "Cancelled";
+    const actorId = getUserId() || "";
+    const actorName = getAuditUserName();
+    const updatedOfferIds = new Set();
+    const terminalFields = targetStatus === "Rejected"
+      ? {
+        rejectedAt: serverTimestamp(),
+        rejectedAtMillis: changedAtMillis,
+        rejectedByUserId: actorId,
+        rejectedByUserName: actorName,
+      }
+      : {
+        canceledAt: serverTimestamp(),
+        cancelledAt: serverTimestamp(),
+        canceledAtMillis: changedAtMillis,
+        canceledByUserId: actorId,
+        canceledByUserName: actorName,
+      };
+
+    await Promise.all(workOfferSnapshots.map(async (offerSnap) => {
+      const offer = offerSnap.data() || {};
+      const statusKey = String(offer.status || "").trim().toLowerCase();
+      if (finalStatuses.has(statusKey)) return;
+
+      await updateDoc(offerSnap.ref, {
+        status: targetStatus,
+        assignmentStatus: targetStatus,
+        statusChangedAt: serverTimestamp(),
+        statusChangedAtMillis: changedAtMillis,
+        statusChangedByUserId: actorId,
+        statusChangedByUserName: actorName,
+        statusChangeReason: reason,
+        canTechnicianSchedule: false,
+        allowsTechnicianSelfScheduling: false,
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: changedAtMillis,
+        ...terminalFields,
+      });
+
+      updatedOfferIds.add(offerSnap.id);
+    }));
+
+    if (updatedOfferIds.size) {
+      setWorkOffers((current) =>
+        (current || []).map((offer) =>
+          updatedOfferIds.has(offer.id)
+            ? {
+              ...offer,
+              status: targetStatus,
+              assignmentStatus: targetStatus,
+              updatedAt: new Date(changedAtMillis),
+              updatedAtMillis: changedAtMillis,
+            }
+            : offer
+        )
+      );
+    }
+
+    return updatedOfferIds.size;
+  };
+
+  const voidLinkedJobInvoicesForTerminalStatus = async ({
+    invoiceSnapshots = [],
+    reason,
+    changedAtMillis,
+  }) => {
+    const keepStatuses = new Set(["paid", "void", "voided", "uncollectible"]);
+    const actorId = getUserId() || "";
+    const actorName = getAuditUserName();
+    let voidedCount = 0;
+
+    await Promise.all(invoiceSnapshots.map(async (invoiceSnap) => {
+      const invoice = invoiceSnap.data() || {};
+      const statusKey = String(invoice.status || "").trim().toLowerCase();
+      if (keepStatuses.has(statusKey)) return;
+
+      await updateDoc(invoiceSnap.ref, {
+        status: SalesInvoiceStatus.void,
+        voidedAt: serverTimestamp(),
+        voidedAtMillis: changedAtMillis,
+        voidedByUserId: actorId,
+        voidedByUserName: actorName,
+        statusChangedAt: serverTimestamp(),
+        statusChangedAtMillis: changedAtMillis,
+        statusChangedByUserId: actorId,
+        statusChangedByUserName: actorName,
+        statusChangeReason: reason,
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: changedAtMillis,
+      });
+
+      voidedCount += 1;
+    }));
+
+    return voidedCount;
+  };
+
+  const terminalActionForBillingStatus = (billingStatus = "") => {
+    const key = String(billingStatus || "").trim().toLowerCase();
+    if (key === "rejected") return "rejected";
+    if (key === "expired") return "expired";
+    if (key === JOB_BILLING_STATUS.customerResolved.toLowerCase()) return "customerResolved";
+    if (key === JOB_BILLING_STATUS.canceled.toLowerCase()) return "canceled";
+    return "canceled";
+  };
+
+  const cleanupJobRelatedWorkForTerminalStatus = async ({
+    nextBillingStatus,
+    terminalAction = terminalActionForBillingStatus(nextBillingStatus),
+    reason = "Job was closed.",
+    changedAtMillis = Date.now(),
+  } = {}) => {
+    if (!recentlySelectedCompany || !jobId) return {};
+
+    const taskStatus = terminalAction === "rejected" ? "Rejected" : "Canceled";
+    const [
+      serviceStopSnapshots,
+      workOfferSnapshots,
+      agreementSnapshots,
+      contractSnapshots,
+      invoiceSnapshots,
+    ] = await Promise.all([
+      getLinkedServiceStopSnapshots(),
+      getLinkedWorkOfferSnapshots(),
+      getLinkedSalesAgreementSnapshots(),
+      getLinkedLegacyContractSnapshots(),
+      getLinkedSalesInvoiceSnapshots(),
+    ]);
+
+    const [
+      jobTasks,
+      serviceStopSummary,
+      workOffersClosed,
+      salesAgreementsClosed,
+      legacyEstimatesClosed,
+      invoicesVoided,
+    ] = await Promise.all([
+      updateJobTasksForTerminalStatus({ taskStatus, reason, changedAtMillis }),
+      updateLinkedServiceStopsForTerminalStatus({
+        serviceStopSnapshots,
+        taskStatus,
+        reason,
+        changedAtMillis,
+      }),
+      updateWorkOffersForTerminalStatus({
+        workOfferSnapshots,
+        terminalAction,
+        reason,
+        changedAtMillis,
+      }),
+      updateSalesAgreementsForTerminalStatus({
+        agreementSnapshots,
+        terminalAction,
+        reason,
+        changedAtMillis,
+      }),
+      updateLegacyContractsForTerminalStatus({
+        contractSnapshots,
+        terminalAction,
+        reason,
+        changedAtMillis,
+      }),
+      voidLinkedJobInvoicesForTerminalStatus({
+        invoiceSnapshots,
+        reason,
+        changedAtMillis,
+      }),
+    ]);
+
+    return {
+      jobTasks,
+      serviceStops: serviceStopSummary.serviceStops || 0,
+      serviceStopTasks: serviceStopSummary.serviceStopTasks || 0,
+      activeRoutesUpdated: serviceStopSummary.activeRoutes || 0,
+      workOffersClosed,
+      salesAgreementsClosed,
+      legacyEstimatesClosed,
+      invoicesVoided,
+    };
+  };
+
+  const deleteSnapshots = async (snapshots = []) => {
+    const docsByPath = new Map();
+    snapshots.forEach((docSnap) => {
+      if (docSnap?.ref?.path) docsByPath.set(docSnap.ref.path, docSnap);
+    });
+
+    await Promise.all(Array.from(docsByPath.values()).map((docSnap) => deleteDoc(docSnap.ref)));
+    return docsByPath.size;
+  };
+
+  const restoreSourceSuggestedWorkForDeletedJob = async () => {
+    if (!recentlySelectedCompany || !jobId) return 0;
+
+    const jobGeneratedSuggestedWorkId = suggestedWorkIdForSource("job", jobId);
+    const sourceSuggestedWorkIds = uniqueIds(job.suggestedWorkId, job.sourceSuggestedWorkId)
+      .filter((suggestedWorkId) => suggestedWorkId && suggestedWorkId !== jobGeneratedSuggestedWorkId);
+    if (!sourceSuggestedWorkIds.length) return 0;
+
+    let restoredCount = 0;
+    await Promise.all(sourceSuggestedWorkIds.map(async (suggestedWorkId) => {
+      const suggestedWorkRef = doc(db, "companies", recentlySelectedCompany, "suggestedWork", suggestedWorkId);
+      const suggestedWorkSnap = await getDoc(suggestedWorkRef);
+      if (!suggestedWorkSnap.exists()) return;
+
+      const suggestedWork = suggestedWorkSnap.data() || {};
+      await updateDoc(suggestedWorkRef, {
+        status: suggestedWork.convertedToJobId === jobId
+          ? SUGGESTED_WORK_STATUS.OPEN
+          : suggestedWork.status || SUGGESTED_WORK_STATUS.OPEN,
+        suggestionStatus: suggestedWork.convertedToJobId === jobId
+          ? SUGGESTED_WORK_STATUS.OPEN
+          : suggestedWork.suggestionStatus || suggestedWork.status || SUGGESTED_WORK_STATUS.OPEN,
+        convertedToJobId: suggestedWork.convertedToJobId === jobId ? "" : suggestedWork.convertedToJobId || "",
+        convertedToJobInternalId: suggestedWork.convertedToJobId === jobId ? "" : suggestedWork.convertedToJobInternalId || "",
+        jobIds: arrayRemove(jobId),
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: Date.now(),
+      });
+      restoredCount += 1;
+    }));
+
+    return restoredCount;
+  };
+
+  const unlinkRepairRequestForDeletedJob = async () => {
+    if (!recentlySelectedCompany || !jobId || !job.repairRequestId) return 0;
+
+    const repairRequestRef = job.repairRequestSourcePath === "homeowner"
+      ? doc(db, "homeownerRepairRequests", job.repairRequestId)
+      : doc(db, "companies", recentlySelectedCompany, "repairRequests", job.repairRequestId);
+    const repairRequestSnap = await getDoc(repairRequestRef);
+    if (!repairRequestSnap.exists()) return 0;
+
+    const repairRequest = repairRequestSnap.data() || {};
+    const remainingJobIds = (repairRequest.jobIds || []).filter((id) => id !== jobId);
+    await updateDoc(repairRequestRef, {
+      jobIds: arrayRemove(jobId),
+      ...(repairRequest.convertedToJobId === jobId ? { convertedToJobId: "" } : {}),
+      ...(repairRequest.latestJobId === jobId ? { latestJobId: remainingJobIds[0] || "" } : {}),
+      ...(remainingJobIds.length === 0 && repairRequest.status === "Converted To Job"
+        ? { status: "Unresolved" }
+        : {}),
+      updatedAt: serverTimestamp(),
+      updatedAtMillis: Date.now(),
+    });
+
+    return 1;
+  };
+
+  const deleteLinkedJobRecords = async () => {
+    if (!recentlySelectedCompany || !jobId) return {};
+
+    const [
+      serviceStopSnapshots,
+      workOfferSnapshots,
+      shoppingSnapshots,
+      purchasedSnapshots,
+      agreementSnapshots,
+      contractSnapshots,
+      invoiceSnapshots,
+      suggestedWorkSnapshots,
+      customerJobSnapshots,
+    ] = await Promise.all([
+      getLinkedServiceStopSnapshots(),
+      getLinkedWorkOfferSnapshots(),
+      getLinkedShoppingListSnapshots(),
+      getLinkedPurchasedItemSnapshots(),
+      getLinkedSalesAgreementSnapshots(),
+      getLinkedLegacyContractSnapshots(),
+      getLinkedSalesInvoiceSnapshots(),
+      getLinkedSuggestedWorkSnapshots(),
+      getLinkedCustomerJobSnapshots(),
+    ]);
+    const finishedLinkedServiceStopCount = serviceStopSnapshots.filter((serviceStopSnapshot) =>
+      isFinishedServiceStopRecord({ id: serviceStopSnapshot.id, ...serviceStopSnapshot.data() })
+    ).length;
+
+    if (finishedLinkedServiceStopCount > 0) {
+      return {
+        blockedByFinishedServiceStops: finishedLinkedServiceStopCount,
+        skippedFinishedServiceStops: finishedLinkedServiceStopCount,
+        serviceStopsDeleted: 0,
+        serviceStopChildrenDeleted: 0,
+        activeRoutesUpdated: 0,
+        shoppingItemsDeleted: 0,
+        payLinesDeleted: 0,
+        purchasedItemsDeleted: 0,
+        workOffersDeleted: 0,
+        salesAgreementsDeleted: 0,
+        legacyEstimatesDeleted: 0,
+        invoicesDeleted: 0,
+        suggestedWorkDeleted: 0,
+        customerJobRecordsDeleted: 0,
+        sourceSuggestedWorkRestored: 0,
+        repairRequestsUnlinked: 0,
+      };
+    }
+
+    const payLineSnapshots = await getLinkedPayLineItemSnapshots(serviceStopSnapshots);
+
+    const serviceStopResults = await Promise.all(
+      serviceStopSnapshots.map((serviceStopSnapshot) => deleteServiceStopWithRelations(serviceStopSnapshot))
+    );
+    const serviceStopSummary = serviceStopResults.reduce((total, item) => ({
+      serviceStops: total.serviceStops + (item.serviceStops || 0),
+      serviceStopChildren: total.serviceStopChildren + (item.serviceStopChildren || 0),
+      activeRoutes: total.activeRoutes + (item.activeRoutes || 0),
+      skippedFinishedServiceStops: total.skippedFinishedServiceStops + (item.skippedFinishedServiceStops || 0),
+    }), { serviceStops: 0, serviceStopChildren: 0, activeRoutes: 0, skippedFinishedServiceStops: 0 });
+
+    const shoppingDeleted = await Promise.all(
+      shoppingSnapshots.map((shoppingSnap) => {
+        const item = { id: shoppingSnap.id, ...shoppingSnap.data() };
+        return deleteShoppingListItemWithLinks({
+          db,
+          companyId: recentlySelectedCompany,
+          itemId: shoppingSnap.id,
+          item,
+        }).then(() => 1);
+      })
+    );
+    const [
+      payLinesDeleted,
+      purchasedDeleted,
+      workOffersDeleted,
+      salesAgreementsDeleted,
+      legacyEstimatesDeleted,
+      invoicesDeleted,
+      suggestedWorkDeleted,
+      customerJobRecordsDeleted,
+      sourceSuggestedWorkRestored,
+      repairRequestsUnlinked,
+    ] = await Promise.all([
+      deleteSnapshots(payLineSnapshots),
+      deleteSnapshots(purchasedSnapshots),
+      deleteSnapshots(workOfferSnapshots),
+      deleteSnapshots(agreementSnapshots),
+      deleteSnapshots(contractSnapshots),
+      deleteSnapshots(invoiceSnapshots),
+      deleteSnapshots(suggestedWorkSnapshots),
+      deleteSnapshots(customerJobSnapshots),
+      restoreSourceSuggestedWorkForDeletedJob(),
+      unlinkRepairRequestForDeletedJob(),
+    ]);
+
+    return {
+      serviceStopsDeleted: serviceStopSummary.serviceStops,
+      serviceStopChildrenDeleted: serviceStopSummary.serviceStopChildren,
+      skippedFinishedServiceStops: serviceStopSummary.skippedFinishedServiceStops,
+      activeRoutesUpdated: serviceStopSummary.activeRoutes,
+      shoppingItemsDeleted: shoppingDeleted.reduce((total, count) => total + count, 0),
+      payLinesDeleted,
+      purchasedItemsDeleted: purchasedDeleted,
+      workOffersDeleted,
+      salesAgreementsDeleted,
+      legacyEstimatesDeleted,
+      invoicesDeleted,
+      suggestedWorkDeleted,
+      customerJobRecordsDeleted,
+      sourceSuggestedWorkRestored,
+      repairRequestsUnlinked,
+    };
+  };
+
   const upsertSuggestedWorkRecord = async ({
     billingStatus = job.billingStatus || "",
     previousBillingStatus = job.billingStatus || "",
@@ -1950,7 +3143,7 @@ const JobDetailView = () => {
       .join(", ");
     const locationName = serviceLocation.nickName || serviceLocation.name || "";
     const openTaskCount = (taskList || []).filter(
-      (task) => String(task.status || "").toLowerCase() !== "finished"
+      (task) => isOpenTaskStatus(task.status)
     ).length;
     const jobLabel = job.internalId || job.type || jobId;
     const statusLabel = billingStatus || "Outstanding";
@@ -2065,7 +3258,7 @@ const JobDetailView = () => {
       .join(", ");
     const locationName = serviceLocation.nickName || serviceLocation.name || "";
     const openTaskCount = (taskList || []).filter(
-      (task) => String(task.status || "").toLowerCase() !== "finished"
+      (task) => isOpenTaskStatus(task.status)
     ).length;
     const jobLabel = job.internalId || job.type || jobId;
     const noteLines = [
@@ -2172,7 +3365,7 @@ const JobDetailView = () => {
       .join(", ");
     const locationName = serviceLocation.nickName || serviceLocation.name || "";
     const openTaskCount = (taskList || []).filter(
-      (task) => String(task.status || "").toLowerCase() !== "finished"
+      (task) => isOpenTaskStatus(task.status)
     ).length;
     const jobLabel = job.internalId || job.type || jobId;
     const noteLines = [
@@ -5147,7 +6340,7 @@ const JobDetailView = () => {
       .join(", ");
     const selectedBody = taskBodyOfWaterList.find((body) => body.id === (job.bodyOfWaterId || bodyOfWaterId || customerNoteBodyOfWaterId));
     const bodyOfWaterName = job.bodyOfWaterName || selectedBody?.label || selectedBody?.name || "";
-    const openTasks = (taskList || []).filter((task) => String(task.status || "").toLowerCase() !== "finished");
+    const openTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
     const plannedMaterials = shoppingList || [];
     const purchasedMaterialCount = (purchasedItems || []).length;
     const serviceStopCount = (serviceStops || []).length;
@@ -5659,12 +6852,12 @@ const JobDetailView = () => {
       0;
     const totalAmountCents = cents(sourceRate) || subtotalAmountCents || cents(job.rate);
     const selectedSolutionId = selectedPlanId;
-    const sourceTerms = source?.termsList?.length ? source.termsList : source?.terms;
+    const sourceTerms = Array.isArray(source?.termsList) ? source.termsList : [];
     const selectedTerms = normalizeTerms(sourceTerms || []);
+    const defaultTermsText = String(source?.terms || source?.termsText || existingAgreement?.terms || "").trim();
     const fallbackTerms =
       source?.termsSummary ||
-      source?.termsText ||
-      source?.terms ||
+      defaultTermsText ||
       source?.notes ||
       source?.description ||
       existingAgreement?.termsSummary ||
@@ -5688,7 +6881,8 @@ const JobDetailView = () => {
     const termsText = termsList
       .map((term) => term.description || term.title)
       .filter(Boolean);
-    const termsSummary = (termsText.length ? termsText : [fallbackTerms]).join("\n");
+    const termsSummaryParts = [defaultTermsText, ...termsText].filter(Boolean);
+    const termsSummary = (termsSummaryParts.length ? termsSummaryParts : [fallbackTerms]).join("\n");
     const legacyContractId = !sourceIsAgreement
       ? source?.id || existingAgreement?.contractId || ""
       : existingAgreement?.contractId || "";
@@ -5713,10 +6907,10 @@ const JobDetailView = () => {
       sourceId: jobId,
       title: source?.title || `${job.internalId || "Job"} Estimate`,
       description: source?.description || source?.notes || job.description || "",
-      terms: selectedTerms.length ? "" : fallbackTerms,
-      termsTemplateId: source?.termsTemplateId || "",
-      termsTemplateName: source?.termsTemplateName || "Job Estimate Terms",
-      termsTemplateDescription: source?.termsTemplateDescription || "",
+      terms: defaultTermsText || (!termsList.length ? fallbackTerms : ""),
+      termsTemplateId: source?.termsTemplateId || existingAgreement?.termsTemplateId || "",
+      termsTemplateName: source?.termsTemplateName || existingAgreement?.termsTemplateName || "",
+      termsTemplateDescription: source?.termsTemplateDescription || existingAgreement?.termsTemplateDescription || "",
       termsList: termsList.length ? termsList : fallbackTermsList,
       termsSummary,
       lineItems,
@@ -5889,10 +7083,11 @@ const JobDetailView = () => {
     const preparedDate = escapeEstimateHtml(formatDateValue(new Date()));
     const acceptBy = escapeEstimateHtml(formatDateValue(sourceRecord.expiresAt || sourceRecord.lastDateToAccept));
     const defaultPlan = planRows.find((row) => row.planId === selectedPlanId) || planRows[0] || null;
-    const terms = normalizeTerms(sourceRecord.termsList?.length ? sourceRecord.termsList : sourceRecord.terms || [])
+    const terms = normalizeTerms(Array.isArray(sourceRecord.termsList) ? sourceRecord.termsList : [])
       .map((term) => term.description || term.value || term.title || "")
       .filter(Boolean);
-    const fallbackTermsText = String(sourceRecord.termsSummary || sourceRecord.terms || "").trim();
+    const termsIntroText = String(sourceRecord.terms || sourceRecord.termsText || "").trim();
+    const fallbackTermsText = String(sourceRecord.termsSummary || termsIntroText || "").trim();
     const planSections = planRows.length
       ? planRows.map((row, index) => {
         const optionLineItems = mapEstimateSnapshotLineItems(row.lineItems || [], row.planId || `print_plan_${index}`);
@@ -5939,11 +7134,14 @@ const JobDetailView = () => {
           <p class="muted">Create a plan before sending this estimate for customer review.</p>
         </section>
       `;
-    const termsHtml = terms.length
-      ? `<ol>${terms.map((term) => `<li>${estimateHtmlWithBreaks(term)}</li>`).join("")}</ol>`
-      : fallbackTermsText
+    const termsHtml = [
+      termsIntroText ? `<p>${estimateHtmlWithBreaks(termsIntroText)}</p>` : "",
+      terms.length ? `<ol>${terms.map((term) => `<li>${estimateHtmlWithBreaks(term)}</li>`).join("")}</ol>` : "",
+    ].filter(Boolean).join("") || (
+      fallbackTermsText
         ? `<p>${estimateHtmlWithBreaks(fallbackTermsText)}</p>`
-        : '<p class="muted">No estimate terms were saved.</p>';
+        : '<p class="muted">No estimate terms were saved.</p>'
+    );
 
     return `
       <!doctype html>
@@ -6530,6 +7728,56 @@ const JobDetailView = () => {
   };
 
   useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setBillingTermsTemplates([]);
+      setLoadingBillingTermsTemplates(false);
+      return undefined;
+    }
+
+    setLoadingBillingTermsTemplates(true);
+
+    const unsubscribe = listenTermsTemplates(
+      recentlySelectedCompany,
+      (templates) => {
+        setBillingTermsTemplates(templates);
+        setLoadingBillingTermsTemplates(false);
+      },
+      (error) => {
+        console.error("[JobDetailView] Failed to load estimate terms templates", error);
+        toast.error("Failed to load terms templates.");
+        setBillingTermsTemplates([]);
+        setLoadingBillingTermsTemplates(false);
+      }
+    );
+
+    return unsubscribe;
+  }, [recentlySelectedCompany]);
+
+  const selectedBillingTermsTemplate = useMemo(
+    () => billingTermsTemplates.find((template) => template.id === billingEstimateDraft.termsTemplateId) || null,
+    [billingEstimateDraft.termsTemplateId, billingTermsTemplates]
+  );
+
+  const jobEstimateBillingTermsTemplates = useMemo(
+    () => billingTermsTemplates.filter(isJobEstimateTermsTemplate),
+    [billingTermsTemplates]
+  );
+
+  const sharedBillingTermsTemplates = useMemo(
+    () => billingTermsTemplates.filter((template) => (
+      isSharedTermsTemplate(template) &&
+      !jobEstimateBillingTermsTemplates.some((jobTemplate) => jobTemplate.id === template.id)
+    )),
+    [billingTermsTemplates, jobEstimateBillingTermsTemplates]
+  );
+
+  const currentBillingTermsTemplateIsOutsidePicker = Boolean(
+    selectedBillingTermsTemplate &&
+    !jobEstimateBillingTermsTemplates.some((template) => template.id === selectedBillingTermsTemplate.id) &&
+    !sharedBillingTermsTemplates.some((template) => template.id === selectedBillingTermsTemplate.id)
+  );
+
+  useEffect(() => {
     const source = selectedPlanEstimateRecord || {};
     const sourceTermsList = normalizeTerms(source.termsList || []);
     const nextTermsList = sourceTermsList.filter((term) =>
@@ -6541,6 +7789,9 @@ const JobDetailView = () => {
       title: source.title || `${job.internalId || "Job"} Estimate`,
       description: source.description || selectedBillingPlanEstimate?.description || job.description || "",
       expiresAt: toInputDateValue(source.expiresAt || selectedBillingPlanEstimate?.acceptBy),
+      termsTemplateId: source.termsTemplateId || "",
+      termsTemplateName: source.termsTemplateName || "",
+      termsTemplateDescription: source.termsTemplateDescription || "",
       terms: fallbackTerms,
       termsList: nextTermsList,
     });
@@ -6554,6 +7805,9 @@ const JobDetailView = () => {
     selectedPlanEstimateRecord?.expiresAt,
     selectedPlanEstimateRecord?.id,
     selectedPlanEstimateRecord?.terms,
+    selectedPlanEstimateRecord?.termsTemplateDescription,
+    selectedPlanEstimateRecord?.termsTemplateId,
+    selectedPlanEstimateRecord?.termsTemplateName,
     selectedPlanEstimateRecord?.termsSummary,
     selectedPlanEstimateRecord?.title,
     selectedPlanEstimateRecord?.updatedAt,
@@ -6640,7 +7894,7 @@ const JobDetailView = () => {
       console.warn("Could not refresh connected shopping list items before finishing job", error);
     }
 
-    const unfinishedTasks = (taskList || []).filter((task) => !isFinishedTaskStatus(task.status));
+    const unfinishedTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
     setJobFinishTaskIds(unfinishedTasks.map((task) => task.id).filter(Boolean));
     setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(connectedShoppingItems));
     setShowJobFinishConfirm(true);
@@ -6665,7 +7919,7 @@ const JobDetailView = () => {
     setJobFinishTaskIds(
       checked
         ? (taskList || [])
-          .filter((task) => !isFinishedTaskStatus(task.status))
+          .filter((task) => isOpenTaskStatus(task.status))
           .map((task) => task.id)
           .filter(Boolean)
         : []
@@ -6909,7 +8163,7 @@ const JobDetailView = () => {
       const previousBillingStatus = job.billingStatus || "—";
       const nextBillingStatus =
         job.billingStatus === "Draft" || !job.billingStatus ? "In Progress" : job.billingStatus;
-      const unfinishedTasks = (taskList || []).filter((task) => !isFinishedTaskStatus(task.status));
+      const unfinishedTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
       const selectedTaskIdSet = new Set(
         Array.isArray(selectedTaskIds)
           ? selectedTaskIds
@@ -7152,6 +8406,629 @@ const JobDetailView = () => {
     if (!workerType) return "Not Assigned";
     if (typeof workerType === "string") return workerType;
     return workerType?.rawValue || workerType?.value || workerType?.name || "Not Assigned";
+  };
+
+  const activeActualServiceStopTypes = useMemo(() => (
+    (companyServiceStopTypes || [])
+      .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive")
+      .sort((a, b) => String(a.name || a.label || "").localeCompare(String(b.name || b.label || "")))
+  ), [companyServiceStopTypes]);
+
+  const getActualServiceStopTypeOptions = useCallback((useCase, selectedTypeId = "") => {
+    const scopedTypes = activeActualServiceStopTypes.filter((type) =>
+      serviceStopTypeMatchesUseCase(type, useCase)
+    );
+    const selectedType = selectedTypeId
+      ? (companyServiceStopTypes || []).find((type) => type.id === selectedTypeId)
+      : null;
+
+    if (selectedType && !scopedTypes.some((type) => type.id === selectedType.id)) {
+      return [selectedType, ...scopedTypes];
+    }
+
+    return scopedTypes;
+  }, [activeActualServiceStopTypes, companyServiceStopTypes]);
+
+  const getActualServiceStopSelectedType = (serviceStopTypeId = "") => (
+    serviceStopTypeId
+      ? (companyServiceStopTypes || []).find((type) => type.id === serviceStopTypeId) || null
+      : null
+  );
+
+  const getActualServiceStopTypeId = (stop = {}) =>
+    stop.typeId || stop.serviceStopTypeId || stop.payTypeId || "";
+
+  const inferActualServiceStopScheduleMode = (stop = {}) => {
+    const typeLike = {
+      ...stop,
+      id: getActualServiceStopTypeId(stop),
+      name: stop.serviceStopTypeName || stop.type || stop.payTypeName || "",
+      serviceStopTypeUseCaseRawValue:
+        stop.serviceStopTypeUseCaseRawValue ||
+        stop.serviceStopTypeUseCase ||
+        stop.useCase ||
+        "",
+    };
+
+    if (serviceStopTypeMatchesUseCase(typeLike, SERVICE_STOP_TYPE_USE_CASES.jobEstimate)) {
+      return "jobEstimate";
+    }
+
+    return DEFAULT_ACTUAL_SERVICE_STOP_MODE;
+  };
+
+  const actualServiceStopFormFromStop = (stop = {}) => {
+    const mode = inferActualServiceStopScheduleMode(stop);
+    const form = createActualServiceStopForm(mode);
+
+    return {
+      ...form,
+      serviceStopTypeId: getActualServiceStopTypeId(stop),
+      serviceDate: serviceStopDateInputValue(stop.serviceDate),
+      techId: stop.techId || stop.userId || stop.technicianId || "",
+      estimatedDuration: String(stop.estimatedDuration || stop.duration || ""),
+      description: stop.description || "",
+      operationStatus: stop.operationStatus || form.operationStatus,
+      billingStatus: stop.billingStatus || form.billingStatus,
+      includeReadings: Boolean(stop.includeReadings),
+      includeDosages: Boolean(stop.includeDosages),
+    };
+  };
+
+  const sortActualServiceStops = (stops = []) => (
+    [...stops].sort((a, b) => {
+      const aDate = a.serviceDate?.toDate?.()?.getTime?.() || new Date(a.serviceDate || 0).getTime();
+      const bDate = b.serviceDate?.toDate?.()?.getTime?.() || new Date(b.serviceDate || 0).getTime();
+      return bDate - aDate;
+    })
+  );
+
+  const isTaskUnavailableForNewServiceStop = (task = {}) => {
+    const status = String(task.status || "").trim().toLowerCase();
+    return ["scheduled", "finished", "canceled", "cancelled", "rejected"].includes(status);
+  };
+
+  const openScheduleServiceStopChooser = () => {
+    if (!requirePermission("242", "create service stops")) return;
+    setScheduleServiceStopMode("");
+    setScheduleServiceStopForm(createActualServiceStopForm());
+    setShowScheduleServiceStopModal(true);
+  };
+
+  const closeScheduleServiceStopModal = ({ force = false } = {}) => {
+    if (savingScheduledServiceStop && !force) return;
+    setShowScheduleServiceStopModal(false);
+    setScheduleServiceStopMode("");
+    setScheduleServiceStopForm(createActualServiceStopForm());
+  };
+
+  const chooseScheduleServiceStopMode = (mode) => {
+    const config = getActualServiceStopScheduleMode(mode);
+    const typeOptions = getActualServiceStopTypeOptions(config.useCase);
+    const defaultTaskIds = config.id === "jobVisit"
+      ? (taskList || [])
+        .filter((task) => task.id && !isTaskUnavailableForNewServiceStop(task))
+        .map((task) => task.id)
+      : [];
+
+    setScheduleServiceStopMode(config.id);
+    setScheduleServiceStopForm({
+      ...createActualServiceStopForm(config.id),
+      serviceStopTypeId: typeOptions[0]?.id || "",
+      taskIds: defaultTaskIds,
+    });
+  };
+
+  const updateScheduleServiceStopForm = (field, value) => {
+    setScheduleServiceStopForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const updateActualServiceStopEditForm = (field, value) => {
+    setActualServiceStopEditForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const toggleScheduleServiceStopTask = (taskId) => {
+    setScheduleServiceStopForm((prev) => {
+      const selected = new Set(prev.taskIds || []);
+      if (selected.has(taskId)) {
+        selected.delete(taskId);
+      } else {
+        selected.add(taskId);
+      }
+
+      return {
+        ...prev,
+        taskIds: Array.from(selected),
+      };
+    });
+  };
+
+  const applyPlannedStopToScheduleServiceStopForm = (plannedStopId) => {
+    const plannedStop = (plannedServiceStops || []).find((stop) => stop.id === plannedStopId) || null;
+    const schedulableTaskIds = new Set(
+      (taskList || [])
+        .filter((task) => task.id && !isTaskUnavailableForNewServiceStop(task))
+        .map((task) => task.id)
+    );
+    setScheduleServiceStopForm((prev) => ({
+      ...prev,
+      plannedServiceStopId: plannedStopId,
+      serviceStopTypeId: plannedStop?.serviceStopTypeId || plannedStop?.typeId || prev.serviceStopTypeId,
+      estimatedDuration: plannedStop
+        ? String(plannedStop.estimatedMinutes || plannedStop.estimatedDuration || plannedStop.duration || prev.estimatedDuration)
+        : prev.estimatedDuration,
+      description: plannedStop?.description || prev.description,
+      taskIds: plannedStop
+        ? Array.from(new Set(Array.isArray(plannedStop.taskIds) ? plannedStop.taskIds : []))
+          .filter((taskId) => schedulableTaskIds.has(taskId))
+        : prev.taskIds,
+    }));
+  };
+
+  const openEditActualServiceStopModal = (stop = {}) => {
+    if (!requirePermission("244", "update service stops")) return;
+    if (!stop?.id) return;
+    setEditingActualServiceStopId(stop.id);
+    setActualServiceStopEditForm(actualServiceStopFormFromStop(stop));
+  };
+
+  const closeEditActualServiceStopModal = ({ force = false } = {}) => {
+    if (savingActualServiceStopEdit && !force) return;
+    setEditingActualServiceStopId("");
+    setActualServiceStopEditForm(createActualServiceStopForm());
+  };
+
+  const actualServiceStopPayloadFromForm = ({
+    form,
+    modeConfig,
+    selectedType,
+    selectedWorker,
+    serviceDate,
+    durationMinutes,
+    context,
+  }) => {
+    const resolvedTypeFields = resolveServiceStopTypeFields({
+      companyServiceStopTypes,
+      selectedType,
+      selectedTypeId: form.serviceStopTypeId,
+      fallbackName: modeConfig.fallbackName,
+      useCase: modeConfig.useCase,
+      context,
+    });
+
+    return {
+      description: form.description || "",
+      serviceDate: Timestamp.fromDate(serviceDate),
+      techId: getCompanyUserId(selectedWorker),
+      tech: getCompanyUserName(selectedWorker),
+      estimatedDuration: durationMinutes,
+      duration: durationMinutes || 15,
+      operationStatus: form.operationStatus || modeConfig.defaultOperationStatus,
+      billingStatus: form.billingStatus || modeConfig.defaultBillingStatus,
+      includeReadings: Boolean(form.includeReadings),
+      includeDosages: Boolean(form.includeDosages),
+      isInvoiced: ["Invoiced", "Paid"].includes(form.billingStatus),
+      payTypeId: resolvedTypeFields.payTypeId,
+      payTypeName: resolvedTypeFields.payTypeName,
+      type: resolvedTypeFields.type,
+      typeId: resolvedTypeFields.typeId,
+      typeImage: resolvedTypeFields.typeImage,
+      category: resolvedTypeFields.category,
+      serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
+    };
+  };
+
+  const saveScheduledServiceStop = async (event) => {
+    event.preventDefault();
+    if (!requirePermission("242", "create service stops")) return;
+    if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
+
+    const modeConfig = getActualServiceStopScheduleMode(scheduleServiceStopMode);
+    const serviceDate = serviceStopDateFromInputValue(scheduleServiceStopForm.serviceDate);
+    if (!serviceDate) return toast.error("Select a valid service date.");
+
+    const selectedWorker = (companyUserList || []).find(
+      (user) => getCompanyUserId(user) === scheduleServiceStopForm.techId
+    );
+    if (!selectedWorker) return toast.error("Select a technician.");
+
+    const activeCustomerId = job.customerId || customer.id || "";
+    const activeServiceLocationId = job.serviceLocationId || serviceLocation.id || "";
+    if (!activeCustomerId || !activeServiceLocationId) {
+      return toast.error("This job needs a customer and site before scheduling a stop.");
+    }
+
+    const durationMinutes = Math.max(0, Number(scheduleServiceStopForm.estimatedDuration || 0)) || 15;
+    const selectedTaskIds = Array.from(new Set(scheduleServiceStopForm.taskIds || []));
+    const tasksToSchedule = (taskList || []).filter((task) =>
+      selectedTaskIds.includes(task.id) && !isTaskUnavailableForNewServiceStop(task)
+    );
+    const scheduledTaskIds = tasksToSchedule.map((task) => task.id);
+
+    if (modeConfig.id === "jobVisit" && !tasksToSchedule.length) {
+      return toast.error("Select at least one job task for the service stop.");
+    }
+
+    try {
+      setSavingScheduledServiceStop(true);
+
+      const serviceStopId = "comp_ss_" + uuidv4();
+      const serviceStopRef = doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId);
+      const counterRef = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
+      const counterSnap = await getDoc(counterRef);
+      const serviceStopCount = counterSnap.exists() && typeof counterSnap.data().increment === "number"
+        ? counterSnap.data().increment
+        : 0;
+      const internalId = `SS${serviceStopCount}`;
+      await setDoc(counterRef, { increment: serviceStopCount + 1 }, { merge: true });
+
+      const selectedType = getActualServiceStopSelectedType(scheduleServiceStopForm.serviceStopTypeId);
+      const basePayload = actualServiceStopPayloadFromForm({
+        form: scheduleServiceStopForm,
+        modeConfig,
+        selectedType,
+        selectedWorker,
+        serviceDate,
+        durationMinutes,
+        context: "JobDetailView.saveScheduledServiceStop",
+      });
+      const estimateTasks = tasksToSchedule.length
+        ? tasksToSchedule
+        : [{
+          id: `${serviceStopId}_duration`,
+          name: basePayload.type || modeConfig.fallbackName,
+          type: basePayload.type || modeConfig.fallbackName,
+          estimatedTime: durationMinutes,
+          contractedRate: 0,
+        }];
+      const paySummary = estimateServiceStopPaySummary({
+        companyId: recentlySelectedCompany,
+        settings: paySettings,
+        serviceStop: {
+          ...basePayload,
+          id: serviceStopId,
+          jobId,
+        },
+        serviceStopType: selectedType || {
+          id: basePayload.typeId,
+          name: basePayload.type,
+        },
+        serviceStopUseCaseSourceId: basePayload.typeId,
+        tasks: estimateTasks,
+        worker: selectedWorker,
+        workTypes: companyWorkTypes,
+        mappings: workTypeMappings,
+        rates: technicianRates,
+        date: serviceDate,
+      });
+      const rate = tasksToSchedule.reduce(
+        (total, task) => total + Number(task.rate || task.contractedRate || 0),
+        0
+      );
+      const address = serviceLocation.address || {
+        streetAddress: serviceLocation.streetAddress || "",
+        city: serviceLocation.city || "",
+        state: serviceLocation.state || "",
+        zip: serviceLocation.zip || "",
+      };
+      const newServiceStop = {
+        id: serviceStopId,
+        address,
+        companyId: recentlySelectedCompany,
+        companyName: authCtx?.recentlySelectedCompanyName || "",
+        customerId: activeCustomerId,
+        customerName: job.customerName || getCustomerDisplayName(),
+        dateCreated: Timestamp.now(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        ...basePayload,
+        contractedCompanyId: "",
+        jobId,
+        workOrderId: jobId,
+        assignedJobId: jobId,
+        jobName: job.description || job.internalId || "Job",
+        serviceLocationId: activeServiceLocationId,
+        internalId,
+        checkList: [],
+        mainCompanyId: "",
+        otherCompany: false,
+        laborContractId: "",
+        endTime: null,
+        startTime: null,
+        estimatedPayCents: paySummary.totalAmountCents,
+        estimatedPayLines: paySummary.lines,
+        manualPayOverrideCents: null,
+        manualPayOverrideNotes: "",
+        plannedServiceStopId: scheduleServiceStopForm.plannedServiceStopId || "",
+        rate,
+        recurringServiceStopId: "",
+        leadId: "",
+        source: "JobDetailViewActualModal",
+        serviceNotes: "",
+      };
+
+      const taskWrites = tasksToSchedule.map((task) => {
+        const taskId = `comp_ss_tas_${uuidv4()}`;
+        return setDoc(
+          doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId, "tasks", taskId),
+          {
+            ...task,
+            id: taskId,
+            workerId: getCompanyUserId(selectedWorker),
+            workerName: getCompanyUserName(selectedWorker),
+            workerType: getCompanyUserWorkerType(selectedWorker),
+            status: "Scheduled",
+            serviceStopId: {
+              id: serviceStopId,
+              internalId,
+            },
+            jobId: {
+              id: jobId,
+              internalId: job.internalId || "",
+            },
+            recurringServiceStopId: {
+              id: "",
+              internalId: "",
+            },
+            jobTaskId: task.id,
+            payTypeId: task.payTypeId || task.workTypeId || basePayload.payTypeId,
+            payTypeName: task.payTypeName || task.workTypeName || basePayload.payTypeName,
+            workOrderTaskId: task.id,
+          }
+        );
+      });
+      const jobTaskWrites = tasksToSchedule.map((task) =>
+        updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), {
+          status: "Scheduled",
+          workerId: getCompanyUserId(selectedWorker),
+          workerName: getCompanyUserName(selectedWorker),
+          workerType: getCompanyUserWorkerType(selectedWorker),
+          serviceStopId: {
+            id: serviceStopId,
+            internalId,
+          },
+          serviceStopIdString: serviceStopId,
+          updatedAt: serverTimestamp(),
+        })
+      );
+      const plannedStopWrite = scheduleServiceStopForm.plannedServiceStopId
+        ? setDoc(
+          doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), scheduleServiceStopForm.plannedServiceStopId),
+          {
+            serviceStopId,
+            scheduledServiceStopId: serviceStopId,
+            scheduledServiceStopInternalId: internalId,
+            status: "Scheduled",
+            updatedAt: serverTimestamp(),
+            updatedAtMillis: Date.now(),
+          },
+          { merge: true }
+        )
+        : Promise.resolve();
+
+      await Promise.all([
+        setDoc(serviceStopRef, newServiceStop),
+        ...taskWrites,
+        ...jobTaskWrites,
+        plannedStopWrite,
+        updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
+          serviceStopIds: arrayUnion(serviceStopId),
+          ...(modeConfig.id !== "jobEstimate" ? { operationStatus: "Scheduled" } : {}),
+          updatedAt: serverTimestamp(),
+        }),
+      ]);
+
+      setServiceStops((prev) => sortActualServiceStops([
+        {
+          ...newServiceStop,
+          serviceDate,
+          dateCreated: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        ...(prev || []).filter((stop) => stop.id !== serviceStopId),
+      ]));
+      setTaskList((prev) =>
+        (prev || []).map((task) =>
+          scheduledTaskIds.includes(task.id)
+            ? {
+              ...task,
+              status: "Scheduled",
+              workerId: getCompanyUserId(selectedWorker),
+              workerName: getCompanyUserName(selectedWorker),
+              workerType: getCompanyUserWorkerType(selectedWorker),
+              serviceStopId: {
+                id: serviceStopId,
+                internalId,
+              },
+              serviceStopIdString: serviceStopId,
+            }
+            : task
+        )
+      );
+      if (scheduleServiceStopForm.plannedServiceStopId) {
+        setPlannedServiceStops((prev) =>
+          (prev || []).map((stop) =>
+            stop.id === scheduleServiceStopForm.plannedServiceStopId
+              ? {
+                ...stop,
+                serviceStopId,
+                scheduledServiceStopId: serviceStopId,
+                scheduledServiceStopInternalId: internalId,
+                status: "Scheduled",
+              }
+              : stop
+          )
+        );
+      }
+      if (modeConfig.id !== "jobEstimate") {
+        setJob((prev) => ({
+          ...prev,
+          operationStatus: "Scheduled",
+          serviceStopIds: Array.from(new Set([...(Array.isArray(prev.serviceStopIds) ? prev.serviceStopIds : []), serviceStopId])),
+        }));
+        setSelectedOperationStatus({ value: "Scheduled", label: "Scheduled" });
+      } else {
+        setJob((prev) => ({
+          ...prev,
+          serviceStopIds: Array.from(new Set([...(Array.isArray(prev.serviceStopIds) ? prev.serviceStopIds : []), serviceStopId])),
+        }));
+      }
+
+      await recordJobHistory({
+        eventType: "Service Stop",
+        title: `${modeConfig.title} scheduled: ${internalId}`,
+        description: scheduleServiceStopForm.description || "",
+        changes: [
+          buildHistoryChange("type", "Type", "—", basePayload.type),
+          buildHistoryChange("serviceDate", "Service Date", "—", formatDateValue(serviceDate)),
+          buildHistoryChange("tech", "Technician", "—", getCompanyUserName(selectedWorker)),
+          buildHistoryChange("taskIds", "Linked Tasks", "—", String(tasksToSchedule.length)),
+        ],
+        metadata: {
+          serviceStopId,
+          internalId,
+          scheduleMode: modeConfig.id,
+          plannedServiceStopId: scheduleServiceStopForm.plannedServiceStopId || "",
+        },
+        severity: "success",
+      });
+
+      toast.success(`${modeConfig.title} scheduled`);
+      closeScheduleServiceStopModal({ force: true });
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to schedule service stop.");
+    } finally {
+      setSavingScheduledServiceStop(false);
+    }
+  };
+
+  const saveActualServiceStopEdit = async (event) => {
+    event.preventDefault();
+    if (!requirePermission("244", "update service stops")) return;
+    if (!recentlySelectedCompany || !editingActualServiceStopId) return toast.error("Missing service stop context.");
+
+    const originalStop = (serviceStops || []).find((stop) => stop.id === editingActualServiceStopId) || null;
+    if (!originalStop) return toast.error("Service stop was not found.");
+
+    const modeConfig = getActualServiceStopScheduleMode(actualServiceStopEditForm.scheduleMode);
+    const serviceDate = serviceStopDateFromInputValue(actualServiceStopEditForm.serviceDate);
+    if (!serviceDate) return toast.error("Select a valid service date.");
+
+    const selectedWorker = (companyUserList || []).find(
+      (user) => getCompanyUserId(user) === actualServiceStopEditForm.techId
+    );
+    if (!selectedWorker) return toast.error("Select a technician.");
+
+    const durationMinutes = Math.max(0, Number(actualServiceStopEditForm.estimatedDuration || 0)) || 15;
+    const selectedType = getActualServiceStopSelectedType(actualServiceStopEditForm.serviceStopTypeId);
+    const payload = {
+      ...actualServiceStopPayloadFromForm({
+        form: actualServiceStopEditForm,
+        modeConfig,
+        selectedType,
+        selectedWorker,
+        serviceDate,
+        durationMinutes,
+        context: "JobDetailView.saveActualServiceStopEdit",
+      }),
+      updatedAt: serverTimestamp(),
+      updatedAtMillis: Date.now(),
+    };
+    const techChanged = getCompanyUserId(selectedWorker) !== (originalStop.techId || originalStop.userId || originalStop.technicianId || "");
+
+    try {
+      setSavingActualServiceStopEdit(true);
+      const serviceStopRef = doc(db, "companies", recentlySelectedCompany, "serviceStops", editingActualServiceStopId);
+      const serviceStopTaskSnap = await getDocs(collection(serviceStopRef, "tasks"));
+      const linkedJobTasks = (taskList || []).filter((task) => (
+        idValue(task.serviceStopId) === editingActualServiceStopId ||
+        task.serviceStopIdString === editingActualServiceStopId
+      ));
+
+      await Promise.all([
+        updateDoc(serviceStopRef, payload),
+        ...(techChanged
+          ? serviceStopTaskSnap.docs.map((taskDoc) =>
+            updateDoc(taskDoc.ref, {
+              workerId: getCompanyUserId(selectedWorker),
+              workerName: getCompanyUserName(selectedWorker),
+              workerType: getCompanyUserWorkerType(selectedWorker),
+              updatedAt: serverTimestamp(),
+            })
+          )
+          : []),
+        ...(techChanged
+          ? linkedJobTasks.map((task) =>
+            updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), {
+              workerId: getCompanyUserId(selectedWorker),
+              workerName: getCompanyUserName(selectedWorker),
+              workerType: getCompanyUserWorkerType(selectedWorker),
+              updatedAt: serverTimestamp(),
+            })
+          )
+          : []),
+      ]);
+
+      setServiceStops((prev) => sortActualServiceStops(
+        (prev || []).map((stop) =>
+          stop.id === editingActualServiceStopId
+            ? {
+              ...stop,
+              ...payload,
+              serviceDate,
+              updatedAt: new Date(),
+            }
+            : stop
+        )
+      ));
+      if (techChanged) {
+        setTaskList((prev) =>
+          (prev || []).map((task) =>
+            linkedJobTasks.some((linkedTask) => linkedTask.id === task.id)
+              ? {
+                ...task,
+                workerId: getCompanyUserId(selectedWorker),
+                workerName: getCompanyUserName(selectedWorker),
+                workerType: getCompanyUserWorkerType(selectedWorker),
+              }
+              : task
+          )
+        );
+      }
+
+      await recordJobHistory({
+        eventType: "Service Stop",
+        title: `Service stop updated: ${originalStop.internalId || originalStop.type || editingActualServiceStopId}`,
+        description: actualServiceStopEditForm.description || "",
+        changes: [
+          buildHistoryChange("type", "Type", originalStop.type || "—", payload.type),
+          buildHistoryChange("serviceDate", "Service Date", formatDateValue(originalStop.serviceDate), formatDateValue(serviceDate)),
+          buildHistoryChange("tech", "Technician", originalStop.tech || "—", getCompanyUserName(selectedWorker)),
+          buildHistoryChange("operationStatus", "Operation Status", originalStop.operationStatus || "—", payload.operationStatus),
+          buildHistoryChange("billingStatus", "Billing Status", originalStop.billingStatus || "—", payload.billingStatus),
+        ],
+        metadata: {
+          serviceStopId: editingActualServiceStopId,
+          scheduleMode: modeConfig.id,
+        },
+      });
+
+      toast.success("Service stop updated");
+      closeEditActualServiceStopModal({ force: true });
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update service stop.");
+    } finally {
+      setSavingActualServiceStopEdit(false);
+    }
   };
 
   const openCreateWorkOfferModal = () => {
@@ -8446,12 +10323,26 @@ const JobDetailView = () => {
         updates.operationStatus = selectedOperationStatus.value;
       }
 
-      const resolvedBillingStatus = updates.billingStatus ?? job.billingStatus ?? "";
+      let resolvedBillingStatus = updates.billingStatus ?? job.billingStatus ?? "";
+      const resolvedOperationStatus = updates.operationStatus ?? job.operationStatus ?? "";
+      if (
+        resolvedOperationStatus === JOB_OPERATION_STATUS.canceled &&
+        resolvedBillingStatus !== JOB_BILLING_STATUS.canceled
+      ) {
+        updates.billingStatus = JOB_BILLING_STATUS.canceled;
+        resolvedBillingStatus = JOB_BILLING_STATUS.canceled;
+      }
       if (
         resolvedBillingStatus === JOB_BILLING_STATUS.customerResolved &&
         (updates.operationStatus ?? job.operationStatus) !== JOB_OPERATION_STATUS.finished
       ) {
         updates.operationStatus = JOB_OPERATION_STATUS.finished;
+      }
+      if (
+        resolvedBillingStatus === JOB_BILLING_STATUS.canceled &&
+        (updates.operationStatus ?? job.operationStatus) !== JOB_OPERATION_STATUS.canceled
+      ) {
+        updates.operationStatus = JOB_OPERATION_STATUS.canceled;
       }
 
       const nextSolutionTier = normalizeIssuePriority(selectedSolutionTier?.value);
@@ -8470,14 +10361,36 @@ const JobDetailView = () => {
       }
 
       if (Object.keys(updates).length) {
+        const statusChangedAtMillis = Date.now();
+        const nextSavedBillingStatus = updates.billingStatus ?? job.billingStatus ?? "";
+        const terminalStatusWasTouched = Boolean(updates.billingStatus || updates.operationStatus);
+
+        if (nextSavedBillingStatus === JOB_BILLING_STATUS.canceled && terminalStatusWasTouched) {
+          updates.canceledAt = serverTimestamp();
+          updates.cancelledAt = serverTimestamp();
+          updates.canceledAtMillis = statusChangedAtMillis;
+          updates.canceledByUserId = getUserId() || "";
+          updates.canceledByUserName = getAuditUserName();
+          updates.cancelReason = "Job canceled from edit status.";
+        }
+
         await updateDoc(jobRef, updates);
         let invoicedPurchasedItemCount = 0;
         let invoicedShoppingItemCount = 0;
+        let terminalCleanupSummary = null;
         if (updates.billingStatus && jobBillingIsInvoiced(updates.billingStatus)) {
           const invoiceId = job.salesInvoiceId || job.invoiceRef || job.invoiceId || "";
           const invoiceType = job.invoiceType || (job.salesInvoiceId ? "salesInvoice" : "job");
           invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({ invoiceId, invoiceType });
           invoicedShoppingItemCount = await markShoppingItemsInvoicedForJob({ invoiceId, invoiceType });
+        }
+        if (terminalStatusWasTouched && terminalBillingStatuses.includes(nextSavedBillingStatus)) {
+          terminalCleanupSummary = await cleanupJobRelatedWorkForTerminalStatus({
+            nextBillingStatus: nextSavedBillingStatus,
+            terminalAction: terminalActionForBillingStatus(nextSavedBillingStatus),
+            reason: `Job marked ${nextSavedBillingStatus} from job edit status.`,
+            changedAtMillis: statusChangedAtMillis,
+          });
         }
         await recordJobHistory({
           title: "Job details updated",
@@ -8488,9 +10401,12 @@ const JobDetailView = () => {
             buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", updates.operationStatus ?? job.operationStatus),
             buildHistoryChange("issuePriority", "Issue Priority", getIssuePriorityLabel(job.issuePriorityLevel || job.priorityLevel || job.solutionTier), getIssuePriorityLabel(updates.issuePriorityLevel ?? job.issuePriorityLevel ?? job.priorityLevel ?? job.solutionTier)),
           ],
-          metadata: invoicedPurchasedItemCount || invoicedShoppingItemCount
-            ? { invoicedPurchasedItemCount, invoicedShoppingItemCount }
-            : {},
+          metadata: {
+            ...(invoicedPurchasedItemCount || invoicedShoppingItemCount
+              ? { invoicedPurchasedItemCount, invoicedShoppingItemCount }
+              : {}),
+            ...(terminalCleanupSummary ? { terminalCleanupSummary } : {}),
+          },
         });
 
         if (updates.billingStatus === "Expired") {
@@ -8592,9 +10508,9 @@ const JobDetailView = () => {
       const ok = isJobExpired
         ? true
         : await appConfirm({
-          title: "Cancel Job",
-          message: "Cancel this job? The job will not be deleted. Billing status will be set to Expired and the scope will be copied to Suggested Work.",
-          confirmLabel: "Cancel Job",
+          title: "Cancel to Potential Work",
+          message: "Cancel this job and keep the scope as potential customer work? The job will not be deleted. Billing status will be set to Expired and the scope will be copied to Suggested Work.",
+          confirmLabel: "Cancel to Potential Work",
           variant: "danger",
         });
       if (!ok) return;
@@ -8618,6 +10534,13 @@ const JobDetailView = () => {
           updatedAtMillis: nowMillis,
         });
       }
+
+      const terminalCleanupSummary = await cleanupJobRelatedWorkForTerminalStatus({
+        nextBillingStatus: "Expired",
+        terminalAction: "canceled",
+        reason: "Job canceled from job detail.",
+        changedAtMillis: nowMillis,
+      });
 
       await upsertExpiredJobRecord({
         previousBillingStatus,
@@ -8643,6 +10566,7 @@ const JobDetailView = () => {
           customerId: job.customerId || customer.id || "",
           customerExpiredJobId: jobId,
           suggestedWorkId: suggestedWorkIdForSource("job", jobId),
+          terminalCleanupSummary,
         },
         severity: "warning",
       });
@@ -8667,6 +10591,100 @@ const JobDetailView = () => {
       toast.error(err?.message || "Failed to cancel job");
     } finally {
       setExpiringJob(false);
+    }
+  };
+
+  const cancelJobWithoutPotentialWork = async (e) => {
+    e.preventDefault();
+    if (!requireUpdateCurrentJob("update jobs")) return;
+    if (cancelingJob) return;
+    if (!edit) {
+      toast.error("Click Edit before canceling this job.");
+      return;
+    }
+
+    const promptedReason = await appPrompt({
+      title: "Cancel Job Only",
+      message: "Use this when the issue was not real, was already fixed, or no future work is needed. The job will be preserved and no Suggested Work item will be created.",
+      inputLabel: "Cancel reason",
+      defaultValue: "Issue was not real or has already been fixed.",
+      confirmLabel: "Cancel Job",
+      required: false,
+      variant: "danger",
+    });
+    if (promptedReason === null) return;
+
+    const cancelReason = String(promptedReason || "").trim() || "Issue was not real or has already been fixed.";
+
+    try {
+      setCancelingJob(true);
+
+      const previousBillingStatus = job.billingStatus || "";
+      const previousOperationStatus = job.operationStatus || "";
+      const nowMillis = Date.now();
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+
+      if (!isJobCanceled || job.cancelReason !== cancelReason) {
+        await updateDoc(jobRef, {
+          billingStatus: JOB_BILLING_STATUS.canceled,
+          operationStatus: JOB_OPERATION_STATUS.canceled,
+          cancellationOutcome: "noFutureWork",
+          cancelReason,
+          canceledAt: serverTimestamp(),
+          cancelledAt: serverTimestamp(),
+          canceledAtMillis: nowMillis,
+          canceledByUserId: getUserId() || "",
+          canceledByUserName: getAuditUserName(),
+          updatedAt: serverTimestamp(),
+          updatedAtMillis: nowMillis,
+        });
+      }
+
+      const terminalCleanupSummary = await cleanupJobRelatedWorkForTerminalStatus({
+        nextBillingStatus: JOB_BILLING_STATUS.canceled,
+        terminalAction: "canceled",
+        reason: cancelReason,
+        changedAtMillis: nowMillis,
+      });
+
+      await recordJobHistory({
+        eventType: "Job Canceled",
+        title: isJobCanceled ? "Canceled job reason refreshed" : "Job canceled with no future work",
+        description: "The job was preserved without adding it to suggested work.",
+        changes: isJobCanceled
+          ? []
+          : [
+            buildHistoryChange("billingStatus", "Billing Status", previousBillingStatus || "—", JOB_BILLING_STATUS.canceled),
+            buildHistoryChange("operationStatus", "Operation Status", previousOperationStatus || "—", JOB_OPERATION_STATUS.canceled),
+          ],
+        metadata: {
+          outcome: "noFutureWork",
+          reason: cancelReason,
+          terminalCleanupSummary,
+        },
+        severity: "warning",
+      });
+
+      setJob((prev) => ({
+        ...prev,
+        billingStatus: JOB_BILLING_STATUS.canceled,
+        operationStatus: JOB_OPERATION_STATUS.canceled,
+        cancellationOutcome: "noFutureWork",
+        cancelReason,
+        canceledAt: new Date(nowMillis),
+        cancelledAt: new Date(nowMillis),
+        canceledAtMillis: nowMillis,
+        updatedAt: new Date(nowMillis),
+        updatedAtMillis: nowMillis,
+      }));
+      setSelectedBillingStatus({ value: JOB_BILLING_STATUS.canceled, label: JOB_BILLING_STATUS.canceled });
+      setSelectedOperationStatus({ value: JOB_OPERATION_STATUS.canceled, label: JOB_OPERATION_STATUS.canceled });
+      toast.success(isJobCanceled ? "Canceled job reason refreshed" : "Job canceled");
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to cancel job");
+    } finally {
+      setCancelingJob(false);
     }
   };
 
@@ -8718,6 +10736,13 @@ const JobDetailView = () => {
         });
       }
 
+      const terminalCleanupSummary = await cleanupJobRelatedWorkForTerminalStatus({
+        nextBillingStatus: JOB_BILLING_STATUS.customerResolved,
+        terminalAction: "customerResolved",
+        reason: "Job closed as customer resolved from job detail.",
+        changedAtMillis: nowMillis,
+      });
+
       await upsertCustomerResolvedJobRecord({
         previousBillingStatus,
         previousOperationStatus,
@@ -8740,6 +10765,7 @@ const JobDetailView = () => {
           customerResolvedJobId: jobId,
           outcome: "customerTookCareOfIt",
           resolutionNote,
+          terminalCleanupSummary,
         },
         severity: "success",
       });
@@ -8782,6 +10808,38 @@ const JobDetailView = () => {
     }
     if (!recentlySelectedCompany || !jobId) return;
 
+    const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+    let linkedServiceStopSnapshots = [];
+
+    try {
+      const [latestJobSnap, linkedStops] = await Promise.all([
+        getDoc(jobRef),
+        getLinkedServiceStopSnapshots(),
+      ]);
+      const latestJob = latestJobSnap.exists()
+        ? { id: latestJobSnap.id, ...latestJobSnap.data() }
+        : job;
+
+      if (isFinishedJobRecord(latestJob)) {
+        toast.error("Finished jobs cannot be deleted.");
+        return;
+      }
+
+      linkedServiceStopSnapshots = linkedStops;
+      const finishedLinkedServiceStopCount = linkedServiceStopSnapshots.filter((serviceStopSnap) =>
+        isFinishedServiceStopRecord({ id: serviceStopSnap.id, ...serviceStopSnap.data() })
+      ).length;
+
+      if (finishedLinkedServiceStopCount > 0) {
+        toast.error("Jobs with finished service stops cannot be deleted.");
+        return;
+      }
+    } catch (err) {
+      console.error("Unable to verify job delete eligibility", err);
+      toast.error("Could not confirm this job can be deleted.");
+      return;
+    }
+
     const ok = await appConfirm({
       title: "Delete Job",
       message: [
@@ -8811,7 +10869,6 @@ const JobDetailView = () => {
     try {
       setDeletingJob(true);
 
-      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
       const jobOwnedCollections = [
         collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks"),
         collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "comments"),
@@ -8824,15 +10881,18 @@ const JobDetailView = () => {
         collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "workOfferRefs"),
       ];
 
+      const linkedDeleteSummary = await deleteLinkedJobRecords();
+      if (linkedDeleteSummary.blockedByFinishedServiceStops > 0) {
+        throw new Error("A linked service stop is finished, so this job cannot be deleted.");
+      }
       await Promise.all(jobOwnedCollections.map((collectionRef) => deleteQueryDocs(collectionRef)));
-
-      await Promise.all([
-        deleteQueryDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
-        deleteQueryDocs(query(workOffersPath(recentlySelectedCompany), where("jobId", "==", jobId))),
-      ]);
 
       await deleteDoc(jobRef);
 
+      console.info("[JobDetailView] Job deleted with linked cleanup", {
+        jobId,
+        linkedDeleteSummary,
+      });
       toast.success("Job deleted");
       navigate("/company/jobs/operations", { replace: true });
     } catch (err) {
@@ -8880,6 +10940,10 @@ const JobDetailView = () => {
       );
       const normalizedTemplateLaborLines = normalizeJobLaborLineItems(laborLineItems);
       const defaultTemplatePriceCents = plannedEstimatePriceCents || cents(job.rate);
+      const templateIssuePriorityLevel = normalizeIssuePriority(
+        job.issuePriorityLevel || job.priorityLevel || job.solutionTier || DEFAULT_ISSUE_PRIORITY
+      );
+      const templateIssuePriorityLabel = getIssuePriorityLabel(templateIssuePriorityLevel);
 
       const templateRef = doc(db, "companies", recentlySelectedCompany, "jobTemplates", templateId);
       await setDoc(templateRef, {
@@ -8895,6 +10959,14 @@ const JobDetailView = () => {
         defaultLaborPriceCents: plannedLaborPriceCents,
         defaultMaterialCostCents: plannedMaterialCostCents,
         defaultMaterialPriceCents: plannedMaterialPriceCents,
+        defaultIssuePriorityLevel: templateIssuePriorityLevel,
+        defaultIssuePriorityLabel: templateIssuePriorityLabel,
+        issuePriorityLevel: templateIssuePriorityLevel,
+        issuePriorityLabel: templateIssuePriorityLabel,
+        priorityLevel: templateIssuePriorityLevel,
+        priorityLabel: templateIssuePriorityLabel,
+        solutionTier: templateIssuePriorityLevel,
+        solutionTierLabel: templateIssuePriorityLabel,
         taskCount: taskList.length,
         plannedStopCount: plannedServiceStops.length,
         shoppingItemCount: shoppingList.length,
@@ -8902,6 +10974,7 @@ const JobDetailView = () => {
         color: job.color || "",
         isActive: true,
         locked: false,
+        technicianCanAdd: true,
         sourceJobId: jobId,
         sourceJobInternalId: job.internalId || "",
         sourceCustomerId: job.customerId || "",
@@ -8929,7 +11002,7 @@ const JobDetailView = () => {
             billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
             estimatedTime: Number(task.estimatedTime || 0),
             customerApproval: Boolean(task.customerApproval),
-            equipmentId: task.equipmentId || "",
+            equipmentId: "",
             serviceLocationId: "",
             bodyOfWaterId: "",
             dataBaseItemId: task.dataBaseItemId || "",
@@ -8981,6 +11054,9 @@ const JobDetailView = () => {
       const laborLineWrites = normalizedTemplateLaborLines.map((line, index) => {
         const templateLaborLineId = "comp_job_template_labor_line_" + uuidv4();
         const taskTemplateIds = getLaborLineTaskIds(line).map((taskId) => taskIdMap[taskId]).filter(Boolean);
+        const plannedStopTemplateIds = getLaborLinePlannedStopIds(line)
+          .map((plannedStopId) => plannedStopIdMap[plannedStopId])
+          .filter(Boolean);
         const catalogItemId = line.salesCatalogItemId || line.catalogItemId || line.sourceCatalogItemId || "";
 
         return setDoc(
@@ -8999,9 +11075,9 @@ const JobDetailView = () => {
             taskTemplateIds,
             taskIds: taskTemplateIds,
             laborLineTaskIds: taskTemplateIds,
-            plannedServiceStopTemplateIds: [],
-            plannedServiceStopIds: [],
-            laborLinePlannedServiceStopIds: [],
+            plannedServiceStopTemplateIds: plannedStopTemplateIds,
+            plannedServiceStopIds: plannedStopTemplateIds,
+            laborLinePlannedServiceStopIds: plannedStopTemplateIds,
             salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
             billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
             sourceType: line.sourceType || SalesCatalogSourceType.manual,
@@ -11125,6 +13201,13 @@ const JobDetailView = () => {
     }));
   };
 
+  const handleShoppingDbItemIdChange = (itemId) => {
+    const option = (shoppingDbItemList || []).find((item) =>
+      String(item.id || item.value || "") === String(itemId || "")
+    ) || null;
+    handleShoppingDbItemChange(option);
+  };
+
   const handleCreateShoppingDatabaseItem = async (e) => {
     e.preventDefault();
     if (!requirePermission("852", "create database items")) return;
@@ -11208,15 +13291,17 @@ const JobDetailView = () => {
     }
   };
 
-  const clearNewShoppingListItem = (e) => {
-    e.preventDefault();
-    setNewShoppingList(false);
+  const resetNewShoppingListItemDraft = ({ keepOpen = false, keepSubCategory = false } = {}) => {
+    if (!keepOpen) {
+      setNewShoppingList(false);
+    }
+
     setSelectedPurchaser(null);
     setSelectedShoppingDbItem(null);
     resetShoppingDbItemCreator();
     setShoppingFormData({
       category: "Job",
-      subCategory: "Data Base",
+      subCategory: keepSubCategory ? shoppingFormData.subCategory || "Data Base" : "Data Base",
       status: initialJobMaterialStatus(),
       purchaserId: "",
       purchaserName: "",
@@ -11233,6 +13318,11 @@ const JobDetailView = () => {
       linkedTaskId: "",
       customerApprovalRequired: false,
     });
+  };
+
+  const clearNewShoppingListItem = (e) => {
+    e?.preventDefault?.();
+    resetNewShoppingListItemDraft();
   };
 
   const buildShoppingEditForm = (item = {}) => ({
@@ -11454,8 +13544,8 @@ const JobDetailView = () => {
     }
   };
 
-  const handleAddShoppingListItem = async (e) => {
-    e.preventDefault();
+  const handleAddShoppingListItem = async (e, { keepOpen = false } = {}) => {
+    e?.preventDefault?.();
     if (!requireBuildJobEstimatePlan("build job estimate plans")) return;
 
     try {
@@ -11658,8 +13748,8 @@ const JobDetailView = () => {
         currentShoppingList: items,
       });
 
-      toast.success("Added item");
-      clearNewShoppingListItem({ preventDefault: () => { } });
+      toast.success(keepOpen ? "Added part. Ready for another one." : "Added part");
+      resetNewShoppingListItemDraft({ keepOpen, keepSubCategory: keepOpen });
     } catch (err) {
       console.error(err);
       toast.error("Failed to add item");
@@ -12908,9 +14998,8 @@ const JobDetailView = () => {
   const buildBillingEstimateSourceRecord = (overrides = {}) => {
     const termsList = normalizeBillingEstimateDraftTerms();
     const termsText = String(billingEstimateDraft.terms || "").trim();
-    const termsSummary = termsList.length
-      ? termsList.map((term) => term.description || term.title).filter(Boolean).join("\n")
-      : termsText;
+    const termsLineSummary = termsList.map((term) => term.description || term.title).filter(Boolean).join("\n");
+    const termsSummary = [termsText, termsLineSummary].filter(Boolean).join("\n");
     const selectedEstimatePlanId = overrides.selectedPlanId || selectedBillingPlanEstimate?.planId || "";
     const baseRecord = selectedPlanEstimateRecord || selectedSalesAgreement || selectedContract || {};
 
@@ -12920,6 +15009,9 @@ const JobDetailView = () => {
       description: billingEstimateDraft.description.trim() || baseRecord.description || selectedBillingPlanEstimate?.description || job.description || "",
       notes: billingEstimateDraft.description.trim() || baseRecord.notes || selectedBillingPlanEstimate?.description || job.description || "",
       terms: termsText,
+      termsTemplateId: billingEstimateDraft.termsTemplateId || baseRecord.termsTemplateId || "",
+      termsTemplateName: billingEstimateDraft.termsTemplateName || baseRecord.termsTemplateName || "",
+      termsTemplateDescription: billingEstimateDraft.termsTemplateDescription || baseRecord.termsTemplateDescription || "",
       termsList,
       termsSummary,
       expiresAt: billingEstimateDraft.expiresAt || baseRecord.expiresAt || null,
@@ -12937,6 +15029,46 @@ const JobDetailView = () => {
 
   const updateBillingEstimateDraftField = (field, value) => {
     setBillingEstimateDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const applyBillingTermsTemplate = async (templateId) => {
+    if (applyingBillingTermsTemplate) return;
+
+    if (!templateId) {
+      setBillingEstimateDraft((prev) => ({
+        ...prev,
+        termsTemplateId: "",
+        termsTemplateName: "",
+        termsTemplateDescription: "",
+        terms: "",
+      }));
+      return;
+    }
+
+    const template = billingTermsTemplates.find((item) => item.id === templateId) || null;
+    if (!template || !recentlySelectedCompany) {
+      toast.error("Select a saved terms template.");
+      return;
+    }
+
+    setApplyingBillingTermsTemplate(true);
+
+    try {
+      const templateTerms = await getTerms(recentlySelectedCompany, template.id);
+      setBillingEstimateDraft((prev) => ({
+        ...prev,
+        termsTemplateId: template.id,
+        termsTemplateName: template.name || "",
+        termsTemplateDescription: template.description || "",
+        terms: template.content || "",
+        termsList: normalizeTerms(templateTerms),
+      }));
+    } catch (error) {
+      console.error("[JobDetailView] Unable to apply estimate terms template", error);
+      toast.error("Failed to apply terms template.");
+    } finally {
+      setApplyingBillingTermsTemplate(false);
+    }
   };
 
   const updateBillingEstimateTerm = (termId, field, value) => {
@@ -13017,10 +15149,13 @@ const JobDetailView = () => {
         description: sourceRecord.termsSummary || sourceRecord.description || "",
         changes: [
           buildHistoryChange("expiresAt", "Last Date To Accept", formatDateValue(selectedPlanEstimateRecord?.expiresAt), formatDateValue(sourceRecord.expiresAt)),
+          buildHistoryChange("termsTemplateId", "Terms Template", selectedPlanEstimateRecord?.termsTemplateName || "—", sourceRecord.termsTemplateName || "—"),
           buildHistoryChange("terms", "Terms", selectedPlanEstimateRecord?.termsSummary || selectedPlanEstimateRecord?.terms || "—", sourceRecord.termsSummary || sourceRecord.terms || "—"),
         ],
         metadata: {
           salesAgreementId: agreement.id,
+          termsTemplateId: sourceRecord.termsTemplateId || "",
+          termsTemplateName: sourceRecord.termsTemplateName || "",
           selectedPlanId: selectedBillingPlanEstimate?.planId || agreement.selectedPlanId || "",
           selectedPlanTitle: selectedBillingPlanEstimate ? estimatePlanOptionTitle(selectedBillingPlanEstimate) : "",
           planOptionCount: agreement.planOptions?.length || 0,
@@ -13156,6 +15291,8 @@ const JobDetailView = () => {
           metadata: {
             salesAgreementId: salesAgreement.id,
             contractId: selectedContract?.id || "",
+            termsTemplateId: refinedEstimateSource.termsTemplateId || "",
+            termsTemplateName: refinedEstimateSource.termsTemplateName || "",
             selectedPlanId: selectedEstimatePlanId,
             selectedPlanTitle: selectedBillingPlanEstimate ? estimatePlanOptionTitle(selectedBillingPlanEstimate) : "",
             planOptionCount: salesAgreement.planOptions?.length || 0,
@@ -14526,6 +16663,235 @@ const JobDetailView = () => {
     </section>
   );
 
+  const renderActualServiceStopFormFields = ({
+    form,
+    updateForm,
+    saving = false,
+    isEdit = false,
+    onPlannedStopChange,
+    onTaskToggle,
+  }) => {
+    const modeConfig = getActualServiceStopScheduleMode(form.scheduleMode);
+    const typeOptions = getActualServiceStopTypeOptions(modeConfig.useCase, form.serviceStopTypeId);
+    const selectedTaskIds = new Set(form.taskIds || []);
+    const showTaskPicker = modeConfig.id === "jobVisit" && !isEdit;
+
+    return (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <label className="block text-sm font-semibold text-slate-700">
+          Pay Type
+          <select
+            value={form.serviceStopTypeId}
+            onChange={(event) => updateForm("serviceStopTypeId", event.target.value)}
+            disabled={saving}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <option value="">Use default {modeConfig.fallbackName}</option>
+            {typeOptions.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.name || type.label || type.type || "Service Stop"}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block text-sm font-semibold text-slate-700">
+          Technician
+          <select
+            value={form.techId}
+            onChange={(event) => updateForm("techId", event.target.value)}
+            disabled={saving}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <option value="">Select Technician</option>
+            {(companyUserList || []).map((user) => {
+              const userId = getCompanyUserId(user);
+              return (
+                <option key={userId || user.id} value={userId}>
+                  {getCompanyUserName(user)}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+
+        {!isEdit && modeConfig.id === "jobVisit" && plannedServiceStops.length > 0 && (
+          <label className="block text-sm font-semibold text-slate-700 md:col-span-2">
+            Planned Operations Stop
+            <select
+              value={form.plannedServiceStopId}
+              onChange={(event) => onPlannedStopChange?.(event.target.value)}
+              disabled={saving}
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="">No planned stop selected</option>
+              {plannedServiceStops.map((plannedStop) => {
+                const alreadyScheduled = plannedStop.serviceStopId || plannedStop.scheduledServiceStopId || plannedStop.convertedServiceStopId;
+                return (
+                  <option key={plannedStop.id} value={plannedStop.id}>
+                    {plannedStop.name || plannedStop.serviceStopTypeName || plannedStop.type || "Planned stop"}
+                    {alreadyScheduled ? " (already scheduled)" : ""}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        )}
+
+        <label className="block text-sm font-semibold text-slate-700">
+          Service Date
+          <input
+            type="date"
+            value={form.serviceDate}
+            onChange={(event) => updateForm("serviceDate", event.target.value)}
+            disabled={saving}
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </label>
+
+        <label className="block text-sm font-semibold text-slate-700">
+          Estimated Duration (Min)
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={form.estimatedDuration}
+            onChange={(event) => updateForm("estimatedDuration", event.target.value)}
+            disabled={saving}
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </label>
+
+        <label className="block text-sm font-semibold text-slate-700">
+          Operation Status
+          <select
+            value={form.operationStatus}
+            onChange={(event) => updateForm("operationStatus", event.target.value)}
+            disabled={saving}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {SERVICE_STOP_OPERATION_STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block text-sm font-semibold text-slate-700">
+          Billing Status
+          <select
+            value={form.billingStatus}
+            onChange={(event) => updateForm("billingStatus", event.target.value)}
+            disabled={saving}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {SERVICE_STOP_BILLING_STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex flex-wrap gap-2 md:col-span-2">
+          <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              checked={Boolean(form.includeReadings)}
+              onChange={(event) => updateForm("includeReadings", event.target.checked)}
+              disabled={saving}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600"
+            />
+            Readings
+          </label>
+          <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              checked={Boolean(form.includeDosages)}
+              onChange={(event) => updateForm("includeDosages", event.target.checked)}
+              disabled={saving}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600"
+            />
+            Dosages
+          </label>
+        </div>
+
+        <label className="block text-sm font-semibold text-slate-700 md:col-span-2">
+          Description
+          <textarea
+            value={form.description}
+            onChange={(event) => updateForm("description", event.target.value)}
+            disabled={saving}
+            className="mt-1 min-h-[96px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            placeholder="Notes for the technician or estimate visit."
+          />
+        </label>
+
+        {showTaskPicker && (
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3 md:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-bold text-slate-900">Tasks To Assign</p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Scheduled and finished tasks stay locked to avoid double-booking work.
+                </p>
+              </div>
+              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
+                {selectedTaskIds.size}
+              </span>
+            </div>
+
+            <div className="mt-3 max-h-52 space-y-2 overflow-y-auto">
+              {!taskList.length ? (
+                <div className="rounded-md border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-500">
+                  No job tasks are available yet.
+                </div>
+              ) : (
+                taskList.map((task) => {
+                  const unavailable = isTaskUnavailableForNewServiceStop(task);
+                  const checked = selectedTaskIds.has(task.id) && !unavailable;
+                  return (
+                    <label
+                      key={task.id}
+                      className={[
+                        "flex items-start gap-2 rounded-md border p-2 text-sm",
+                        checked
+                          ? "border-blue-200 bg-blue-50"
+                          : unavailable
+                            ? "border-slate-200 bg-white opacity-60"
+                            : "border-slate-200 bg-white",
+                      ].join(" ")}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => onTaskToggle?.(task.id)}
+                        disabled={saving || unavailable}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-semibold text-slate-900">{task.name || task.description || "Task"}</span>
+                        <span className="mt-0.5 block text-xs text-slate-500">
+                          {[task.type || "Task", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : "", taskContextLabel(task)].filter(Boolean).join(" • ")}
+                        </span>
+                        {unavailable && (
+                          <span className="mt-1 block text-xs font-semibold text-slate-500">
+                            {task.status || "Unavailable"}
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderServiceStopCard = (stop) => {
     const scheduledLaborCents = getScheduledStopEstimatedLaborCents(stop);
     const timeRange = [formatTimeValue(stop.startTime), formatTimeValue(stop.endTime)]
@@ -14534,11 +16900,18 @@ const JobDetailView = () => {
     const duration = formatDurationMinutes(stop.duration || stop.estimatedDuration);
 
     return (
-      <button
+      <div
         key={stop.id}
-        type="button"
+        role="button"
+        tabIndex={0}
         onClick={() => openServiceStopDetail(stop.id)}
-        className="w-full rounded-md border border-slate-200 bg-slate-50 p-3 text-left transition hover:bg-white hover:shadow-sm"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openServiceStopDetail(stop.id);
+          }
+        }}
+        className="w-full cursor-pointer rounded-md border border-slate-200 bg-slate-50 p-3 text-left transition hover:bg-white hover:shadow-sm"
       >
         <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -14550,23 +16923,46 @@ const JobDetailView = () => {
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-1.5 lg:justify-end">
-            {stop.includeReadings && (
+          <div className="flex items-start justify-end gap-2">
+            <div className="flex flex-wrap gap-1.5 lg:justify-end">
+              {stop.includeReadings && (
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                  Readings
+                </span>
+              )}
+              {stop.includeDosages && (
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                  Dosages
+                </span>
+              )}
               <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                Readings
+                Ops: {stop.operationStatus || "—"}
               </span>
-            )}
-            {stop.includeDosages && (
               <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                Dosages
+                Billing: {stop.billingStatus || "—"}
               </span>
-            )}
-            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-              Ops: {stop.operationStatus || "—"}
-            </span>
-            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-              Billing: {stop.billingStatus || "—"}
-            </span>
+            </div>
+            <div
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              <JobLineActionMenu
+                label={`${stop.internalId || stop.type || "Service stop"} actions`}
+                actions={[
+                  {
+                    label: "View Service Stop",
+                    icon: DocumentTextIcon,
+                    onClick: () => openServiceStopDetail(stop.id),
+                  },
+                  {
+                    label: "Edit",
+                    icon: PencilSquareIcon,
+                    tone: "blue",
+                    onClick: () => openEditActualServiceStopModal(stop),
+                  },
+                ]}
+              />
+            </div>
           </div>
         </div>
 
@@ -14616,7 +17012,7 @@ const JobDetailView = () => {
             )}
           </div>
         )}
-      </button>
+      </div>
     );
   };
 
@@ -15030,7 +17426,7 @@ const JobDetailView = () => {
   const selfScheduleWorkOfferCount = workOffers.filter((offer) => getOfferCanSelfSchedule(offer)).length;
   const visibleActualServiceStops = showAllActualServiceStops ? serviceStops : serviceStops.slice(0, 5);
   const hiddenActualServiceStopCount = Math.max(serviceStops.length - 5, 0);
-  const unfinishedJobFinishTasks = (taskList || []).filter((task) => !isFinishedTaskStatus(task.status));
+  const unfinishedJobFinishTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
   const selectedJobFinishTaskCount = jobFinishTaskIds.filter((taskId) =>
     unfinishedJobFinishTasks.some((task) => task.id === taskId)
   ).length;
@@ -15177,6 +17573,7 @@ const JobDetailView = () => {
   const billingStatusKey = timelineStatusKey(job.billingStatus || "Draft");
   const operationStatusKey = timelineStatusKey(job.operationStatus || "Estimate Pending");
   const customerResolvedKey = timelineStatusKey(JOB_BILLING_STATUS.customerResolved);
+  const canceledKey = timelineStatusKey(JOB_BILLING_STATUS.canceled);
   const statusKeyMatches = (keys = [], key = "") => keys.includes(key);
   const jobLifecycleStatusSteps = [
     {
@@ -15259,7 +17656,7 @@ const JobDetailView = () => {
       targetTab: "Billing",
     },
   ];
-  const alternativeBillingStatusKeys = new Set(["comped", customerResolvedKey, "expired"]);
+  const alternativeBillingStatusKeys = new Set(["comped", customerResolvedKey, canceledKey, "expired"]);
   const responseBillingStatusKeys = new Set(["rejected"]);
   const fallbackBillingProgressIndex = (() => {
     if (billingStatusKey === "comped" || billingStatusKey === customerResolvedKey) {
@@ -15267,6 +17664,9 @@ const JobDetailView = () => {
     }
     if (billingStatusKey === "expired" || billingStatusKey === "rejected") {
       return jobLifecycleStatusSteps.findIndex((step) => step.id === "estimate");
+    }
+    if (billingStatusKey === canceledKey) {
+      return jobLifecycleStatusSteps.findIndex((step) => step.id === "estimate-pending");
     }
     return -1;
   })();
@@ -16591,173 +18991,279 @@ const JobDetailView = () => {
     );
   };
 
-  const renderPlanInvoiceNewMaterialForm = () => (
-    <form onSubmit={handleAddShoppingListItem} className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3">
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-            Sub Category
-            <select
-              value={shoppingFormData.subCategory}
-              onChange={(event) => handleShoppingSubCategoryChange(event.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-            >
-              {shoppingSubCategoryOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          {requiresShoppingDbItem && (
-            <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span>Database Item</span>
-                {!showShoppingDbItemCreator && (
-                  <button
-                    type="button"
-                    onClick={() => setShowShoppingDbItemCreator(true)}
-                    className="inline-flex items-center justify-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold normal-case tracking-normal text-blue-700 transition hover:bg-blue-100"
-                  >
-                    <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />
-                    New Item
-                  </button>
+  const renderPlanInvoiceNewMaterialForm = () => {
+    const selectedShoppingDbItemId =
+      selectedShoppingDbItem?.id || selectedShoppingDbItem?.value || shoppingFormData.dbItemId || "";
+
+    return (
+      <form onSubmit={handleAddShoppingListItem} className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="space-y-4">
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-950">Purchase Line Picker</h4>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Select a saved product or switch to a manual part line.
+                    </p>
+                  </div>
+                  <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 lg:w-48">
+                    Type
+                    <select
+                      value={shoppingFormData.subCategory}
+                      onChange={(event) => handleShoppingSubCategoryChange(event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {shoppingSubCategoryOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                {requiresShoppingDbItem ? (
+                  <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_auto]">
+                    <select
+                      value={selectedShoppingDbItemId}
+                      onChange={(event) => handleShoppingDbItemIdChange(event.target.value)}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      aria-label="Select purchase line item"
+                    >
+                      <option value="">
+                        {(shoppingDbItemList || []).length ? "Select product or part" : "No database items yet"}
+                      </option>
+                      {(shoppingDbItemList || []).map((item) => {
+                        const itemId = item.id || item.value || "";
+                        const itemPriceCents = item.sellPrice || item.billingRate || item.rate || item.cost || 0;
+                        return (
+                          <option key={itemId} value={itemId}>
+                            {[
+                              item.name || item.label || "Database Item",
+                              moneyFromCents(itemPriceCents),
+                              item.subCategory || item.category || "",
+                            ].filter(Boolean).join(" - ")}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={shoppingFormData.quantity}
+                      onChange={(event) => handleShoppingFormChange("quantity", event.target.value)}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      aria-label="Purchase line quantity"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowShoppingDbItemCreator(true)}
+                      disabled={showShoppingDbItemCreator}
+                      className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                      New Item
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-600">
+                    Add a manual part line below when the product is not in the database yet.
+                  </p>
+                )}
+
+                {showShoppingDbItemCreator && requiresShoppingDbItem && (
+                  <div className="mt-3">{renderShoppingDatabaseItemCreator()}</div>
                 )}
               </div>
-              <div className="text-sm font-medium normal-case tracking-normal">
-                <Select
-                  value={selectedShoppingDbItem}
-                  options={shoppingDbItemList}
-                  onChange={handleShoppingDbItemChange}
-                  isSearchable
-                  isClearable
-                  placeholder="Select a database item"
-                  theme={selectTheme}
-                  styles={selectStyles}
-                />
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {requiresShoppingDbItem && selectedShoppingDbItem && (
+                  <div className="md:col-span-2 rounded-md border border-slate-200 bg-white p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Selected Part</p>
+                    <p className="mt-1 text-sm font-bold text-slate-950">
+                      {selectedShoppingDbItem.name || selectedShoppingDbItem.label || "Selected database item"}
+                    </p>
+                    {selectedShoppingDbItem.description && (
+                      <p className="mt-1 text-sm text-slate-600">{selectedShoppingDbItem.description}</p>
+                    )}
+                  </div>
+                )}
+
+                {requiresShoppingManualDetails && (
+                  <>
+                    <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                      Name
+                      <input
+                        type="text"
+                        value={shoppingFormData.name}
+                        onChange={(event) => handleShoppingFormChange("name", event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                        placeholder="Product name"
+                      />
+                    </label>
+                    <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                      Quantity
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={shoppingFormData.quantity}
+                        onChange={(event) => handleShoppingFormChange("quantity", event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                      />
+                    </label>
+                    <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 md:col-span-2">
+                      Description
+                      <textarea
+                        value={shoppingFormData.description}
+                        onChange={(event) => handleShoppingFormChange("description", event.target.value)}
+                        className="mt-1 min-h-[72px] w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                        placeholder="Product description"
+                      />
+                    </label>
+                  </>
+                )}
+
+                <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                  Unit Cost
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={shoppingFormData.plannedUnitCost}
+                    onChange={(event) => handleShoppingFormChange("plannedUnitCost", event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                    placeholder="0.00"
+                  />
+                </label>
+                <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                  Unit Billing
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={shoppingFormData.plannedUnitPrice}
+                    onChange={(event) => handleShoppingFormChange("plannedUnitPrice", event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                    placeholder="0.00"
+                  />
+                </label>
+                <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 md:col-span-2">
+                  Linked Task
+                  <select
+                    value={shoppingFormData.linkedTaskId}
+                    onChange={(event) => handleShoppingFormChange("linkedTaskId", event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                  >
+                    <option value="">No linked task</option>
+                    {(taskList || []).map((task) => (
+                      <option key={task.id} value={task.id}>
+                        {[task.name || task.type || "Task", task.status || ""].filter(Boolean).join(" - ")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs md:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(shoppingFormData.customerApprovalRequired)}
+                    onChange={(event) => handleShoppingFormChange("customerApprovalRequired", event.target.checked)}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block font-bold text-amber-900">Require customer approval</span>
+                    <span className="mt-1 block text-amber-800">Keeps this product out of the shopping list until approved.</span>
+                  </span>
+                </label>
               </div>
             </div>
-          )}
-          {showShoppingDbItemCreator && requiresShoppingDbItem && (
-            <div className="md:col-span-2">{renderShoppingDatabaseItemCreator()}</div>
-          )}
-          {requiresShoppingManualDetails && (
-            <>
-              <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                Name
-                <input
-                  type="text"
-                  value={shoppingFormData.name}
-                  onChange={(event) => handleShoppingFormChange("name", event.target.value)}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-                  placeholder="Product name"
-                />
-              </label>
-              <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 md:col-span-2">
-                Description
-                <textarea
-                  value={shoppingFormData.description}
-                  onChange={(event) => handleShoppingFormChange("description", event.target.value)}
-                  className="mt-1 min-h-[72px] w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-                  placeholder="Product description"
-                />
-              </label>
-            </>
-          )}
-          <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-            Quantity
-            <input
-              type="text"
-              value={shoppingFormData.quantity}
-              onChange={(event) => handleShoppingFormChange("quantity", event.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-            />
-          </label>
-          <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-            Unit Cost
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={shoppingFormData.plannedUnitCost}
-              onChange={(event) => handleShoppingFormChange("plannedUnitCost", event.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-              placeholder="0.00"
-            />
-          </label>
-          <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-            Unit Billing
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={shoppingFormData.plannedUnitPrice}
-              onChange={(event) => handleShoppingFormChange("plannedUnitPrice", event.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-              placeholder="0.00"
-            />
-          </label>
-          <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-            Linked Task
-            <select
-              value={shoppingFormData.linkedTaskId}
-              onChange={(event) => handleShoppingFormChange("linkedTaskId", event.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-            >
-              <option value="">No linked task</option>
-              {(taskList || []).map((task) => (
-                <option key={task.id} value={task.id}>
-                  {[task.name || task.type || "Task", task.status || ""].filter(Boolean).join(" - ")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs md:col-span-2">
-            <input
-              type="checkbox"
-              checked={Boolean(shoppingFormData.customerApprovalRequired)}
-              onChange={(event) => handleShoppingFormChange("customerApprovalRequired", event.target.checked)}
-              className="mt-1"
-            />
-            <span>
-              <span className="block font-bold text-amber-900">Require customer approval</span>
-              <span className="mt-1 block text-amber-800">Keeps this product out of the shopping list until approved.</span>
-            </span>
-          </label>
-        </div>
-        <div className="rounded-md border border-slate-200 bg-white p-3">
-          <h5 className="text-sm font-bold text-slate-900">Line Preview</h5>
-          <div className="mt-3 space-y-2 text-xs">
-            {[
-              ["Unit Cost", shoppingPreviewUnitCostCents],
-              ["Unit Billing", shoppingPreviewUnitPriceCents],
-              ["Total Cost", shoppingPreviewTotalCostCents],
-              ["Total Billing", shoppingPreviewTotalPriceCents],
-            ].map(([label, value]) => (
-              <div key={label} className="flex justify-between gap-3 border-b border-slate-100 pb-2 last:border-b-0">
-                <span className="font-semibold text-slate-500">{label}</span>
-                <span className="font-bold text-slate-900">{moneyFromCents(value)}</span>
+
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <h5 className="text-sm font-bold text-slate-900">Line Preview</h5>
+              <div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200 bg-white text-xs">
+                {[
+                  ["Unit Cost", shoppingPreviewUnitCostCents],
+                  ["Unit Billing", shoppingPreviewUnitPriceCents],
+                  ["Total Cost", shoppingPreviewTotalCostCents],
+                  ["Total Billing", shoppingPreviewTotalPriceCents],
+                ].map(([label, value]) => (
+                  <div key={label} className="flex justify-between gap-3 px-3 py-2">
+                    <span className="font-semibold text-slate-500">{label}</span>
+                    <span className="font-bold text-slate-900">{moneyFromCents(value)}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
           </div>
-          <div className="mt-3 flex gap-2">
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <button
+            type="button"
+            onClick={clearNewShoppingListItem}
+            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
             <button
               type="button"
-              onClick={clearNewShoppingListItem}
-              className="flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+              onClick={(event) => handleAddShoppingListItem(event, { keepOpen: true })}
+              disabled={!canSaveShoppingItem}
+              className="rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Cancel
+              Save & Add More Parts
             </button>
             <button
               type="submit"
               disabled={!canSaveShoppingItem}
-              className="flex-1 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Add
+              Add Part
             </button>
           </div>
         </div>
+      </form>
+    );
+  };
+
+  const renderNewShoppingListModal = () => {
+    if (!newShoppingList) return null;
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-planned-product-title"
+      >
+        <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Planned Product</p>
+              <h3 id="add-planned-product-title" className="mt-1 text-lg font-bold text-slate-950">
+                Add Product Line
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Add one part to the plan, or keep the popup open to add several parts in a row.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearNewShoppingListItem}
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50"
+              aria-label="Close product line creator"
+            >
+              <XMarkIcon className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </div>
+
+          {renderPlanInvoiceNewMaterialForm()}
+        </div>
       </div>
-    </form>
-  );
+    );
+  };
 
   const renderUnassignedLaborScopeRow = () => {
     if (!unassignedLaborTasks.length) return null;
@@ -17581,10 +20087,10 @@ const JobDetailView = () => {
 	                            </p>
 	                          </div>
 	                          <div className="flex flex-wrap items-center gap-2">
-	                            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
+	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
 	                              Price {moneyFromCents(currentPlanLaborPriceCents)}
 	                            </span>
-	                            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
+	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
 	                              Cost {moneyFromCents(currentPlanLaborCostCents)}
 	                            </span>
                             {canBuildJobEstimatePlan && (
@@ -17593,7 +20099,7 @@ const JobDetailView = () => {
 	                                  type="button"
 	                                  onClick={toggleServiceCatalogPicker}
 	                                  disabled={Boolean(addingCatalogServiceId) || newLaborLine || Boolean(editingLaborLineId)}
-                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
 		                                >
 		                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
 		                                  Service
@@ -17602,7 +20108,7 @@ const JobDetailView = () => {
 	                                  type="button"
                                   onClick={showNewTaskItem}
                                   disabled={Boolean(editingTaskId) || newTask || newLaborLine || Boolean(editingLaborLineId)}
-                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                   <PlusIcon className="h-4 w-4" aria-hidden="true" />
                                   Task
@@ -17672,10 +20178,10 @@ const JobDetailView = () => {
 	                            </p>
 	                          </div>
 	                          <div className="flex flex-wrap items-center gap-2">
-	                            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
+	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
 	                              Price {moneyFromCents(currentPlanMaterialPriceCents)}
 	                            </span>
-	                            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
+	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
 	                              Cost {moneyFromCents(currentPlanMaterialCostCents)}
 	                            </span>
 	                            {canBuildJobEstimatePlan && (
@@ -17683,7 +20189,7 @@ const JobDetailView = () => {
 	                                type="button"
 	                                onClick={showNewShoppingListItem}
 	                                disabled={Boolean(editingShoppingItemId) || newShoppingList}
-	                                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+	                                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
 	                              >
 	                                <PlusIcon className="h-4 w-4" aria-hidden="true" />
 	                                Product Line
@@ -17693,7 +20199,7 @@ const JobDetailView = () => {
 	                        </div>
 
 	                        <div className="space-y-2 bg-white p-4">
-	                          {!shoppingList.length && !newShoppingList ? (
+	                          {!shoppingList.length ? (
 	                            <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
 	                              <p className="text-sm font-medium text-slate-700">No planned products yet.</p>
 	                              <p className="mt-0.5 text-xs text-slate-500">
@@ -17728,8 +20234,6 @@ const JobDetailView = () => {
 	                              </button>
 	                            </div>
 	                          )}
-
-	                          {newShoppingList && renderPlanInvoiceNewMaterialForm()}
 	                        </div>
 	                      </section>
 
@@ -18840,18 +21344,13 @@ const JobDetailView = () => {
                             {markingJobInvoiced ? "Converting..." : "Convert to Invoice"}
                           </button>
                         )}
-                        <Link
-                          to={`/company/serviceStops/createNew/${jobId}?category=jobEstimate`}
-                          className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                        >
-                          Schedule Job Estimate
-                        </Link>
-                        <Link
-                          to={`/company/serviceStops/createNew/${jobId}?category=jobVisit`}
+                        <button
+                          type="button"
+                          onClick={openScheduleServiceStopChooser}
                           className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
                         >
                           Schedule Service Stop
-                        </Link>
+                        </button>
                       </div>
                     </div>
 
@@ -19477,7 +21976,81 @@ const JobDetailView = () => {
 	                                    : "border-gray-200 bg-gray-50 hover:bg-white",
 	                                ].join(" ")}
 	                              >
-	                                <div className="grid gap-3 sm:grid-cols-[132px_minmax(0,1fr)]">
+	                                <div className="space-y-3">
+	                                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+	                                    <div className="flex flex-wrap items-center gap-1.5">
+	                                      <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${estimateRow.statusClass}`}>
+	                                        {estimateRow.statusLabel}
+	                                      </span>
+	                                      {active && (
+	                                        <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700">
+	                                          Default / manual accept
+	                                        </span>
+	                                      )}
+	                                    </div>
+
+	                                    <Menu
+	                                      as="div"
+	                                      className="relative shrink-0 text-left"
+	                                      onClick={(event) => event.stopPropagation()}
+	                                      onKeyDown={(event) => event.stopPropagation()}
+	                                    >
+	                                      <MenuButton
+	                                        type="button"
+	                                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+	                                        aria-label={`${estimateRow.title || "Plan estimate"} actions`}
+	                                        title="Plan estimate actions"
+	                                      >
+	                                        <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
+	                                      </MenuButton>
+	                                      <MenuItems className="absolute right-0 z-40 mt-2 w-44 origin-top-right overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
+	                                        <MenuItem disabled={!canBuildJobEstimatePlan}>
+	                                          <button
+	                                            type="button"
+	                                            onClick={() => {
+	                                              if (!canBuildJobEstimatePlan) return;
+	                                              setSelectedBillingPlanId(estimateRow.planId);
+	                                              handleJobTabChange("Planned");
+	                                            }}
+	                                            disabled={!canBuildJobEstimatePlan}
+	                                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 data-[focus]:bg-blue-50"
+	                                          >
+	                                            <PencilSquareIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+	                                            <span>Create Plans</span>
+	                                          </button>
+	                                        </MenuItem>
+	                                        <MenuItem disabled={!estimateRow.agreementId}>
+	                                          <button
+	                                            type="button"
+	                                            onClick={() => {
+	                                              if (!estimateRow.agreementId) return;
+	                                              navigate(`/company/estimates/${estimateRow.agreementId}`);
+	                                            }}
+	                                            disabled={!estimateRow.agreementId}
+	                                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 data-[focus]:bg-slate-50"
+	                                          >
+	                                            <DocumentTextIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+	                                            <span>Open Estimate</span>
+	                                          </button>
+	                                        </MenuItem>
+	                                      </MenuItems>
+	                                    </Menu>
+	                                  </div>
+
+	                                  <div className="min-w-0">
+	                                    <p className="truncate text-base font-bold text-gray-800">
+	                                      {estimateRow.title}
+	                                    </p>
+
+	                                    {estimateRow.description ? (
+	                                      <p className="mt-1 line-clamp-2 text-sm text-gray-600">
+	                                        {estimateRow.description}
+	                                      </p>
+	                                    ) : (
+	                                      <p className="mt-1 text-sm text-gray-500">No description added.</p>
+	                                    )}
+	                                  </div>
+
 	                                  <dl className="divide-y divide-slate-200 border-y border-slate-200">
 	                                    {planEstimateMetrics.map((metric) => (
 	                                      <div key={metric.label} className="flex items-center justify-between gap-3 py-1.5">
@@ -19490,57 +22063,6 @@ const JobDetailView = () => {
 	                                      </div>
 	                                    ))}
 	                                  </dl>
-
-	                                  <div className="min-w-0 sm:border-l sm:border-slate-200 sm:pl-3">
-	                                    <div className="flex items-start justify-between gap-2">
-	                                      <p className="min-w-0 truncate text-base font-bold text-gray-800">
-	                                        {estimateRow.title}
-	                                      </p>
-	                                      <div className="flex shrink-0 flex-col items-end gap-1">
-	                                        <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${estimateRow.statusClass}`}>
-	                                          {estimateRow.statusLabel}
-	                                        </span>
-	                                        {active && (
-	                                          <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700">
-	                                            Default / manual accept
-	                                          </span>
-	                                        )}
-	                                      </div>
-	                                    </div>
-
-	                                    {estimateRow.description ? (
-	                                      <p className="mt-1 line-clamp-2 text-sm text-gray-600">
-	                                        {estimateRow.description}
-	                                      </p>
-	                                    ) : (
-	                                      <p className="mt-1 text-sm text-gray-500">No description added.</p>
-	                                    )}
-
-	                                    <div className="mt-3 flex flex-wrap gap-2">
-	                                      <button
-	                                        type="button"
-	                                        onClick={(event) => {
-	                                          event.stopPropagation();
-                                          if (!canBuildJobEstimatePlan) return;
-	                                          setSelectedBillingPlanId(estimateRow.planId);
-	                                          handleJobTabChange("Planned");
-	                                        }}
-                                        disabled={!canBuildJobEstimatePlan}
-	                                        className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-	                                      >
-	                                        Create Plans
-	                                      </button>
-	                                      {estimateRow.agreementId && (
-	                                        <Link
-	                                          to={`/company/estimates/${estimateRow.agreementId}`}
-	                                          onClick={(e) => e.stopPropagation()}
-	                                          className="rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-100"
-	                                        >
-	                                          Open Estimate
-	                                        </Link>
-	                                      )}
-	                                    </div>
-	                                  </div>
 	                                </div>
 	                              </div>
 	                            );
@@ -19692,20 +22214,100 @@ const JobDetailView = () => {
                           />
                         </label>
 
-                        <label className="mt-4 block text-sm font-semibold text-slate-700">
-                          Default Terms
-                          <textarea
-                            value={billingEstimateDraft.terms}
-                            onChange={(event) => updateBillingEstimateDraftField("terms", event.target.value)}
-                            className="mt-1 min-h-[92px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            placeholder="General estimate terms, approval language, payment expectations, exclusions, or notes"
-                          />
-                        </label>
-
-                        <div className="mt-5">
-                          <div className="flex items-center justify-between gap-3">
+                        <section className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
-                              <h5 className="text-sm font-bold text-slate-950">Terms Lines</h5>
+                              <h5 className="text-sm font-bold text-slate-950">Terms</h5>
+                              <p className="mt-1 text-sm text-slate-500">
+                                Select a job estimate template, then adjust the content and lines for this estimate only.
+                              </p>
+                            </div>
+
+                            <Link
+                              to="/company/settings/terms-templates"
+                              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                              Manage Templates
+                            </Link>
+                          </div>
+
+                          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                            <label className="block text-sm font-semibold text-slate-700">
+                              Job Estimate Terms Template
+                              <select
+                                value={billingEstimateDraft.termsTemplateId || ""}
+                                onChange={(event) => applyBillingTermsTemplate(event.target.value)}
+                                disabled={loadingBillingTermsTemplates || applyingBillingTermsTemplate}
+                                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                              >
+                                <option value="">
+                                  {loadingBillingTermsTemplates ? "Loading templates..." : "No template selected"}
+                                </option>
+                                {currentBillingTermsTemplateIsOutsidePicker && (
+                                  <option value={selectedBillingTermsTemplate.id}>
+                                    {selectedBillingTermsTemplate.name || "Current template"}
+                                  </option>
+                                )}
+                                {jobEstimateBillingTermsTemplates.length > 0 && (
+                                  <optgroup label="Job Estimate Templates">
+                                    {jobEstimateBillingTermsTemplates.map((template) => (
+                                      <option key={template.id} value={template.id}>
+                                        {template.name}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                                {sharedBillingTermsTemplates.length > 0 && (
+                                  <optgroup label="Shared Templates">
+                                    {sharedBillingTermsTemplates.map((template) => (
+                                      <option key={template.id} value={template.id}>
+                                        {template.name}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                              </select>
+                            </label>
+
+                            <div className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-600">
+                              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Template Type</p>
+                              <p className="mt-2 font-semibold text-slate-800">
+                                {selectedBillingTermsTemplate
+                                  ? termsTemplateUseCaseLabel(selectedBillingTermsTemplate.useCase || selectedBillingTermsTemplate.category)
+                                  : "Job Estimate or Custom"}
+                              </p>
+                              <p className="mt-1">
+                                {selectedBillingTermsTemplate?.description ||
+                                  "Use Case controls where templates appear. Job estimates should use Job Estimate templates; Custom templates are shared."}
+                              </p>
+                            </div>
+                          </div>
+
+                          {applyingBillingTermsTemplate && (
+                            <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
+                          )}
+
+                          {!loadingBillingTermsTemplates &&
+                            !jobEstimateBillingTermsTemplates.length &&
+                            !sharedBillingTermsTemplates.length && (
+                              <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-500">
+                                Create a terms template with the Job Estimate use case to make it available here.
+                              </div>
+                            )}
+
+                          <label className="mt-4 block text-sm font-semibold text-slate-700">
+                            Template Default Content
+                            <textarea
+                              value={billingEstimateDraft.terms}
+                              onChange={(event) => updateBillingEstimateDraftField("terms", event.target.value)}
+                              className="mt-1 min-h-[92px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                              placeholder="General estimate terms, approval language, payment expectations, exclusions, or notes"
+                            />
+                          </label>
+
+                          <div className="mt-5 flex items-center justify-between gap-3">
+                            <div>
+                              <h6 className="text-sm font-bold text-slate-950">Terms Lines</h6>
                               <p className="mt-1 text-sm text-slate-500">
                                 Add or adjust estimate-specific lines for this customer review.
                               </p>
@@ -19744,12 +22346,12 @@ const JobDetailView = () => {
                             ))}
 
                             {(!billingEstimateDraft.termsList || billingEstimateDraft.termsList.length === 0) && (
-                              <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                                Add estimate-specific terms lines.
+                              <div className="rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+                                Select a template or add estimate-specific terms lines.
                               </div>
                             )}
                           </div>
-                        </div>
+                        </section>
 
                         <div className="mt-5 rounded-lg border border-slate-200">
                           <div className="border-b border-slate-200 px-4 py-3">
@@ -19981,22 +22583,32 @@ const JobDetailView = () => {
         </div>
       </div>
       {edit && (canUpdateCurrentJob || can("26")) && (
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {canUpdateCurrentJob && (
             <button
               type="button"
               onClick={cancelJob}
-              disabled={expiringJob || resolvingCustomerHandledJob || deletingJob}
+              disabled={jobActionInProgress}
               className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Cancel Job"}
+              {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Potential Work" : "Cancel to Potential Work"}
+            </button>
+          )}
+          {canUpdateCurrentJob && (
+            <button
+              type="button"
+              onClick={cancelJobWithoutPotentialWork}
+              disabled={jobActionInProgress}
+              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {cancelingJob ? "Canceling..." : isJobCanceled ? "Refresh Cancel Reason" : "Cancel Job Only"}
             </button>
           )}
           {canUpdateCurrentJob && (
             <button
               type="button"
               onClick={markCustomerTookCareOfJob}
-              disabled={expiringJob || resolvingCustomerHandledJob || deletingJob}
+              disabled={jobActionInProgress}
               className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {resolvingCustomerHandledJob
@@ -20010,7 +22622,8 @@ const JobDetailView = () => {
             <button
               type="button"
               onClick={deleteJob}
-              disabled={deletingJob || expiringJob || resolvingCustomerHandledJob}
+              disabled={jobActionInProgress || isJobDeleteLocked}
+              title={isJobDeleteLocked ? "Finished jobs cannot be deleted." : "Delete job"}
               className="w-full rounded-xl border border-red-300 bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {deletingJob ? "Deleting..." : "Delete Job"}
@@ -20022,6 +22635,7 @@ const JobDetailView = () => {
 	      {renderLaborLineTaskSelectorModal()}
 	      {renderServiceCatalogCreatorModal()}
 	      {renderNewTaskModal()}
+	      {renderNewShoppingListModal()}
 	      {renderTaskEditModal()}
 	      {showCreateTemplateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -20290,6 +22904,143 @@ const JobDetailView = () => {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {showScheduleServiceStopModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+              <div>
+                <h3 className="text-xl font-bold text-slate-950">
+                  {scheduleServiceStopMode
+                    ? `Schedule ${getActualServiceStopScheduleMode(scheduleServiceStopMode).buttonLabel}`
+                    : "Schedule Service Stop"}
+                </h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  {scheduleServiceStopMode
+                    ? getActualServiceStopScheduleMode(scheduleServiceStopMode).helper
+                    : "Choose whether this is an estimate visit or a service stop for performing the work."}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeScheduleServiceStopModal}
+                disabled={savingScheduledServiceStop}
+                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Close schedule service stop form"
+              >
+                <XMarkIcon className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+
+            {!scheduleServiceStopMode ? (
+              <div className="grid gap-3 overflow-y-auto p-5 md:grid-cols-2">
+                {ACTUAL_SERVICE_STOP_SCHEDULE_MODES.map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => chooseScheduleServiceStopMode(mode.id)}
+                    className="rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50"
+                  >
+                    <span className="block text-base font-bold text-slate-950">{mode.buttonLabel}</span>
+                    <span className="mt-1 block text-sm text-slate-600">{mode.helper}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <form onSubmit={saveScheduledServiceStop} className="overflow-y-auto">
+                <div className="p-5">
+                  {renderActualServiceStopFormFields({
+                    form: scheduleServiceStopForm,
+                    updateForm: updateScheduleServiceStopForm,
+                    saving: savingScheduledServiceStop,
+                    onPlannedStopChange: applyPlannedStopToScheduleServiceStopForm,
+                    onTaskToggle: toggleScheduleServiceStopTask,
+                  })}
+                </div>
+
+                <div className="flex flex-col gap-2 border-t border-slate-200 p-5 sm:flex-row sm:justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleServiceStopMode("")}
+                    disabled={savingScheduledServiceStop}
+                    className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Back
+                  </button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={closeScheduleServiceStopModal}
+                      disabled={savingScheduledServiceStop}
+                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingScheduledServiceStop}
+                      className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {savingScheduledServiceStop ? "Scheduling..." : `Schedule ${getActualServiceStopScheduleMode(scheduleServiceStopMode).buttonLabel}`}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+      {editingActualServiceStopId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+              <div>
+                <h3 className="text-xl font-bold text-slate-950">Edit Service Stop</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Update the stop without leaving the job actuals page.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeEditActualServiceStopModal}
+                disabled={savingActualServiceStopEdit}
+                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Close service stop edit form"
+              >
+                <XMarkIcon className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+
+            <form onSubmit={saveActualServiceStopEdit} className="overflow-y-auto">
+              <div className="p-5">
+                {renderActualServiceStopFormFields({
+                  form: actualServiceStopEditForm,
+                  updateForm: updateActualServiceStopEditForm,
+                  saving: savingActualServiceStopEdit,
+                  isEdit: true,
+                })}
+              </div>
+
+              <div className="flex flex-col gap-2 border-t border-slate-200 p-5 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeEditActualServiceStopModal}
+                  disabled={savingActualServiceStopEdit}
+                  className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingActualServiceStopEdit}
+                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingActualServiceStopEdit ? "Saving..." : "Save Service Stop"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -20826,7 +23577,7 @@ const JobDetailView = () => {
               <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <p className="text-sm font-semibold text-blue-900">Paired-status rules</p>
                 <p className="mt-1 text-sm text-blue-800">
-                  Billing Invoiced, Paid, Comped, or Customer Resolved marks operation Finished. Billing Expired or Rejected moves unfinished work back to Estimate Pending. Operation Finished leaves billing In Progress until invoiced, paid, comped, or customer-resolved.
+                  Billing Invoiced, Paid, Comped, or Customer Resolved marks operation Finished. Billing Canceled marks operation Canceled. Billing Expired or Rejected moves unfinished work back to Estimate Pending. Operation Finished leaves billing In Progress until invoiced, paid, comped, or customer-resolved.
                 </p>
               </div>
 

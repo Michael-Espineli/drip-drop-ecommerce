@@ -34,6 +34,7 @@ import {
 import { appAlert, appConfirm } from '../../../utils/appDialog';
 import ShareItemButton from '../../components/share/ShareItemButton';
 import PartApprovalCreateModal from '../partApprovals/PartApprovalCreateModal';
+import CreateJobFlowLauncher from '../jobs/CreateJobFlowLauncher';
 
 const RepairRequestDetailView = () => {
   const { recentlySelectedCompany, dataBaseUser, user } = useContext(Context);
@@ -435,19 +436,6 @@ const RepairRequestDetailView = () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedPhoto]);
-
-  const handleCreateJob = () => {
-    if (!requirePermission("22", "create jobs")) return;
-    navigate(`/company/jobs/createNew`, {
-      state: {
-        repairRequest: {
-          ...repairRequest,
-          sourcePath,
-        },
-        repairRequestSourcePath: sourcePath,
-      },
-    });
-  };
 
   const handlePartApprovalCreated = async (approval) => {
     if (!approval?.id || !repairRequest?.id) return;
@@ -1224,14 +1212,17 @@ const RepairRequestDetailView = () => {
                 </div>
               )}
 
-              {can("22") && (
-                <button
-                  onClick={handleCreateJob}
-                  className="w-full rounded-md bg-blue-600 px-4 py-3 font-bold text-white transition hover:bg-blue-700"
-                >
-                  Create Job from Request
-                </button>
-              )}
+              <CreateJobFlowLauncher
+                buttonLabel="Create Job from Request"
+                buttonClassName="w-full rounded-md bg-blue-600 px-4 py-3 font-bold text-white transition hover:bg-blue-700"
+                contextState={{
+                  repairRequest: {
+                    ...repairRequest,
+                    sourcePath,
+                  },
+                  repairRequestSourcePath: sourcePath,
+                }}
+              />
 
               {can("34") && (
                 <button

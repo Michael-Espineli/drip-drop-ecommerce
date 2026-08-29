@@ -1,5 +1,6 @@
 import {
   OFFERED_WORK_PERMISSION_ID,
+  SERVICE_AGREEMENTS_PERMISSION_ID,
   SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
 } from "./companyPermissions";
 
@@ -51,6 +52,7 @@ const routePermissionRules = [
   [/^\/company\/payroll/i, "420"],
   [/^\/company\/accounting/i, "400"],
   [/^\/company\/sales\/pnl-viewer/i, "420"],
+  [/^\/company\/sales\/agreements/i, SERVICE_AGREEMENTS_PERMISSION_ID],
   [/^\/company\/sales/i, "400"],
   [/^\/company\/purchased-items/i, "400"],
   [/^\/company\/purchaseditems/i, "400"],

@@ -234,7 +234,7 @@ const TermsTemplateDetail = () => {
         if (!isEditing || !requirePermission("886", "delete terms templates")) return;
 
         const confirmed = await appConfirm({
-            title: 'Delete Service Agreement Template',
+            title: 'Delete Terms Template',
             message: 'Are you sure you want to delete this template and all its terms?',
             confirmLabel: 'Delete Template',
             variant: 'danger',
@@ -319,10 +319,10 @@ const TermsTemplateDetail = () => {
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 <div>
                                     <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                                        Editing Service Agreement Template
+                                        Editing Terms Template
                                     </span>
                                     <h1 className="mt-3 text-3xl font-bold text-slate-950">Edit Template</h1>
-                                    <p className="mt-1 text-sm text-slate-500">Update the saved agreement defaults and terms lines.</p>
+                                    <p className="mt-1 text-sm text-slate-500">Update the saved agreement or estimate defaults and terms lines.</p>
                                 </div>
                             </div>
 
@@ -376,7 +376,7 @@ const TermsTemplateDetail = () => {
 
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div>
-                                <h2 className="text-xl font-bold text-slate-950">Agreement Defaults</h2>
+                                <h2 className="text-xl font-bold text-slate-950">Agreement / Estimate Defaults</h2>
                                 <p className="mt-1 text-sm text-slate-500">Optional defaults copied into a draft when this template is selected.</p>
                             </div>
 
@@ -612,12 +612,12 @@ const TermsTemplateDetail = () => {
                         <section className="grid gap-4 sm:grid-cols-3">
                             <DetailStatCard label="Terms" value={clauses.length} helper="Reusable term lines" />
                             <DetailStatCard label="Default Copy" value={String(template.content || '').trim() ? 'Yes' : 'No'} helper="Seed agreement body text" />
-                            <DetailStatCard label="Agreement Defaults" value={termsTemplateHasAgreementDefaults(template) ? 'Yes' : 'No'} helper="Seed billing and chemical settings" />
+                            <DetailStatCard label="Agreement / Estimate Defaults" value={termsTemplateHasAgreementDefaults(template) ? 'Yes' : 'No'} helper="Seed billing and chemical settings" />
                         </section>
 
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div>
-                                <h2 className="text-xl font-bold text-slate-950">Agreement Defaults</h2>
+                                <h2 className="text-xl font-bold text-slate-950">Agreement / Estimate Defaults</h2>
                                 <p className="mt-1 text-sm text-slate-500">These values are copied into draft agreements when this template is selected.</p>
                             </div>
 

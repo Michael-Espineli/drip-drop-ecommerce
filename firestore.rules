@@ -139,6 +139,52 @@ service cloud.firestore {
         && hasCompanyAccess(data.companyId);
     }
 
+    function canUseCompanySalesAgreementPermission(companyId, permissionId) {
+      return isCompanyOwner(companyId)
+        || hasCompanyRolePermission(companyId, permissionId)
+        || hasCompanyRolePermission(companyId, "400");
+    }
+
+    function canReadSalesAgreementRecord(data) {
+      return signedIn()
+        && (
+          (
+            data.companyId is string
+            && hasCompanyAccess(data.companyId)
+            && (
+              canUseCompanySalesAgreementPermission(data.companyId, "430")
+              || canUseCompanySalesAgreementPermission(data.companyId, "628")
+            )
+          )
+          || (data.customerUserId is string && data.customerUserId == request.auth.uid)
+          || emailMatchesSignedInUser(data)
+        );
+    }
+
+    function canCreateSalesAgreementRecord(data) {
+      return signedIn()
+        && data.companyId is string
+        && hasCompanyAccess(data.companyId)
+        && (
+          canUseCompanySalesAgreementPermission(data.companyId, "432")
+          || canUseCompanySalesAgreementPermission(data.companyId, "628")
+        );
+    }
+
+    function canUpdateSalesAgreementRecord(data) {
+      return signedIn()
+        && data.companyId is string
+        && hasCompanyAccess(data.companyId)
+        && canUseCompanySalesAgreementPermission(data.companyId, "434");
+    }
+
+    function canDeleteSalesAgreementRecord(data) {
+      return signedIn()
+        && data.companyId is string
+        && hasCompanyAccess(data.companyId)
+        && canUseCompanySalesAgreementPermission(data.companyId, "436");
+    }
+
     function validProductFeedbackCreate(data) {
       return data.keys().hasOnly([
           "type",
@@ -578,9 +624,10 @@ service cloud.firestore {
     }
 
     match /salesAgreements/{agreementId} {
-      allow read: if canReadSalesRecord(resource.data);
-      allow create: if canCompanyWriteSalesRecord(request.resource.data);
-      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+      allow read: if canReadSalesAgreementRecord(resource.data);
+      allow create: if canCreateSalesAgreementRecord(request.resource.data);
+      allow update: if canUpdateSalesAgreementRecord(resource.data);
+      allow delete: if canDeleteSalesAgreementRecord(resource.data);
     }
 
     match /salesBillingProfiles/{billingProfileId} {

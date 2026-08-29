@@ -41,6 +41,7 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
 import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import {
+  AdjustmentsHorizontalIcon,
   ArrowPathRoundedSquareIcon,
   BriefcaseIcon,
   ChevronDownIcon,
@@ -49,6 +50,11 @@ import {
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
 import { deleteEquipmentWithSubcollections } from "../../../utils/equipmentDelete";
+import {
+  CREATE_JOBS_PERMISSION_ID,
+  CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
+  SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
+} from "../../../utils/companyPermissions";
 import {
   CATALOG_READY_STATUS,
   RECONCILED_STATUS,
@@ -329,6 +335,10 @@ const EquipmentDetail = () => {
   const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
   const { equipmentId } = useParams();
+  const canScheduleTemplateWorkOrders =
+    can(CREATE_JOBS_PERMISSION_ID) ||
+    can(CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID) ||
+    can(SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID);
 
   const [equipment, setEquipment] = useState({});
   const [edit, setEdit] = useState(false);
@@ -445,7 +455,7 @@ const EquipmentDetail = () => {
       openMaintenanceModal();
     } else if (action === "recordRepair") {
       setShowRepairHistoryModal(true);
-    } else if (action === "editMakeModel") {
+    } else if (["editMakeModel", "editNotes", "updateStatus"].includes(action)) {
       openMakeModelModal();
     }
 
@@ -1736,9 +1746,16 @@ const EquipmentDetail = () => {
   });
 
   const createEquipmentJob = (jobIntent) => {
-    navigate("/company/jobs/createNew", {
+    const params = new URLSearchParams();
+    if (equipment?.customerId) params.set("customerId", equipment.customerId);
+    if (equipment?.serviceLocationId) params.set("locationId", equipment.serviceLocationId);
+    if (equipment?.bodyOfWaterId) params.set("bodyOfWaterId", equipment.bodyOfWaterId);
+    if (equipment?.id || equipmentId) params.set("equipmentId", equipment?.id || equipmentId);
+
+    navigate(`/company/jobs/basic-create${params.toString() ? `?${params.toString()}` : ""}`, {
       state: {
         equipmentContext: buildEquipmentContext(jobIntent),
+        createdFromEquipmentDetail: true,
         jobIntent,
       },
     });
@@ -1901,8 +1918,18 @@ const EquipmentDetail = () => {
                   {can("64") && (
                     <>
                       <EquipmentHeaderActionMenuItem
-                        label="Edit Make/Model"
+                        label="Edit Equipment"
                         icon={PencilSquareIcon}
+                        onClick={openMakeModelModal}
+                      />
+                      <EquipmentHeaderActionMenuItem
+                        label="Edit Notes"
+                        icon={DocumentTextIcon}
+                        onClick={openMakeModelModal}
+                      />
+                      <EquipmentHeaderActionMenuItem
+                        label="Update Status"
+                        icon={AdjustmentsHorizontalIcon}
                         onClick={openMakeModelModal}
                       />
                       <EquipmentHeaderActionMenuItem
@@ -1937,16 +1964,16 @@ const EquipmentDetail = () => {
                     />
                   )}
 
-                  {can("22") && (
+                  {canScheduleTemplateWorkOrders && (
                     <>
                       <EquipmentHeaderActionMenuItem
-                        label="Create Maintenance Job"
+                        label="Schedule Maintenance"
                         icon={BriefcaseIcon}
                         tone="green"
                         onClick={() => createEquipmentJob("maintenance")}
                       />
                       <EquipmentHeaderActionMenuItem
-                        label="Create Repair Job"
+                        label="Schedule Repair"
                         icon={BriefcaseIcon}
                         tone="amber"
                         onClick={() => createEquipmentJob("repair")}

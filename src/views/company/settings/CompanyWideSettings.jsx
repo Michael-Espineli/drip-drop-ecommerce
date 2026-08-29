@@ -783,14 +783,14 @@ const CompanyOverview = ({ overview, currentUserId }) => {
           links={[
             { to: "/Company/TaskGroups", label: "Task Groups" },
             { to: "/company/settings/job-templates", label: "Job Templates" },
-            { to: "/company/settings/terms-templates", label: "Agreement Templates" },
+            { to: "/company/settings/terms-templates", label: "Terms Templates" },
             { to: "/company/settings/product-catalog", label: "Products" },
             { to: "/company/settings/vendor-items", label: "Vendor Items" },
           ]}
         >
           <OverviewRow label="Task groups" value={formatCount(counts.taskGroups, "group")} />
           <OverviewRow label="Job templates" value={formatCount(counts.jobTemplates, "template")} />
-          <OverviewRow label="Agreement templates" value={formatCount(counts.termsTemplates, "template")} />
+          <OverviewRow label="Terms templates" value={formatCount(counts.termsTemplates, "template")} />
           <OverviewRow label="Products" value={formatCount(counts.productCatalog, "product")} />
           <OverviewRow label="Vendor items" value={formatCount(counts.vendorItems, "vendor item")} />
         </OverviewCard>

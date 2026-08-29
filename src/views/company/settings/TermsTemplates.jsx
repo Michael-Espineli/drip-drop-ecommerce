@@ -92,7 +92,7 @@ const TemplateCard = ({ template, canDuplicate, isDuplicating, onDuplicate }) =>
         <article className="flex min-h-[220px] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-blue-200">
             <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                    <h2 className="truncate text-lg font-bold text-slate-950">{template.name || 'Service Agreement Template'}</h2>
+                    <h2 className="truncate text-lg font-bold text-slate-950">{template.name || 'Terms Template'}</h2>
                     <p className="mt-1 line-clamp-2 text-sm text-slate-600">
                         {template.description || 'No description added.'}
                     </p>
@@ -287,21 +287,21 @@ const TermsTemplates = () => {
                                 Back to Settings
                             </Link>
                             <div className="mt-3 flex items-center gap-2">
-                                <h1 className="text-3xl font-bold text-slate-950">Service Agreement Templates</h1>
-                                <FeatureInfoButton title="How Service Agreement Templates Work" align="left">
+                                <h1 className="text-3xl font-bold text-slate-950">Terms Templates</h1>
+                                <FeatureInfoButton title="How Terms Templates Work" align="left">
                                     <p>
-                                        Service agreement templates are saved under this company at
+                                        Terms templates are saved under this company at
                                         {' '}<span className="font-semibold">companies/{'{companyId}'}/termsTemplates</span>.
-                                        Each pool company can keep its own residential, commercial, weekly, twice-weekly, or custom service terms.
+                                        Each pool company can keep its own job estimate, residential, commercial, weekly, twice-weekly, or custom terms.
                                     </p>
                                     <p>
-                                        When a service agreement or estimate is drafted, the selected template can seed the agreement terms,
+                                        When a service agreement or estimate is drafted, the selected template can seed the terms,
                                         then the company can adjust the final wording for that customer.
                                     </p>
                                 </FeatureInfoButton>
                             </div>
                             <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                                Reusable agreement language and billing defaults for estimates, service agreements, and company-specific terms.
+                                Reusable terms language and billing defaults for estimates, service agreements, and company-specific terms.
                             </p>
                         </div>
 
@@ -321,7 +321,7 @@ const TermsTemplates = () => {
                 <section className="grid gap-4 sm:grid-cols-3">
                     <StatCard label="Templates" value={summary.total} helper="Saved terms records" />
                     <StatCard label="Default Copy" value={summary.withContent} helper="Templates with content" />
-                    <StatCard label="Agreement Defaults" value={summary.withDefaults} helper="Templates that seed billing" />
+                    <StatCard label="Agreement / Estimate Defaults" value={summary.withDefaults} helper="Templates that seed billing" />
                 </section>
 
                 <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -344,7 +344,7 @@ const TermsTemplates = () => {
                 ) : templates.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
                         <h3 className="text-xl font-bold text-slate-950">No templates found</h3>
-                        <p className="mt-2 text-sm text-slate-500">Create a template to seed new service agreement terms.</p>
+                        <p className="mt-2 text-sm text-slate-500">Create a template to seed estimate or service agreement terms.</p>
                     </div>
                 ) : filteredTemplates.length === 0 ? (
                     <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
@@ -419,7 +419,7 @@ const TermsTemplates = () => {
                                     />
                                 </div>
                                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Agreement Defaults</h3>
+                                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Agreement / Estimate Defaults</h3>
                                     <div className="mt-3 grid gap-4 sm:grid-cols-2">
                                         <div>
                                             <label htmlFor="billingFrequency" className="block text-sm font-semibold text-slate-700">Billing Frequency</label>

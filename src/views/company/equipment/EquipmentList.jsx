@@ -39,7 +39,11 @@ import {
   PencilSquareIcon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
-import { sortCompanyUsersByName } from "../../../utils/companyUsers";
+import {
+  filterCompanyUserAdminOptions,
+  isActiveCompanyUser,
+  sortCompanyUsersByName,
+} from "../../../utils/companyUsers";
 import {
   JOB_BILLING_STATUS,
   JOB_OPERATION_STATUS,
@@ -424,16 +428,6 @@ const buildCompanyUserOption = (companyUser = {}) => {
   };
 };
 
-const isActiveCompanyUser = (companyUser = {}) => {
-  const status = String(companyUser.status || companyUser.userStatus || "").trim().toLowerCase();
-  return companyUser.isActive !== false && companyUser.active !== false && status !== "inactive";
-};
-
-const isLikelyAdminUser = (companyUser = {}) => {
-  const searchable = `${companyUser.roleName || ""} ${companyUser.role || ""} ${companyUser.workerType || ""}`.toLowerCase();
-  return ["owner", "admin", "manager", "office"].some((term) => searchable.includes(term));
-};
-
 const jobTemplateIsScheduleable = (template = {}) => (
   template.isActive !== false &&
   template.active !== false &&
@@ -527,6 +521,10 @@ const isActiveEquipmentJob = (job = {}) => {
   if (operationStatus === normalizeJobStatus(JOB_OPERATION_STATUS.finished)) return false;
   return !TERMINAL_JOB_BILLING_STATUSES.has(billingStatus);
 };
+
+const isScheduledEquipmentJob = (job = {}) => (
+  normalizeJobStatus(job.operationStatus || job.status) === normalizeJobStatus(JOB_OPERATION_STATUS.scheduled)
+);
 
 const getJobDateMillis = (job = {}) => sortableDateMillis(job.dateCreated || job.createdAt) || 0;
 
@@ -1557,6 +1555,23 @@ export default function EquipmentList() {
     equipmentList.filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById))
   ), [customerActiveById, equipmentList]);
   const maintenanceDueCount = maintenanceBoardEquipment.length;
+  const maintenanceScheduledJobSummary = useMemo(() => {
+    const scheduledEquipmentIds = new Set();
+    const scheduledJobIds = new Set();
+
+    maintenanceBoardEquipment.forEach((equipment) => {
+      const scheduledJobs = (activeJobsByEquipmentId[equipment?.id] || []).filter(isScheduledEquipmentJob);
+      if (!scheduledJobs.length) return;
+
+      if (equipment?.id) scheduledEquipmentIds.add(equipment.id);
+      scheduledJobs.forEach((job) => scheduledJobIds.add(job.id));
+    });
+
+    return {
+      equipmentCount: scheduledEquipmentIds.size,
+      jobCount: scheduledJobIds.size,
+    };
+  }, [activeJobsByEquipmentId, maintenanceBoardEquipment]);
   const quickDefaultsToNeedsService = useMemo(() => equipmentDefaultsToNeedsService({
     name: quickName,
     type: quickType,
@@ -1600,10 +1615,9 @@ export default function EquipmentList() {
       .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
   ), [jobTemplates]);
 
-  const scheduleAdminOptions = useMemo(() => {
-    const admins = companyUserOptions.filter(isLikelyAdminUser);
-    return admins.length ? admins : companyUserOptions;
-  }, [companyUserOptions]);
+  const scheduleAdminOptions = useMemo(() => (
+    filterCompanyUserAdminOptions(companyUserOptions)
+  ), [companyUserOptions]);
 
   const scheduleTechnicianOptions = useMemo(() => {
     if (canScheduleTemplateForOthers) return companyUserOptions;
@@ -1642,8 +1656,9 @@ export default function EquipmentList() {
       0
     );
 
-    return (scheduleTemplateDetails.laborLineItems.length ? laborLinePrice : taskPrice + stopPrice) + materialPrice;
-  }, [scheduleTemplateDetails]);
+    const generatedPrice = (scheduleTemplateDetails.laborLineItems.length ? laborLinePrice : taskPrice + stopPrice) + materialPrice;
+    return generatedPrice || Number(selectedScheduleTemplate?.defaultRateCents || selectedScheduleTemplate?.rate || 0);
+  }, [scheduleTemplateDetails, selectedScheduleTemplate]);
 
   const selectedQuickEquipmentServiceLocation = useMemo(() => (
     selectedQuickEquipment?.serviceLocationId
@@ -2357,6 +2372,9 @@ export default function EquipmentList() {
           internalLaborCostCents: Number(line.internalCostCents || 0),
           taskIds: line.taskIds || [],
           plannedServiceStopIds: line.plannedServiceStopIds || [],
+          equipmentId: line.equipmentId || "",
+          serviceLocationId: line.serviceLocationId || "",
+          bodyOfWaterId: line.bodyOfWaterId || "",
           taxable: Boolean(line.taxable),
           stripeConnectedAccountId: line.stripeConnectedAccountId || "",
           stripeProductId: line.stripeProductId || "",
@@ -2380,6 +2398,9 @@ export default function EquipmentList() {
             unitAmountCents: amount,
             totalAmountCents: amount,
             amount,
+            equipmentId: stop.equipmentId || "",
+            serviceLocationId: stop.serviceLocationId || "",
+            bodyOfWaterId: stop.bodyOfWaterId || "",
             taxable: false,
             displayAmount: moneyFromCents(amount),
           };
@@ -2401,6 +2422,9 @@ export default function EquipmentList() {
             amount,
             billingLaborPriceCents: amount,
             internalLaborCostCents: Number(task.contractedRate || 0),
+            equipmentId: task.equipmentId || "",
+            serviceLocationId: task.serviceLocationId || "",
+            bodyOfWaterId: task.bodyOfWaterId || "",
             taxable: false,
             displayAmount: moneyFromCents(amount),
           };
@@ -2423,6 +2447,9 @@ export default function EquipmentList() {
         unitAmountCents,
         totalAmountCents: amount,
         amount,
+        equipmentId: item.equipmentId || "",
+        serviceLocationId: item.serviceLocationId || "",
+        bodyOfWaterId: item.bodyOfWaterId || "",
         taxable: Boolean(item.taxable),
         displayAmount: moneyFromCents(amount),
       };
@@ -2618,6 +2645,9 @@ export default function EquipmentList() {
           laborLinePlannedServiceStopIds: plannedServiceStopIds,
           sourceTemplateTaskIds: sourceTaskIds,
           sourceTemplatePlannedServiceStopIds: sourcePlannedStopIds,
+          equipmentId: selectedQuickEquipment.id,
+          serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
           salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
           billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
           sourceType: line.sourceType || SalesCatalogSourceType.manual,
@@ -2652,6 +2682,9 @@ export default function EquipmentList() {
           sourcePlanId: planId,
           solutionId: planId,
           sourceSolutionId: planId,
+          equipmentId: selectedQuickEquipment.id,
+          serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
           sourceTemplateId: selectedScheduleTemplate.id,
           sourceTemplateShoppingItemId: item.id || "",
           category: "Job",
@@ -2726,6 +2759,11 @@ export default function EquipmentList() {
         customerName,
         serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
         serviceLocationName,
+        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+        bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
+        equipmentId: selectedQuickEquipment.id,
+        equipmentName: getEquipmentDisplayName(selectedQuickEquipment),
+        equipmentIds: [selectedQuickEquipment.id],
         sourceType: "template",
         sourceTemplateId: selectedScheduleTemplate.id,
         sourceTemplateName: selectedScheduleTemplate.name || "",
@@ -2781,6 +2819,9 @@ export default function EquipmentList() {
             estimatedMinutes: Number(task.estimatedTime || 0),
             plannedLaborCostCents: Number(task.contractedRate || 0),
             billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
+            equipmentId: task.equipmentId || "",
+            serviceLocationId: task.serviceLocationId || "",
+            bodyOfWaterId: task.bodyOfWaterId || "",
           })),
 	          plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
 	            id: stop.id,
@@ -2791,6 +2832,9 @@ export default function EquipmentList() {
             estimatedMinutes: Number(stop.estimatedMinutes || 0),
 	            plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
 	            taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
+	            equipmentId: stop.equipmentId || "",
+	            serviceLocationId: stop.serviceLocationId || "",
+	            bodyOfWaterId: stop.bodyOfWaterId || "",
 	          })),
 	          laborLineSummaries: normalizedLaborLineItems.map((line, index) => ({
 	            id: line.id,
@@ -2804,6 +2848,9 @@ export default function EquipmentList() {
 	            catalogItemId: laborLineCatalogItemId(line),
 	            taskIds: Array.isArray(line.taskIds) ? line.taskIds : [],
 	            plannedServiceStopIds: Array.isArray(line.plannedServiceStopIds) ? line.plannedServiceStopIds : [],
+	            equipmentId: line.equipmentId || "",
+	            serviceLocationId: line.serviceLocationId || "",
+	            bodyOfWaterId: line.bodyOfWaterId || "",
 	          })),
 	          materialSummaries: normalizedShoppingItems.map((item, index) => ({
 	            id: item.id,
@@ -2813,6 +2860,9 @@ export default function EquipmentList() {
             quantity: item.quantity || "1",
             plannedTotalCostCents: plannedMaterialTotalCostCents(item),
             plannedTotalPriceCents: plannedMaterialTotalPriceCents(item),
+            equipmentId: item.equipmentId || "",
+            serviceLocationId: item.serviceLocationId || "",
+            bodyOfWaterId: item.bodyOfWaterId || "",
           })),
           counts: {
 	            tasks: normalizedTasks.length,
@@ -2872,6 +2922,8 @@ export default function EquipmentList() {
         customerName,
         serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
         serviceLocationName,
+        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+        bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
         serviceStopIds: [],
         laborContractIds: [],
         adminId,
@@ -2984,6 +3036,8 @@ export default function EquipmentList() {
         jobId,
         jobName: nextInternalId,
         serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
+        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+        bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
         tech: techName,
         techId,
         internalId: serviceStopInternalId,
@@ -3126,6 +3180,9 @@ export default function EquipmentList() {
           createdFromEquipmentList: true,
           createdFromEquipmentScheduleModal: true,
           equipmentId: selectedQuickEquipment.id,
+          equipmentName: getEquipmentDisplayName(selectedQuickEquipment),
+          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+          bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
           equipmentContext,
           adminAssignmentSource: "Equipment schedule popup",
         },
@@ -3468,7 +3525,10 @@ export default function EquipmentList() {
 
         {maintenanceDueCount > 0 && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">
-            <span className="font-bold">Maintenance Alert:</span> You have {maintenanceDueCount} item(s) needing maintenance (by status or due date).
+            <span className="font-bold">Maintenance Alert:</span> You have {maintenanceDueCount} item(s) needing maintenance (by status or due date).{" "}
+            {loadingActiveJobs
+              ? "Checking scheduled job coverage."
+              : `Of those, ${maintenanceScheduledJobSummary.jobCount} scheduled job(s) cover ${maintenanceScheduledJobSummary.equipmentCount} item(s).`}
           </div>
         )}
 

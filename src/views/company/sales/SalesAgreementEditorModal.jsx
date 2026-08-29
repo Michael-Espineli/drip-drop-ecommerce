@@ -57,6 +57,10 @@ import {
   saveSalesCatalogItem,
 } from '../../../utils/sales/salesFirestore';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import {
+  DELETE_SERVICE_AGREEMENTS_PERMISSION_ID,
+  UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID,
+} from '../../../utils/companyPermissions';
 import { appConfirm } from '../../../utils/appDialog';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -415,6 +419,8 @@ const SalesAgreementEditorModal = ({
     user,
   } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
+  const canUpdateServiceAgreements = can(UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID) || can(SALES_PERMISSION_ID);
+  const canDeleteServiceAgreements = can(DELETE_SERVICE_AGREEMENTS_PERMISSION_ID) || can(SALES_PERMISSION_ID);
   const [activeAgreementId, setActiveAgreementId] = useState('');
   const [editDraft, setEditDraft] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -946,6 +952,10 @@ const SalesAgreementEditorModal = ({
 
   const saveEdit = async () => {
     if (!agreement || !editDraft) return;
+    if (!canUpdateServiceAgreements) {
+      toast.error('Your role cannot edit service agreements.');
+      return;
+    }
 
     const nextLineItems = (editDraft.lineItems || [])
       .map((item) => {
@@ -1099,7 +1109,10 @@ const SalesAgreementEditorModal = ({
 
   const deleteAgreement = async () => {
     if (!agreement || deleteConfirmation.trim().toUpperCase() !== 'DELETE') return;
-    if (!requirePermission(SALES_PERMISSION_ID, 'delete service agreements')) return;
+    if (!canDeleteServiceAgreements) {
+      toast.error('Your role cannot delete service agreements.');
+      return;
+    }
 
     const selectedCompanyId = String(recentlySelectedCompany || '').trim();
     const agreementCompanyId = salesRecordCompanyId(agreement);
@@ -1813,7 +1826,7 @@ const SalesAgreementEditorModal = ({
                   setConfirmingDelete(true);
                   setDeleteConfirmation('');
                 }}
-                disabled={!agreement || companyMismatch || deleting || savingEdit}
+                disabled={!agreement || companyMismatch || deleting || savingEdit || !canDeleteServiceAgreements}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 sm:mr-auto"
               >
                 <FaTrash className="text-xs" />
@@ -1831,7 +1844,7 @@ const SalesAgreementEditorModal = ({
               <button
                 type="button"
                 onClick={saveEdit}
-                disabled={savingEdit || applyingTermsTemplate || updatingTermsTemplate || savingCatalogItem}
+                disabled={savingEdit || applyingTermsTemplate || updatingTermsTemplate || savingCatalogItem || !canUpdateServiceAgreements}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FaSave className="text-xs" />

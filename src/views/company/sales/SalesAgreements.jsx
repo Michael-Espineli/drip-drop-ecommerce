@@ -40,6 +40,13 @@ import { getTerms, listenTermsTemplates } from '../../../utils/terms/termsTempla
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import SalesAgreementEditorModal from './SalesAgreementEditorModal';
 import ServiceAgreementSendDialog from './components/ServiceAgreementSendDialog';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import {
+  CREATE_SERVICE_AGREEMENTS_PERMISSION_ID,
+  FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
+  SEND_SERVICE_AGREEMENTS_PERMISSION_ID,
+  UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID,
+} from '../../../utils/companyPermissions';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -266,9 +273,10 @@ const agreementHasTerms = (agreement = {}) => (
   (Array.isArray(agreement.termsList) && agreement.termsList.length > 0)
 );
 
-const agreementSendDisabledReason = ({ agreement, activeUser, selectedCompanyId }) => {
+const agreementSendDisabledReason = ({ agreement, activeUser, selectedCompanyId, canSendAgreement = true }) => {
   if (!agreement?.id) return 'Agreement is still loading.';
   if (!activeUser?.uid && !activeUser?.id) return 'You must be signed in to send this agreement.';
+  if (!canSendAgreement) return 'Your role cannot send service agreements.';
   if (selectedCompanyId && agreement.companyId && agreement.companyId !== selectedCompanyId) {
     return 'Select the company that owns this agreement before sending.';
   }
@@ -667,6 +675,18 @@ const SalesAgreements = ({
   const [actionLoadingKey, setActionLoadingKey] = useState('');
 
   const navigate = useNavigate();
+  const { can } = useCompanyPermissions();
+  const canCreateServiceAgreements =
+    can(CREATE_SERVICE_AGREEMENTS_PERMISSION_ID) ||
+    can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
+    can('400');
+  const canUpdateServiceAgreements =
+    can(UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID) ||
+    can('400');
+  const canSendServiceAgreements =
+    can(SEND_SERVICE_AGREEMENTS_PERMISSION_ID) ||
+    can(FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID) ||
+    can('400');
   const [searchParams, setSearchParams] = useSearchParams();
   const allowedBillingTypes = useMemo(() => (
     routingQueueOnly ? [AgreementBillingType.recurring] : normalizeAgreementTypeOptions(agreementTypes)
@@ -992,6 +1012,11 @@ const SalesAgreements = ({
   const selectedQuickEditDirtyCount = selectedQuickEditAgreements.filter(quickEditDraftIsDirty).length;
 
   const enterQuickEditMode = () => {
+    if (!canUpdateServiceAgreements) {
+      toast.error('Your role cannot edit service agreements.');
+      return;
+    }
+
     closeAgreementActions();
     setQuickEditMode(true);
     setQuickEditSelectedIds([]);
@@ -1163,6 +1188,11 @@ const SalesAgreements = ({
   const saveQuickEditedAgreements = async () => {
     if (savingQuickEdit) return;
 
+    if (!canUpdateServiceAgreements) {
+      toast.error('Your role cannot edit service agreements.');
+      return;
+    }
+
     const dirtyAgreements = quickEditDirtyAgreements;
 
     if (!dirtyAgreements.length) {
@@ -1331,6 +1361,7 @@ const SalesAgreements = ({
       agreement,
       activeUser,
       selectedCompanyId: recentlySelectedCompany,
+      canSendAgreement: canSendServiceAgreements,
     });
     if (disabledReason) {
       toast.error(disabledReason);
@@ -1376,6 +1407,11 @@ const SalesAgreements = ({
   };
 
   const openAcceptAgreementDialog = (agreement) => {
+    if (!canUpdateServiceAgreements) {
+      toast.error('Your role cannot edit service agreements.');
+      return;
+    }
+
     const disabledReason = agreementAcceptanceDisabledReason({
       agreement,
       activeUser,
@@ -1415,6 +1451,11 @@ const SalesAgreements = ({
       silent = false,
     } = {}
   ) => {
+    if (!canUpdateServiceAgreements) {
+      toast.error('Your role cannot edit service agreements.');
+      return;
+    }
+
     const disabledReason = agreementAcceptanceDisabledReason({
       agreement,
       activeUser,
@@ -1551,6 +1592,11 @@ const SalesAgreements = ({
   };
 
   const markAgreementRejectedFromList = async (agreement) => {
+    if (!canUpdateServiceAgreements) {
+      toast.error('Your role cannot edit service agreements.');
+      return;
+    }
+
     const disabledReason = agreementRejectionDisabledReason({
       agreement,
       activeUser,
@@ -1600,6 +1646,11 @@ const SalesAgreements = ({
   };
 
   const handleGenerateFromRoutes = async () => {
+    if (!canCreateServiceAgreements) {
+      toast.error('Your role cannot create service agreements.');
+      return;
+    }
+
     if (!recentlySelectedCompany) {
       toast.error('Select a company first.');
       return;
@@ -1730,20 +1781,22 @@ const SalesAgreements = ({
                 <button
                   type="button"
                   onClick={handleGenerateFromRoutes}
-                  disabled={generatingFromRoutes}
+                  disabled={generatingFromRoutes || !canCreateServiceAgreements}
                   className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                 >
                   <FaRoute className="text-xs" />
                   {generatingFromRoutes ? 'Generating...' : 'Generate From Routes'}
                 </button>
               )}
-              <Link
-                to="/company/sales/agreements/new"
-                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-              >
-                <FaPlus className="text-xs" />
-                New Agreement
-              </Link>
+              {canCreateServiceAgreements && (
+                <Link
+                  to="/company/sales/agreements/new"
+                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                >
+                  <FaPlus className="text-xs" />
+                  New Agreement
+                </Link>
+              )}
             </div>
           </div>
         </section>
@@ -1885,7 +1938,7 @@ const SalesAgreements = ({
                     <button
                       type="button"
                       onClick={enterQuickEditMode}
-                      disabled={loading || summary.draftCount === 0}
+                      disabled={loading || summary.draftCount === 0 || !canUpdateServiceAgreements}
                       className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       <FaEdit className="text-xs" />
@@ -2171,6 +2224,8 @@ const SalesAgreements = ({
               label="Edit"
               icon={FaEdit}
               tone="blue"
+              disabled={!canUpdateServiceAgreements}
+              title={!canUpdateServiceAgreements ? 'Your role cannot edit service agreements.' : ''}
               onClick={() => {
                 setEditingAgreementId(openActionAgreement.id);
                 closeAgreementActions();
@@ -2185,12 +2240,12 @@ const SalesAgreements = ({
                 agreement: openActionAgreement,
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
-              }))}
+              })) || !canUpdateServiceAgreements}
               title={agreementAcceptanceDisabledReason({
                 agreement: openActionAgreement,
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
-              })}
+              }) || (!canUpdateServiceAgreements ? 'Your role cannot edit service agreements.' : '')}
               onClick={() => openAcceptAgreementDialog(openActionAgreement)}
             />
             <AgreementActionMenuItem
@@ -2202,11 +2257,13 @@ const SalesAgreements = ({
                 agreement: openActionAgreement,
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
+                canSendAgreement: canSendServiceAgreements,
               }))}
               title={agreementSendDisabledReason({
                 agreement: openActionAgreement,
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
+                canSendAgreement: canSendServiceAgreements,
               })}
               onClick={() => {
                 setSendDialogAgreementId(openActionAgreement.id);
@@ -2222,12 +2279,12 @@ const SalesAgreements = ({
                 agreement: openActionAgreement,
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
-              }))}
+              })) || !canUpdateServiceAgreements}
               title={agreementRejectionDisabledReason({
                 agreement: openActionAgreement,
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
-              })}
+              }) || (!canUpdateServiceAgreements ? 'Your role cannot edit service agreements.' : '')}
               onClick={() => markAgreementRejectedFromList(openActionAgreement)}
             />
           </div>

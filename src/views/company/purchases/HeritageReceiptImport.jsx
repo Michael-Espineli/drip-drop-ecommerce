@@ -6,7 +6,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
 import * as pdfjsLib from "pdfjs-dist/webpack";
-import { FaCheckCircle, FaReceipt, FaSpinner } from "react-icons/fa";
+import { FaCheckCircle, FaReceipt, FaSpinner, FaStepForward } from "react-icons/fa";
 import { Context } from "../../../context/AuthContext";
 import { db, storage } from "../../../utils/config";
 import {
@@ -434,8 +434,10 @@ const HeritageReceiptImport = () => {
   const [bulkQueue, setBulkQueue] = useState([]);
   const [bulkIndex, setBulkIndex] = useState(0);
   const [bulkSavedCount, setBulkSavedCount] = useState(0);
+  const [bulkSkippedReceiptIds, setBulkSkippedReceiptIds] = useState({});
   const [bulkQueueExpanded, setBulkQueueExpanded] = useState(false);
   const [receiptLoading, setReceiptLoading] = useState(null);
+  const [skipping, setSkipping] = useState(false);
   const [receipt, setReceipt] = useState(blankParsedReceipt);
   const [lines, setLines] = useState([]);
   const [updatingDatabaseItemCostIds, setUpdatingDatabaseItemCostIds] = useState({});
@@ -466,9 +468,17 @@ const HeritageReceiptImport = () => {
     technicianOptions.find((user) => user.value === selectedTechId || user.userId === selectedTechId || user.id === selectedTechId) ||
     null;
   const sourceFileName = sourceFile?.name || "";
+  const bulkSkippedCount = Object.values(bulkSkippedReceiptIds).filter(Boolean).length;
   const isBulkImport = bulkQueue.length > 1;
   const isFinalBulkReceipt = isBulkImport && bulkIndex >= bulkQueue.length - 1;
   const selectedSourceCount = isBulkImport ? bulkQueue.length : sourceFile ? 1 : 0;
+  const hasReceiptToSkip = Boolean(
+    sourceFile ||
+    String(receipt.invoiceNum || "").trim() ||
+    String(receipt.rawText || "").trim() ||
+    lines.length
+  );
+  const canSkipReceipt = hasReceiptToSkip && !loading && !parsing && !saving && !skipping;
 
   useEffect(() => {
     const loadSelectors = async () => {
@@ -684,6 +694,7 @@ const HeritageReceiptImport = () => {
     setBulkQueue(nextQueue);
     setBulkIndex(0);
     setBulkSavedCount(0);
+    setBulkSkippedReceiptIds({});
     setBulkQueueExpanded(false);
     await parseSourceFile(files[0], { index: 0, total: files.length });
   };
@@ -782,6 +793,7 @@ const HeritageReceiptImport = () => {
       setBulkQueue([]);
       setBulkIndex(0);
       setBulkSavedCount(0);
+      setBulkSkippedReceiptIds({});
     }
     setBulkQueueExpanded(false);
     setSourceFile(null);
@@ -802,6 +814,47 @@ const HeritageReceiptImport = () => {
       products: nextProducts,
     });
     return true;
+  };
+
+  const skipCurrentReceipt = async () => {
+    if (!canSkipReceipt) return;
+
+    setSkipping(true);
+    setPendingSaveOptions(null);
+
+    try {
+      if (isBulkImport) {
+        const currentQueueItem = bulkQueue[bulkIndex];
+        const currentAlreadySkipped = Boolean(currentQueueItem && bulkSkippedReceiptIds[currentQueueItem.id]);
+        const nextSkippedCount = currentQueueItem && !currentAlreadySkipped
+          ? bulkSkippedCount + 1
+          : bulkSkippedCount;
+        const nextIndex = bulkIndex + 1;
+
+        if (currentQueueItem) {
+          setBulkSkippedReceiptIds((current) => ({
+            ...current,
+            [currentQueueItem.id]: true,
+          }));
+        }
+
+        if (nextIndex < bulkQueue.length) {
+          toast.success(`Receipt skipped. Loading ${nextIndex + 1} of ${bulkQueue.length}.`);
+          await parseQueuedSourceFile(nextIndex);
+        } else {
+          toast.success(
+            `Bulk import complete. ${bulkSavedCount} receipt${bulkSavedCount === 1 ? "" : "s"} created, ${nextSkippedCount} skipped.`
+          );
+          resetImportForm();
+        }
+        return;
+      }
+
+      toast.success("Receipt skipped. Ready for another.");
+      resetImportForm();
+    } finally {
+      setSkipping(false);
+    }
   };
 
   const requestSaveReceipt = (options = {}) => {
@@ -1039,7 +1092,9 @@ const HeritageReceiptImport = () => {
           toast.success(`Receipt saved. Loading ${nextIndex + 1} of ${bulkQueue.length}.`);
           await parseQueuedSourceFile(nextIndex, bulkQueue, databaseItemsForNextReceipt, productsForNextReceipt);
         } else {
-          toast.success(`Bulk import complete. ${nextSavedCount} receipt${nextSavedCount === 1 ? "" : "s"} created.`);
+          toast.success(
+            `Bulk import complete. ${nextSavedCount} receipt${nextSavedCount === 1 ? "" : "s"} created${bulkSkippedCount ? `, ${bulkSkippedCount} skipped` : ""}.`
+          );
           resetImportForm();
         }
       } else if (addAnother) {
@@ -1198,7 +1253,7 @@ const HeritageReceiptImport = () => {
                     <div>
                       <p className="font-semibold text-gray-900">Bulk Queue</p>
                       <p className="mt-1 text-xs font-semibold text-gray-500">
-                        {bulkSavedCount} Saved / {selectedSourceCount} Selected
+                        {bulkSavedCount} Saved{bulkSkippedCount ? ` / ${bulkSkippedCount} Skipped` : ""} / {selectedSourceCount} Selected
                       </p>
                     </div>
                     <button
@@ -1214,7 +1269,8 @@ const HeritageReceiptImport = () => {
                       {isBulkImport ? (
                         bulkQueue.map((queueItem, queueIndex) => {
                           const isCurrent = queueIndex === bulkIndex;
-                          const isComplete = queueIndex < bulkIndex;
+                          const isSkipped = Boolean(bulkSkippedReceiptIds[queueItem.id]);
+                          const isComplete = queueIndex < bulkIndex && !isSkipped;
 
                           return (
                             <div
@@ -1222,14 +1278,16 @@ const HeritageReceiptImport = () => {
                               className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 ${
                                 isCurrent
                                   ? "border-blue-200 bg-blue-50 text-blue-900"
-                                  : isComplete
+                                  : isSkipped
+                                    ? "border-amber-200 bg-amber-50 text-amber-900"
+                                    : isComplete
                                     ? "border-emerald-200 bg-emerald-50 text-emerald-900"
                                     : "border-gray-200 bg-white text-gray-600"
                               }`}
                             >
                               <span className="min-w-0 truncate">{queueItem.file.name}</span>
                               <span className="shrink-0 text-xs font-semibold">
-                                {isCurrent ? "Reviewing" : isComplete ? "Done" : "Waiting"}
+                                {isCurrent ? "Reviewing" : isSkipped ? "Skipped" : isComplete ? "Done" : "Waiting"}
                               </span>
                             </div>
                           );
@@ -1501,6 +1559,21 @@ const HeritageReceiptImport = () => {
                   {saving ? "Saving..." : "Save and Add Another"}
                 </button>
               )}
+              {hasReceiptToSkip ? (
+                <button
+                  type="button"
+                  disabled={!canSkipReceipt}
+                  onClick={skipCurrentReceipt}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-200 bg-white px-5 py-2 text-sm font-semibold text-amber-700 shadow-sm hover:bg-amber-50 disabled:opacity-60"
+                >
+                  <FaStepForward className="text-xs" />
+                  {skipping
+                    ? "Skipping..."
+                    : isBulkImport && isFinalBulkReceipt
+                      ? "Skip Final Receipt"
+                      : "Skip Receipt"}
+                </button>
+              ) : null}
               <button
                 type="button"
                 disabled={loading || parsing || saving || !lines.length}

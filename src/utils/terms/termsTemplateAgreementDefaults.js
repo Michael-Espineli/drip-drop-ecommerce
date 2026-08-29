@@ -10,7 +10,7 @@ export const TermsTemplateUseCase = Object.freeze({
 
 export const termsTemplateUseCaseOptions = [
   { value: TermsTemplateUseCase.recurringService, label: 'Recurring Service' },
-  { value: TermsTemplateUseCase.oneOffJob, label: 'One-Off Job' },
+  { value: TermsTemplateUseCase.oneOffJob, label: 'Job Estimate' },
   { value: TermsTemplateUseCase.parts, label: 'Parts' },
   { value: TermsTemplateUseCase.labor, label: 'Labor' },
   { value: TermsTemplateUseCase.custom, label: 'Custom' },

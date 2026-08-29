@@ -1,7 +1,7 @@
 const admin = require("firebase-admin");
 
 const REAL_EMAILS_FEATURE_FLAG_ID = "feature_flag_012";
-const EMAIL_TEST_RECIPIENT = process.env.SEND_GRID_TEST_RECIPIENT || "michael@dripdrop-poolapp.com";
+const EMAIL_TEST_RECIPIENT = process.env.SEND_GRID_TEST_RECIPIENT || "mespineli@dripdrop-poolapp.com";
 
 const isFeatureFlagEnabled = async (flagId) => {
   const flagDoc = await admin.firestore().collection("featureFlags").doc(flagId).get();

@@ -24,6 +24,9 @@ const db = admin.firestore();
 const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
 const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
 const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
+const FINANCE_PERMISSION_ID = "400";
+const SEND_SERVICE_AGREEMENTS_PERMISSION_ID = "438";
+const FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID = "628";
 const SERVICE_STOP_CATEGORIES = {
     route: "Route",
     job: "Job",
@@ -422,6 +425,37 @@ const userHasCompanyAccess = async (uid, companyId) => {
         .get();
 
     return accessDoc.exists;
+};
+
+const userHasAnyCompanyPermission = async (uid, companyId, permissionIds = []) => {
+    if (!uid || !companyId) return false;
+
+    const accessDoc = await db
+        .collection("users")
+        .doc(uid)
+        .collection("userAccess")
+        .doc(companyId)
+        .get();
+
+    if (!accessDoc.exists) return false;
+
+    const roleId = String(accessDoc.data()?.roleId || "").trim();
+    if (!roleId) return true;
+
+    const roleDoc = await db
+        .collection("companies")
+        .doc(companyId)
+        .collection("roles")
+        .doc(roleId)
+        .get();
+
+    if (!roleDoc.exists) return true;
+
+    const permissionIdList = roleDoc.data()?.permissionIdList;
+    if (!Array.isArray(permissionIdList)) return true;
+
+    const selectedIds = permissionIdList.map(String);
+    return permissionIds.map(String).some((permissionId) => selectedIds.includes(permissionId));
 };
 
 const formatCurrency = (amountCents = 0) => {
@@ -1528,8 +1562,12 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         throw new HttpsError("invalid-argument", "Missing agreementId.");
     }
 
-    if (!(await userHasCompanyAccess(callableAuth.uid, companyId))) {
-        throw new HttpsError("permission-denied", "You do not have access to send email for this company.");
+    if (!(await userHasAnyCompanyPermission(callableAuth.uid, companyId, [
+        FINANCE_PERMISSION_ID,
+        SEND_SERVICE_AGREEMENTS_PERMISSION_ID,
+        FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
+    ]))) {
+        throw new HttpsError("permission-denied", "You do not have permission to send service agreements for this company.");
     }
 
     if (!templateId) {
