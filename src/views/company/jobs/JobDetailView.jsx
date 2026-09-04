@@ -16,6 +16,7 @@ import {
   Timestamp,
   arrayUnion,
   arrayRemove,
+  writeBatch,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../../../utils/config";
@@ -142,6 +143,7 @@ import {
 } from "../../../utils/jobStatusFilters";
 import {
   SERVICE_STOP_TYPE_USE_CASES,
+  normalizeServiceStopCategory,
   resolveServiceStopTypeFields,
   serviceStopTypeMatchesUseCase,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
@@ -257,6 +259,20 @@ const withFirestoreDocId = (docSnap) => {
     id: firestoreId,
   };
 };
+const statusSelectOption = (value, fallback = "") => {
+  const status = String(value || fallback || "").trim();
+  return {
+    value: status,
+    label: status,
+  };
+};
+const issuePrioritySelectOption = (value) => {
+  const priority = normalizeIssuePriority(value || DEFAULT_ISSUE_PRIORITY);
+  return {
+    value: priority,
+    label: `${priority} - ${getIssuePriorityLabel(priority)}`,
+  };
+};
 const getFirestoreDocId = (record = {}) =>
   record.firestoreId || record.docId || record.id || "";
 const PLAN_EDITOR_UNSAVED_WARNING =
@@ -294,6 +310,20 @@ const EMPTY_TASK_EDIT_FORM = {
   quantity: "1",
   customerApproval: false,
 };
+
+const createEmptyScheduleTaskForm = () => ({
+  description: "",
+  type: null,
+  laborCost: "0",
+  billingLaborPrice: "0",
+  estimatedTime: "0",
+  payTypeId: "",
+  bodyOfWaterId: "",
+  equipmentId: "",
+  dataBaseItemId: "",
+  quantity: "1",
+  equipmentMapping: emptyDatabaseEquipmentMapping(),
+});
 
 const EMPTY_PLANNED_STOP_FORM = {
   serviceStopTypeId: "",
@@ -334,7 +364,7 @@ const ACTUAL_SERVICE_STOP_SCHEDULE_MODES = [
     helper: "Schedule an estimate visit before the customer accepts a plan.",
     useCase: SERVICE_STOP_TYPE_USE_CASES.jobEstimate,
     fallbackName: "Job Estimate",
-    defaultOperationStatus: "Estimate Pending",
+    defaultOperationStatus: "Not Finished",
     defaultBillingStatus: "Not Invoiced",
     includeReadings: false,
     includeDosages: false,
@@ -342,19 +372,76 @@ const ACTUAL_SERVICE_STOP_SCHEDULE_MODES = [
 ];
 const SERVICE_STOP_OPERATION_STATUS_OPTIONS = [
   "Not Finished",
-  "Scheduled",
-  "In Progress",
-  "Waiting For Parts",
   "Finished",
-  "Canceled",
+  "Skipped",
 ];
+const isValidActualServiceStopOperationStatus = (status) =>
+  SERVICE_STOP_OPERATION_STATUS_OPTIONS.includes(String(status || "").trim());
+const normalizeActualServiceStopOperationStatus = (status, fallback = "Not Finished") => {
+  const normalizedStatus = String(status || "").trim();
+  if (isValidActualServiceStopOperationStatus(normalizedStatus)) return normalizedStatus;
+
+  const normalizedFallback = String(fallback || "").trim();
+  return isValidActualServiceStopOperationStatus(normalizedFallback) ? normalizedFallback : "Not Finished";
+};
 const SERVICE_STOP_BILLING_STATUS_OPTIONS = [
   "Not Invoiced",
   "Invoiced",
   "Paid",
-  "Comped",
-  "Canceled",
 ];
+const isValidActualServiceStopBillingStatus = (status) =>
+  SERVICE_STOP_BILLING_STATUS_OPTIONS.includes(String(status || "").trim());
+const normalizeActualServiceStopBillingStatus = (status, fallback = "Not Invoiced") => {
+  const normalizedStatus = String(status || "").trim();
+  if (isValidActualServiceStopBillingStatus(normalizedStatus)) return normalizedStatus;
+
+  const normalizedFallback = String(fallback || "").trim();
+  return isValidActualServiceStopBillingStatus(normalizedFallback) ? normalizedFallback : "Not Invoiced";
+};
+const ACTUAL_SERVICE_STOP_CATEGORY_USE_CASES = [
+  SERVICE_STOP_TYPE_USE_CASES.jobEstimate,
+  SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate,
+  SERVICE_STOP_TYPE_USE_CASES.customerRelationship,
+  SERVICE_STOP_TYPE_USE_CASES.jobVisit,
+  SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
+];
+const getActualServiceStopCategoryUseCase = (stop = {}, fallback = SERVICE_STOP_TYPE_USE_CASES.unknown) => {
+  const explicitUseCase = String(
+    stop.serviceStopTypeUseCaseRawValue ||
+    stop.serviceStopTypeUseCase ||
+    stop.useCase ||
+    ""
+  ).trim();
+  if (Object.values(SERVICE_STOP_TYPE_USE_CASES).includes(explicitUseCase)) return explicitUseCase;
+
+  return ACTUAL_SERVICE_STOP_CATEGORY_USE_CASES.find((useCase) =>
+    serviceStopTypeMatchesUseCase(stop, useCase)
+  ) || fallback;
+};
+const normalizeActualServiceStopCategory = (stop = {}) =>
+  normalizeServiceStopCategory(
+    stop.category || stop.serviceStopCategory || "",
+    getActualServiceStopCategoryUseCase(stop)
+  );
+const actualServiceStopMobileCompatibilityPatch = (stop = {}) => {
+  const patch = {};
+  const operationStatus = normalizeActualServiceStopOperationStatus(stop.operationStatus);
+  const billingStatus = normalizeActualServiceStopBillingStatus(stop.billingStatus);
+  const category = normalizeActualServiceStopCategory(stop);
+  const existingCategory = String(stop.category || "").trim();
+
+  if (String(stop.operationStatus || "").trim() !== operationStatus) {
+    patch.operationStatus = operationStatus;
+  }
+  if (String(stop.billingStatus || "").trim() !== billingStatus) {
+    patch.billingStatus = billingStatus;
+  }
+  if (existingCategory && existingCategory !== category) {
+    patch.category = category;
+  }
+
+  return patch;
+};
 const getActualServiceStopScheduleMode = (mode = DEFAULT_ACTUAL_SERVICE_STOP_MODE) =>
   ACTUAL_SERVICE_STOP_SCHEDULE_MODES.find((option) => option.id === mode) ||
   ACTUAL_SERVICE_STOP_SCHEDULE_MODES[0];
@@ -640,6 +727,10 @@ const buildShoppingDbItemOption = (data = {}, docId = "") => {
   const sku = data.sku || "";
   const rate = Number(data.rate || 0);
   const sellPrice = Number(data.sellPrice ?? data.billingRate ?? data.rate ?? 0);
+  const category = data.category || "";
+  const subCategory = data.subCategory || data.subcategory || "";
+  const uom = data.UOM || data.uom || "";
+  const storeName = data.storeName || data.vendorName || "";
 
   return {
     id,
@@ -651,13 +742,13 @@ const buildShoppingDbItemOption = (data = {}, docId = "") => {
     sellPrice,
     billingRate: Number(data.billingRate ?? sellPrice),
     cost: Number(data.cost || data.rate || 0),
-    category: data.category || "",
-    subCategory: data.subCategory || "",
-    UOM: data.UOM || "",
+    category,
+    subCategory,
+    UOM: uom,
     sku,
     size: data.size || "",
     color: data.color || "",
-    storeName: data.storeName || "",
+    storeName,
     venderId: data.venderId || data.vendorId || "",
     vendorId: data.vendorId || data.venderId || "",
     billable: Boolean(data.billable),
@@ -670,6 +761,18 @@ const buildShoppingDbItemOption = (data = {}, docId = "") => {
     label: isEquipmentDatabaseItem(data)
       ? equipmentDatabaseItemLabel({ ...data, id })
       : [name, sku].filter(Boolean).join(" - "),
+    searchText: [
+      name,
+      sku,
+      category,
+      subCategory,
+      uom,
+      data.description,
+      data.size,
+      data.color,
+      storeName,
+      id,
+    ].filter(Boolean).join(" "),
     value: id,
   };
 };
@@ -1132,6 +1235,9 @@ const JobDetailView = () => {
   const [scheduleServiceStopMode, setScheduleServiceStopMode] = useState("");
   const [scheduleServiceStopForm, setScheduleServiceStopForm] = useState(() => createActualServiceStopForm());
   const [savingScheduledServiceStop, setSavingScheduledServiceStop] = useState(false);
+  const [showScheduleTaskCreator, setShowScheduleTaskCreator] = useState(false);
+  const [scheduleTaskForm, setScheduleTaskForm] = useState(() => createEmptyScheduleTaskForm());
+  const [savingScheduleTask, setSavingScheduleTask] = useState(false);
   const [editingActualServiceStopId, setEditingActualServiceStopId] = useState("");
   const [actualServiceStopEditForm, setActualServiceStopEditForm] = useState(() => createActualServiceStopForm());
   const [savingActualServiceStopEdit, setSavingActualServiceStopEdit] = useState(false);
@@ -1226,6 +1332,7 @@ const JobDetailView = () => {
     value: DEFAULT_ISSUE_PRIORITY,
     label: getIssuePriorityLabel(DEFAULT_ISSUE_PRIORITY),
   });
+  const [quickSavingJobField, setQuickSavingJobField] = useState("");
 
   // Sections
   const getInitialJobTab = useCallback((sectionValue) => (
@@ -1540,7 +1647,7 @@ const JobDetailView = () => {
   const [showJobFinishConfirm, setShowJobFinishConfirm] = useState(false);
   const [jobFinishTaskIds, setJobFinishTaskIds] = useState([]);
   const [jobFinishShoppingItemActions, setJobFinishShoppingItemActions] = useState({});
-  const [markingJobInvoiced, setMarkingJobInvoiced] = useState(false);
+  const [jobInvoiceActionInProgress, setJobInvoiceActionInProgress] = useState("");
   const [cancelingJob, setCancelingJob] = useState(false);
   const [linkedSalesAgreement, setLinkedSalesAgreement] = useState(null);
   const [linkedSalesInvoice, setLinkedSalesInvoice] = useState(null);
@@ -2334,6 +2441,251 @@ const JobDetailView = () => {
       ["finished", "completed", "done", "complete"].includes(normalizedStatus) ||
       Boolean(stop.endTime || stop.finishedAt || stop.completedAt)
     );
+  };
+
+  const getRouteDateValue = (value) => {
+    if (!value) return null;
+    const date = value?.toDate?.() || (value instanceof Date ? value : new Date(value));
+    return Number.isNaN(date?.getTime?.()) ? null : date;
+  };
+
+  const startOfRouteDay = (value) => {
+    const date = getRouteDateValue(value);
+    if (!date) return null;
+    const next = new Date(date);
+    next.setHours(0, 0, 0, 0);
+    return next;
+  };
+
+  const endOfRouteDay = (value) => {
+    const date = getRouteDateValue(value);
+    if (!date) return null;
+    const next = new Date(date);
+    next.setHours(23, 59, 59, 999);
+    return next;
+  };
+
+  const sameRouteDay = (left, right) => {
+    const leftDate = startOfRouteDay(left);
+    const rightDate = startOfRouteDay(right);
+    return Boolean(leftDate && rightDate && leftDate.getTime() === rightDate.getTime());
+  };
+
+  const activeRouteDocumentId = (date, techId) => (
+    `com_ar_${format(startOfRouteDay(date) || new Date(date), "yyyyMMdd")}_${String(techId || "").replace(/\//g, "_")}`
+  );
+
+  const activeRouteHasWorkActivity = (route = {}) => Boolean(
+    getRouteDateValue(route.startTime) ||
+    getRouteDateValue(route.endTime) ||
+    (route.status && route.status !== "Did Not Start")
+  );
+
+  const pickCanonicalActiveRoute = (routes = []) => (
+    [...routes].sort((left, right) => {
+      const leftHasWork = activeRouteHasWorkActivity(left);
+      const rightHasWork = activeRouteHasWorkActivity(right);
+
+      if (leftHasWork !== rightHasWork) return leftHasWork ? -1 : 1;
+
+      const stopDelta = (right.serviceStopsIds?.length || 0) - (left.serviceStopsIds?.length || 0);
+      if (stopDelta !== 0) return stopDelta;
+
+      return String(left.id || "").localeCompare(String(right.id || ""));
+    })[0] || null
+  );
+
+  const mergeServiceStopsIntoActiveRouteOrder = (route, stops = []) => {
+    const stopById = new Map(stops.map((stop) => [stop.id, stop]));
+    const orderedIds = route?.serviceStopsIds?.length
+      ? route.serviceStopsIds
+      : (Array.isArray(route?.order)
+        ? [...route.order]
+          .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
+          .map((item) => item.serviceStopId || item.id)
+          .filter(Boolean)
+        : []);
+    const includedStopIds = new Set();
+    const orderedStops = orderedIds
+      .map((stopId) => stopById.get(stopId))
+      .filter(Boolean)
+      .filter((stop) => {
+        if (includedStopIds.has(stop.id)) return false;
+        includedStopIds.add(stop.id);
+        return true;
+      });
+    const remainingStops = stops.filter((stop) => !includedStopIds.has(stop.id));
+
+    return [...orderedStops, ...remainingStops];
+  };
+
+  const buildActiveRouteOrderForServiceStops = (route, orderedStops = []) => {
+    const existingOrder = Array.isArray(route?.order) ? route.order : [];
+    const existingByStopId = new Map(existingOrder.map((item) => [item.serviceStopId || item.id, item]));
+
+    return orderedStops.map((stop, index) => {
+      const existing = existingByStopId.get(stop.id) || {};
+
+      return {
+        ...existing,
+        id: existing.id || stop.routeOrderId || `route_order_${uuidv4()}`,
+        order: index + 1,
+        serviceStopId: stop.id,
+        recurringServiceStopId: existing.recurringServiceStopId || stop.recurringServiceStopId || "",
+        customerId: existing.customerId || stop.customerId || "",
+        customerName: existing.customerName || stop.customerName || "",
+        locationId: existing.locationId || stop.serviceLocationId || stop.locationId || "",
+      };
+    });
+  };
+
+  const getActiveRouteStatusFromServiceStops = (stops = [], existingRoute = null) => {
+    if (!stops.length) return "Did Not Start";
+
+    const finishedStops = stops.filter(isFinishedServiceStopRecord).length;
+    const inProgressStops = stops.filter((stop) => getRouteDateValue(stop.startTime) && !isFinishedServiceStopRecord(stop)).length;
+
+    if (finishedStops === stops.length) return "Finished";
+    if (inProgressStops > 0 || finishedStops > 0) return "In Progress";
+    if (["In Progress", "Traveling", "On Break"].includes(existingRoute?.status)) return existingRoute.status;
+    return "Did Not Start";
+  };
+
+  const syncActiveRouteForServiceStops = async ({ date, techId, techName }) => {
+    const normalizedTechId = String(techId || "").trim();
+    const normalizedTechName = String(techName || "").trim();
+    if (!recentlySelectedCompany || !date || !normalizedTechId) return null;
+
+    const dayStart = startOfRouteDay(date);
+    const dayEnd = endOfRouteDay(date);
+    if (!dayStart || !dayEnd) return null;
+
+    const [stopsSnapshot, routesSnapshot] = await Promise.all([
+      getDocs(
+        query(
+          collection(db, "companies", recentlySelectedCompany, "serviceStops"),
+          where("serviceDate", ">=", dayStart),
+          where("serviceDate", "<=", dayEnd)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, "companies", recentlySelectedCompany, "activeRoutes"),
+          where("date", ">=", dayStart),
+          where("date", "<=", dayEnd)
+        )
+      ),
+    ]);
+
+    const stops = stopsSnapshot.docs
+      .map((stopDoc) => ({ id: stopDoc.id, ref: stopDoc.ref, ...stopDoc.data() }))
+      .filter((stop) => (
+        String(stop.techId || "").trim() === normalizedTechId ||
+        (!stop.techId && String(stop.tech || "").trim() === normalizedTechName)
+      ));
+    const existingRoutes = routesSnapshot.docs
+      .map((routeDoc) => ({ id: routeDoc.id, ref: routeDoc.ref, ...routeDoc.data() }))
+      .filter((route) => !route.duplicateOf && String(route.techId || "").trim() === normalizedTechId);
+    const routeForTech = pickCanonicalActiveRoute(existingRoutes);
+
+    if (!stops.length && !existingRoutes.length) return null;
+
+    const batch = writeBatch(db);
+    const duplicateRoutes = existingRoutes.filter((route) => route.id !== routeForTech?.id);
+    const stopCompatibilityRepairs = stops
+      .map((stop) => ({
+        stop,
+        patch: actualServiceStopMobileCompatibilityPatch(stop),
+      }))
+      .filter(({ patch }) => Object.keys(patch).length);
+
+    if (!stops.length) {
+      if (routeForTech?.ref) {
+        batch.update(routeForTech.ref, {
+          serviceStopsIds: [],
+          order: [],
+          totalStops: 0,
+          finishedStops: 0,
+          status: "Did Not Start",
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      duplicateRoutes.forEach((route) => {
+        batch.update(route.ref, {
+          duplicateOf: routeForTech?.id || "",
+          serviceStopsIds: [],
+          order: [],
+          totalStops: 0,
+          finishedStops: 0,
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
+      return null;
+    }
+
+    const routeId = routeForTech?.id || activeRouteDocumentId(dayStart, normalizedTechId);
+    const routeRef = doc(db, "companies", recentlySelectedCompany, "activeRoutes", routeId);
+    const orderedStops = mergeServiceStopsIntoActiveRouteOrder(routeForTech, stops);
+    const serviceStopsIds = orderedStops.map((stop) => stop.id);
+    const finishedStops = orderedStops.filter(isFinishedServiceStopRecord).length;
+    const routePayload = {
+      id: routeId,
+      name: routeForTech?.name || `${normalizedTechName || "Technician"}'s Route - ${format(dayStart, "MM/dd/yyyy")}`,
+      date: Timestamp.fromDate(dayStart),
+      techId: normalizedTechId,
+      techName: normalizedTechName,
+      serviceStopsIds,
+      order: buildActiveRouteOrderForServiceStops(routeForTech, orderedStops),
+      totalStops: serviceStopsIds.length,
+      finishedStops,
+      status: getActiveRouteStatusFromServiceStops(orderedStops, routeForTech),
+      durationSeconds: orderedStops.reduce((total, stop) => total + Number(stop.duration || stop.estimatedDuration || 0), 0) * 60,
+      distanceMiles: Number(routeForTech?.distanceMiles || routeForTech?.distance || 0),
+      vehicalId: routeForTech?.vehicalId || "",
+      vehicleSource: routeForTech?.vehicleSource || "",
+      personalVehicleOwnerId: routeForTech?.personalVehicleOwnerId || "",
+      vehicleLabel: routeForTech?.vehicleLabel || "",
+      vehiclePlate: routeForTech?.vehiclePlate || "",
+      vehicleKind: routeForTech?.vehicleKind || "",
+      updatedAt: serverTimestamp(),
+    };
+
+    console.info("[JobDetailView][syncActiveRouteForServiceStops]", {
+      companyId: recentlySelectedCompany,
+      routeId,
+      date: format(dayStart, "yyyy-MM-dd"),
+      techId: normalizedTechId,
+      serviceStopsIds,
+      orderCount: routePayload.order.length,
+      repairedStops: stopCompatibilityRepairs.map(({ stop, patch }) => ({
+        id: stop.id,
+        patch,
+      })),
+    });
+
+    batch.set(routeRef, routePayload, { merge: true });
+    stopCompatibilityRepairs.forEach(({ stop, patch }) => {
+      batch.update(stop.ref, {
+        ...patch,
+        updatedAt: serverTimestamp(),
+      });
+    });
+    duplicateRoutes.forEach((route) => {
+      batch.update(route.ref, {
+        duplicateOf: routeId,
+        serviceStopsIds: [],
+        order: [],
+        totalStops: 0,
+        finishedStops: 0,
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    await batch.commit();
+    return routePayload;
   };
 
   const removeServiceStopFromActiveRoutes = async (serviceStopId, serviceStop = {}) => {
@@ -4098,6 +4450,10 @@ const JobDetailView = () => {
       backgroundColor: "#FFFFFF",
       padding: 4,
     }),
+    menuPortal: (base) => ({
+      ...base,
+      zIndex: 9999,
+    }),
     option: (base, state) => ({
       ...base,
       backgroundColor: state.isSelected ? "#2563EB" : state.isFocused ? "#DBEAFE" : "#FFFFFF",
@@ -4123,6 +4479,31 @@ const JobDetailView = () => {
   const fieldLabelClass = "block text-xs font-bold uppercase tracking-wide text-slate-600";
   const fieldInputClass =
     "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+  const selectMenuPortalTarget = typeof document !== "undefined" ? document.body : null;
+
+  const formatShoppingDbItemOption = (option, meta) => {
+    const name = option.name || option.label || "Database Item";
+    if (meta.context === "value") return name;
+
+    const isSelected = meta.selectValue?.some((selected) => selected.value === option.value);
+    const detailClass = isSelected ? "text-blue-100" : "text-slate-500";
+    const itemPriceCents = option.sellPrice || option.billingRate || option.rate || option.cost || 0;
+
+    return (
+      <div>
+        <p className={`font-semibold ${isSelected ? "text-white" : "text-slate-900"}`}>{name}</p>
+        <p className={`text-xs ${detailClass}`}>
+          {[
+            option.sku ? `SKU: ${option.sku}` : "",
+            itemPriceCents ? `Price: ${moneyFromCents(itemPriceCents)}` : "",
+            option.subCategory || option.category || "",
+            option.UOM ? `UOM: ${option.UOM}` : "",
+            option.storeName ? `Vendor: ${option.storeName}` : "",
+          ].filter(Boolean).join(" | ") || "No item details saved"}
+        </p>
+      </div>
+    );
+  };
 
   const selectedTaskTypeValue = canonicalJobTaskType(selectedTaskType?.value || "");
   const taskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(selectedTaskTypeValue);
@@ -4248,6 +4629,19 @@ const JobDetailView = () => {
   );
   const selectedTaskDbItemOptions = taskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
   const editingTaskDbItemOptions = editingTaskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
+  const scheduleTaskTypeValue = canonicalJobTaskType(scheduleTaskForm.type?.value || scheduleTaskForm.type || "");
+  const scheduleTaskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(scheduleTaskTypeValue);
+  const scheduleTaskNeedsEquipment = taskTypeRequiresEquipment(scheduleTaskTypeValue);
+  const scheduleTaskNeedsInstallItem = taskTypeRequiresInstallItem(scheduleTaskTypeValue);
+  const scheduleTaskNeedsEquipmentDatabaseItem = isInstallOrReplaceTaskType(scheduleTaskTypeValue);
+  const scheduleTaskSelectedEquipment = equipmentById.get(scheduleTaskForm.equipmentId) || null;
+  const scheduleTaskResolvedBodyOfWaterId =
+    scheduleTaskForm.bodyOfWaterId ||
+    scheduleTaskSelectedEquipment?.bodyOfWaterId ||
+    job.bodyOfWaterId ||
+    "";
+  const scheduleTaskSelectedDbItem = shoppingDbItemById.get(scheduleTaskForm.dataBaseItemId) || null;
+  const scheduleTaskDbItemOptions = scheduleTaskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
 
   const getLinkedShoppingItemsForTask = (task) => {
     const linkedIds = new Set(
@@ -5997,6 +6391,7 @@ const JobDetailView = () => {
     ["invoiced", "paid"].includes(String(status || "").toLowerCase());
   const jobIsFinished = String(job.operationStatus || "").trim().toLowerCase() ===
     String(JOB_OPERATION_STATUS.finished || "Finished").trim().toLowerCase();
+  const markingJobInvoiced = Boolean(jobInvoiceActionInProgress);
   const convertInvoiceActionLabel = jobIsFinished ? "Convert to Invoice" : "Mark As Invoiced";
 
   const purchasedItemInvoiceUpdates = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
@@ -8393,12 +8788,15 @@ const JobDetailView = () => {
     }));
   };
 
-  const getCompanyUserId = (user) => user?.userId || user?.id || user?.docId || "";
+  const getCompanyUserId = (user) => user?.userId || user?.uid || user?.id || user?.docId || user?.value || "";
 
   const getCompanyUserName = (user) =>
     user?.userName ||
+    user?.displayName ||
     user?.name ||
     [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
+    user?.label ||
+    user?.email ||
     "Technician";
 
   const getCompanyUserWorkerType = (user) => {
@@ -8407,6 +8805,25 @@ const JobDetailView = () => {
     if (typeof workerType === "string") return workerType;
     return workerType?.rawValue || workerType?.value || workerType?.name || "Not Assigned";
   };
+
+  const getCompanyUserIdentifiers = (user = {}) => (
+    Array.from(new Set([
+      user.userId,
+      user.uid,
+      user.id,
+      user.docId,
+      user.value,
+    ].map((value) => String(value || "").trim()).filter(Boolean)))
+  );
+
+  const companyUserMatchesId = (user, userId) => {
+    const normalizedUserId = String(userId || "").trim();
+    return Boolean(normalizedUserId && getCompanyUserIdentifiers(user).includes(normalizedUserId));
+  };
+
+  const findCompanyUserById = (userId) => (
+    (companyUserList || []).find((user) => companyUserMatchesId(user, userId)) || null
+  );
 
   const activeActualServiceStopTypes = useMemo(() => (
     (companyServiceStopTypes || [])
@@ -8429,9 +8846,58 @@ const JobDetailView = () => {
     return scopedTypes;
   }, [activeActualServiceStopTypes, companyServiceStopTypes]);
 
+  const getActualServiceStopTypeOptionId = (type = {}) =>
+    type.id || type.typeId || type.serviceStopTypeId || type.payTypeId || type.value || "";
+
+  const getActualServiceStopTypeOptionName = (type = {}) =>
+    type.name || type.label || type.type || type.payTypeName || "Pay Type";
+
+  const getActualServiceStopTypeBucketLabel = (type = {}) => {
+    const bucketLabel = String(
+      type.stopPayBucketLabel ||
+      type.bucketLabel ||
+      type.serviceStopBucketLabel ||
+      type.stopPayCategory ||
+      type.category ||
+      ""
+    ).trim();
+    const bucketId = String(
+      type.stopPayBucketId ||
+      type.bucketId ||
+      type.serviceStopBucketId ||
+      ""
+    ).trim();
+
+    if (!bucketLabel) return bucketId;
+    if (!bucketId || bucketId.toLowerCase() === bucketLabel.toLowerCase()) return bucketLabel;
+    return `${bucketLabel} (${bucketId})`;
+  };
+
+  const getActualServiceStopTypeOptionLabel = (type = {}) => {
+    const name = getActualServiceStopTypeOptionName(type);
+    const bucketLabel = getActualServiceStopTypeBucketLabel(type);
+    return bucketLabel ? `${name} - Bucket: ${bucketLabel}` : name;
+  };
+
+  const renderActualServiceStopTypeOption = (type = {}, { context } = {}) => {
+    const name = getActualServiceStopTypeOptionName(type);
+    const bucketLabel = getActualServiceStopTypeBucketLabel(type);
+
+    if (context === "value") {
+      return <span>{bucketLabel ? `${name} - ${bucketLabel}` : name}</span>;
+    }
+
+    return (
+      <div className="py-0.5">
+        <div className="font-semibold">{name}</div>
+        <div className="text-xs opacity-75">Bucket: {bucketLabel || "Unassigned"}</div>
+      </div>
+    );
+  };
+
   const getActualServiceStopSelectedType = (serviceStopTypeId = "") => (
     serviceStopTypeId
-      ? (companyServiceStopTypes || []).find((type) => type.id === serviceStopTypeId) || null
+      ? (companyServiceStopTypes || []).find((type) => getActualServiceStopTypeOptionId(type) === serviceStopTypeId) || null
       : null
   );
 
@@ -8468,8 +8934,8 @@ const JobDetailView = () => {
       techId: stop.techId || stop.userId || stop.technicianId || "",
       estimatedDuration: String(stop.estimatedDuration || stop.duration || ""),
       description: stop.description || "",
-      operationStatus: stop.operationStatus || form.operationStatus,
-      billingStatus: stop.billingStatus || form.billingStatus,
+      operationStatus: normalizeActualServiceStopOperationStatus(stop.operationStatus, form.operationStatus),
+      billingStatus: normalizeActualServiceStopBillingStatus(stop.billingStatus, form.billingStatus),
       includeReadings: Boolean(stop.includeReadings),
       includeDosages: Boolean(stop.includeDosages),
     };
@@ -8492,14 +8958,32 @@ const JobDetailView = () => {
     if (!requirePermission("242", "create service stops")) return;
     setScheduleServiceStopMode("");
     setScheduleServiceStopForm(createActualServiceStopForm());
+    setShowScheduleTaskCreator(false);
+    setScheduleTaskForm(createEmptyScheduleTaskForm());
     setShowScheduleServiceStopModal(true);
   };
 
   const closeScheduleServiceStopModal = ({ force = false } = {}) => {
-    if (savingScheduledServiceStop && !force) return;
+    if ((savingScheduledServiceStop || savingScheduleTask) && !force) return;
     setShowScheduleServiceStopModal(false);
     setScheduleServiceStopMode("");
     setScheduleServiceStopForm(createActualServiceStopForm());
+    setShowScheduleTaskCreator(false);
+    setScheduleTaskForm(createEmptyScheduleTaskForm());
+  };
+
+  const openScheduleTaskCreator = () => {
+    if (!requireBuildJobEstimatePlan("add job tasks")) return;
+    setScheduleTaskForm({
+      ...createEmptyScheduleTaskForm(),
+      payTypeId: taskPayTypeOptions[0]?.id || "",
+    });
+    setShowScheduleTaskCreator(true);
+  };
+
+  const resetScheduleTaskCreator = () => {
+    setShowScheduleTaskCreator(false);
+    setScheduleTaskForm(createEmptyScheduleTaskForm());
   };
 
   const chooseScheduleServiceStopMode = (mode) => {
@@ -8517,6 +9001,7 @@ const JobDetailView = () => {
       serviceStopTypeId: typeOptions[0]?.id || "",
       taskIds: defaultTaskIds,
     });
+    resetScheduleTaskCreator();
   };
 
   const updateScheduleServiceStopForm = (field, value) => {
@@ -8524,6 +9009,271 @@ const JobDetailView = () => {
       ...prev,
       [field]: value,
     }));
+  };
+
+  const updateScheduleTaskForm = (field, value) => {
+    setScheduleTaskForm((prev) => {
+      const next = {
+        ...prev,
+        [field]: value,
+      };
+
+      if (field === "type") {
+        const canonicalType = canonicalJobTaskType(value?.value || value || "");
+        next.type = value;
+        next.bodyOfWaterId = taskTypeRequiresBodyOfWater(canonicalType) ? prev.bodyOfWaterId : "";
+        next.equipmentId = taskTypeRequiresEquipment(canonicalType) ? prev.equipmentId : "";
+        next.dataBaseItemId = taskTypeRequiresInstallItem(canonicalType) ? prev.dataBaseItemId : "";
+        next.quantity = taskTypeRequiresInstallItem(canonicalType) ? prev.quantity || "1" : "1";
+        next.equipmentMapping = taskTypeRequiresInstallItem(canonicalType)
+          ? prev.equipmentMapping
+          : emptyDatabaseEquipmentMapping();
+      }
+
+      if (field === "equipmentId") {
+        const selectedEquipment = equipmentById.get(value);
+        if (selectedEquipment?.bodyOfWaterId && !next.bodyOfWaterId) {
+          next.bodyOfWaterId = selectedEquipment.bodyOfWaterId;
+        }
+      }
+
+      if (field === "dataBaseItemId") {
+        const selectedDbItem = shoppingDbItemById.get(value);
+        next.equipmentMapping = databaseEquipmentMappingFromItem(selectedDbItem || {});
+      }
+
+      return next;
+    });
+  };
+
+  const saveScheduleServiceStopTask = async () => {
+    if (!requireBuildJobEstimatePlan("add job tasks")) return;
+    if (scheduleServiceStopMode !== "jobVisit") return;
+    if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
+
+    const nextName = String(scheduleTaskForm.description || "").trim();
+    const laborCostNumber = Number(scheduleTaskForm.laborCost || 0);
+    const billingLaborPriceNumber = Number(scheduleTaskForm.billingLaborPrice || 0);
+    const estimatedTimeNumber = Number(scheduleTaskForm.estimatedTime || 0);
+    const selectedPayType = taskPayTypeById.get(scheduleTaskForm.payTypeId) || taskPayTypeOptions[0] || null;
+    let selectedDbItem = scheduleTaskSelectedDbItem;
+    const quantity = scheduleTaskNeedsInstallItem ? parseFloat(scheduleTaskForm.quantity) : 0;
+
+    if (!scheduleTaskTypeValue) return toast.error("Pick a task type.");
+    if (!nextName) return toast.error("Add a task description.");
+    if (!Number.isFinite(laborCostNumber) || laborCostNumber < 0) {
+      return toast.error("Labor cost cannot be negative.");
+    }
+    if (!Number.isFinite(billingLaborPriceNumber) || billingLaborPriceNumber < 0) {
+      return toast.error("Billing labor price cannot be negative.");
+    }
+    if (!Number.isFinite(estimatedTimeNumber) || estimatedTimeNumber < 0) {
+      return toast.error("Estimated time cannot be negative.");
+    }
+    if (scheduleTaskNeedsBodyOfWater && !scheduleTaskResolvedBodyOfWaterId) {
+      return toast.error("Select a body of water.");
+    }
+    if (scheduleTaskNeedsEquipment && !scheduleTaskSelectedEquipment?.id) {
+      return toast.error("Select equipment.");
+    }
+    if (scheduleTaskNeedsInstallItem && !selectedDbItem?.id) {
+      return toast.error("Select an item.");
+    }
+    if (scheduleTaskNeedsEquipmentDatabaseItem && selectedDbItem && !isEquipmentDatabaseItem(selectedDbItem)) {
+      return toast.error("Select an equipment database item.");
+    }
+    if (
+      scheduleTaskNeedsEquipmentDatabaseItem &&
+      selectedDbItem &&
+      !hasDatabaseEquipmentMapping({ ...selectedDbItem, ...databaseEquipmentMappingPatch(scheduleTaskForm.equipmentMapping) })
+    ) {
+      return toast.error("Connect the equipment item to universal equipment or enter custom type, make, and model.");
+    }
+    if (scheduleTaskNeedsInstallItem && (!Number.isFinite(quantity) || quantity <= 0)) {
+      return toast.error("Quantity must be greater than 0.");
+    }
+
+    try {
+      setSavingScheduleTask(true);
+
+      if (scheduleTaskNeedsEquipmentDatabaseItem) {
+        selectedDbItem = await saveEquipmentMappingForDatabaseItem(
+          selectedDbItem,
+          scheduleTaskForm.equipmentMapping
+        );
+        if (!selectedDbItem) return;
+      }
+
+      const id = "comp_wo_tas_" + uuidv4();
+      const costCents = centsFromCurrencyInput(scheduleTaskForm.laborCost || "0");
+      const billingLaborPriceCents = centsFromCurrencyInput(scheduleTaskForm.billingLaborPrice || "0");
+      const linkedShoppingListItemId = scheduleTaskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
+      const taskPayload = {
+        id,
+        name: nextName,
+        description: nextName,
+        type: scheduleTaskTypeValue,
+        contractedRate: costCents,
+        billingLaborPriceCents,
+        estimatedTime: estimatedTimeNumber,
+        payTypeId: selectedPayType?.id || "",
+        payTypeName: selectedPayType?.name || selectedPayType?.label || "",
+        status: "Unassigned",
+        customerApproval: false,
+        actualTime: 0,
+        workerId: "",
+        workerType: "Not Assigned",
+        workerName: "",
+        laborContractId: "",
+        serviceStopId: {
+          id: "",
+          internalId: "",
+        },
+        equipmentId: scheduleTaskNeedsEquipment ? scheduleTaskSelectedEquipment?.id || "" : "",
+        serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
+        bodyOfWaterId: scheduleTaskNeedsBodyOfWater ? scheduleTaskResolvedBodyOfWaterId : "",
+        dataBaseItemId: scheduleTaskNeedsInstallItem ? selectedDbItem?.id || "" : "",
+        shoppingListItemId: linkedShoppingListItemId,
+        shoppingListItemIds: linkedShoppingListItemId ? [linkedShoppingListItemId] : [],
+        customerApprovalRequired: false,
+        customerApprovalStatus: "notRequired",
+        customerApprovalRequestId: "",
+      };
+      let materialPayload = null;
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), taskPayload);
+
+      if (scheduleTaskNeedsInstallItem) {
+        const plannedUnitCostCents = Number(selectedDbItem?.rate || selectedDbItem?.cost || 0);
+        const plannedUnitPriceCents = Number(
+          selectedDbItem?.sellPrice ||
+          selectedDbItem?.rate ||
+          selectedDbItem?.cost ||
+          0
+        );
+        const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
+        const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
+        const materialName = selectedDbItem?.name || "";
+        const materialDescription = selectedDbItem?.description || "";
+        const materialPhotoFields = itemPhotoFieldsFromSource(selectedDbItem, materialName || "Shopping item photo");
+        const materialStatus = initialJobMaterialStatus();
+
+        materialPayload = {
+          id: linkedShoppingListItemId,
+          category: "Job",
+          subCategory: "Data Base",
+          status: materialStatus,
+          purchaserId: "",
+          purchaserName: "",
+          genericItemId: selectedDbItem?.genericItemId || "",
+          name: materialName,
+          description: materialDescription,
+          datePurchased: null,
+          quantity: String(quantity),
+          jobId: jobId || "",
+          jobName: job.internalId || "Job",
+          linkedTaskId: id,
+          linkedTaskName: nextName,
+          linkedTaskType: scheduleTaskTypeValue,
+          customerId: job.customerId || customer.id || "",
+          customerName:
+            job.customerName ||
+            [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+            "",
+          userId: "",
+          userName: "",
+          serviceStopId: "",
+          serviceStopInternalId: "",
+          serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
+          serviceLocationName: serviceLocation.nickName || "",
+          scheduledDate: null,
+          prepKeys: [
+            jobId ? `job:${jobId}` : "",
+            job.customerId || customer.id ? `customer:${job.customerId || customer.id}` : "",
+            job.serviceLocationId || serviceLocation.id ? `serviceLocation:${job.serviceLocationId || serviceLocation.id}` : "",
+            `jobTask:${id}`,
+          ].filter(Boolean),
+          needsAction: true,
+          actionDate: Timestamp.fromDate(new Date()),
+          assignedTechIds: [],
+          dbItemId: selectedDbItem?.id || "",
+          dbItemName: selectedDbItem?.name || "",
+          ...materialPhotoFields,
+          purchasedItem: "",
+          invoiced: false,
+          customerApprovalRequired: false,
+          customerApprovalStatus: "notRequired",
+          customerApprovalRequestedAt: null,
+          approvalRequestId: "",
+          partApprovalRequestId: "",
+          estimateAccepted: isJobAcceptedForMaterials(),
+          jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
+          itemId: selectedDbItem?.id || "",
+          itemType: "Data Base",
+          cost: plannedUnitCostCents,
+          price: plannedUnitPriceCents,
+          plannedUnitCostCents,
+          plannedUnitPriceCents,
+          plannedTotalCostCents,
+          plannedTotalPriceCents,
+        };
+
+        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), materialPayload);
+      }
+
+      setTaskList((prev) => [
+        ...(prev || []).filter((task) => task.id !== id),
+        taskPayload,
+      ]);
+      if (materialPayload) {
+        setShoppingList((prev) => [
+          { ...materialPayload, docId: linkedShoppingListItemId },
+          ...(prev || []).filter((item) => (item.id || item.docId) !== linkedShoppingListItemId),
+        ]);
+      }
+      setScheduleServiceStopForm((prev) => ({
+        ...prev,
+        taskIds: Array.from(new Set([...(prev.taskIds || []), id])),
+      }));
+
+      await recordJobHistory({
+        eventType: "Task",
+        title: `Task added while scheduling: ${nextName}`,
+        changes: [
+          buildHistoryChange("type", "Task Type", "—", scheduleTaskTypeValue),
+          buildHistoryChange("contractedRate", "Tech Labor Cost", "—", moneyFromCents(costCents)),
+          buildHistoryChange("billingLaborPriceCents", "Billing Labor Price", "—", moneyFromCents(billingLaborPriceCents)),
+          buildHistoryChange("estimatedTime", "Estimated Time", "—", `${estimatedTimeNumber} minutes`),
+          ...(scheduleTaskNeedsBodyOfWater
+            ? [buildHistoryChange("bodyOfWaterId", "Body Of Water", "—", bodyOfWaterById.get(scheduleTaskResolvedBodyOfWaterId)?.label || bodyOfWaterById.get(scheduleTaskResolvedBodyOfWaterId)?.name || "—")]
+            : []),
+          ...(scheduleTaskNeedsEquipment
+            ? [buildHistoryChange("equipmentId", "Equipment", "—", scheduleTaskSelectedEquipment?.label || scheduleTaskSelectedEquipment?.name || "—")]
+            : []),
+          ...(scheduleTaskNeedsInstallItem
+            ? [buildHistoryChange("dataBaseItemId", "Item", "—", selectedDbItem?.label || selectedDbItem?.name || "—")]
+            : []),
+        ],
+        metadata: {
+          taskId: id,
+          selectedForServiceStop: true,
+          scheduleMode: scheduleServiceStopMode,
+        },
+      });
+
+      await refreshJobTaskAndShoppingState();
+      setScheduleTaskForm({
+        ...createEmptyScheduleTaskForm(),
+        payTypeId: taskPayTypeOptions[0]?.id || "",
+      });
+      setShowScheduleTaskCreator(false);
+      toast.success("Added and selected task");
+    } catch (error) {
+      console.error("[JobDetailView] Failed to add task while scheduling service stop", error);
+      toast.error("Failed to add task");
+    } finally {
+      setSavingScheduleTask(false);
+    }
   };
 
   const updateActualServiceStopEditForm = (field, value) => {
@@ -8601,6 +9351,15 @@ const JobDetailView = () => {
       useCase: modeConfig.useCase,
       context,
     });
+    const operationStatus = normalizeActualServiceStopOperationStatus(
+      form.operationStatus,
+      modeConfig.defaultOperationStatus
+    );
+    const billingStatus = normalizeActualServiceStopBillingStatus(
+      form.billingStatus,
+      modeConfig.defaultBillingStatus
+    );
+    const category = normalizeServiceStopCategory(resolvedTypeFields.category, modeConfig.useCase);
 
     return {
       description: form.description || "",
@@ -8609,17 +9368,17 @@ const JobDetailView = () => {
       tech: getCompanyUserName(selectedWorker),
       estimatedDuration: durationMinutes,
       duration: durationMinutes || 15,
-      operationStatus: form.operationStatus || modeConfig.defaultOperationStatus,
-      billingStatus: form.billingStatus || modeConfig.defaultBillingStatus,
+      operationStatus,
+      billingStatus,
       includeReadings: Boolean(form.includeReadings),
       includeDosages: Boolean(form.includeDosages),
-      isInvoiced: ["Invoiced", "Paid"].includes(form.billingStatus),
+      isInvoiced: ["Invoiced", "Paid"].includes(billingStatus),
       payTypeId: resolvedTypeFields.payTypeId,
       payTypeName: resolvedTypeFields.payTypeName,
       type: resolvedTypeFields.type,
       typeId: resolvedTypeFields.typeId,
       typeImage: resolvedTypeFields.typeImage,
-      category: resolvedTypeFields.category,
+      category,
       serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
     };
   };
@@ -8627,15 +9386,14 @@ const JobDetailView = () => {
   const saveScheduledServiceStop = async (event) => {
     event.preventDefault();
     if (!requirePermission("242", "create service stops")) return;
+    if (savingScheduleTask) return toast.error("Finish adding the task before scheduling the stop.");
     if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
 
     const modeConfig = getActualServiceStopScheduleMode(scheduleServiceStopMode);
     const serviceDate = serviceStopDateFromInputValue(scheduleServiceStopForm.serviceDate);
     if (!serviceDate) return toast.error("Select a valid service date.");
 
-    const selectedWorker = (companyUserList || []).find(
-      (user) => getCompanyUserId(user) === scheduleServiceStopForm.techId
-    );
+    const selectedWorker = findCompanyUserById(scheduleServiceStopForm.techId);
     if (!selectedWorker) return toast.error("Select a technician.");
 
     const activeCustomerId = job.customerId || customer.id || "";
@@ -8677,6 +9435,19 @@ const JobDetailView = () => {
         serviceDate,
         durationMinutes,
         context: "JobDetailView.saveScheduledServiceStop",
+      });
+      console.info("[JobDetailView][saveScheduledServiceStop][serviceStopPayload]", {
+        companyId: recentlySelectedCompany,
+        jobId,
+        mode: modeConfig.id,
+        serviceDate: format(serviceDate, "yyyy-MM-dd"),
+        techId: getCompanyUserId(selectedWorker),
+        tech: getCompanyUserName(selectedWorker),
+        operationStatus: basePayload.operationStatus,
+        billingStatus: basePayload.billingStatus,
+        category: basePayload.category,
+        typeId: basePayload.typeId,
+        type: basePayload.type,
       });
       const estimateTasks = tasksToSchedule.length
         ? tasksToSchedule
@@ -8823,6 +9594,11 @@ const JobDetailView = () => {
           updatedAt: serverTimestamp(),
         }),
       ]);
+      await syncActiveRouteForServiceStops({
+        date: serviceDate,
+        techId: getCompanyUserId(selectedWorker),
+        techName: getCompanyUserName(selectedWorker),
+      });
 
       setServiceStops((prev) => sortActualServiceStops([
         {
@@ -8922,9 +9698,7 @@ const JobDetailView = () => {
     const serviceDate = serviceStopDateFromInputValue(actualServiceStopEditForm.serviceDate);
     if (!serviceDate) return toast.error("Select a valid service date.");
 
-    const selectedWorker = (companyUserList || []).find(
-      (user) => getCompanyUserId(user) === actualServiceStopEditForm.techId
-    );
+    const selectedWorker = findCompanyUserById(actualServiceStopEditForm.techId);
     if (!selectedWorker) return toast.error("Select a technician.");
 
     const durationMinutes = Math.max(0, Number(actualServiceStopEditForm.estimatedDuration || 0)) || 15;
@@ -8942,7 +9716,11 @@ const JobDetailView = () => {
       updatedAt: serverTimestamp(),
       updatedAtMillis: Date.now(),
     };
-    const techChanged = getCompanyUserId(selectedWorker) !== (originalStop.techId || originalStop.userId || originalStop.technicianId || "");
+    const originalTechId = originalStop.techId || originalStop.userId || originalStop.technicianId || "";
+    const nextTechId = getCompanyUserId(selectedWorker);
+    const nextTechName = getCompanyUserName(selectedWorker);
+    const techChanged = nextTechId !== originalTechId;
+    const dateChanged = !sameRouteDay(originalStop.serviceDate, serviceDate);
 
     try {
       setSavingActualServiceStopEdit(true);
@@ -8976,6 +9754,32 @@ const JobDetailView = () => {
           )
           : []),
       ]);
+
+      const routeSyncTargets = [
+        {
+          date: serviceDate,
+          techId: nextTechId,
+          techName: nextTechName,
+        },
+      ];
+      if (dateChanged || techChanged) {
+        routeSyncTargets.unshift({
+          date: originalStop.serviceDate,
+          techId: originalTechId,
+          techName: originalStop.tech,
+        });
+      }
+      const routeSyncKeys = new Set();
+      await Promise.all(routeSyncTargets
+        .filter((target) => {
+          const dayStart = startOfRouteDay(target.date);
+          const key = `${dayStart?.getTime?.() || ""}:${target.techId || ""}`;
+          if (!target.techId || !dayStart || routeSyncKeys.has(key)) return false;
+          routeSyncKeys.add(key);
+          return true;
+        })
+        .map((target) => syncActiveRouteForServiceStops(target))
+      );
 
       setServiceStops((prev) => sortActualServiceStops(
         (prev || []).map((stop) =>
@@ -9093,9 +9897,7 @@ const JobDetailView = () => {
       }
 
       const isBoardPost = workOfferForm.offerType === "Internal Board";
-      const selectedWorker = (companyUserList || []).find(
-        (user) => getCompanyUserId(user) === workOfferForm.workerId
-      );
+      const selectedWorker = findCompanyUserById(workOfferForm.workerId);
 
       if (!isBoardPost && !selectedWorker) {
         toast.error("Select a technician before creating a direct offer.");
@@ -9525,12 +10327,23 @@ const JobDetailView = () => {
           : [];
 
         const stopsById = new Map();
+        const stopCompatibilityRepairs = new Map();
         const addStopFromSnapshot = (snap) => {
           if (!snap.exists()) return;
           const data = snap.data();
           const stopId = idValue(data.id) || snap.id;
+          const compatibilityPatch = actualServiceStopMobileCompatibilityPatch(data);
+
+          if (Object.keys(compatibilityPatch).length) {
+            stopCompatibilityRepairs.set(snap.ref.path, {
+              ref: snap.ref,
+              patch: compatibilityPatch,
+            });
+          }
+
           stopsById.set(stopId, {
             ...data,
+            ...compatibilityPatch,
             id: stopId,
           });
         };
@@ -9561,6 +10374,25 @@ const JobDetailView = () => {
           const bDate = b.serviceDate?.toDate?.()?.getTime?.() || new Date(b.serviceDate || 0).getTime();
           return bDate - aDate;
         });
+
+        if (stopCompatibilityRepairs.size) {
+          console.info("[JobDetailView][loadJobDetails][repairServiceStopCompatibility]", {
+            companyId: recentlySelectedCompany,
+            jobId,
+            repairs: Array.from(stopCompatibilityRepairs.values()).map(({ ref, patch }) => ({
+              path: ref.path,
+              patch,
+            })),
+          });
+          const repairBatch = writeBatch(db);
+          stopCompatibilityRepairs.forEach(({ ref, patch }) => {
+            repairBatch.update(ref, {
+              ...patch,
+              updatedAt: serverTimestamp(),
+            });
+          });
+          await repairBatch.commit();
+        }
 
         setServiceStops(stops);
 
@@ -9699,23 +10531,21 @@ const JobDetailView = () => {
         const items = itemsSnap.docs.map(withFirestoreDocId);
         setShoppingList(items);
 
-        const companyUsersQ = query(
-          collection(db, "companies", recentlySelectedCompany, "companyUsers"),
-          orderBy("firstName")
-        );
-        const companyUsersSnap = await getDocs(companyUsersQ);
+        const companyUsersSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers"));
         const companyUsers = sortCompanyUsersByName(companyUsersSnap.docs.map((docSnap) => {
           const data = docSnap.data();
           const name = getCompanyUserDisplayName(data, "Unnamed User");
+          const userId = data.userId || data.uid || data.id || docSnap.id;
 
           return {
             ...data,
             id: data.id || docSnap.id,
-            userId: data.userId || data.id || docSnap.id,
+            docId: docSnap.id,
+            userId,
             userName: data.userName || name,
             name,
             label: name,
-            value: data.id || docSnap.id,
+            value: userId,
           };
         }));
         setCompanyUserList(companyUsers);
@@ -10290,37 +11120,45 @@ const JobDetailView = () => {
     });
   };
 
-  const saveEditChanges = async (e) => {
-    e.preventDefault();
+  const saveEditChanges = async (e, overrides = {}) => {
+    e?.preventDefault?.();
     if (!requireUpdateCurrentJob("update jobs")) return;
 
     try {
       const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+      const nextSelectedAdmin = overrides.selectedAdmin ?? selectedAdmin;
+      const nextCustomerPriceInput = overrides.customerPriceInput ?? customerPriceInput;
+      const nextSelectedBillingStatus = overrides.selectedBillingStatus ?? selectedBillingStatus;
+      const nextSelectedOperationStatus = overrides.selectedOperationStatus ?? selectedOperationStatus;
+      const nextSelectedSolutionTier = overrides.selectedSolutionTier ?? selectedSolutionTier;
+      const successMessage = overrides.successMessage || "Saved";
+      const noChangesMessage = overrides.noChangesMessage || "No changes";
+      const sourceDescription = overrides.sourceDescription || "edit status";
 
       const updates = {};
 
       if (
-        selectedAdmin?.id &&
-        (selectedAdmin.id !== job.adminId || selectedAdmin.name !== job.adminName)
+        nextSelectedAdmin?.id &&
+        (nextSelectedAdmin.id !== job.adminId || nextSelectedAdmin.name !== job.adminName)
       ) {
-        updates.adminId = selectedAdmin.id;
-        updates.adminName = selectedAdmin.name;
+        updates.adminId = nextSelectedAdmin.id;
+        updates.adminName = nextSelectedAdmin.name;
       }
-      if (customerPriceInput !== "" && Number(customerPriceInput) < 0) {
+      if (nextCustomerPriceInput !== "" && Number(nextCustomerPriceInput) < 0) {
         return toast.error("Customer price cannot be negative");
       }
-      const nextRateCents = Math.round(Number(customerPriceInput || 0) * 100);
+      const nextRateCents = Math.round(Number(nextCustomerPriceInput || 0) * 100);
 
       if (Number.isFinite(nextRateCents) && nextRateCents !== Number(job.rate || 0)) {
         updates.rate = nextRateCents;
       }
 
-      if (selectedBillingStatus?.value && selectedBillingStatus.value !== (job.billingStatus || "")) {
-        updates.billingStatus = selectedBillingStatus.value;
+      if (nextSelectedBillingStatus?.value && nextSelectedBillingStatus.value !== (job.billingStatus || "")) {
+        updates.billingStatus = nextSelectedBillingStatus.value;
       }
 
-      if (selectedOperationStatus?.value && selectedOperationStatus.value !== (job.operationStatus || "")) {
-        updates.operationStatus = selectedOperationStatus.value;
+      if (nextSelectedOperationStatus?.value && nextSelectedOperationStatus.value !== (job.operationStatus || "")) {
+        updates.operationStatus = nextSelectedOperationStatus.value;
       }
 
       let resolvedBillingStatus = updates.billingStatus ?? job.billingStatus ?? "";
@@ -10345,7 +11183,7 @@ const JobDetailView = () => {
         updates.operationStatus = JOB_OPERATION_STATUS.canceled;
       }
 
-      const nextSolutionTier = normalizeIssuePriority(selectedSolutionTier?.value);
+      const nextSolutionTier = normalizeIssuePriority(nextSelectedSolutionTier?.value);
       const currentSolutionTier = normalizeIssuePriority(job.issuePriorityLevel || job.priorityLevel || job.solutionTier || DEFAULT_ISSUE_PRIORITY);
       if (nextSolutionTier !== currentSolutionTier) {
         updates.issuePriorityLevel = nextSolutionTier;
@@ -10388,7 +11226,7 @@ const JobDetailView = () => {
           terminalCleanupSummary = await cleanupJobRelatedWorkForTerminalStatus({
             nextBillingStatus: nextSavedBillingStatus,
             terminalAction: terminalActionForBillingStatus(nextSavedBillingStatus),
-            reason: `Job marked ${nextSavedBillingStatus} from job edit status.`,
+            reason: `Job marked ${nextSavedBillingStatus} from ${sourceDescription}.`,
             changedAtMillis: statusChangedAtMillis,
           });
         }
@@ -10414,7 +11252,7 @@ const JobDetailView = () => {
             previousBillingStatus: job.billingStatus || "",
             previousOperationStatus: job.operationStatus || "",
             nextOperationStatus: updates.operationStatus ?? job.operationStatus ?? "",
-            reason: "Job expired from edit status",
+            reason: `Job expired from ${sourceDescription}`,
             priorityLevel: updates.issuePriorityLevel ?? updates.solutionTier ?? job.issuePriorityLevel ?? job.priorityLevel ?? job.solutionTier ?? DEFAULT_ISSUE_PRIORITY,
           });
         }
@@ -10425,7 +11263,7 @@ const JobDetailView = () => {
             previousBillingStatus: job.billingStatus || "",
             previousOperationStatus: job.operationStatus || "",
             nextOperationStatus: updates.operationStatus ?? job.operationStatus ?? "",
-            reason: "Job rejected from edit status",
+            reason: `Job rejected from ${sourceDescription}`,
             priorityLevel: updates.issuePriorityLevel ?? updates.solutionTier ?? job.issuePriorityLevel ?? job.priorityLevel ?? job.solutionTier ?? DEFAULT_ISSUE_PRIORITY,
           });
         }
@@ -10435,13 +11273,13 @@ const JobDetailView = () => {
             previousBillingStatus: job.billingStatus || "",
             previousOperationStatus: job.operationStatus || "",
             resolvedAtMillis: Date.now(),
-            resolutionNote: "Customer took care of the issue from job edit status.",
+            resolutionNote: `Customer took care of the issue from ${sourceDescription}.`,
           });
         }
 
-        toast.success("Saved");
+        toast.success(successMessage);
       } else {
-        toast.success("No changes");
+        toast.success(noChangesMessage);
       }
 
       const jobSnap = await getDoc(jobRef);
@@ -11175,6 +12013,85 @@ const JobDetailView = () => {
       selectedOperationStatus?.value || job.operationStatus || "Estimate Pending"
     );
     setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });
+  };
+
+  const handleQuickJobSelectChange = async (field, opt) => {
+    if (!opt?.value) return;
+
+    if (edit) {
+      if (field === "billingStatus") {
+        handleSelectedBillingStatus(opt);
+      } else if (field === "operationStatus") {
+        handleSelectedOperationStatus(opt);
+      } else if (field === "priority") {
+        setSelectedSolutionTier(issuePrioritySelectOption(opt.value));
+      }
+      return;
+    }
+
+    if (!requireUpdateCurrentJob("update jobs")) return;
+
+    const currentBillingStatus = job.billingStatus || "Draft";
+    const currentOperationStatus = job.operationStatus || "Estimate Pending";
+    const currentPriority = currentIssuePriority();
+    let nextBillingStatus = currentBillingStatus;
+    let nextOperationStatus = currentOperationStatus;
+    let nextPriority = currentPriority;
+
+    if (field === "billingStatus") {
+      nextBillingStatus = opt.value;
+      if (nextBillingStatus !== "Estimate") {
+        nextOperationStatus = suggestOperationForBilling(
+          nextBillingStatus,
+          currentOperationStatus
+        );
+      }
+    } else if (field === "operationStatus") {
+      nextOperationStatus = opt.value;
+      nextBillingStatus = suggestBillingForOperation(
+        nextOperationStatus,
+        currentBillingStatus
+      );
+    } else if (field === "priority") {
+      nextPriority = normalizeIssuePriority(opt.value);
+    }
+
+    const changeLabels = [
+      nextBillingStatus !== currentBillingStatus
+        ? `billing status from ${currentBillingStatus || "Not set"} to ${nextBillingStatus}`
+        : null,
+      nextOperationStatus !== currentOperationStatus
+        ? `operation status from ${currentOperationStatus || "Not set"} to ${nextOperationStatus}`
+        : null,
+      nextPriority !== currentPriority
+        ? `priority from ${currentPriority} - ${getIssuePriorityLabel(currentPriority)} to ${nextPriority} - ${getIssuePriorityLabel(nextPriority)}`
+        : null,
+    ].filter(Boolean);
+
+    if (!changeLabels.length) return;
+
+    const ok = await appConfirm({
+      title: "Save Job Update",
+      message: `Save ${changeLabels.join(", ")}?`,
+      confirmLabel: "Save Changes",
+    });
+    if (!ok) return;
+
+    try {
+      setQuickSavingJobField(field);
+      await saveEditChanges(null, {
+        selectedAdmin: currentAdminOption(job),
+        customerPriceInput: ((Number(job.rate || 0) / 100) || 0).toFixed(2),
+        selectedBillingStatus: statusSelectOption(nextBillingStatus, "Draft"),
+        selectedOperationStatus: statusSelectOption(nextOperationStatus, "Estimate Pending"),
+        selectedSolutionTier: issuePrioritySelectOption(nextPriority),
+        successMessage: "Job updated",
+        noChangesMessage: "No changes",
+        sourceDescription: "job header dropdown",
+      });
+    } finally {
+      setQuickSavingJobField("");
+    }
   };
   const getPayrollLineAmountCents = (line) => {
     return cents(
@@ -13199,13 +14116,6 @@ const JobDetailView = () => {
       plannedUnitPrice,
       ...photoFields,
     }));
-  };
-
-  const handleShoppingDbItemIdChange = (itemId) => {
-    const option = (shoppingDbItemList || []).find((item) =>
-      String(item.id || item.value || "") === String(itemId || "")
-    ) || null;
-    handleShoppingDbItemChange(option);
   };
 
   const handleCreateShoppingDatabaseItem = async (e) => {
@@ -16366,13 +17276,18 @@ const JobDetailView = () => {
     }
   };
 
-  const handleMarkAsInvoiced = async () => {
+  const handleMarkAsInvoiced = async (action = "mark") => {
+    const invoiceAction = action === "convert" ? "convert" : "mark";
+    const invoiceActionTitle = invoiceAction === "convert"
+      ? "Job converted to invoice"
+      : "Job marked as invoiced";
+
     if (markingJobInvoiced || sendingInvoiceEmail) return;
 
     try {
       if (!recentlySelectedCompany || !jobId) return;
 
-      setMarkingJobInvoiced(true);
+      setJobInvoiceActionInProgress(invoiceAction);
       const salesAgreement = salesWorkflowEnabled
         ? selectedSalesAgreement || await findLinkedSalesAgreement()
         : null;
@@ -16401,9 +17316,10 @@ const JobDetailView = () => {
         salesInvoice,
         invoiceId,
         invoiceType,
-        historyTitle: jobIsFinished ? "Job converted to invoice" : "Job marked as invoiced",
+        historyTitle: invoiceActionTitle,
         historyMetadata: {
           manual: true,
+          invoiceAction,
           createdSalesInvoice: Boolean(salesWorkflowEnabled && salesInvoice?.id && !existingSalesInvoice?.id),
           sourceEstimateId: salesAgreement?.id || selectedContract?.id || "",
           sourceEstimateType: salesAgreement?.id
@@ -16415,13 +17331,13 @@ const JobDetailView = () => {
       });
 
       toast.success(
-        `${jobIsFinished ? "Job converted to invoice" : "Job marked as invoiced"}. ${result.invoicedPurchasedItemCount} purchased item(s) and ${result.invoicedShoppingItemCount} shopping item(s) updated.`
+        `${invoiceActionTitle}. ${result.invoicedPurchasedItemCount} purchased item(s) and ${result.invoicedShoppingItemCount} shopping item(s) updated.`
       );
     } catch (err) {
       console.error(err);
       toast.error("Failed to mark as invoiced");
     } finally {
-      setMarkingJobInvoiced(false);
+      setJobInvoiceActionInProgress("");
     }
   };
   const renderPlannedServiceStopCard = (stop) => {
@@ -16675,45 +17591,95 @@ const JobDetailView = () => {
     const typeOptions = getActualServiceStopTypeOptions(modeConfig.useCase, form.serviceStopTypeId);
     const selectedTaskIds = new Set(form.taskIds || []);
     const showTaskPicker = modeConfig.id === "jobVisit" && !isEdit;
+    const technicianOptions = (companyUserList || []).filter((user) => getCompanyUserId(user));
+    const selectedTechnicianOption = form.techId ? findCompanyUserById(form.techId) : null;
+    const selectedServiceStopTypeOption = form.serviceStopTypeId
+      ? typeOptions.find((type) => getActualServiceStopTypeOptionId(type) === form.serviceStopTypeId) ||
+        getActualServiceStopSelectedType(form.serviceStopTypeId)
+      : null;
+    const selectPortalTarget = typeof document !== "undefined" ? document.body : undefined;
+    const scheduleTaskTypeOption = scheduleTaskTypeValue
+      ? (taskTypeList || []).find((option) => canonicalJobTaskType(option.value || option.name || option.label || "") === scheduleTaskTypeValue) ||
+        scheduleTaskForm.type
+      : null;
+    const scheduleTaskPayTypeOption = scheduleTaskForm.payTypeId
+      ? taskPayTypeById.get(scheduleTaskForm.payTypeId) || null
+      : null;
+    const scheduleTaskBodyOfWaterOption = scheduleTaskResolvedBodyOfWaterId
+      ? bodyOfWaterById.get(scheduleTaskResolvedBodyOfWaterId) || null
+      : null;
+    const scheduleTaskEquipmentOption = scheduleTaskForm.equipmentId
+      ? equipmentById.get(scheduleTaskForm.equipmentId) || null
+      : null;
+    const scheduleTaskDbItemOption = scheduleTaskForm.dataBaseItemId
+      ? shoppingDbItemById.get(scheduleTaskForm.dataBaseItemId) || null
+      : null;
+    const scheduleTaskFieldLabelClass = "block text-xs font-bold uppercase tracking-wide text-slate-600";
+    const scheduleTaskInputClass =
+      "mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 disabled:cursor-not-allowed disabled:opacity-50";
+    const scheduleSelectStyles = {
+      control: (base, state) => ({
+        ...base,
+        minHeight: 40,
+        borderColor: state.isFocused ? "#3b82f6" : "#cbd5e1",
+        boxShadow: state.isFocused ? "0 0 0 2px rgba(59, 130, 246, 0.12)" : "none",
+        "&:hover": { borderColor: state.isFocused ? "#3b82f6" : "#94a3b8" },
+      }),
+      menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+    };
 
     return (
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <label className="block text-sm font-semibold text-slate-700">
-          Pay Type
-          <select
-            value={form.serviceStopTypeId}
-            onChange={(event) => updateForm("serviceStopTypeId", event.target.value)}
-            disabled={saving}
-            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        <div>
+          <label
+            htmlFor={`actual-service-stop-pay-type-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+            className="block text-sm font-semibold text-slate-700"
           >
-            <option value="">Use default {modeConfig.fallbackName}</option>
-            {typeOptions.map((type) => (
-              <option key={type.id} value={type.id}>
-                {type.name || type.label || type.type || "Service Stop"}
-              </option>
-            ))}
-          </select>
-        </label>
+            Pay Type
+          </label>
+          <Select
+            inputId={`actual-service-stop-pay-type-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+            options={typeOptions}
+            value={selectedServiceStopTypeOption}
+            onChange={(option) => updateForm("serviceStopTypeId", option ? getActualServiceStopTypeOptionId(option) : "")}
+            isClearable
+            isDisabled={saving}
+            placeholder={`Use default ${modeConfig.fallbackName}`}
+            noOptionsMessage={() => "No pay types found"}
+            getOptionValue={(option) => getActualServiceStopTypeOptionId(option)}
+            getOptionLabel={(option) => getActualServiceStopTypeOptionLabel(option)}
+            formatOptionLabel={renderActualServiceStopTypeOption}
+            className="mt-1 text-sm"
+            menuPortalTarget={selectPortalTarget}
+            menuPosition="fixed"
+            styles={scheduleSelectStyles}
+          />
+        </div>
 
-        <label className="block text-sm font-semibold text-slate-700">
-          Technician
-          <select
-            value={form.techId}
-            onChange={(event) => updateForm("techId", event.target.value)}
-            disabled={saving}
-            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        <div>
+          <label
+            htmlFor={`actual-service-stop-technician-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+            className="block text-sm font-semibold text-slate-700"
           >
-            <option value="">Select Technician</option>
-            {(companyUserList || []).map((user) => {
-              const userId = getCompanyUserId(user);
-              return (
-                <option key={userId || user.id} value={userId}>
-                  {getCompanyUserName(user)}
-                </option>
-              );
-            })}
-          </select>
-        </label>
+            Assign Technician
+          </label>
+          <Select
+            inputId={`actual-service-stop-technician-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+            options={technicianOptions}
+            value={selectedTechnicianOption}
+            onChange={(option) => updateForm("techId", option ? getCompanyUserId(option) : "")}
+            isClearable
+            isDisabled={saving}
+            placeholder="Select a technician..."
+            noOptionsMessage={() => "No technicians found"}
+            getOptionValue={(option) => getCompanyUserId(option)}
+            getOptionLabel={(option) => getCompanyUserName(option)}
+            className="mt-1 text-sm"
+            menuPortalTarget={selectPortalTarget}
+            menuPosition="fixed"
+            styles={scheduleSelectStyles}
+          />
+        </div>
 
         {!isEdit && modeConfig.id === "jobVisit" && plannedServiceStops.length > 0 && (
           <label className="block text-sm font-semibold text-slate-700 md:col-span-2">
@@ -16837,10 +17803,227 @@ const JobDetailView = () => {
                   Scheduled and finished tasks stay locked to avoid double-booking work.
                 </p>
               </div>
-              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
-                {selectedTaskIds.size}
-              </span>
+              <div className="flex items-center gap-2">
+                {canBuildJobEstimatePlan && (
+                  <button
+                    type="button"
+                    onClick={openScheduleTaskCreator}
+                    disabled={saving || savingScheduleTask || showScheduleTaskCreator}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                    Add Task
+                  </button>
+                )}
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
+                  {selectedTaskIds.size}
+                </span>
+              </div>
             </div>
+
+            {showScheduleTaskCreator && (
+              <div className="mt-3 rounded-md border border-blue-200 bg-white p-3">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <label className={scheduleTaskFieldLabelClass}>
+                    Description
+                    <input
+                      type="text"
+                      value={scheduleTaskForm.description}
+                      onChange={(event) => updateScheduleTaskForm("description", event.target.value)}
+                      disabled={saving || savingScheduleTask}
+                      className={scheduleTaskInputClass}
+                      placeholder="Task description"
+                    />
+                  </label>
+
+                  <div className={scheduleTaskFieldLabelClass}>
+                    Type
+                    <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                      <Select
+                        value={scheduleTaskTypeOption}
+                        options={taskTypeList}
+                        onChange={(option) => updateScheduleTaskForm("type", option)}
+                        isSearchable
+                        isDisabled={saving || savingScheduleTask}
+                        placeholder="Select a task type"
+                        menuPortalTarget={selectPortalTarget}
+                        menuPosition="fixed"
+                        styles={scheduleSelectStyles}
+                      />
+                    </div>
+                  </div>
+
+                  <div className={scheduleTaskFieldLabelClass}>
+                    Pay Type
+                    <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                      <Select
+                        value={scheduleTaskPayTypeOption}
+                        options={taskPayTypeOptions}
+                        onChange={(option) => updateScheduleTaskForm("payTypeId", option?.id || "")}
+                        isSearchable
+                        isClearable
+                        isDisabled={saving || savingScheduleTask}
+                        placeholder="Select a task pay type"
+                        menuPortalTarget={selectPortalTarget}
+                        menuPosition="fixed"
+                        styles={scheduleSelectStyles}
+                      />
+                    </div>
+                  </div>
+
+                  {scheduleTaskNeedsBodyOfWater && (
+                    <div className={scheduleTaskFieldLabelClass}>
+                      Body of Water
+                      <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                        <Select
+                          value={scheduleTaskBodyOfWaterOption}
+                          options={taskBodyOfWaterList}
+                          onChange={(option) => updateScheduleTaskForm("bodyOfWaterId", option?.id || "")}
+                          isSearchable
+                          isClearable
+                          isDisabled={saving || savingScheduleTask}
+                          placeholder="Select body of water"
+                          menuPortalTarget={selectPortalTarget}
+                          menuPosition="fixed"
+                          styles={scheduleSelectStyles}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {scheduleTaskNeedsEquipment && (
+                    <div className={scheduleTaskFieldLabelClass}>
+                      Equipment
+                      <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                        <Select
+                          value={scheduleTaskEquipmentOption}
+                          options={taskEquipmentOptions}
+                          onChange={(option) => updateScheduleTaskForm("equipmentId", option?.id || "")}
+                          isSearchable
+                          isClearable
+                          isDisabled={saving || savingScheduleTask}
+                          placeholder="Select equipment"
+                          menuPortalTarget={selectPortalTarget}
+                          menuPosition="fixed"
+                          styles={scheduleSelectStyles}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {scheduleTaskNeedsInstallItem && (
+                    <>
+                      <div className={scheduleTaskFieldLabelClass}>
+                        {scheduleTaskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
+                        <div className="mt-1 text-sm font-medium normal-case tracking-normal">
+                          <Select
+                            value={scheduleTaskDbItemOption}
+                            options={scheduleTaskDbItemOptions}
+                            onChange={(option) => updateScheduleTaskForm("dataBaseItemId", option?.id || "")}
+                            isSearchable
+                            isClearable
+                            isDisabled={saving || savingScheduleTask}
+                            placeholder={scheduleTaskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
+                            menuPortalTarget={selectPortalTarget}
+                            menuPosition="fixed"
+                            styles={scheduleSelectStyles}
+                          />
+                        </div>
+                      </div>
+
+                      <label className={scheduleTaskFieldLabelClass}>
+                        Quantity
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={scheduleTaskForm.quantity}
+                          onChange={(event) => updateScheduleTaskForm("quantity", event.target.value)}
+                          disabled={saving || savingScheduleTask}
+                          className={scheduleTaskInputClass}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {scheduleTaskNeedsEquipmentDatabaseItem && scheduleTaskSelectedDbItem && (
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 md:col-span-2 xl:col-span-4">
+                      <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
+                        Equipment Mapping
+                      </div>
+                      <EquipmentCatalogPicker
+                        value={scheduleTaskForm.equipmentMapping}
+                        onChange={(mapping) => updateScheduleTaskForm("equipmentMapping", mapping)}
+                        preferCustom
+                        inputClassName="w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
+                        labelClassName="block text-xs font-bold uppercase tracking-wide text-slate-600"
+                        gridClassName="grid grid-cols-1 gap-3 md:grid-cols-3"
+                        labels={{ type: "Equipment Type", make: "Make", model: "Model" }}
+                      />
+                    </div>
+                  )}
+
+                  <label className={scheduleTaskFieldLabelClass}>
+                    Tech Labor Cost
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={scheduleTaskForm.laborCost}
+                      onChange={(event) => updateScheduleTaskForm("laborCost", event.target.value)}
+                      disabled={saving || savingScheduleTask}
+                      className={scheduleTaskInputClass}
+                    />
+                  </label>
+
+                  <label className={scheduleTaskFieldLabelClass}>
+                    Billing Labor
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={scheduleTaskForm.billingLaborPrice}
+                      onChange={(event) => updateScheduleTaskForm("billingLaborPrice", event.target.value)}
+                      disabled={saving || savingScheduleTask}
+                      className={scheduleTaskInputClass}
+                    />
+                  </label>
+
+                  <label className={scheduleTaskFieldLabelClass}>
+                    Estimated Time
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={scheduleTaskForm.estimatedTime}
+                      onChange={(event) => updateScheduleTaskForm("estimatedTime", event.target.value)}
+                      disabled={saving || savingScheduleTask}
+                      className={scheduleTaskInputClass}
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={resetScheduleTaskCreator}
+                    disabled={savingScheduleTask}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveScheduleServiceStopTask}
+                    disabled={saving || savingScheduleTask}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                    {savingScheduleTask ? "Adding..." : "Add & Select Task"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="mt-3 max-h-52 space-y-2 overflow-y-auto">
               {!taskList.length ? (
@@ -17724,13 +18907,22 @@ const JobDetailView = () => {
       }]
       : []),
     {
-      label: markingJobInvoiced
-        ? (jobIsFinished ? "Converting..." : "Marking Invoiced...")
-        : convertInvoiceActionLabel,
+      id: "mark-as-invoiced",
+      label: jobInvoiceActionInProgress === "mark" ? "Marking Invoiced..." : "Mark As Invoiced",
       icon: CurrencyDollarIcon,
-      onClick: handleMarkAsInvoiced,
+      onClick: () => handleMarkAsInvoiced("mark"),
       disabled: markingJobInvoiced || sendingInvoiceEmail,
     },
+    ...(jobIsFinished
+      ? [{
+        id: "convert-to-invoice",
+        label: jobInvoiceActionInProgress === "convert" ? "Converting..." : "Convert to Invoice",
+        icon: DocumentTextIcon,
+        tone: "blue",
+        onClick: () => handleMarkAsInvoiced("convert"),
+        disabled: markingJobInvoiced || sendingInvoiceEmail,
+      }]
+      : []),
     ...(canUpdateJobs
       ? [{
         label: "Create Template",
@@ -18992,9 +20184,6 @@ const JobDetailView = () => {
   };
 
   const renderPlanInvoiceNewMaterialForm = () => {
-    const selectedShoppingDbItemId =
-      selectedShoppingDbItem?.id || selectedShoppingDbItem?.value || shoppingFormData.dbItemId || "";
-
     return (
       <form onSubmit={handleAddShoppingListItem} className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
@@ -19024,29 +20213,28 @@ const JobDetailView = () => {
 
                 {requiresShoppingDbItem ? (
                   <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_auto]">
-                    <select
-                      value={selectedShoppingDbItemId}
-                      onChange={(event) => handleShoppingDbItemIdChange(event.target.value)}
-                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      aria-label="Select purchase line item"
-                    >
-                      <option value="">
-                        {(shoppingDbItemList || []).length ? "Select product or part" : "No database items yet"}
-                      </option>
-                      {(shoppingDbItemList || []).map((item) => {
-                        const itemId = item.id || item.value || "";
-                        const itemPriceCents = item.sellPrice || item.billingRate || item.rate || item.cost || 0;
-                        return (
-                          <option key={itemId} value={itemId}>
-                            {[
-                              item.name || item.label || "Database Item",
-                              moneyFromCents(itemPriceCents),
-                              item.subCategory || item.category || "",
-                            ].filter(Boolean).join(" - ")}
-                          </option>
-                        );
-                      })}
-                    </select>
+                    <div className="min-w-0">
+                      <Select
+                        value={selectedShoppingDbItem}
+                        options={shoppingDbItemList}
+                        onChange={handleShoppingDbItemChange}
+                        isSearchable
+                        isClearable
+                        placeholder={(shoppingDbItemList || []).length ? "Search product or part" : "No database items yet"}
+                        noOptionsMessage={() => "No matching database items"}
+                        formatOptionLabel={formatShoppingDbItemOption}
+                        filterOption={(option, inputValue) =>
+                          (option.data.searchText || option.data.label || "")
+                            .toLowerCase()
+                            .includes(inputValue.toLowerCase())
+                        }
+                        theme={selectTheme}
+                        styles={selectStyles}
+                        menuPortalTarget={selectMenuPortalTarget || undefined}
+                        menuPosition="fixed"
+                        aria-label="Select purchase line item"
+                      />
+                    </div>
                     <input
                       type="number"
                       min="0"
@@ -19517,40 +20705,51 @@ const JobDetailView = () => {
                         {job.internalId}
                       </span>
                     )}
-                    {edit ? (
-                      <>
-                        <div className="min-w-[180px]">
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Billing</p>
-                          <Select
-                            value={selectedBillingStatus}
-                            options={billingStatusOptions}
-                            onChange={handleSelectedBillingStatus}
-                            isSearchable
-                            placeholder="Billing status"
-                            theme={selectTheme}
-                            styles={selectStyles}
-                          />
-                        </div>
-                        <div className="min-w-[190px]">
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Operations</p>
-                          <Select
-                            value={selectedOperationStatus}
-                            options={operationStatusOptions}
-                            onChange={handleSelectedOperationStatus}
-                            isSearchable
-                            placeholder="Operations status"
-                            theme={selectTheme}
-                            styles={selectStyles}
-                          />
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <StatusBadge status={job.billingStatus} />
-                        <StatusBadge status={job.operationStatus} />
-                        <IssuePriorityBadge priority={job.issuePriorityLevel || job.priorityLevel || job.solutionTier} />
-                      </>
-                    )}
+                    <div className="min-w-[180px]">
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Billing</p>
+                      <Select
+                        value={edit ? selectedBillingStatus : statusSelectOption(job.billingStatus, "Draft")}
+                        options={billingStatusOptions}
+                        onChange={(opt) => handleQuickJobSelectChange("billingStatus", opt)}
+                        isSearchable
+                        isDisabled={Boolean(quickSavingJobField) || !canUpdateCurrentJob}
+                        placeholder={quickSavingJobField === "billingStatus" ? "Saving..." : "Billing status"}
+                        theme={selectTheme}
+                        styles={selectStyles}
+                        menuPortalTarget={selectMenuPortalTarget}
+                        menuPosition="fixed"
+                      />
+                    </div>
+                    <div className="min-w-[190px]">
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Operations</p>
+                      <Select
+                        value={edit ? selectedOperationStatus : statusSelectOption(job.operationStatus, "Estimate Pending")}
+                        options={operationStatusOptions}
+                        onChange={(opt) => handleQuickJobSelectChange("operationStatus", opt)}
+                        isSearchable
+                        isDisabled={Boolean(quickSavingJobField) || !canUpdateCurrentJob}
+                        placeholder={quickSavingJobField === "operationStatus" ? "Saving..." : "Operations status"}
+                        theme={selectTheme}
+                        styles={selectStyles}
+                        menuPortalTarget={selectMenuPortalTarget}
+                        menuPosition="fixed"
+                      />
+                    </div>
+                    <div className="min-w-[190px]">
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Priority</p>
+                      <Select
+                        value={edit ? selectedSolutionTier : issuePrioritySelectOption(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)}
+                        options={issuePriorityOptions}
+                        onChange={(opt) => handleQuickJobSelectChange("priority", opt)}
+                        isSearchable={false}
+                        isDisabled={Boolean(quickSavingJobField) || !canUpdateCurrentJob}
+                        placeholder={quickSavingJobField === "priority" ? "Saving..." : "Issue priority"}
+                        theme={selectTheme}
+                        styles={selectStyles}
+                        menuPortalTarget={selectMenuPortalTarget}
+                        menuPosition="fixed"
+                      />
+                    </div>
                   </div>
                   <h1 className="mt-3 text-3xl font-bold text-slate-950">{job.type || "Job Details"}</h1>
                   <div className="mt-2 flex max-w-3xl flex-col gap-2 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
@@ -19598,7 +20797,7 @@ const JobDetailView = () => {
                   <MenuItems className="absolute right-0 z-30 mt-2 w-64 origin-top-right overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
                     {headerActionItems.map((action) => (
                       <JobHeaderActionMenuItem
-                        key={action.label}
+                        key={action.id || action.label}
                         label={action.label}
                         icon={action.icon}
                         tone={action.tone}
@@ -21337,11 +22536,11 @@ const JobDetailView = () => {
                         {jobIsFinished && !jobBillingIsInvoiced() && (
                           <button
                             type="button"
-                            onClick={handleMarkAsInvoiced}
+                            onClick={() => handleMarkAsInvoiced("convert")}
                             disabled={markingJobInvoiced || sendingInvoiceEmail}
                             className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {markingJobInvoiced ? "Converting..." : "Convert to Invoice"}
+                            {jobInvoiceActionInProgress === "convert" ? "Converting..." : "Convert to Invoice"}
                           </button>
                         )}
                         <button
@@ -21839,12 +23038,12 @@ const JobDetailView = () => {
                           </button>
                         )}
                         <button
-                          onClick={handleMarkAsInvoiced}
+                          onClick={() => handleMarkAsInvoiced(jobIsFinished ? "convert" : "mark")}
                           disabled={markingJobInvoiced || sendingInvoiceEmail}
                           className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition disabled:opacity-50"
                         >
                           {markingJobInvoiced
-                            ? (jobIsFinished ? "Converting..." : "Marking...")
+                            ? (jobInvoiceActionInProgress === "convert" ? "Converting..." : "Marking...")
                             : convertInvoiceActionLabel}
                         </button>
                       </div>
@@ -22926,7 +24125,7 @@ const JobDetailView = () => {
               <button
                 type="button"
                 onClick={closeScheduleServiceStopModal}
-                disabled={savingScheduledServiceStop}
+                disabled={savingScheduledServiceStop || savingScheduleTask}
                 className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="Close schedule service stop form"
               >
@@ -22963,8 +24162,11 @@ const JobDetailView = () => {
                 <div className="flex flex-col gap-2 border-t border-slate-200 p-5 sm:flex-row sm:justify-between">
                   <button
                     type="button"
-                    onClick={() => setScheduleServiceStopMode("")}
-                    disabled={savingScheduledServiceStop}
+                    onClick={() => {
+                      setScheduleServiceStopMode("");
+                      resetScheduleTaskCreator();
+                    }}
+                    disabled={savingScheduledServiceStop || savingScheduleTask}
                     className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Back
@@ -22973,14 +24175,14 @@ const JobDetailView = () => {
                     <button
                       type="button"
                       onClick={closeScheduleServiceStopModal}
-                      disabled={savingScheduledServiceStop}
+                      disabled={savingScheduledServiceStop || savingScheduleTask}
                       className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
-                      disabled={savingScheduledServiceStop}
+                      disabled={savingScheduledServiceStop || savingScheduleTask}
                       className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {savingScheduledServiceStop ? "Scheduling..." : `Schedule ${getActualServiceStopScheduleMode(scheduleServiceStopMode).buttonLabel}`}

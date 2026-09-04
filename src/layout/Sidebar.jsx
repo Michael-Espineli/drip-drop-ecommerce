@@ -39,6 +39,7 @@ import {
     isActionableOperationsJob,
     isFinishedOutstandingJob,
 } from '../utils/jobStatusFilters';
+import { isWorkOfferRecord } from '../utils/workOffers';
 
 const normalizeBookmarkPaths = (savedBookmarks) => (
     Array.isArray(savedBookmarks)
@@ -205,6 +206,17 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 return featureFlagIds.length === 0 || (featureFlagsLoaded && featureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId)));
             };
 
+            const permissionsEnabledForItem = (item) => {
+                const permissionIds = [
+                    item.permissionId,
+                    ...(Array.isArray(item.permissionIds) ? item.permissionIds : []),
+                ].filter(Boolean);
+
+                return permissionIds.length === 0 ||
+                    companyRoleLoading ||
+                    permissionIds.some((permissionId) => hasCompanyPermission(permissionId));
+            };
+
             const savedCategoryOrder = dataBaseUser?.settings?.companyNavigationCategoryOrder;
             const navs = getNav(role, savedCategoryOrder);
             const filteredNavs = Object.entries(navs).reduce((acc, [category, items]) => {
@@ -214,7 +226,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                     return (
                         item.role !== "Company" ||
                         (
-                            (!item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId)) &&
+                            permissionsEnabledForItem(item) &&
                             featureFlagsEnabledForItem(item)
                         )
                     );
@@ -336,6 +348,17 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             return actionableJobIds.size;
         };
 
+        const getOpenWorkOfferCount = async () => {
+            const counts = await Promise.all(openWorkOfferQueries.map((workOfferQuery) => (
+                getFilteredDocsCount(
+                    workOfferQuery,
+                    (workOfferDoc) => isWorkOfferRecord({ id: workOfferDoc.id, ...workOfferDoc.data() })
+                )
+            )));
+
+            return counts.reduce((total, count) => total + count, 0);
+        };
+
         const getPurchaseReadyShoppingCount = async (collectionName) => {
             const snapshot = await getDocs(query(
                 collection(db, "companies", recentlySelectedCompany, collectionName),
@@ -371,7 +394,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                     (jobDoc) => isFinishedOutstandingJob({ id: jobDoc.id, ...jobDoc.data() })
                 )),
                 loadCount("actionable job", getActionableJobCount),
-                loadCount("offered work", () => sumServerCounts(openWorkOfferQueries)),
+                loadCount("offered work", getOpenWorkOfferCount),
                 loadCount("equipment maintenance", getEquipmentMaintenanceCount),
             ]);
 

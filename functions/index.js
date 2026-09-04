@@ -72,6 +72,106 @@ const salesAgreementRecurringSetupReady = (agreement = {}) => {
   );
 };
 
+const workflowAlertDisplayName = (user = {}, fallback = 'Company user') => {
+  const fullName = [
+    user.firstName,
+    user.lastName,
+  ].map((value) => salesWorkflowFirstText(value)).filter(Boolean).join(' ');
+
+  return salesWorkflowFirstText(
+    user.userName,
+    user.displayName,
+    user.name,
+    fullName,
+    user.email,
+    fallback
+  );
+};
+
+const workflowAlertUserId = (user = {}, fallback = '') => (
+  salesWorkflowFirstText(user.userId, user.uid, user.authUserId, user.id, fallback)
+);
+
+const workflowAlertCompanyUserIsActive = (user = {}) => {
+  const status = normalizeSalesWorkflowText(user.status || user.userStatus || user.companyUserStatus);
+  return user.active !== false && user.isActive !== false && !['inactive', 'revoked', 'past', 'deleted'].includes(status);
+};
+
+const workflowAlertCompanyUserReceivesOperations = (user = {}) => {
+  const searchable = [
+    user.roleName,
+    user.role,
+    user.position,
+    user.workerType,
+    user.department,
+  ].map(salesWorkflowFirstText).join(' ').toLowerCase();
+
+  return ['owner', 'admin', 'manager', 'office', 'dispatcher', 'sales'].some((term) => searchable.includes(term));
+};
+
+const getWorkflowAlertPersonalRecipients = async (companyId) => {
+  if (!companyId) return [];
+
+  const snapshot = await db.collection('companies').doc(companyId).collection('companyUsers').get();
+  const activeUsers = snapshot.docs
+    .map((companyUserDoc) => ({
+      companyUserDocId: companyUserDoc.id,
+      data: {
+        id: companyUserDoc.id,
+        ...(companyUserDoc.data() || {}),
+      },
+    }))
+    .filter(({ data }) => workflowAlertCompanyUserIsActive(data));
+  const preferredUsers = activeUsers.filter(({ data }) => workflowAlertCompanyUserReceivesOperations(data));
+  const selectedUsers = preferredUsers.length ? preferredUsers : activeUsers;
+  const seenUserIds = new Set();
+
+  return selectedUsers.reduce((recipients, { companyUserDocId, data }) => {
+    const userId = workflowAlertUserId(data, companyUserDocId);
+    if (!userId || seenUserIds.has(userId)) return recipients;
+
+    seenUserIds.add(userId);
+    recipients.push({
+      userId,
+      companyUserDocId,
+      name: workflowAlertDisplayName(data, userId),
+    });
+
+    return recipients;
+  }, []);
+};
+
+const writeCompanyWorkflowAlert = async ({ companyId, alertId, payload }) => {
+  if (!companyId || !alertId || !payload) return [];
+
+  await db.collection('companies').doc(companyId).collection('alerts').doc(alertId).set(payload, { merge: true });
+
+  const recipients = await getWorkflowAlertPersonalRecipients(companyId);
+  if (!recipients.length) return [];
+
+  const batch = db.batch();
+  recipients.forEach((recipient) => {
+    const personalAlertId = `${alertId}_${recipient.userId}`;
+    batch.set(
+      db.collection('users').doc(recipient.userId).collection('alerts').doc(personalAlertId),
+      {
+        ...payload,
+        id: personalAlertId,
+        targetScope: 'specific',
+        recipientUserId: recipient.userId,
+        assignedToUserId: recipient.userId,
+        assignedToCompanyUserDocId: recipient.companyUserDocId,
+        assignedToName: recipient.name,
+        notificationGroupId: alertId,
+      },
+      { merge: true }
+    );
+  });
+
+  await batch.commit();
+  return recipients.map((recipient) => recipient.userId);
+};
+
 const createCompanySalesAgreementAcceptedAlert = async ({ agreementId, agreement }) => {
   const companyId = salesWorkflowFirstText(agreement.companyId, agreement.recipientCompanyId);
   if (!agreementId || !companyId) return '';
@@ -98,9 +198,10 @@ const createCompanySalesAgreementAcceptedAlert = async ({ agreementId, agreement
     billingChoice ? `Billing choice: ${billingChoice}.` : '',
   ].filter(Boolean).join(' ');
 
-  await db.collection('companies').doc(companyId).collection('alerts').doc(alertId).set({
+  const alertPayload = {
     id: alertId,
     companyId,
+    recipientCompanyId: companyId,
     title: `${recordLabel} accepted`,
     name: `${recordLabel} accepted`,
     message,
@@ -112,9 +213,11 @@ const createCompanySalesAgreementAcceptedAlert = async ({ agreementId, agreement
     source: 'salesAgreements',
     sourceId: agreementId,
     route: companyWebPath,
+    category: salesAgreementIsEstimateRecord(agreement) ? 'estimate' : 'serviceAgreement',
     hasItem: true,
     itemId: agreementId,
     itemName: recordTitle,
+    targetScope: 'team',
     deliveryTargets: ['web', 'ios'],
     channels: {
       dashboard: true,
@@ -148,9 +251,16 @@ const createCompanySalesAgreementAcceptedAlert = async ({ agreementId, agreement
     acceptedByUserName: agreement.acceptedByUserName || customerName,
     acceptedByEmail: agreement.acceptedByEmail || agreement.email || agreement.customerEmail || '',
     acceptedAt: agreement.acceptedAt || admin.firestore.FieldValue.serverTimestamp(),
+    date: admin.firestore.FieldValue.serverTimestamp(),
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
+  };
+
+  await writeCompanyWorkflowAlert({
+    companyId,
+    alertId,
+    payload: alertPayload,
+  });
 
   return alertId;
 };
@@ -255,7 +365,7 @@ const createCompanyRepairRequestCreatedAlert = async ({ companyId, repairRequest
   ].filter(Boolean).join(' ');
   const createdDate = repairRequest.date || repairRequest.createdAt || admin.firestore.FieldValue.serverTimestamp();
 
-  await db.collection('companies').doc(companyId).collection('alerts').doc(alertId).set({
+  const alertPayload = {
     id: alertId,
     companyId,
     recipientCompanyId: companyId,
@@ -315,7 +425,13 @@ const createCompanyRepairRequestCreatedAlert = async ({ companyId, repairRequest
     date: createdDate,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
+  };
+
+  await writeCompanyWorkflowAlert({
+    companyId,
+    alertId,
+    payload: alertPayload,
+  });
 
   return alertId;
 };
@@ -404,6 +520,7 @@ exports.createCompanyUserInvite = callableGeneral.createCompanyUserInvite;
 exports.manageCompanyUserInvite = callableGeneral.manageCompanyUserInvite;
 exports.updateCompanyUserAccess = callableGeneral.updateCompanyUserAccess;
 exports.getCompanyUserContactInfo = callableGeneral.getCompanyUserContactInfo;
+exports.createCompanyAlertNotification = callableGeneral.createCompanyAlertNotification;
 exports.populateBaseTechnicianRatesOnCompanyUserCreate = callableGeneral.populateBaseTechnicianRatesOnCompanyUserCreate;
 exports.populateCustomerPipelineOnCustomerCreate = callableGeneral.populateCustomerPipelineOnCustomerCreate;
 exports.populateCustomerPipelineOnLeadCreate = callableGeneral.populateCustomerPipelineOnLeadCreate;
@@ -425,6 +542,7 @@ exports.analyzeTesterStripScan = testerStripProfiles.analyzeTesterStripScan;
 exports.seedAquaChekTesterStripProfile = testerStripProfiles.seedAquaChekTesterStripProfile;
 
 exports.deleteRecurringServiceStop = callableGeneral.deleteRecurringServiceStop;
+exports.deleteRecurringRoute = callableGeneral.deleteRecurringRoute;
 exports.endRecurringServiceStop = callableGeneral.endRecurringServiceStop;
 exports.updateRecurringServiceStop = callableGeneral.updateRecurringServiceStop;
 
@@ -512,6 +630,9 @@ exports.deleteRecurringServiceStopDurationPoint = serviceStopDurationAverages.de
 exports.clearRecurringServiceStopDurationHistory = serviceStopDurationAverages.clearRecurringServiceStopDurationHistory;
 exports.recalculateRecurringServiceStopDurationEstimate = serviceStopDurationAverages.recalculateRecurringServiceStopDurationEstimate;
 exports.setRecurringServiceStopEstimatedDuration = serviceStopDurationAverages.setRecurringServiceStopEstimatedDuration;
+
+const serviceStopCompletion = require('./serviceStopCompletion');
+exports.processServiceStopCompletionWork = serviceStopCompletion.processServiceStopCompletionWork;
 
 
 

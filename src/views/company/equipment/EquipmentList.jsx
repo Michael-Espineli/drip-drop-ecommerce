@@ -69,6 +69,18 @@ import {
 } from "../../../utils/models/Sales";
 import { canonicalJobTaskType } from "../../../utils/jobTaskTypes";
 import {
+  equipmentAssignmentPatch,
+  equipmentSummaryForIds,
+  getJobScopeBodyOfWaterIds,
+  getJobScopeEquipmentIds,
+  getMissingEquipmentAssignments,
+  getRecordEquipmentIds as getScopedRecordEquipmentIds,
+  jobScopeItemRequiresBodyOfWater,
+  jobScopeItemRequiresEquipment,
+  recordOptionById,
+  uniqueStringList,
+} from "../../../utils/jobEquipmentScope";
+import {
   buildCustomerActiveById,
   equipmentDateIsDueThroughToday as dateIsDue,
   equipmentMatchesActiveFilter,
@@ -508,11 +520,15 @@ const serviceLocationDisplayName = (serviceLocation = {}) => {
   );
 };
 
-const getRecordEquipmentIds = (record = {}) => [
-  record.equipmentId,
-  ...(Array.isArray(record.equipmentIds) ? record.equipmentIds : []),
-  ...(Array.isArray(record.companyEquipmentIds) ? record.companyEquipmentIds : []),
-].filter(Boolean).map(String);
+const getEquipmentScheduleLabel = (equipment = {}) => (
+  [
+    equipment?.name,
+    equipment?.make,
+    equipment?.model,
+  ].filter(Boolean).join(" ") || equipment?.type || "Equipment"
+);
+
+const getRecordEquipmentIds = (record = {}) => getScopedRecordEquipmentIds(record);
 
 const isActiveEquipmentJob = (job = {}) => {
   const operationStatus = normalizeJobStatus(job.operationStatus || job.status);
@@ -1672,6 +1688,167 @@ export default function EquipmentList() {
     formatAddressLine(selectedQuickEquipment?.address) ||
     "";
 
+  const scheduleEquipmentOptions = useMemo(() => {
+    const serviceLocationId = selectedQuickEquipment?.serviceLocationId || "";
+    const customerId = selectedQuickEquipment?.customerId || "";
+
+    return equipmentList
+      .filter((equipment) => {
+        if (!equipment?.id) return false;
+        if (serviceLocationId) return equipment.serviceLocationId === serviceLocationId;
+        if (customerId) return equipment.customerId === customerId;
+        return true;
+      })
+      .map((equipment) => ({
+        ...equipment,
+        id: equipment.id,
+        value: equipment.id,
+        label: getEquipmentScheduleLabel(equipment),
+      }))
+      .sort((left, right) => String(left.label || "").localeCompare(String(right.label || "")));
+  }, [equipmentList, selectedQuickEquipment?.customerId, selectedQuickEquipment?.serviceLocationId]);
+
+  const equipmentById = useMemo(() => (
+    new Map(equipmentList.map((equipment) => [
+      equipment.id,
+      {
+        ...equipment,
+        value: equipment.id,
+        label: getEquipmentScheduleLabel(equipment),
+      },
+    ]))
+  ), [equipmentList]);
+
+  const scheduleBodyOfWaterNameById = useMemo(() => {
+    const bodyNames = new Map();
+    equipmentList.forEach((equipment) => {
+      if (equipment?.bodyOfWaterId && equipment?.bodyOfWaterName) {
+        bodyNames.set(equipment.bodyOfWaterId, equipment.bodyOfWaterName);
+      }
+    });
+    return bodyNames;
+  }, [equipmentList]);
+
+  const scheduleEquipmentOptionForId = useCallback((equipmentId) => (
+    recordOptionById(scheduleEquipmentOptions, equipmentId) || recordOptionById(equipmentList, equipmentId)
+  ), [equipmentList, scheduleEquipmentOptions]);
+
+  const selectedQuickEquipmentOption = useMemo(() => (
+    scheduleEquipmentOptionForId(selectedQuickEquipment?.id) ||
+    (selectedQuickEquipment
+      ? {
+        ...selectedQuickEquipment,
+        value: selectedQuickEquipment.id,
+        label: getEquipmentScheduleLabel(selectedQuickEquipment),
+      }
+      : null)
+  ), [scheduleEquipmentOptionForId, selectedQuickEquipment]);
+
+  const buildScheduleEquipmentPatch = useCallback((equipmentOption) => (
+    equipmentAssignmentPatch(equipmentOption || {}, null)
+  ), []);
+
+  const updateScheduleTemplateDetailEquipment = useCallback((collectionName, itemId, equipmentOption) => {
+    const equipmentPatch = buildScheduleEquipmentPatch(equipmentOption);
+
+    setScheduleTemplateDetails((currentDetails) => ({
+      ...currentDetails,
+      [collectionName]: (currentDetails[collectionName] || []).map((item) => (
+        item.id === itemId || item.laborLineId === itemId
+          ? { ...item, ...equipmentPatch }
+          : item
+      )),
+    }));
+  }, [buildScheduleEquipmentPatch]);
+
+  const selectedScheduleTemplateRequiresEquipment = useMemo(() => {
+    if (!selectedScheduleTemplate) return false;
+    return (
+      jobScopeItemRequiresEquipment(selectedScheduleTemplate) ||
+      scheduleTemplateDetails.tasks.some(jobScopeItemRequiresEquipment) ||
+      scheduleTemplateDetails.laborLineItems.some(jobScopeItemRequiresEquipment) ||
+      scheduleTemplateDetails.plannedServiceStops.some(jobScopeItemRequiresEquipment)
+    );
+  }, [scheduleTemplateDetails.laborLineItems, scheduleTemplateDetails.plannedServiceStops, scheduleTemplateDetails.tasks, selectedScheduleTemplate]);
+
+  const selectedScheduleTemplateRequiresBodyOfWater = useMemo(() => {
+    if (!selectedScheduleTemplate) return false;
+    return (
+      jobScopeItemRequiresBodyOfWater(selectedScheduleTemplate) ||
+      scheduleTemplateDetails.tasks.some(jobScopeItemRequiresBodyOfWater) ||
+      scheduleTemplateDetails.laborLineItems.some(jobScopeItemRequiresBodyOfWater) ||
+      scheduleTemplateDetails.plannedServiceStops.some(jobScopeItemRequiresBodyOfWater)
+    );
+  }, [scheduleTemplateDetails.laborLineItems, scheduleTemplateDetails.plannedServiceStops, scheduleTemplateDetails.tasks, selectedScheduleTemplate]);
+
+  const scheduleMissingEquipmentAssignments = useMemo(() => (
+    selectedScheduleTemplate
+      ? getMissingEquipmentAssignments({
+        tasks: scheduleTemplateDetails.tasks,
+        laborLineItems: scheduleTemplateDetails.laborLineItems,
+        plannedServiceStops: scheduleTemplateDetails.plannedServiceStops,
+        fallbackEquipmentId: "",
+        validEquipmentIds: scheduleEquipmentOptions.map((equipment) => equipment.id),
+        requireAllTasks: selectedScheduleTemplateRequiresEquipment,
+        requireAllLaborLineItems: selectedScheduleTemplateRequiresEquipment,
+        requireAllPlannedServiceStops: selectedScheduleTemplateRequiresEquipment,
+      })
+      : []
+  ), [
+    scheduleEquipmentOptions,
+    scheduleTemplateDetails.laborLineItems,
+    scheduleTemplateDetails.plannedServiceStops,
+    scheduleTemplateDetails.tasks,
+    selectedScheduleTemplate,
+    selectedScheduleTemplateRequiresEquipment,
+  ]);
+
+  const scheduleAssignedEquipmentIds = useMemo(() => (
+    getJobScopeEquipmentIds({
+      primaryEquipmentId: selectedQuickEquipment?.id || "",
+      tasks: scheduleTemplateDetails.tasks,
+      plannedServiceStops: scheduleTemplateDetails.plannedServiceStops,
+      laborLineItems: scheduleTemplateDetails.laborLineItems,
+      shoppingItems: scheduleTemplateDetails.shoppingItems,
+    })
+  ), [
+    scheduleTemplateDetails.laborLineItems,
+    scheduleTemplateDetails.plannedServiceStops,
+    scheduleTemplateDetails.shoppingItems,
+    scheduleTemplateDetails.tasks,
+    selectedQuickEquipment?.id,
+  ]);
+
+  const scheduleAssignedEquipmentSummary = useMemo(() => (
+    equipmentSummaryForIds({
+      equipmentIds: scheduleAssignedEquipmentIds,
+      equipmentById,
+      primaryEquipmentId: selectedQuickEquipment?.id || scheduleAssignedEquipmentIds[0] || "",
+      primaryEquipmentName: selectedQuickEquipment ? getEquipmentScheduleLabel(selectedQuickEquipment) : "",
+    })
+  ), [equipmentById, scheduleAssignedEquipmentIds, selectedQuickEquipment]);
+
+  const scheduleAssignedBodyOfWaterIds = useMemo(() => (
+    getJobScopeBodyOfWaterIds({
+      primaryBodyOfWaterId: selectedQuickEquipment?.bodyOfWaterId || "",
+      tasks: scheduleTemplateDetails.tasks,
+      plannedServiceStops: scheduleTemplateDetails.plannedServiceStops,
+      laborLineItems: scheduleTemplateDetails.laborLineItems,
+      shoppingItems: scheduleTemplateDetails.shoppingItems,
+    })
+  ), [
+    scheduleTemplateDetails.laborLineItems,
+    scheduleTemplateDetails.plannedServiceStops,
+    scheduleTemplateDetails.shoppingItems,
+    scheduleTemplateDetails.tasks,
+    selectedQuickEquipment?.bodyOfWaterId,
+  ]);
+
+  const scheduleResolvedBodyOfWaterId =
+    selectedQuickEquipment?.bodyOfWaterId ||
+    scheduleAssignedBodyOfWaterIds[0] ||
+    "";
+
   const scheduleEquipmentIsMissingLocation =
     activeQuickModal === SCHEDULE_JOB_MODAL &&
     (!selectedQuickEquipment?.customerId || !selectedQuickEquipment?.serviceLocationId);
@@ -1685,7 +1862,10 @@ export default function EquipmentList() {
     !!scheduleDateTime &&
     !scheduleEquipmentIsMissingLocation &&
     !loadingScheduleTemplateDetails &&
-    !schedulingJob;
+    !schedulingJob &&
+    scheduleMissingEquipmentAssignments.length === 0 &&
+    (!selectedScheduleTemplateRequiresEquipment || scheduleAssignedEquipmentIds.length > 0) &&
+    (!selectedScheduleTemplateRequiresBodyOfWater || !!scheduleResolvedBodyOfWaterId);
 
   useEffect(() => {
     if (activeQuickModal !== SCHEDULE_JOB_MODAL) return;
@@ -1713,6 +1893,51 @@ export default function EquipmentList() {
     scheduleTechnicianOptions,
     scheduleTemplateId,
     scheduleTemplateOptions,
+  ]);
+
+  useEffect(() => {
+    if (activeQuickModal !== SCHEDULE_JOB_MODAL || !selectedQuickEquipmentOption) return;
+
+    const equipmentPatch = buildScheduleEquipmentPatch(selectedQuickEquipmentOption);
+    const applyDefaultEquipment = (items, shouldAssign) => {
+      let changed = false;
+      const nextItems = items.map((item) => {
+        if (!shouldAssign(item) || item.equipmentId) return item;
+        changed = true;
+        return { ...item, ...equipmentPatch };
+      });
+
+      return changed ? nextItems : items;
+    };
+
+    setScheduleTemplateDetails((currentDetails) => {
+      const nextDetails = {
+        ...currentDetails,
+        tasks: applyDefaultEquipment(
+          currentDetails.tasks,
+          (task) => selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(task)
+        ),
+        laborLineItems: applyDefaultEquipment(
+          currentDetails.laborLineItems,
+          (line) => selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(line)
+        ),
+        plannedServiceStops: applyDefaultEquipment(
+          currentDetails.plannedServiceStops,
+          (stop) => selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(stop)
+        ),
+      };
+
+      return nextDetails.tasks === currentDetails.tasks &&
+        nextDetails.laborLineItems === currentDetails.laborLineItems &&
+        nextDetails.plannedServiceStops === currentDetails.plannedServiceStops
+        ? currentDetails
+        : nextDetails;
+    });
+  }, [
+    activeQuickModal,
+    buildScheduleEquipmentPatch,
+    selectedQuickEquipmentOption,
+    selectedScheduleTemplateRequiresEquipment,
   ]);
 
   const getEquipmentServiceLocation = useCallback((equipment) => (
@@ -2460,17 +2685,17 @@ export default function EquipmentList() {
     if (!selectedQuickEquipment || !recentlySelectedCompany) return;
 
     if (!canScheduleTemplateSelf) {
-      toast.error("You do not have permission to schedule template work orders.");
+      toast.error("You do not have permission to schedule template jobs.");
       return;
     }
 
     if (!canCreateScheduledEquipmentJob) {
-      toast.error("Pick a template, admin, technician, and scheduled time.");
+      toast.error("Pick a template, admin, technician, scheduled time, and equipment assignments.");
       return;
     }
 
     if (!canScheduleTemplateForOthers && selectedScheduleTechnician?.userId !== currentCompanyUser?.userId) {
-      toast.error("You can only assign this work order to yourself.");
+      toast.error("You can only assign this basic job to yourself.");
       setScheduleTechnicianId(currentCompanyUser?.userId || currentCompanyUser?.id || "");
       return;
     }
@@ -2513,43 +2738,78 @@ export default function EquipmentList() {
       const adminName = selectedScheduleAdmin.userName || selectedScheduleAdmin.label || "";
       const techId = selectedScheduleTechnician.userId || selectedScheduleTechnician.id || "";
       const techName = selectedScheduleTechnician.userName || selectedScheduleTechnician.label || "";
+      const scopeForTemplateItem = (item = {}) => {
+        const assignedEquipment =
+          scheduleEquipmentOptionForId(item.equipmentId) ||
+          selectedQuickEquipmentOption ||
+          selectedQuickEquipment;
+        const equipmentPatch = equipmentAssignmentPatch(assignedEquipment || {}, null);
+
+        return {
+          equipmentId: equipmentPatch.equipmentId || selectedQuickEquipment.id || "",
+          equipmentName: equipmentPatch.equipmentName || getEquipmentDisplayName(selectedQuickEquipment),
+          serviceLocationId: item.serviceLocationId || assignedEquipment?.serviceLocationId || selectedQuickEquipment.serviceLocationId || "",
+          bodyOfWaterId: item.bodyOfWaterId || equipmentPatch.bodyOfWaterId || selectedQuickEquipment.bodyOfWaterId || "",
+          bodyOfWaterName: item.bodyOfWaterName || equipmentPatch.bodyOfWaterName || selectedQuickEquipment.bodyOfWaterName || "",
+        };
+      };
 
       await setDoc(workOrderCounterRef, { increment: nextCount }, { merge: true });
 
-      const normalizedTasks = scheduleTemplateDetails.tasks.map((task, index) => ({
-        id: `comp_job_task_${uuidv4()}`,
-        companyId: recentlySelectedCompany,
-        jobId,
-        sourcePlanId: planId,
-        sourceSolutionId: planId,
-        sourceTemplateId: selectedScheduleTemplate.id,
-        sourceTemplateTaskId: task.id || "",
-        name: task.name || task.description || "Task",
-        type: canonicalJobTaskType(task.type || scheduleJobIntentConfig.jobType || "General"),
-        description: task.description || "",
-        contractedRate: Number(task.contractedRate || 0),
-        billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
-        estimatedTime: Number(task.estimatedTime || 0),
-        status: "Draft",
-        customerApproval: Boolean(task.customerApproval || false),
-        actualTime: 0,
-        workerId: "",
-        workerType: "Not Assigned",
-        workerName: "",
-        laborContractId: "",
-        serviceStopId: { id: "", internalId: "" },
-        equipmentId: selectedQuickEquipment.id,
-        serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
-        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
-        dataBaseItemId: task.dataBaseItemId || "",
-        shoppingListItemId: task.shoppingListItemId || "",
-        shoppingListItemIds: Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds : [],
-        sortOrder: Number(task.sortOrder ?? index),
-      }));
+      const normalizedTasks = scheduleTemplateDetails.tasks.map((task, index) => {
+        const taskScope = scopeForTemplateItem(task);
+
+        return {
+          id: `comp_job_task_${uuidv4()}`,
+          companyId: recentlySelectedCompany,
+          jobId,
+          sourcePlanId: planId,
+          sourceSolutionId: planId,
+          sourceTemplateId: selectedScheduleTemplate.id,
+          sourceTemplateTaskId: task.id || "",
+          name: task.name || task.description || "Task",
+          type: canonicalJobTaskType(task.type || scheduleJobIntentConfig.jobType || "General"),
+          description: task.description || "",
+          contractedRate: Number(task.contractedRate || 0),
+          billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
+          estimatedTime: Number(task.estimatedTime || 0),
+          status: "Draft",
+          customerApproval: Boolean(task.customerApproval || false),
+          actualTime: 0,
+          workerId: "",
+          workerType: "Not Assigned",
+          workerName: "",
+          laborContractId: "",
+          serviceStopId: { id: "", internalId: "" },
+          equipmentId: taskScope.equipmentId,
+          equipmentName: taskScope.equipmentName,
+          serviceLocationId: taskScope.serviceLocationId,
+          bodyOfWaterId: taskScope.bodyOfWaterId,
+          bodyOfWaterName: taskScope.bodyOfWaterName,
+          dataBaseItemId: task.dataBaseItemId || "",
+          shoppingListItemId: task.shoppingListItemId || "",
+          shoppingListItemIds: Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds : [],
+          sortOrder: Number(task.sortOrder ?? index),
+        };
+      });
       const taskIdMap = scheduleTemplateDetails.tasks.reduce((map, task, index) => ({
         ...map,
         [task.id]: normalizedTasks[index]?.id,
       }), {});
+      const normalizedTaskById = new Map(normalizedTasks.map((task) => [task.id, task]));
+      const linkedTaskScopeFor = (taskIds = []) => {
+        const linkedTasks = taskIds.map((taskId) => normalizedTaskById.get(taskId)).filter(Boolean);
+        const equipmentIds = uniqueStringList(linkedTasks.map((task) => task.equipmentId));
+        const bodyOfWaterIds = uniqueStringList(linkedTasks.map((task) => task.bodyOfWaterId));
+        const equipmentTask = linkedTasks.find((task) => task.equipmentId === equipmentIds[0]);
+        const bodyOfWaterTask = linkedTasks.find((task) => task.bodyOfWaterId === bodyOfWaterIds[0]);
+        return {
+          equipmentId: equipmentIds[0] || "",
+          equipmentName: equipmentTask?.equipmentName || "",
+          bodyOfWaterId: bodyOfWaterIds[0] || "",
+          bodyOfWaterName: bodyOfWaterTask?.bodyOfWaterName || "",
+        };
+      };
       const normalizedPlannedStops = scheduleTemplateDetails.plannedServiceStops.length
         ? scheduleTemplateDetails.plannedServiceStops.map((stop, index) => {
           const originalTaskIds = Array.isArray(stop.taskTemplateIds)
@@ -2557,6 +2817,10 @@ export default function EquipmentList() {
             : Array.isArray(stop.taskIds)
               ? stop.taskIds
               : [];
+          const taskIds = originalTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean);
+          const linkedScope = linkedTaskScopeFor(taskIds);
+          const stopScope = scopeForTemplateItem(stop);
+          const stopHasEquipment = getRecordEquipmentIds(stop).length > 0;
 
           return {
             id: `comp_job_plan_stop_${uuidv4()}`,
@@ -2574,42 +2838,50 @@ export default function EquipmentList() {
             serviceStopTypeUseCaseRawValue: stop.serviceStopTypeUseCaseRawValue || "",
             estimatedMinutes: Number(stop.estimatedMinutes || 0),
             sortOrder: Number(stop.sortOrder ?? index),
-            taskIds: originalTaskIds.map((taskId) => taskIdMap[taskId]).filter(Boolean),
+            taskIds,
             plannedLaborCostCents: stop.plannedLaborCostCents !== undefined && stop.plannedLaborCostCents !== null
               ? Number(stop.plannedLaborCostCents)
               : null,
             plannedLaborNotes: stop.plannedLaborNotes || "",
-            equipmentId: selectedQuickEquipment.id,
-            serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
-            bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+            equipmentId: stopHasEquipment ? stopScope.equipmentId : linkedScope.equipmentId || stopScope.equipmentId,
+            equipmentName: stopHasEquipment ? stopScope.equipmentName : linkedScope.equipmentName || stopScope.equipmentName,
+            serviceLocationId: stopScope.serviceLocationId || selectedQuickEquipment.serviceLocationId || "",
+            bodyOfWaterId: stopHasEquipment ? stopScope.bodyOfWaterId : linkedScope.bodyOfWaterId || stopScope.bodyOfWaterId || selectedQuickEquipment.bodyOfWaterId || "",
+            bodyOfWaterName: stopHasEquipment ? stopScope.bodyOfWaterName : linkedScope.bodyOfWaterName || stopScope.bodyOfWaterName || selectedQuickEquipment.bodyOfWaterName || "",
             createdAt: nowTimestamp,
             createdByUserId: createdByUserId || "",
           };
         })
-        : [{
-          id: `comp_job_plan_stop_${uuidv4()}`,
-          companyId: recentlySelectedCompany,
-          jobId,
-          sourcePlanId: planId,
-          sourceSolutionId: planId,
-          sourceTemplateId: selectedScheduleTemplate.id,
-          name: selectedScheduleTemplate.name || `${scheduleJobIntentConfig.label} Visit`,
-          description,
-          serviceStopTypeId: "system_job_service_stop",
-          serviceStopTypeName: "Job Visit",
-          serviceStopTypeImage: "briefcase",
-          serviceStopTypeUseCaseRawValue: "jobVisit",
-          estimatedMinutes: normalizedTasks.reduce((total, task) => total + Number(task.estimatedTime || 0), 0) || 60,
-          sortOrder: 0,
-          taskIds: normalizedTasks.map((task) => task.id),
-          plannedLaborCostCents: 0,
-          plannedLaborNotes: "",
-          equipmentId: selectedQuickEquipment.id,
-          serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
-          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
-          createdAt: nowTimestamp,
-          createdByUserId: createdByUserId || "",
-        }];
+        : (() => {
+          const stopScope = scopeForTemplateItem({});
+
+          return [{
+            id: `comp_job_plan_stop_${uuidv4()}`,
+            companyId: recentlySelectedCompany,
+            jobId,
+            sourcePlanId: planId,
+            sourceSolutionId: planId,
+            sourceTemplateId: selectedScheduleTemplate.id,
+            name: selectedScheduleTemplate.name || `${scheduleJobIntentConfig.label} Visit`,
+            description,
+            serviceStopTypeId: "system_job_service_stop",
+            serviceStopTypeName: "Job Visit",
+            serviceStopTypeImage: "briefcase",
+            serviceStopTypeUseCaseRawValue: "jobVisit",
+            estimatedMinutes: normalizedTasks.reduce((total, task) => total + Number(task.estimatedTime || 0), 0) || 60,
+            sortOrder: 0,
+            taskIds: normalizedTasks.map((task) => task.id),
+            plannedLaborCostCents: 0,
+            plannedLaborNotes: "",
+            equipmentId: stopScope.equipmentId,
+            equipmentName: stopScope.equipmentName,
+            serviceLocationId: stopScope.serviceLocationId,
+            bodyOfWaterId: stopScope.bodyOfWaterId,
+            bodyOfWaterName: stopScope.bodyOfWaterName,
+            createdAt: nowTimestamp,
+            createdByUserId: createdByUserId || "",
+          }];
+        })();
       const plannedStopIdMap = normalizedPlannedStops.reduce((map, stop) => ({
         ...map,
         [stop.sourceTemplatePlannedStopId || stop.id]: stop.id,
@@ -2622,6 +2894,9 @@ export default function EquipmentList() {
         const plannedServiceStopIds = sourcePlannedStopIds.map((stopId) => plannedStopIdMap[stopId]).filter(Boolean);
         const catalogItemId = laborLineCatalogItemId(line);
         const laborLineId = `comp_job_labor_line_${uuidv4()}`;
+        const linkedScope = linkedTaskScopeFor(taskIds);
+        const lineScope = scopeForTemplateItem(line);
+        const lineHasEquipment = getRecordEquipmentIds(line).length > 0;
 
         return {
           id: laborLineId,
@@ -2645,9 +2920,11 @@ export default function EquipmentList() {
           laborLinePlannedServiceStopIds: plannedServiceStopIds,
           sourceTemplateTaskIds: sourceTaskIds,
           sourceTemplatePlannedServiceStopIds: sourcePlannedStopIds,
-          equipmentId: selectedQuickEquipment.id,
-          serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
-          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+          equipmentId: lineHasEquipment ? lineScope.equipmentId : linkedScope.equipmentId || lineScope.equipmentId,
+          equipmentName: lineHasEquipment ? lineScope.equipmentName : linkedScope.equipmentName || lineScope.equipmentName,
+          serviceLocationId: lineScope.serviceLocationId,
+          bodyOfWaterId: lineHasEquipment ? lineScope.bodyOfWaterId : linkedScope.bodyOfWaterId || lineScope.bodyOfWaterId,
+          bodyOfWaterName: lineHasEquipment ? lineScope.bodyOfWaterName : linkedScope.bodyOfWaterName || lineScope.bodyOfWaterName,
           salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
           billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
           sourceType: line.sourceType || SalesCatalogSourceType.manual,
@@ -2671,6 +2948,7 @@ export default function EquipmentList() {
       });
       const normalizedShoppingItems = scheduleTemplateDetails.shoppingItems.map((item, index) => {
         const quantity = item.quantity !== undefined && item.quantity !== null ? String(item.quantity) : "1";
+        const itemScope = scopeForTemplateItem(item);
 
         return {
           id: `comp_shop_${uuidv4()}`,
@@ -2682,9 +2960,11 @@ export default function EquipmentList() {
           sourcePlanId: planId,
           solutionId: planId,
           sourceSolutionId: planId,
-          equipmentId: selectedQuickEquipment.id,
-          serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
-          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+          equipmentId: itemScope.equipmentId,
+          equipmentName: itemScope.equipmentName,
+          serviceLocationId: itemScope.serviceLocationId,
+          bodyOfWaterId: itemScope.bodyOfWaterId,
+          bodyOfWaterName: itemScope.bodyOfWaterName,
           sourceTemplateId: selectedScheduleTemplate.id,
           sourceTemplateShoppingItemId: item.id || "",
           category: "Job",
@@ -2713,6 +2993,31 @@ export default function EquipmentList() {
           sortOrder: Number(item.sortOrder ?? index),
         };
       });
+      const createdEquipmentIds = getJobScopeEquipmentIds({
+        primaryEquipmentId: selectedQuickEquipment.id,
+        tasks: normalizedTasks,
+        plannedServiceStops: normalizedPlannedStops,
+        laborLineItems: normalizedLaborLineItems,
+        shoppingItems: normalizedShoppingItems,
+      });
+      const createdEquipmentSummary = equipmentSummaryForIds({
+        equipmentIds: createdEquipmentIds,
+        equipmentById,
+        primaryEquipmentId: selectedQuickEquipment.id || createdEquipmentIds[0] || "",
+        primaryEquipmentName: getEquipmentDisplayName(selectedQuickEquipment),
+      });
+      const createdBodyOfWaterIds = getJobScopeBodyOfWaterIds({
+        primaryBodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+        tasks: normalizedTasks,
+        plannedServiceStops: normalizedPlannedStops,
+        laborLineItems: normalizedLaborLineItems,
+        shoppingItems: normalizedShoppingItems,
+      });
+      const primaryBodyOfWaterId = selectedQuickEquipment.bodyOfWaterId || createdBodyOfWaterIds[0] || "";
+      const primaryBodyOfWaterName =
+        selectedQuickEquipment.bodyOfWaterName ||
+        scheduleBodyOfWaterNameById.get(primaryBodyOfWaterId) ||
+        "";
       const lineItems = buildScheduleLineItems({
         planId,
         normalizedTasks,
@@ -2759,11 +3064,14 @@ export default function EquipmentList() {
         customerName,
         serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
         serviceLocationName,
-        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
-        bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
-        equipmentId: selectedQuickEquipment.id,
-        equipmentName: getEquipmentDisplayName(selectedQuickEquipment),
-        equipmentIds: [selectedQuickEquipment.id],
+        bodyOfWaterId: primaryBodyOfWaterId,
+        bodyOfWaterName: primaryBodyOfWaterName,
+        bodyOfWaterIds: createdBodyOfWaterIds,
+        equipmentId: createdEquipmentSummary.equipmentId || "",
+        equipmentName: createdEquipmentSummary.equipmentName || "",
+        equipmentIds: createdEquipmentSummary.equipmentIds || [],
+        companyEquipmentIds: createdEquipmentSummary.companyEquipmentIds || [],
+        equipmentNames: createdEquipmentSummary.equipmentNames || [],
         sourceType: "template",
         sourceTemplateId: selectedScheduleTemplate.id,
         sourceTemplateName: selectedScheduleTemplate.name || "",
@@ -2922,8 +3230,9 @@ export default function EquipmentList() {
         customerName,
         serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
         serviceLocationName,
-        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
-        bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
+        bodyOfWaterId: primaryBodyOfWaterId,
+        bodyOfWaterName: primaryBodyOfWaterName,
+        bodyOfWaterIds: createdBodyOfWaterIds,
         serviceStopIds: [],
         laborContractIds: [],
         adminId,
@@ -2959,18 +3268,21 @@ export default function EquipmentList() {
         sourceTemplateId: selectedScheduleTemplate.id,
         sourceTemplateName: selectedScheduleTemplate.name || "",
         createdFromBasicWorkOrderForm: true,
+        createdFromBasicJobForm: true,
         createdFromEquipmentList: true,
         createdFromEquipmentScheduleModal: true,
         basicWorkOrderMode: "template",
+        basicJobMode: "template",
         assignedTechId: techId,
         assignedTechName: techName,
         assignedCompanyUserId: selectedScheduleTechnician.id || "",
         scheduledAt: Timestamp.fromDate(scheduledDate),
         scheduledDate: Timestamp.fromDate(scheduledDate),
-        equipmentId: selectedQuickEquipment.id,
-        equipmentIds: [selectedQuickEquipment.id],
-        companyEquipmentIds: [selectedQuickEquipment.id],
-        equipmentName: getEquipmentDisplayName(selectedQuickEquipment),
+        equipmentId: createdEquipmentSummary.equipmentId || "",
+        equipmentIds: createdEquipmentSummary.equipmentIds || [],
+        companyEquipmentIds: createdEquipmentSummary.companyEquipmentIds || [],
+        equipmentName: createdEquipmentSummary.equipmentName || "",
+        equipmentNames: createdEquipmentSummary.equipmentNames || [],
         equipmentContext,
         jobIntent: scheduleJobIntent,
         createdByUserId,
@@ -3009,6 +3321,27 @@ export default function EquipmentList() {
         ? selectedPlannedStop.taskIds
         : normalizedTasks.map((task) => task.id);
       const scheduledTasks = normalizedTasks.filter((task) => taskIdsForStop.includes(task.id));
+      const scheduledEquipmentIds = getJobScopeEquipmentIds({
+        primaryEquipmentId: selectedQuickEquipment.id,
+        tasks: scheduledTasks,
+        plannedServiceStops: selectedPlannedStop ? [selectedPlannedStop] : [],
+      });
+      const scheduledEquipmentSummary = equipmentSummaryForIds({
+        equipmentIds: scheduledEquipmentIds,
+        equipmentById,
+        primaryEquipmentId: selectedQuickEquipment.id || scheduledEquipmentIds[0] || "",
+        primaryEquipmentName: getEquipmentDisplayName(selectedQuickEquipment),
+      });
+      const scheduledBodyOfWaterIds = getJobScopeBodyOfWaterIds({
+        primaryBodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
+        tasks: scheduledTasks,
+        plannedServiceStops: selectedPlannedStop ? [selectedPlannedStop] : [],
+      });
+      const scheduledBodyOfWaterId = selectedQuickEquipment.bodyOfWaterId || scheduledBodyOfWaterIds[0] || "";
+      const scheduledBodyOfWaterName =
+        selectedQuickEquipment.bodyOfWaterName ||
+        scheduleBodyOfWaterNameById.get(scheduledBodyOfWaterId) ||
+        "";
       const duration =
         Number(selectedPlannedStop?.estimatedMinutes || 0) ||
         scheduledTasks.reduce((total, task) => total + Number(task.estimatedTime || 0), 0) ||
@@ -3036,8 +3369,9 @@ export default function EquipmentList() {
         jobId,
         jobName: nextInternalId,
         serviceLocationId: selectedQuickEquipment.serviceLocationId || "",
-        bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
-        bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
+        bodyOfWaterId: scheduledBodyOfWaterId,
+        bodyOfWaterName: scheduledBodyOfWaterName,
+        bodyOfWaterIds: scheduledBodyOfWaterIds,
         tech: techName,
         techId,
         internalId: serviceStopInternalId,
@@ -3066,9 +3400,11 @@ export default function EquipmentList() {
         source: "EquipmentList",
         serviceNotes: "",
         duration,
-        equipmentId: selectedQuickEquipment.id,
-        equipmentIds: [selectedQuickEquipment.id],
-        companyEquipmentIds: [selectedQuickEquipment.id],
+        equipmentId: scheduledEquipmentSummary.equipmentId || "",
+        equipmentIds: scheduledEquipmentSummary.equipmentIds || [],
+        companyEquipmentIds: scheduledEquipmentSummary.companyEquipmentIds || [],
+        equipmentName: scheduledEquipmentSummary.equipmentName || "",
+        equipmentNames: scheduledEquipmentSummary.equipmentNames || [],
       };
 
       await setDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId), serviceStopRecord);
@@ -3129,26 +3465,29 @@ export default function EquipmentList() {
         operationStatus: "Scheduled",
       });
 
-      const scheduledWorkId = `com_equ_sw_${uuidv4()}`;
-      await setDoc(
-        doc(db, "companies", recentlySelectedCompany, "equipment", selectedQuickEquipment.id, "scheduledWork", scheduledWorkId),
-        {
-          id: scheduledWorkId,
-          name: selectedScheduleTemplate.name || scheduleJobIntentConfig.label,
-          type: scheduleJobIntentConfig.jobType,
-          serviceDate: Timestamp.fromDate(scheduledDate),
-          techId,
-          techName,
-          serviceStopId,
-          serviceStopInternalId,
-          jobId,
-          jobInternalId: nextInternalId,
-          status: "Scheduled",
-          description,
-          dateCreated: nowTimestamp,
-          dateCompleted: null,
-        }
-      );
+      await Promise.all((scheduledEquipmentSummary.equipmentIds || []).map((equipmentId) => {
+        const scheduledWorkId = `com_equ_sw_${uuidv4()}`;
+        return setDoc(
+          doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId, "scheduledWork", scheduledWorkId),
+          {
+            id: scheduledWorkId,
+            name: selectedScheduleTemplate.name || scheduleJobIntentConfig.label,
+            type: scheduleJobIntentConfig.jobType,
+            serviceDate: Timestamp.fromDate(scheduledDate),
+            techId,
+            techName,
+            serviceStopId,
+            serviceStopInternalId,
+            jobId,
+            jobInternalId: nextInternalId,
+            status: "Scheduled",
+            description,
+            dateCreated: nowTimestamp,
+            dateCompleted: null,
+            equipmentId,
+          }
+        );
+      }));
 
       const historyId = `comp_job_hist_${uuidv4()}`;
       await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId), {
@@ -3164,7 +3503,12 @@ export default function EquipmentList() {
           { field: "assignedTechName", label: "Technician", before: "-", after: techName || "-" },
           { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
           { field: "serviceLocationName", label: "Service Location", before: "-", after: serviceLocationName || "-" },
-          { field: "equipmentName", label: "Equipment", before: "-", after: getEquipmentDisplayName(selectedQuickEquipment) },
+          {
+            field: "equipmentNames",
+            label: "Equipment",
+            before: "-",
+            after: createdEquipmentSummary.equipmentNames?.join(", ") || getEquipmentDisplayName(selectedQuickEquipment),
+          },
           { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
 	          { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(totalAmountCents) },
 	          { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
@@ -3179,10 +3523,12 @@ export default function EquipmentList() {
           scheduledServiceStopInternalId: serviceStopInternalId,
           createdFromEquipmentList: true,
           createdFromEquipmentScheduleModal: true,
-          equipmentId: selectedQuickEquipment.id,
-          equipmentName: getEquipmentDisplayName(selectedQuickEquipment),
-          bodyOfWaterId: selectedQuickEquipment.bodyOfWaterId || "",
-          bodyOfWaterName: selectedQuickEquipment.bodyOfWaterName || "",
+          equipmentId: createdEquipmentSummary.equipmentId || "",
+          equipmentIds: createdEquipmentSummary.equipmentIds || [],
+          equipmentNames: createdEquipmentSummary.equipmentNames || [],
+          bodyOfWaterId: primaryBodyOfWaterId,
+          bodyOfWaterName: primaryBodyOfWaterName,
+          bodyOfWaterIds: createdBodyOfWaterIds,
           equipmentContext,
           adminAssignmentSource: "Equipment schedule popup",
         },
@@ -3203,13 +3549,16 @@ export default function EquipmentList() {
 
       setActiveJobsByEquipmentId((current) => {
         const next = { ...current };
-        addJobToEquipmentLookup(
-          next,
-          selectedQuickEquipment.id,
-          scheduledJobForLookup,
-          normalizedTasks.length,
-          normalizedTasks.map((task) => task.name)
-        );
+        (createdEquipmentSummary.equipmentIds || []).forEach((equipmentId) => {
+          const equipmentTasks = normalizedTasks.filter((task) => getRecordEquipmentIds(task).includes(equipmentId));
+          addJobToEquipmentLookup(
+            next,
+            equipmentId,
+            scheduledJobForLookup,
+            equipmentTasks.length,
+            equipmentTasks.map((task) => task.name)
+          );
+        });
         Object.keys(next).forEach((equipmentId) => {
           next[equipmentId] = [...next[equipmentId]].sort((a, b) => b.dateMillis - a.dateMillis);
         });
@@ -4296,6 +4645,160 @@ export default function EquipmentList() {
                     <p className="mt-1 font-bold text-slate-950">{moneyFromCents(scheduleGeneratedPriceCents)}</p>
                   </div>
                 </div>
+              )}
+
+              {selectedScheduleTemplate && selectedScheduleTemplateRequiresEquipment && (
+                <div className="space-y-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-slate-950">Equipment Assignments</p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Each required service item or task must point at the equipment it services.
+                      </p>
+                    </div>
+                    <p className="text-sm font-semibold text-slate-700">
+                      {scheduleAssignedEquipmentSummary.equipmentNames?.join(", ") || "No equipment assigned"}
+                    </p>
+                  </div>
+
+                  {scheduleTemplateDetails.plannedServiceStops.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Planned Stops</p>
+                      {scheduleTemplateDetails.plannedServiceStops.map((stop, index) => {
+                        const stopNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(stop);
+                        if (!stopNeedsEquipment) return null;
+
+                        return (
+                          <div key={stop.id || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">
+                                {stop.name || stop.serviceStopTypeName || `Visit ${index + 1}`}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                {stop.serviceStopTypeName || "Job Visit"} - {Number(stop.estimatedMinutes || 0)} min
+                              </p>
+                            </div>
+                            <select
+                              value={stop.equipmentId || ""}
+                              onChange={(event) => updateScheduleTemplateDetailEquipment(
+                                "plannedServiceStops",
+                                stop.id,
+                                scheduleEquipmentOptionForId(event.target.value)
+                              )}
+                              disabled={schedulingJob || loadingScheduleTemplateDetails}
+                              className={inputBase}
+                            >
+                              <option value="">Assign equipment</option>
+                              {scheduleEquipmentOptions.map((equipment) => (
+                                <option key={equipment.id} value={equipment.id}>
+                                  {equipment.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {scheduleTemplateDetails.laborLineItems.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Service Lines</p>
+                      {scheduleTemplateDetails.laborLineItems.map((line, index) => {
+                        const lineNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(line);
+                        if (!lineNeedsEquipment) return null;
+
+                        return (
+                          <div key={line.id || line.laborLineId || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">
+                                {line.name || line.title || `Service ${index + 1}`}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                Qty: {line.quantity || line.defaultQuantity || 1} - Price: {moneyFromCents(laborLineTotalPriceCents(line))}
+                              </p>
+                            </div>
+                            <select
+                              value={line.equipmentId || ""}
+                              onChange={(event) => updateScheduleTemplateDetailEquipment(
+                                "laborLineItems",
+                                line.id || line.laborLineId,
+                                scheduleEquipmentOptionForId(event.target.value)
+                              )}
+                              disabled={schedulingJob || loadingScheduleTemplateDetails}
+                              className={inputBase}
+                            >
+                              <option value="">Assign equipment</option>
+                              {scheduleEquipmentOptions.map((equipment) => (
+                                <option key={equipment.id} value={equipment.id}>
+                                  {equipment.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {scheduleTemplateDetails.tasks.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
+                      {scheduleTemplateDetails.tasks.map((task, index) => {
+                        const taskNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(task);
+                        if (!taskNeedsEquipment) return null;
+
+                        return (
+                          <div key={task.id || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">
+                                {task.name || task.description || `Task ${index + 1}`}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                {task.type || "Task"} - {Number(task.estimatedTime || 0)} min
+                              </p>
+                            </div>
+                            <select
+                              value={task.equipmentId || ""}
+                              onChange={(event) => updateScheduleTemplateDetailEquipment(
+                                "tasks",
+                                task.id,
+                                scheduleEquipmentOptionForId(event.target.value)
+                              )}
+                              disabled={schedulingJob || loadingScheduleTemplateDetails}
+                              className={inputBase}
+                            >
+                              <option value="">Assign equipment</option>
+                              {scheduleEquipmentOptions.map((equipment) => (
+                                <option key={equipment.id} value={equipment.id}>
+                                  {equipment.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {scheduleMissingEquipmentAssignments.length > 0 && (
+                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  Assign equipment for {scheduleMissingEquipmentAssignments.length} service/task item{scheduleMissingEquipmentAssignments.length === 1 ? "" : "s"} before scheduling this job.
+                </p>
+              )}
+
+              {selectedScheduleTemplateRequiresEquipment && scheduleAssignedEquipmentIds.length === 0 && scheduleMissingEquipmentAssignments.length === 0 && (
+                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  Assign at least one equipment item before scheduling this job.
+                </p>
+              )}
+
+              {selectedScheduleTemplateRequiresBodyOfWater && !scheduleResolvedBodyOfWaterId && (
+                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  Assign equipment with a body of water before scheduling this job.
+                </p>
               )}
 
               <div className="grid gap-4 md:grid-cols-2">

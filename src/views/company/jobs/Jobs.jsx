@@ -4,7 +4,6 @@ import {
     query,
     collection,
     getDocs,
-    orderBy,
     serverTimestamp,
     where,
     writeBatch
@@ -17,14 +16,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
-import {
-    CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
-    CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID,
-    CREATE_JOBS_PERMISSION_ID,
-    CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
-    SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
-    UPDATE_JOBS_PERMISSION_ID,
-} from "../../../utils/companyPermissions";
+import { UPDATE_JOBS_PERMISSION_ID } from "../../../utils/companyPermissions";
 import {
     JOB_BILLING_STATUS,
     JOB_OPERATION_STATUS,
@@ -38,10 +30,11 @@ import {
     getIssuePriorityTone,
     normalizeIssuePriority,
 } from "../../../utils/models/JobPlan";
-import { appAlert, appConfirm } from "../../../utils/appDialog";
+import { appConfirm } from "../../../utils/appDialog";
 import { filterRecordsByCustomerTags } from "../../../utils/customerTags";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import CreateJobFlowLauncher from "./CreateJobFlowLauncher";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
     "Estimate Pending",
@@ -155,15 +148,6 @@ const ALL_PRIORITY_FILTER_VALUES = PRIORITY_FILTER_OPTIONS.map((option) => optio
 
 const getJobPriorityLevel = (job = {}) => (
     normalizeIssuePriority(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)
-);
-
-const getTemplateDefaultPriorityLevel = (template = {}) => (
-    normalizeIssuePriority(
-        template.defaultIssuePriorityLevel ??
-        template.issuePriorityLevel ??
-        template.priorityLevel ??
-        template.solutionTier
-    )
 );
 
 const toMillis = (value) => {
@@ -471,7 +455,6 @@ const Jobs = () => {
         acceptedNotScheduled: 0,
         finishedOutstanding: 0,
     });
-    const [jobTemplates, setJobTemplates] = useState([]);
     const [commentCounts, setCommentCounts] = useState({});
     const [companyUserOptions, setCompanyUserOptions] = useState([]);
 
@@ -490,10 +473,6 @@ const Jobs = () => {
 
     const [searchTerm, setSearchTerm] = useState("");
     const [showFilterModal, setShowFilterModal] = useState(false);
-    const [showCreateOptionsModal, setShowCreateOptionsModal] = useState(false);
-    const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
-    const [loadingTemplates, setLoadingTemplates] = useState(false);
-    const [templateSearchTerm, setTemplateSearchTerm] = useState("");
     const [selectedJobIds, setSelectedJobIds] = useState(() => new Set());
     const [bulkOperationStatus, setBulkOperationStatus] = useState("");
     const [bulkBillingStatus, setBulkBillingStatus] = useState("");
@@ -748,27 +727,6 @@ const Jobs = () => {
         );
     }, [adminFilterActive, adminFilterLookupIds, jobs, priorityFilter, searchTerm, sortBy]);
 
-    const filteredJobTemplates = useMemo(() => {
-        const normalizedSearchTerm = templateSearchTerm.trim().toLowerCase();
-        if (!normalizedSearchTerm) return jobTemplates;
-
-        return jobTemplates.filter((template) => {
-            const priorityLevel = getTemplateDefaultPriorityLevel(template);
-            return [
-                template.name,
-                template.description,
-                template.id,
-                template.defaultRateCents,
-                template.rate,
-                template.defaultLaborCostCents,
-                priorityLevel,
-                getIssuePriorityLabel(priorityLevel),
-                template.locked ? "locked" : "",
-                template.isActive === false ? "inactive" : "active",
-            ].some((value) => String(value || "").toLowerCase().includes(normalizedSearchTerm));
-        });
-    }, [jobTemplates, templateSearchTerm]);
-
     useEffect(() => {
         setSelectedJobIds((previousIds) => {
             if (previousIds.size === 0) return previousIds;
@@ -939,76 +897,6 @@ const Jobs = () => {
         fetchCommentCounts();
     }, [visibleJobs, recentlySelectedCompany]);
 
-    const fetchJobTemplates = async () => {
-        if (!recentlySelectedCompany) return;
-
-        try {
-            setLoadingTemplates(true);
-
-            const templateSnap = await getDocs(
-                query(
-                    collection(db, "companies", recentlySelectedCompany, "jobTemplates"),
-                    orderBy("name", "asc")
-                )
-            );
-
-            const templates = templateSnap.docs.map((docSnap) => {
-                const data = docSnap.data();
-                const id = data.id || docSnap.id;
-
-                return {
-                    ...data,
-                    id,
-                };
-            });
-
-            setJobTemplates(templates);
-        } catch (error) {
-            console.error("Error fetching job templates:", error);
-            appAlert("Failed to load job templates.");
-        } finally {
-            setLoadingTemplates(false);
-        }
-    };
-
-    const openCreateOptions = () => {
-        if (!canCreateAnyJobs) {
-            appAlert("You do not have permission to create jobs or basic work orders.");
-            return;
-        }
-        setShowCreateOptionsModal(true);
-    };
-
-    const handleCreateBlankJob = () => {
-        setShowCreateOptionsModal(false);
-        navigate("/company/jobs/createNew");
-    };
-
-    const handleOpenTemplatePicker = async () => {
-        setShowCreateOptionsModal(false);
-        setTemplateSearchTerm("");
-        setShowTemplatePickerModal(true);
-        await fetchJobTemplates();
-    };
-
-    const handleCreateFromTemplate = (template) => {
-        setShowTemplatePickerModal(false);
-        setTemplateSearchTerm("");
-
-        navigate("/company/jobs/createNew", {
-            state: {
-                startingTemplate: template,
-                template,
-                templateId: template.id,
-            },
-        });
-    };
-
-    const handleCreateBasicWorkOrder = () => {
-        setShowCreateOptionsModal(false);
-        navigate("/company/jobs/basic-create");
-    };
-
     const handleApplyFilters = (
         newOperationFilters,
         newBillingFilters,
@@ -1063,14 +951,6 @@ const Jobs = () => {
     }, [adminFilterActive, adminIdFilter.length, assignedToMeActive]);
 
     const [activeSortKey, activeSortDirection = "asc"] = sortBy.split("-");
-    const canCreateJobs = can(CREATE_JOBS_PERMISSION_ID);
-    const canCreateBasicWorkOrders =
-        canCreateJobs ||
-        can(SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID) ||
-        can(CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID) ||
-        can(CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID) ||
-        can(CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID);
-    const canCreateAnyJobs = canCreateJobs || canCreateBasicWorkOrders;
     const canUpdateJobs = can(UPDATE_JOBS_PERMISSION_ID);
 
     const handleHeaderSort = (nextSortKey) => {
@@ -1277,11 +1157,6 @@ const Jobs = () => {
             style: "currency",
             currency: "USD",
         }).format((Number(value || 0) || 0) / 100);
-    };
-
-    const formatTemplateMoney = (template) => {
-        const rate = Number(template.defaultRateCents || template.rate || 0);
-        return moneyFromCents(rate);
     };
 
     const JobMetricCard = ({ label, value, detail, tone = "slate" }) => {
@@ -1543,241 +1418,6 @@ const Jobs = () => {
         );
     };
 
-    const CreateJobOptionsModal = () => {
-        return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-                <div className="w-full max-w-lg overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                    <div className="border-b border-slate-200 p-5">
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <h3 className="text-xl font-bold text-slate-950">Create Job</h3>
-                                <p className="mt-1 text-sm text-slate-500">
-                                    Start blank or use a reusable job template.
-                                </p>
-                            </div>
-
-                            <button
-                                onClick={() => setShowCreateOptionsModal(false)}
-                                className="h-9 w-9 rounded-md border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
-                            >
-                                ✕
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="space-y-3 p-5">
-                        {canCreateBasicWorkOrders && (
-                            <button
-                                type="button"
-                                onClick={handleCreateBasicWorkOrder}
-                                className="w-full rounded-md border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100"
-                            >
-                                <div className="flex items-start gap-3">
-                                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-blue-200 bg-white">
-                                        <span className="text-lg">▣</span>
-                                    </div>
-
-                                    <div>
-                                        <p className="font-bold text-blue-900">Basic Work Order</p>
-                                        <p className="mt-1 text-sm text-blue-800">
-                                            Schedule a technician-safe template or custom work order with a generated price.
-                                        </p>
-                                    </div>
-                                </div>
-                            </button>
-                        )}
-
-                        {canCreateJobs && (
-                            <button
-                                type="button"
-                                onClick={handleCreateBlankJob}
-                                className="w-full rounded-md border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100"
-                            >
-                                <div className="flex items-start gap-3">
-                                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white">
-                                        <span className="text-lg">＋</span>
-                                    </div>
-
-                                    <div>
-                                        <p className="font-bold text-slate-900">Blank Job</p>
-                                        <p className="mt-1 text-sm text-slate-500">
-                                            Build a job manually from scratch.
-                                        </p>
-                                    </div>
-                                </div>
-                            </button>
-                        )}
-
-                        {canCreateJobs && (
-                            <button
-                                type="button"
-                                onClick={handleOpenTemplatePicker}
-                                className="w-full rounded-md border border-slate-200 bg-white p-4 text-left transition hover:bg-slate-50"
-                            >
-                                <div className="flex items-start gap-3">
-                                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white">
-                                        <span className="text-lg">▣</span>
-                                    </div>
-
-                                    <div>
-                                        <p className="font-bold text-slate-900">From Template</p>
-                                        <p className="mt-1 text-sm text-slate-500">
-                                            Copy planned stops, tasks, materials, and pricing into a new job.
-                                        </p>
-                                    </div>
-                                </div>
-                            </button>
-                        )}
-                    </div>
-                </div>
-            </div>
-        );
-    };
-
-    const TemplatePickerModal = () => {
-        return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-                <div className="max-h-[85vh] w-full max-w-5xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                    <div className="border-b border-slate-200 p-5">
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <h3 className="text-xl font-bold text-slate-950">Choose Template</h3>
-                                <p className="mt-1 text-sm text-slate-500">
-                                    Select a template to prefill the new job.
-                                </p>
-                            </div>
-
-                            <button
-                                onClick={() => {
-                                    setShowTemplatePickerModal(false);
-                                    setTemplateSearchTerm("");
-                                }}
-                                className="h-9 w-9 rounded-md border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
-                            >
-                                ✕
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="border-b border-slate-200 p-5">
-                        <div className="grid gap-3 sm:grid-cols-[minmax(240px,1fr)_auto] sm:items-center">
-                            <input
-                                value={templateSearchTerm}
-                                onChange={(event) => setTemplateSearchTerm(event.target.value)}
-                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                                type="text"
-                                placeholder="Search templates by name, description, price, priority, or status..."
-                                autoFocus
-                            />
-                            <p className="text-sm font-semibold text-slate-500">
-                                {filteredJobTemplates.length} of {jobTemplates.length} shown
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="max-h-[56vh] overflow-y-auto">
-                        {loadingTemplates ? (
-                            <div className="m-5 rounded-lg border border-slate-200 bg-slate-50 p-6 text-center">
-                                <p className="font-semibold text-slate-800">Loading templates...</p>
-                            </div>
-                        ) : jobTemplates.length === 0 ? (
-                            <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                                <p className="font-semibold text-slate-800">No templates found.</p>
-                                <p className="mt-1 text-sm text-slate-500">
-                                    Create a job template first, then return here.
-                                </p>
-                            </div>
-                        ) : filteredJobTemplates.length === 0 ? (
-                            <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                                <p className="font-semibold text-slate-800">No templates match that search.</p>
-                                <p className="mt-1 text-sm text-slate-500">
-                                    Try a name, description, price, priority, or status.
-                                </p>
-                            </div>
-                        ) : (
-                            <div className="min-w-full">
-                                <div className="sticky top-0 z-10 hidden grid-cols-[minmax(260px,1fr)_140px_180px_150px_96px] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-bold uppercase tracking-wide text-slate-500 md:grid">
-                                    <span>Template</span>
-                                    <span>Price</span>
-                                    <span>Priority</span>
-                                    <span>Labor</span>
-                                    <span className="text-right">Action</span>
-                                </div>
-
-                                <div className="divide-y divide-slate-200">
-                                    {filteredJobTemplates.map((template) => (
-                                    <button
-                                        key={template.id}
-                                        type="button"
-                                        onClick={() => handleCreateFromTemplate(template)}
-                                        className="grid w-full gap-3 px-5 py-4 text-left transition hover:bg-blue-50 focus:outline-none focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 md:grid-cols-[minmax(260px,1fr)_140px_180px_150px_96px] md:items-center md:gap-4"
-                                    >
-                                        <div>
-                                            <p className="font-bold text-slate-900">
-                                                {template.name || "Job Template"}
-                                            </p>
-
-                                            {template.description && (
-                                                <p className="mt-1 line-clamp-2 text-sm text-slate-500 md:line-clamp-1">
-                                                    {template.description}
-                                                </p>
-                                            )}
-
-                                            <div className="mt-2 flex flex-wrap gap-2 md:hidden">
-                                                {template.locked && (
-                                                    <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
-                                                        Locked
-                                                    </span>
-                                                )}
-                                                {template.isActive === false && (
-                                                    <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                                                        Inactive
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        <div className="font-bold text-slate-900 md:text-sm">
-                                            {formatTemplateMoney(template)}
-                                        </div>
-
-                                        <div>
-                                            {renderSolutionTier(getTemplateDefaultPriorityLevel(template))}
-                                        </div>
-
-                                        <div className="text-sm font-semibold text-slate-700">
-                                            {template.defaultLaborCostCents !== undefined && (
-                                                <span>{moneyFromCents(template.defaultLaborCostCents)}</span>
-                                            )}
-                                            {template.defaultLaborCostCents === undefined && <span className="text-slate-400">-</span>}
-                                        </div>
-
-                                        <div className="flex items-center justify-between gap-3 md:justify-end">
-                                            <div className="hidden flex-wrap justify-end gap-2 md:flex">
-                                            {template.locked && (
-                                                <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
-                                                    Locked
-                                                </span>
-                                            )}
-                                                {template.isActive === false && (
-                                                    <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                                                        Inactive
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <span className="text-sm font-bold text-blue-700">Select</span>
-                                        </div>
-                                    </button>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </div>
-        );
-    };
-
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
@@ -1811,15 +1451,7 @@ const Jobs = () => {
                                 Job Templates
                             </button>
 
-                            {canCreateAnyJobs && (
-                            <button
-                                type="button"
-                                onClick={openCreateOptions}
-                                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-                            >
-                                Create Job
-                            </button>
-                            )}
+                            <CreateJobFlowLauncher />
                         </div>
                     </div>
                 </section>
@@ -2036,10 +1668,11 @@ const Jobs = () => {
 
                     <div className="overflow-x-auto border-t border-slate-200">
                         <table className="min-w-full bg-white">
-                            <thead className="bg-slate-50">
+                            <thead>
                                 <tr>
-                                    {canUpdateJobs && (
-                                        <th className="w-12 border-b border-slate-200 px-5 py-3 text-left">
+                                    <th className="border-b border-r border-slate-200 bg-slate-100 px-5 py-3 text-left">
+                                        <div className="flex items-center gap-3">
+                                            {canUpdateJobs && (
                                             <input
                                                 type="checkbox"
                                                 aria-label="Select all visible jobs"
@@ -2048,98 +1681,102 @@ const Jobs = () => {
                                                 onChange={(event) => handleSelectAllVisibleJobs(event.target.checked)}
                                                 className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                                             />
-                                        </th>
-                                    )}
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
+                                            )}
+                                            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                                Order
+                                            </span>
+                                        </div>
+                                    </th>
+                                    <th className="border-b border-r border-slate-200 bg-white px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="internalId" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Job
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
-                                        <SortHeaderButton sortKey="dateCreated" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
-                                            Date Created
-                                        </SortHeaderButton>
-                                    </th>
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
-                                        <SortHeaderButton sortKey="customerName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
-                                            Customer
-                                        </SortHeaderButton>
-                                    </th>
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
-                                        <SortHeaderButton sortKey="adminName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
-                                            Admin
-                                        </SortHeaderButton>
-                                    </th>
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
-                                        <SortHeaderButton sortKey="billingStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
-                                            Billing Status
-                                        </SortHeaderButton>
-                                    </th>
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
-                                        <SortHeaderButton sortKey="operationStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
-                                            Operation Status
-                                        </SortHeaderButton>
-                                    </th>
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
+                                    <th className="border-b border-r border-slate-200 bg-amber-50 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="priority" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Priority
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="hidden border-b border-slate-200 px-5 py-3 text-left sm:table-cell">
+                                    <th className="border-b border-r border-slate-200 bg-white px-5 py-3 text-left">
+                                        <SortHeaderButton sortKey="dateCreated" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Date Created
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="border-b border-r border-slate-200 bg-slate-50 px-5 py-3 text-left">
+                                        <SortHeaderButton sortKey="customerName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Customer
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="border-b border-r border-slate-200 bg-emerald-50 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="rate" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Rate
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Description</th>
+                                    <th className="border-b border-r border-slate-200 bg-white px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Description</th>
+                                    <th className="border-b border-r border-slate-200 bg-blue-50 px-5 py-3 text-left">
+                                        <SortHeaderButton sortKey="billingStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Billing Status
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="border-b border-r border-slate-200 bg-cyan-50 px-5 py-3 text-left">
+                                        <SortHeaderButton sortKey="operationStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Operation Status
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="border-b border-slate-200 bg-slate-100 px-5 py-3 text-left">
+                                        <SortHeaderButton sortKey="adminName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Admin
+                                        </SortHeaderButton>
+                                    </th>
                                 </tr>
                             </thead>
 
                             <tbody className="divide-y divide-slate-200">
                                 {visibleJobs.length === 0 ? (
                                     <tr>
-                                        <td colSpan={canUpdateJobs ? 10 : 9} className="px-6 py-12 text-center">
+                                        <td colSpan={10} className="px-6 py-12 text-center">
                                             <p className="font-semibold text-slate-800">No jobs found.</p>
                                             <p className="mt-1 text-sm text-slate-500">
                                                 Create a blank job or start from a template.
                                             </p>
 
-                                            {canCreateAnyJobs && (
-                                                <button
-                                                    type="button"
-                                                    onClick={openCreateOptions}
-                                                    className={getOutlinedButtonClass({ tone: "blue", className: "mt-4" })}
-                                                >
-                                                    Create First Job
-                                                </button>
-                                            )}
+                                            <CreateJobFlowLauncher
+                                                buttonLabel="Create First Job"
+                                                buttonClassName={getOutlinedButtonClass({ tone: "blue", className: "mt-4" })}
+                                            />
                                         </td>
                                     </tr>
                                 ) : (
-                                    visibleJobs.map(job => (
+                                    visibleJobs.map((job, index) => (
                                         <tr
                                             key={job.id}
                                             className={[
-                                                selectedJobIds.has(job.id) ? "bg-blue-50 hover:bg-blue-100" : "hover:bg-slate-50",
+                                                selectedJobIds.has(job.id)
+                                                    ? "bg-blue-50 hover:bg-blue-100"
+                                                    : index % 2 === 0
+                                                        ? "bg-white hover:bg-slate-50"
+                                                        : "bg-slate-50/70 hover:bg-slate-100",
                                                 "transition-colors cursor-pointer",
                                             ].join(" ")}
-                                            onClick={() => navigate(`/company/jobs/detail/${job.id}`)}
+                                            onClick={() => navigate(currentJobListView === "billing" ? `/company/jobs/detail/${job.id}/billing` : `/company/jobs/detail/${job.id}`)}
                                         >
-                                            {canUpdateJobs && (
-                                                <td
-                                                    className="px-5 py-3"
-                                                    onClick={(event) => event.stopPropagation()}
-                                                >
+                                            <td className="border-r border-slate-200 bg-slate-100/70 px-5 py-3 text-sm font-bold text-slate-700">
+                                                <div className="flex items-center gap-3">
+                                                    {canUpdateJobs && (
                                                     <input
                                                         type="checkbox"
                                                         aria-label={`Select job ${job.internalId || job.id}`}
                                                         checked={selectedJobIds.has(job.id)}
                                                         disabled={bulkUpdating}
                                                         onChange={() => toggleJobSelection(job.id)}
+                                                        onClick={(event) => event.stopPropagation()}
                                                         className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                                                     />
-                                                </td>
-                                            )}
-                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
+                                                    )}
+                                                    <span>{index + 1}</span>
+                                                </div>
+                                            </td>
+                                            <td className="whitespace-nowrap border-r border-slate-200 px-5 py-3 text-sm font-semibold text-slate-900">
                                                 <div className="flex items-center gap-2">
                                                     <span>{job.internalId}</span>
 
@@ -2151,43 +1788,43 @@ const Jobs = () => {
                                                 </div>
                                             </td>
 
-                                            <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
+                                            <td className="whitespace-nowrap border-r border-slate-200 bg-amber-50/60 px-5 py-3 text-sm font-semibold text-slate-900">
+                                                {renderSolutionTier(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)}
+                                            </td>
+
+                                            <td className="whitespace-nowrap border-r border-slate-200 px-5 py-3 text-sm text-slate-700">
                                                 {job.dateCreated ? format(job.dateCreated, "MM/dd/yyyy") : "N/A"}
                                             </td>
 
-                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-800">
+                                            <td className="whitespace-nowrap border-r border-slate-200 bg-slate-50/70 px-5 py-3 text-sm font-semibold text-slate-800">
                                                 {job.customerName}
                                             </td>
 
-                                            <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
-                                                {job.adminName || "Unassigned"}
+                                            <td className="whitespace-nowrap border-r border-slate-200 bg-emerald-50/60 px-5 py-3 text-sm font-semibold text-slate-800">
+                                                {moneyFromCents(job.rate)}
                                             </td>
 
-                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
+                                            <td
+                                                className="max-w-xs truncate whitespace-nowrap border-r border-slate-200 px-5 py-3 text-sm text-slate-700"
+                                                title={job.description}
+                                            >
+                                                {job.description}
+                                            </td>
+
+                                            <td className="whitespace-nowrap border-r border-slate-200 bg-blue-50/60 px-5 py-3 text-sm font-semibold text-slate-900">
                                                 <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(job.billingStatus)}`}>
                                                     {job.billingStatus}
                                                 </span>
                                             </td>
 
-                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
+                                            <td className="whitespace-nowrap border-r border-slate-200 bg-cyan-50/60 px-5 py-3 text-sm font-semibold text-slate-900">
                                                 <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(job.operationStatus)}`}>
                                                     {job.operationStatus}
                                                 </span>
                                             </td>
 
-                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
-                                                {renderSolutionTier(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)}
-                                            </td>
-
-                                            <td className="hidden whitespace-nowrap px-5 py-3 text-sm text-slate-800 sm:table-cell">
-                                                {moneyFromCents(job.rate)}
-                                            </td>
-
-                                            <td
-                                                className="max-w-xs whitespace-nowrap px-5 py-3 text-sm text-slate-700 truncate"
-                                                title={job.description}
-                                            >
-                                                {job.description}
+                                            <td className="whitespace-nowrap bg-slate-100/70 px-5 py-3 text-sm text-slate-700">
+                                                {job.adminName || "Unassigned"}
                                             </td>
                                         </tr>
                                     ))
@@ -2205,9 +1842,6 @@ const Jobs = () => {
                 />
             )}
 
-            {showCreateOptionsModal && <CreateJobOptionsModal />}
-
-            {showTemplatePickerModal && <TemplatePickerModal />}
         </div>
     );
 };

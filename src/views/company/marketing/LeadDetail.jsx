@@ -17,7 +17,16 @@ import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
 import { format } from 'date-fns';
-import { FaEnvelope, FaExternalLinkAlt, FaFileSignature, FaCheckCircle } from 'react-icons/fa';
+import {
+    FaBriefcase,
+    FaCalendarAlt,
+    FaCheckCircle,
+    FaChevronDown,
+    FaChevronRight,
+    FaEnvelope,
+    FaExternalLinkAlt,
+    FaFileSignature,
+} from 'react-icons/fa';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { SERVICE_STOP_TYPE_USE_CASES } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import {
@@ -47,7 +56,9 @@ const SERVICE_STOP_OPERATION_STATUS = {
 
 const SERVICE_ESTIMATE_VISIT_LABEL = 'Service Estimate';
 const panelClass = 'rounded-lg border border-gray-200 bg-white p-5 shadow-sm';
-const actionButtonClass = 'inline-flex w-full items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50';
+const actionButtonClass = 'inline-flex w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50';
+const secondaryActionButtonClass = 'inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50';
+const successActionButtonClass = 'inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50';
 const leadStageButtonClasses = {
     Pending: 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100',
     'In Progress': 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100',
@@ -74,11 +85,176 @@ const formatCurrency = (amountCents = 0) => (
         .format((Number(amountCents) || 0) / 100)
 );
 
-const formatAgreementDate = (value) => {
-    if (!value) return '';
+const dateFromValue = (value) => {
+    if (!value) return null;
     const date = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
-    return format(date, 'MMM d, yyyy');
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const formatDateValue = (value, pattern = 'PPP', fallback = 'N/A') => {
+    const date = dateFromValue(value);
+    return date ? format(date, pattern) : fallback;
+};
+
+const dateValueMillis = (value) => dateFromValue(value)?.getTime() || 0;
+
+const formatAgreementDate = (value) => formatDateValue(value, 'MMM d, yyyy', '');
+
+const formatServiceAddress = (address = {}) => {
+    if (!address) return '';
+    if (typeof address === 'string') return address;
+
+    const lineOne = [
+        address.streetAddress || address.address || address.line1 || '',
+        address.unit || address.address2 || '',
+    ].filter(Boolean).join(' ');
+    const cityState = [address.city || '', address.state || ''].filter(Boolean).join(', ');
+    const postal = address.zip || address.zipCode || address.postalCode || '';
+    const lineTwo = [cityState, postal].filter(Boolean).join(' ');
+
+    return [lineOne, lineTwo].filter(Boolean).join('\n');
+};
+
+const compactText = (...values) => values
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || '';
+
+const leadJobIds = (lead = {}) => {
+    const ids = [
+        lead.latestJobId,
+        lead.convertedToJobId,
+        lead.jobId,
+        ...(Array.isArray(lead.jobIds) ? lead.jobIds : []),
+    ];
+
+    return Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+};
+
+const sortNewestRecords = (records = []) => [...records].sort((left, right) => (
+    dateValueMillis(right.updatedAt || right.dateCreated || right.createdAt) -
+    dateValueMillis(left.updatedAt || left.dateCreated || left.createdAt)
+));
+
+const estimateAmountCents = (estimate = {}) => {
+    const rate = Number(estimate.rate || estimate.amount || 0);
+    if (!rate) return 0;
+    return estimate.leadId && !estimate.jobId ? Math.round(rate * 100) : rate;
+};
+
+const jobAmountCents = (job = {}) => (
+    Number(
+        job.estimateTotalCents ??
+        job.totalAmountCents ??
+        job.rate ??
+        0
+    ) || 0
+);
+
+const InfoList = ({ title, items }) => (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+        <h3 className="text-base font-bold text-slate-900">{title}</h3>
+        <dl className="mt-3 divide-y divide-slate-200">
+            {items.map((item) => {
+                const displayValue = item.value === null || item.value === undefined || item.value === ''
+                    ? 'N/A'
+                    : item.value;
+
+                return (
+                    <div key={item.label} className="py-3 first:pt-0 last:pb-0">
+                        <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</dt>
+                        <dd className={`mt-1 text-sm font-medium text-slate-900 ${item.className || ''}`}>
+                            {displayValue}
+                        </dd>
+                    </div>
+                );
+            })}
+        </dl>
+    </div>
+);
+
+const PreviewFields = ({ items }) => {
+    const visibleItems = items.filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
+    if (!visibleItems.length) return null;
+
+    return (
+        <dl className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
+            {visibleItems.map((item) => (
+                <div key={item.label}>
+                    <dt className="font-semibold uppercase tracking-wide text-slate-500">{item.label}</dt>
+                    <dd className="mt-1 text-slate-800">{item.value}</dd>
+                </div>
+            ))}
+        </dl>
+    );
+};
+
+const WorkflowAction = ({ action }) => {
+    const Icon = action.icon;
+    const className = action.className || actionButtonClass;
+    const content = (
+        <>
+            {Icon && <Icon className="text-xs" />}
+            {action.label}
+        </>
+    );
+
+    if (action.to) {
+        return (
+            <Link to={action.to} state={action.state} className={className} title={action.title}>
+                {content}
+            </Link>
+        );
+    }
+
+    return (
+        <button
+            type="button"
+            onClick={action.onClick}
+            disabled={action.disabled}
+            title={action.title}
+            className={className}
+        >
+            {content}
+        </button>
+    );
+};
+
+const WorkflowActionRow = ({ icon: Icon, title, badge, helper, children, actions = [] }) => (
+    <div className="py-4 first:pt-0 last:pb-0">
+        <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-600">
+                <Icon className="text-base" />
+            </div>
+            <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-bold text-slate-900">{title}</p>
+                    {badge && (
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
+                            {badge.label}
+                        </span>
+                    )}
+                </div>
+
+                {helper && <p className="mt-1 text-sm text-slate-600">{helper}</p>}
+                {children}
+
+                {actions.length > 0 && (
+                    <div className="mt-4 grid gap-2">
+                        {actions.map((action) => (
+                            <WorkflowAction key={action.label} action={action} />
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    </div>
+);
+
+const formatEstimateDate = (value) => {
+    if (!value) return 'N/A';
+    const date = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
+    if (Number.isNaN(date.getTime())) return 'N/A';
+    return format(date, 'PPP');
 };
 
 const agreementAmountCents = (agreement = {}) => (
@@ -161,43 +337,6 @@ const buildServiceAgreementDraftPath = ({
     return `/company/sales/agreements/new${params.toString() ? `?${params.toString()}` : ''}`;
 };
 
-const EstimateSnapshot = ({ estimate }) => {
-    return (
-        <div className={panelClass}>
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">Estimate Details</h3>
-            <dl className="space-y-2">
-                <div>
-                    <dt className="text-sm font-medium text-gray-500">Rate</dt>
-                    <dd className="text-lg font-semibold text-gray-900">
-                        ${estimate.rate?.toFixed ? estimate.rate.toFixed(2) : '0.00'}
-                    </dd>
-                </div>
-                <div>
-                    <dt className="text-sm font-medium text-gray-500">Status</dt>
-                    <dd>
-                        <span className="px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">
-                            {estimate.status}
-                        </span>
-                    </dd>
-                </div>
-                <div>
-                    <dt className="text-sm font-medium text-gray-500">Last Date to Accept</dt>
-                    <dd className="text-sm text-gray-600">
-                        {estimate.lastDateToAccept ? format(estimate.lastDateToAccept.toDate(), 'PPP') : 'N/A'}
-                    </dd>
-                </div>
-            </dl>
-
-            <Link
-                to={`/company/contract/detail/${estimate.id}`}
-                className={`${actionButtonClass} mt-4`}
-            >
-                View Estimate
-            </Link>
-        </div>
-    );
-};
-
 const getVisitBadge = (visit) => {
     if (!visit) return null;
     if (visit.operationStatus === SERVICE_STOP_OPERATION_STATUS.finished || visit.endTime) {
@@ -212,92 +351,6 @@ const getVisitBadge = (visit) => {
     return { label: 'Scheduled', className: 'bg-yellow-100 text-yellow-800' };
 };
 
-const PreEstimateVisitCard = ({ existingVisit, schedulerPath, schedulerState }) => {
-    const badge = getVisitBadge(existingVisit);
-
-    return (
-        <div className={panelClass}>
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-800">Service Estimate</h3>
-                {badge && (
-                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${badge.className}`}>
-                        {badge.label}
-                    </span>
-                )}
-            </div>
-
-            {existingVisit ? (
-                <div className="space-y-3">
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">Type</p>
-                        <p className="text-gray-900">{existingVisit.type || SERVICE_ESTIMATE_VISIT_LABEL}</p>
-                    </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">Scheduled For</p>
-                        <p className="text-gray-900">
-                            {existingVisit.serviceDate?.toDate
-                                ? format(existingVisit.serviceDate.toDate(), 'PPP')
-                                : existingVisit.serviceDate
-                                    ? format(new Date(existingVisit.serviceDate), 'PPP')
-                                    : 'N/A'}
-                        </p>
-                    </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">Technician</p>
-                        <p className="text-gray-900">{existingVisit.tech || 'Unassigned'}</p>
-                    </div>
-
-                    <Link
-                        to={`/company/serviceStops/detail/${existingVisit.id}`}
-                        className={actionButtonClass}
-                    >
-                        View Visit
-                    </Link>
-                </div>
-            ) : (
-                <div className="space-y-4">
-                    <p className="text-sm text-gray-600">
-                        Create a service agreement estimate visit from this lead, customer, and service location.
-                    </p>
-
-                    <Link
-                        to={schedulerPath}
-                        state={schedulerState}
-                        className={actionButtonClass}
-                    >
-                        Schedule Estimate
-                    </Link>
-                </div>
-            )}
-        </div>
-    );
-};
-
-const PreEstimateVisitLockedCard = ({ lead }) => {
-    return (
-        <div className={panelClass}>
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-800">Service Estimate</h3>
-                <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-700">
-                    Locked
-                </span>
-            </div>
-
-            <div className="space-y-4">
-                <p className="text-sm text-gray-600">
-                    Create the customer first before scheduling a fact-finding service estimate.
-                </p>
-
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
-                    <p className="text-sm font-medium text-amber-800">
-                        A company customer profile is required before this visit can be created. Use the Lead Conversion action on this page to create and link the customer from the homeowner request.
-                    </p>
-                </div>
-            </div>
-        </div>
-    );
-};
-
 export default function LeadDetail() {
     const { leadId } = useParams();
     const navigate = useNavigate();
@@ -310,9 +363,12 @@ export default function LeadDetail() {
     const [loading, setLoading] = useState(true);
     const [estimateVisit, setEstimateVisit] = useState(null);
     const [linkedAgreement, setLinkedAgreement] = useState(null);
+    const [linkedJob, setLinkedJob] = useState(null);
+    const [linkedJobCount, setLinkedJobCount] = useState(0);
 
     const [savingDescription, setSavingDescription] = useState(false);
     const [descriptionDraft, setDescriptionDraft] = useState('');
+    const [sharedDescriptionOpen, setSharedDescriptionOpen] = useState(true);
     const [savingPrivateNotes, setSavingPrivateNotes] = useState(false);
     const [privateNotesDraft, setPrivateNotesDraft] = useState('');
     const [privateNotesSavedValue, setPrivateNotesSavedValue] = useState('');
@@ -367,6 +423,8 @@ export default function LeadDetail() {
             setEstimate(null);
             setEstimateVisit(null);
             setLinkedAgreement(null);
+            setLinkedJob(null);
+            setLinkedJobCount(0);
             try {
                 const leadRef = doc(db, 'homeownerServiceRequests', leadId);
                 const docSnap = await getDoc(leadRef);
@@ -381,8 +439,10 @@ export default function LeadDetail() {
                     }
 
                     const enhancedLead = { id: docSnap.id, ...leadData, ownerDetails };
+                    const initialDescription = String(leadData.serviceDescription || '');
                     setLead(enhancedLead);
-                    setDescriptionDraft(leadData.serviceDescription || '');
+                    setDescriptionDraft(initialDescription);
+                    setSharedDescriptionOpen(Boolean(initialDescription.trim()));
                     setLeadSourceDraft(leadData.leadSource || leadData.marketingSource || leadData.sourceLabel || leadData.source || 'Manual');
                     setCancelReasonDraft(leadData.lostReason || leadData.cancelReason || leadData.statusChangeReason || '');
 
@@ -445,6 +505,43 @@ export default function LeadDetail() {
                     }
 
                     setEstimateVisit(matchedEstimateVisit);
+
+                    try {
+                        const jobRecordsById = new Map();
+                        const addJobRecord = (jobSnap) => {
+                            if (!jobSnap?.exists?.()) return;
+                            jobRecordsById.set(jobSnap.id, { id: jobSnap.id, ...jobSnap.data() });
+                        };
+
+                        const explicitJobIds = leadJobIds(leadData);
+                        if (explicitJobIds.length) {
+                            const jobSnaps = await Promise.all(explicitJobIds.map((jobIdValue) => (
+                                getDoc(doc(db, 'companies', recentlySelectedCompany, 'workOrders', jobIdValue))
+                            )));
+                            jobSnaps.forEach(addJobRecord);
+                        }
+
+                        const jobQueries = [
+                            query(
+                                collection(db, 'companies', recentlySelectedCompany, 'workOrders'),
+                                where('leadId', '==', leadId)
+                            ),
+                            query(
+                                collection(db, 'companies', recentlySelectedCompany, 'workOrders'),
+                                where('sourceLeadId', '==', leadId)
+                            ),
+                        ];
+                        const jobQuerySnaps = await Promise.all(jobQueries.map((jobQuery) => getDocs(jobQuery)));
+                        jobQuerySnaps.forEach((jobSnap) => jobSnap.docs.forEach(addJobRecord));
+
+                        const linkedJobs = sortNewestRecords(Array.from(jobRecordsById.values()));
+                        setLinkedJob(linkedJobs[0] || null);
+                        setLinkedJobCount(linkedJobs.length);
+                    } catch (jobError) {
+                        console.warn('Unable to load linked job for lead', jobError);
+                        setLinkedJob(null);
+                        setLinkedJobCount(0);
+                    }
 
                     try {
                         const explicitAgreementId =
@@ -956,6 +1053,7 @@ export default function LeadDetail() {
                 ...prev,
                 serviceDescription: nextDescription,
             }));
+            setSharedDescriptionOpen(Boolean(String(nextDescription || '').trim()));
 
             toast.success('Description updated.');
         } catch (error) {
@@ -989,7 +1087,7 @@ export default function LeadDetail() {
         serviceName,
         createdAt,
         status,
-        ownerDetails,
+        ownerDetails = {},
         serviceLocationAddress,
         source,
         customerId,
@@ -1000,6 +1098,12 @@ export default function LeadDetail() {
         homeownerPhone
     } = lead;
     const activeLeadSource = lead.leadSource || lead.marketingSource || lead.sourceLabel || source || 'N/A';
+    const contactName = compactText(customerName, ownerDetails.displayName, homeownerName);
+    const contactEmail = compactText(ownerDetails.email, homeownerEmail);
+    const contactPhone = compactText(ownerDetails.phoneNumber, ownerDetails.phone, homeownerPhone);
+    const formattedServiceAddress = formatServiceAddress(serviceLocationAddress);
+    const createdByDisplayName = compactText(creatorName, lead.createdByName, lead.createdByUserName, lead.creatorEmail);
+    const hasSharedDescription = Boolean(String(descriptionDraft || '').trim());
     const publicIntake = lead.publicLeadIntake || lead.leadIntake || {};
     const publicBodiesOfWater = Array.isArray(publicIntake.bodiesOfWater) ? publicIntake.bodiesOfWater : [];
     const publicEquipment = [
@@ -1080,150 +1184,211 @@ export default function LeadDetail() {
         navigate(serviceAgreementDraftPath, { state: leadContextState });
     };
 
-    const renderActions = () => {
+    const renderWorkflowActions = () => {
         if (!linkedCustomerId) {
             if (!can("612")) return null;
 
             return (
-                <button
-                    onClick={() => navigate(`/company/customers/create-from-lead/${lead.id}`)}
-                    className={actionButtonClass}
-                >
-                    Convert Lead to Customer
-                </button>
-            );
-        }
-
-        if (linkedCustomerId) {
-            if (!can("22") && !can("242") && !can("612")) return null;
-
-            return (
-                <>
-                    {can("22") && (
-                        <button
-                            onClick={handleCreateJobFromLead}
-                            className={actionButtonClass}
-                        >
-                            Create Job
-                        </button>
-                    )}
-                    {can("242") && (
-                        <button
-                            onClick={handleScheduleEstimateVisitFromLead}
-                            className={actionButtonClass}
-                        >
-                            Schedule Estimate
-                        </button>
-                    )}
-                    {can("612") && !linkedAgreement?.id && (
-                        <button
-                            onClick={handleCreateServiceAgreementFromLead}
-                            className={actionButtonClass}
-                        >
-                            Send Service Agreement
-                        </button>
-                    )}
-                </>
-            );
-        }
-
-        return null;
-    };
-
-    const renderLinkedAgreement = () => {
-        if (!linkedCustomerId) return null;
-
-        if (!linkedAgreement?.id) {
-            return (
-                <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4">
-                    <p className="text-sm font-semibold text-slate-900">No linked service agreement yet.</p>
-                    <p className="mt-1 text-xs leading-5 text-slate-600">
-                        Create one from this lead when the estimate is ready.
-                    </p>
+                <div className={panelClass}>
+                    <h3 className="text-lg font-semibold text-gray-800">Linked Work</h3>
+                    <div className="mt-4 divide-y divide-slate-200">
+                        <WorkflowActionRow
+                            icon={FaBriefcase}
+                            title="Lead Conversion"
+                            badge={{ label: 'Needed', className: 'bg-amber-100 text-amber-800' }}
+                            helper="Convert this lead before creating a job, scheduling an estimate, or sending a service agreement."
+                            actions={[
+                                {
+                                    label: 'Convert Lead to Customer',
+                                    onClick: () => navigate(`/company/customers/create-from-lead/${lead.id}`),
+                                },
+                            ]}
+                        />
+                    </div>
                 </div>
             );
         }
 
-        const statusKey = normalizeAgreementStatusKey(linkedAgreement.status);
-        const accepted = agreementIsAccepted(linkedAgreement);
-        const sentAt = linkedAgreement.sentAt || linkedAgreement.emailDelivery?.lastSentAt || linkedAgreement.emailDelivery?.sentAt;
-        const acceptedAt = linkedAgreement.acceptedAt;
-        const sendDisabled = !agreementCanSend(linkedAgreement) || sendingAgreement || acceptingAgreement;
-        const acceptDisabled = !agreementCanAccept(linkedAgreement) || sendingAgreement || acceptingAgreement;
-        const sentBefore = agreementWasSent(linkedAgreement);
+        const canViewJobs = can("20") || can("22") || can("24");
+        const canViewServiceStops = can("240") || can("242") || can("244");
+        const canViewServiceAgreements = can("400") || can("430") || can("612");
+        const canShowJobRow = canViewJobs || can("22");
+        const canShowEstimateRow = canViewServiceStops || can("242") || estimate?.id || estimateVisit?.id;
+        const canShowAgreementRow = canViewServiceAgreements || can("612");
+
+        if (!canShowJobRow && !canShowEstimateRow && !canShowAgreementRow) return null;
+
+        const jobActions = linkedJob?.id
+            ? canViewJobs
+                ? [{
+                    label: 'View Job',
+                    to: `/company/jobs/detail/${linkedJob.id}`,
+                    icon: FaExternalLinkAlt,
+                    className: secondaryActionButtonClass,
+                }]
+                : []
+            : can("22")
+                ? [{
+                    label: 'Create Job',
+                    onClick: handleCreateJobFromLead,
+                }]
+                : [];
+
+        const estimateActions = [];
+        if (estimate?.id) {
+            estimateActions.push({
+                label: 'View Estimate',
+                to: `/company/contract/detail/${estimate.id}`,
+                icon: FaExternalLinkAlt,
+                className: secondaryActionButtonClass,
+            });
+        }
+        if (estimateVisit?.id && canViewServiceStops) {
+            estimateActions.push({
+                label: 'View Estimate Visit',
+                to: `/company/serviceStops/detail/${estimateVisit.id}`,
+                icon: FaExternalLinkAlt,
+                className: secondaryActionButtonClass,
+            });
+        }
+        if (!estimate?.id && !estimateVisit?.id && can("242")) {
+            estimateActions.push({
+                label: 'Schedule Estimate',
+                onClick: handleScheduleEstimateVisitFromLead,
+            });
+        }
+
+        const agreementActions = [];
+        const statusKey = normalizeAgreementStatusKey(linkedAgreement?.status);
+        const accepted = agreementIsAccepted(linkedAgreement || {});
+        const sentAt = linkedAgreement?.sentAt || linkedAgreement?.emailDelivery?.lastSentAt || linkedAgreement?.emailDelivery?.sentAt;
+        const acceptedAt = linkedAgreement?.acceptedAt;
+        const sendDisabled = !agreementCanSend(linkedAgreement || {}) || sendingAgreement || acceptingAgreement;
+        const acceptDisabled = !agreementCanAccept(linkedAgreement || {}) || sendingAgreement || acceptingAgreement;
+        const sentBefore = agreementWasSent(linkedAgreement || {});
+
+        if (linkedAgreement?.id) {
+            if (canViewServiceAgreements) {
+                agreementActions.push({
+                    label: 'View Agreement',
+                    to: `/company/sales/agreements/${linkedAgreement.id}`,
+                    icon: FaExternalLinkAlt,
+                    className: secondaryActionButtonClass,
+                });
+            }
+            if (can("400")) {
+                agreementActions.push({
+                    label: sendingAgreement ? 'Sending...' : sentBefore ? 'Resend Agreement' : 'Send Agreement',
+                    onClick: () => setShowAgreementSendDialog(true),
+                    disabled: sendDisabled,
+                    title: sendDisabled && !sendingAgreement ? 'Agreement must be active and include line items and terms before sending.' : undefined,
+                    icon: FaEnvelope,
+                    className: actionButtonClass,
+                });
+                agreementActions.push({
+                    label: acceptingAgreement ? 'Accepting...' : accepted ? 'Accepted' : 'Mark Accepted',
+                    onClick: () => markLinkedAgreementAccepted({ completeLead: true, confirm: true }),
+                    disabled: acceptDisabled,
+                    title: acceptDisabled && !acceptingAgreement ? 'Agreement is already final.' : undefined,
+                    icon: FaCheckCircle,
+                    className: successActionButtonClass,
+                });
+            }
+        } else if (can("612")) {
+            agreementActions.push({
+                label: 'Send Service Agreement',
+                onClick: handleCreateServiceAgreementFromLead,
+            });
+        }
 
         return (
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-md bg-blue-50 p-2 text-blue-700">
-                                <FaFileSignature className="text-sm" />
-                            </span>
-                            <div className="min-w-0">
-                                <p className="truncate text-sm font-bold text-slate-950">
-                                    {linkedAgreement.title || 'Service Agreement'}
-                                </p>
-                                <p className="mt-0.5 text-xs text-slate-500">
-                                    {formatCurrency(agreementAmountCents(linkedAgreement))}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                        accepted
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : terminalAgreementStatusKeys.has(statusKey)
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-blue-100 text-blue-800'
-                    }`}
-                    >
-                        {labelize(linkedAgreement.status || 'Draft')}
-                    </span>
-                </div>
+            <div className={panelClass}>
+                <h3 className="text-lg font-semibold text-gray-800">Linked Work</h3>
+                <div className="mt-4 divide-y divide-slate-200">
+                    {canShowJobRow && (
+                        <WorkflowActionRow
+                            icon={FaBriefcase}
+                            title={linkedJob?.id ? `Job ${linkedJob.internalId || linkedJob.id}` : 'Job'}
+                            badge={linkedJob?.id
+                                ? { label: linkedJob.operationStatus || 'Open', className: 'bg-blue-100 text-blue-800' }
+                                : { label: 'Not created', className: 'bg-slate-100 text-slate-700' }}
+                            helper={linkedJob?.id && linkedJobCount > 1
+                                ? `${linkedJobCount - 1} more linked job${linkedJobCount === 2 ? '' : 's'} on this lead.`
+                                : linkedJob?.id
+                                    ? linkedJob.description || ''
+                                    : 'No linked job yet.'}
+                            actions={jobActions}
+                        >
+                            {linkedJob?.id && (
+                                <PreviewFields
+                                    items={[
+                                        { label: 'Billing', value: linkedJob.billingStatus || 'Draft' },
+                                        { label: 'Created', value: formatDateValue(linkedJob.dateCreated || linkedJob.createdAt) },
+                                        { label: 'Admin', value: linkedJob.adminName || 'Unassigned' },
+                                        { label: 'Price', value: formatCurrency(jobAmountCents(linkedJob)) },
+                                    ]}
+                                />
+                            )}
+                        </WorkflowActionRow>
+                    )}
 
-                <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                        <dt className="font-semibold uppercase tracking-wide text-slate-500">Sent</dt>
-                        <dd className="mt-1 text-slate-800">{formatAgreementDate(sentAt) || 'Not sent'}</dd>
-                    </div>
-                    <div>
-                        <dt className="font-semibold uppercase tracking-wide text-slate-500">Accepted</dt>
-                        <dd className="mt-1 text-slate-800">{formatAgreementDate(acceptedAt) || 'Not accepted'}</dd>
-                    </div>
-                </dl>
+                    {canShowEstimateRow && (
+                        <WorkflowActionRow
+                            icon={FaCalendarAlt}
+                            title="Estimate"
+                            badge={estimate?.id
+                                ? { label: labelize(estimate.status || 'Pending'), className: 'bg-yellow-100 text-yellow-800' }
+                                : estimateVisit?.id
+                                    ? getVisitBadge(estimateVisit)
+                                    : { label: 'Not scheduled', className: 'bg-slate-100 text-slate-700' }}
+                            helper={estimate?.id
+                                ? estimate.notes || ''
+                                : estimateVisit?.id
+                                    ? estimateVisit.description || ''
+                                    : 'No estimate visit or estimate is linked yet.'}
+                            actions={estimateActions}
+                        >
+                            {(estimate?.id || estimateVisit?.id) && (
+                                <PreviewFields
+                                    items={[
+                                        estimate?.id ? { label: 'Amount', value: formatCurrency(estimateAmountCents(estimate)) } : null,
+                                        estimate?.id ? { label: 'Accept By', value: formatEstimateDate(estimate.lastDateToAccept) } : null,
+                                        estimateVisit?.id ? { label: 'Visit Type', value: estimateVisit.type || SERVICE_ESTIMATE_VISIT_LABEL } : null,
+                                        estimateVisit?.id ? { label: 'Scheduled', value: formatDateValue(estimateVisit.serviceDate) } : null,
+                                        estimateVisit?.id ? { label: 'Technician', value: estimateVisit.tech || 'Unassigned' } : null,
+                                    ].filter(Boolean)}
+                                />
+                            )}
+                        </WorkflowActionRow>
+                    )}
 
-                <div className="mt-4 grid gap-2">
-                    <Link
-                        to={`/company/sales/agreements/${linkedAgreement.id}`}
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                    >
-                        <FaExternalLinkAlt className="text-xs" />
-                        View Agreement
-                    </Link>
-                    {can("400") && (
-                        <>
-                            <button
-                                type="button"
-                                onClick={() => setShowAgreementSendDialog(true)}
-                                disabled={sendDisabled}
-                                title={sendDisabled && !sendingAgreement ? 'Agreement must be active and include line items and terms before sending.' : undefined}
-                                className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                <FaEnvelope className="text-xs" />
-                                {sendingAgreement ? 'Sending...' : sentBefore ? 'Resend Agreement' : 'Send Agreement'}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => markLinkedAgreementAccepted({ completeLead: true, confirm: true })}
-                                disabled={acceptDisabled}
-                                title={acceptDisabled && !acceptingAgreement ? 'Agreement is already final.' : undefined}
-                                className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                <FaCheckCircle className="text-xs" />
-                                {acceptingAgreement ? 'Accepting...' : accepted ? 'Accepted' : 'Mark Accepted'}
-                            </button>
-                        </>
+                    {canShowAgreementRow && (
+                        <WorkflowActionRow
+                            icon={FaFileSignature}
+                            title={linkedAgreement?.id ? linkedAgreement.title || 'Service Agreement' : 'Service Agreement'}
+                            badge={linkedAgreement?.id
+                                ? {
+                                    label: labelize(linkedAgreement.status || 'Draft'),
+                                    className: accepted
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : terminalAgreementStatusKeys.has(statusKey)
+                                            ? 'bg-rose-100 text-rose-800'
+                                            : 'bg-blue-100 text-blue-800',
+                                }
+                                : { label: 'Not created', className: 'bg-slate-100 text-slate-700' }}
+                            helper={linkedAgreement?.id ? '' : 'No linked service agreement yet.'}
+                            actions={agreementActions}
+                        >
+                            {linkedAgreement?.id && (
+                                <PreviewFields
+                                    items={[
+                                        { label: 'Amount', value: formatCurrency(agreementAmountCents(linkedAgreement)) },
+                                        { label: 'Sent', value: formatAgreementDate(sentAt) || 'Not sent' },
+                                        { label: 'Accepted', value: formatAgreementDate(acceptedAt) || 'Not accepted' },
+                                    ]}
+                                />
+                            )}
+                        </WorkflowActionRow>
                     )}
                 </div>
             </div>
@@ -1269,7 +1434,7 @@ export default function LeadDetail() {
                             </div>
 
                             <div className="mb-6 rounded-md border border-gray-200 bg-gray-50 p-4">
-                                <div className="flex items-center justify-between gap-3">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div>
                                         <div className="flex flex-wrap items-center gap-2">
                                             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -1284,39 +1449,61 @@ export default function LeadDetail() {
                                         </p>
                                     </div>
 
-                                    {can("614") && (
+                                    <div className="flex shrink-0 items-center gap-2">
                                         <button
                                             type="button"
-                                            onClick={saveDescription}
-                                            disabled={
-                                                savingDescription ||
-                                                descriptionDraft === (lead.serviceDescription || '')
-                                            }
-                                            className={[
-                                                'px-3 py-1 rounded-lg text-sm font-semibold transition border',
-                                                savingDescription ||
-                                                    descriptionDraft === (lead.serviceDescription || '')
-                                                    ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                                                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100',
-                                            ].join(' ')}
+                                            onClick={() => setSharedDescriptionOpen((open) => !open)}
+                                            aria-expanded={sharedDescriptionOpen}
+                                            className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1 text-sm font-semibold text-gray-700 transition hover:bg-gray-100"
                                         >
-                                            {savingDescription ? 'Saving...' : 'Save'}
+                                            {sharedDescriptionOpen ? (
+                                                <FaChevronDown className="text-xs" />
+                                            ) : (
+                                                <FaChevronRight className="text-xs" />
+                                            )}
+                                            {sharedDescriptionOpen ? 'Collapse' : hasSharedDescription ? 'Expand' : 'Add'}
                                         </button>
-                                    )}
+
+                                        {can("614") && sharedDescriptionOpen && (
+                                            <button
+                                                type="button"
+                                                onClick={saveDescription}
+                                                disabled={
+                                                    savingDescription ||
+                                                    descriptionDraft === String(lead.serviceDescription || '')
+                                                }
+                                                className={[
+                                                    'px-3 py-1 rounded-lg text-sm font-semibold transition border',
+                                                    savingDescription ||
+                                                        descriptionDraft === String(lead.serviceDescription || '')
+                                                        ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
+                                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100',
+                                                ].join(' ')}
+                                            >
+                                                {savingDescription ? 'Saving...' : 'Save'}
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
 
-                                <textarea
-                                    className="mt-2 w-full min-h-[120px] p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white"
-                                    placeholder="Add the shared request description..."
-                                    value={descriptionDraft}
-                                    onChange={(e) => setDescriptionDraft(e.target.value)}
-                                    readOnly={!can("614")}
-                                    onBlur={() => {
-                                        if (can("614") && descriptionDraft !== (lead.serviceDescription || '')) {
-                                            saveDescription();
-                                        }
-                                    }}
-                                />
+                                {sharedDescriptionOpen ? (
+                                    <textarea
+                                        className="mt-2 w-full min-h-[120px] p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white"
+                                        placeholder="Add the shared request description..."
+                                        value={descriptionDraft}
+                                        onChange={(e) => setDescriptionDraft(e.target.value)}
+                                        readOnly={!can("614")}
+                                        onBlur={() => {
+                                            if (can("614") && descriptionDraft !== String(lead.serviceDescription || '')) {
+                                                saveDescription();
+                                            }
+                                        }}
+                                    />
+                                ) : (
+                                    <p className="mt-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600">
+                                        {hasSharedDescription ? descriptionDraft : 'No shared description yet.'}
+                                    </p>
+                                )}
                             </div>
 
                             <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4">
@@ -1357,7 +1544,7 @@ export default function LeadDetail() {
                                 </div>
 
                                 <textarea
-                                    className="mt-2 w-full min-h-[120px] p-3 border border-amber-300 rounded-lg focus:ring-amber-500 focus:border-amber-500 bg-white"
+                                    className="mt-2 w-full min-h-[240px] p-3 border border-amber-300 rounded-lg focus:ring-amber-500 focus:border-amber-500 bg-white"
                                     placeholder="Add internal follow-up notes, pricing thoughts, access details, or sales context..."
                                     value={privateNotesDraft}
                                     onChange={(e) => setPrivateNotesDraft(e.target.value)}
@@ -1374,24 +1561,25 @@ export default function LeadDetail() {
                                 />
                             </div>
 
-                            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-4">
-                                <div>
-                                    <dt className="text-sm font-medium text-gray-500">Submitted On</dt>
-                                    <dd className="mt-1 text-lg text-gray-900">
-                                        {createdAt ? format(createdAt.toDate(), 'PPP') : 'N/A'}
-                                    </dd>
-                                </div>
-                                <div>
-                                    <dt className="text-sm font-medium text-gray-500">Lead Source</dt>
-                                    <dd className="mt-1 text-lg text-gray-900">{activeLeadSource}</dd>
-                                </div>
-                                {creatorName && (
-                                    <div>
-                                        <dt className="text-sm font-medium text-gray-500">Created By</dt>
-                                        <dd className="mt-1 text-lg text-gray-900">{creatorName}</dd>
-                                    </div>
-                                )}
-                            </dl>
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <InfoList
+                                    title="Contact Info"
+                                    items={[
+                                        { label: 'Name', value: contactName },
+                                        { label: 'Email', value: contactEmail, className: 'break-words' },
+                                        { label: 'Phone', value: contactPhone },
+                                        { label: 'Service Address', value: formattedServiceAddress, className: 'whitespace-pre-line' },
+                                    ]}
+                                />
+                                <InfoList
+                                    title="Lead Info"
+                                    items={[
+                                        { label: 'Submitted', value: formatDateValue(createdAt) },
+                                        { label: 'Lead Source', value: activeLeadSource },
+                                        { label: 'Created By', value: createdByDisplayName },
+                                    ]}
+                                />
+                            </div>
                         </div>
 
                         {hasPublicIntakeDetails && (
@@ -1525,50 +1713,6 @@ export default function LeadDetail() {
                             </div>
                         )}
 
-                        <div className={panelClass}>
-                            <h3 className="text-xl font-bold text-gray-900 mb-6">Homeowner & Location</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                <div>
-                                    <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">
-                                        Contact Info
-                                    </h4>
-                                    <dl>
-                                        <div className="mb-4">
-                                            <dt className="text-sm font-medium text-gray-500">Name</dt>
-                                            <dd className="text-lg text-gray-900">
-                                                {customerName || ownerDetails.displayName || homeownerName}
-                                            </dd>
-                                        </div>
-                                        <div className="mb-4">
-                                            <dt className="text-sm font-medium text-gray-500">Email</dt>
-                                            <dd className="text-lg text-gray-900 break-words">
-                                                {ownerDetails.email || homeownerEmail || 'N/A'}
-                                            </dd>
-                                        </div>
-                                        <div>
-                                            <dt className="text-sm font-medium text-gray-500">Phone</dt>
-                                            <dd className="text-lg text-gray-900">
-                                                {ownerDetails.phoneNumber || homeownerPhone || 'N/A'}
-                                            </dd>
-                                        </div>
-                                    </dl>
-                                </div>
-
-                                {serviceLocationAddress && (
-                                    <div>
-                                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">
-                                            Service Address
-                                        </h4>
-                                        <address className="not-italic text-lg text-gray-900">
-                                            {serviceLocationAddress.streetAddress}
-                                            <br />
-                                            {serviceLocationAddress.city}, {serviceLocationAddress.state}{' '}
-                                            {serviceLocationAddress.zip}
-                                        </address>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
                     </div>
 
                     <div className="space-y-6">
@@ -1656,48 +1800,22 @@ export default function LeadDetail() {
                             </div>
                         )}
 
-                        {linkedCustomerId && can("242") ? (
-                            <PreEstimateVisitCard
-                                existingVisit={estimateVisit}
-                                schedulerPath={serviceEstimateSchedulerPath}
-                                schedulerState={leadContextState}
-                            />
-                        ) : !linkedCustomerId && can("242") ? (
-                            <PreEstimateVisitLockedCard lead={lead} />
-                        ) : null}
-
-                        {estimate ? (
-                            <EstimateSnapshot estimate={estimate} />
-                        ) : (
-                            <>
-                                {linkedCustomerId && (
-                                    <div className={panelClass}>
-                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">
-                                            Associated Customer
-                                        </h3>
-                                        <p className="text-gray-800 mb-3">{customerName}</p>
-                                        <Link
-                                            to={`/company/customers/details/${linkedCustomerId}`}
-                                            className={actionButtonClass}
-                                        >
-                                            View Customer Profile
-                                        </Link>
-                                    </div>
-                                )}
-
-	                                {(can("612") || can("22") || can("242")) && (
-	                                    <div className={panelClass}>
-	                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">
-	                                            {linkedCustomerId ? 'Next Steps' : 'Lead Conversion'}
-	                                        </h3>
-	                                        <div className="space-y-3">
-                                                {renderLinkedAgreement()}
-                                                {renderActions()}
-                                            </div>
-	                                    </div>
-	                                )}
-                            </>
+                        {linkedCustomerId && (
+                            <div className={panelClass}>
+                                <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                                    Associated Customer
+                                </h3>
+                                <p className="text-gray-800 mb-3">{customerName || contactName || 'Linked customer'}</p>
+                                <Link
+                                    to={`/company/customers/details/${linkedCustomerId}`}
+                                    className={actionButtonClass}
+                                >
+                                    View Customer Profile
+                                </Link>
+                            </div>
                         )}
+
+                        {renderWorkflowActions()}
                     </div>
                 </div>
             </div>

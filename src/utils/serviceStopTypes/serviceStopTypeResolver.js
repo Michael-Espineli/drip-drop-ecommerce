@@ -68,6 +68,45 @@ const normalize = (value) =>
 
 export const normalizeServiceStopTypeBucket = normalize;
 
+export const normalizeServiceStopCategory = (category = "", useCase = SERVICE_STOP_TYPE_USE_CASES.unknown) => {
+    const fallbackCategory = FALLBACKS[useCase]?.category || FALLBACKS.unknown.category;
+    const normalizedCategory = normalize(category);
+
+    const exactCategory = Object.values(FALLBACKS)
+        .map((fallback) => fallback.category)
+        .find((knownCategory) => normalize(knownCategory) === normalizedCategory);
+    if (exactCategory) return exactCategory;
+
+    const categoryAliases = {
+        route: FALLBACKS.recurringRoute.category,
+        routes: FALLBACKS.recurringRoute.category,
+        recurringroute: FALLBACKS.recurringRoute.category,
+        recurringservicestop: FALLBACKS.recurringRoute.category,
+        recurringroutestop: FALLBACKS.recurringRoute.category,
+        jobvisit: FALLBACKS.jobVisit.category,
+        jobservice: FALLBACKS.jobVisit.category,
+        jobservicestop: FALLBACKS.jobVisit.category,
+        servicecall: FALLBACKS.jobVisit.category,
+        job: FALLBACKS.jobVisit.category,
+        jobestimate: FALLBACKS.jobEstimate.category,
+        estimate: FALLBACKS.jobEstimate.category,
+        estimateforjob: FALLBACKS.jobEstimate.category,
+        bidvisit: FALLBACKS.jobEstimate.category,
+        serviceagreementestimate: FALLBACKS.serviceAgreementEstimate.category,
+        serviceestimate: FALLBACKS.serviceAgreementEstimate.category,
+        recurringserviceestimate: FALLBACKS.serviceAgreementEstimate.category,
+        startup: FALLBACKS.serviceAgreementEstimate.category,
+        startuppool: FALLBACKS.serviceAgreementEstimate.category,
+        startupprofile: FALLBACKS.serviceAgreementEstimate.category,
+        customerrelationship: FALLBACKS.customerRelationship.category,
+        customerrelationshipstop: FALLBACKS.customerRelationship.category,
+        customervisit: FALLBACKS.customerRelationship.category,
+        followup: FALLBACKS.customerRelationship.category,
+    };
+
+    return categoryAliases[normalizedCategory] || fallbackCategory;
+};
+
 const isActiveType = (type) =>
     type &&
     type.isActive !== false &&
@@ -191,7 +230,10 @@ export const resolveServiceStopTypeFields = ({
             payTypeId: matchedType.id,
             payTypeName: matchedType.name || fallbackName || fallback.type,
             serviceStopTypeUseCaseRawValue: normalizedUseCase,
-            category: matchedType.serviceStopCategory || matchedType.category || fallback.category,
+            category: normalizeServiceStopCategory(
+                matchedType.serviceStopCategory || matchedType.category || fallback.category,
+                normalizedUseCase
+            ),
             defaultWorkTypeIds: Array.isArray(matchedType.defaultWorkTypeIds) ? matchedType.defaultWorkTypeIds : [matchedType.id],
             source: "companyPayType",
         };
@@ -215,7 +257,10 @@ export const resolveServiceStopTypeFields = ({
         payTypeId: selectedId || fallback.typeId,
         payTypeName: fallbackName || selectedType?.name || fallback.type,
         serviceStopTypeUseCaseRawValue: normalizedUseCase,
-        category: selectedType?.category || fallback.category,
+        category: normalizeServiceStopCategory(
+            selectedType?.serviceStopCategory || selectedType?.category || fallback.category,
+            normalizedUseCase
+        ),
         defaultWorkTypeIds: selectedId ? [selectedId] : [],
         source: "systemFallback",
     };

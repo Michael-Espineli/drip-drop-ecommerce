@@ -476,7 +476,13 @@ const fetchExactIdResults = async ({ companyId, rawTerm }) => {
 };
 
 const canShowNavItem = ({ item, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled }) => {
-    const permissionAllowed = !item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId);
+    const permissionIds = [
+        item.permissionId,
+        ...(Array.isArray(item.permissionIds) ? item.permissionIds : []),
+    ].filter(Boolean);
+    const permissionAllowed = permissionIds.length === 0 ||
+        companyRoleLoading ||
+        permissionIds.some((permissionId) => hasCompanyPermission(permissionId));
     const featureFlagIds = [
         item.featureFlagId,
         ...(Array.isArray(item.featureFlagIds) ? item.featureFlagIds : []),

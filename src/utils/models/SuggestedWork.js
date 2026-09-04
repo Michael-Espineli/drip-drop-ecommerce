@@ -91,6 +91,69 @@ export const isOpenSuggestedWorkStatus = (status) =>
     normalizeSuggestedWorkStatus(status)
   );
 
+const normalizeRecordKey = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+
+const SUGGESTED_WORK_SOURCE_TYPES = new Set([
+  "manual",
+  "repairrequest",
+  "repairrequestcomment",
+  "workoffer",
+  "offeredwork",
+]);
+
+export const suggestedWorkStatusValue = (work = {}) =>
+  work?.status || work?.suggestionStatus || SUGGESTED_WORK_STATUS.OPEN;
+
+export const isSuggestedWorkRecord = (work = {}) => {
+  if (!work || typeof work !== "object" || Array.isArray(work)) return false;
+
+  const id = String(work.id || work.suggestedWorkId || work.sourceSuggestedWorkId || "");
+  if (id.startsWith("comp_suggested_work")) return true;
+
+  const hasExplicitSuggestedWorkMarker = Boolean(
+    work.suggestionStatus ||
+    work.suggestedWorkPriorityLevel ||
+    work.suggestedWorkPriorityLabel ||
+    work.estimatedPriceCents !== undefined ||
+    work.convertedToJobId ||
+    work.convertedToJobInternalId
+  );
+  const looksLikeStandaloneWorkRecord = Boolean(
+    work.operationStatus ||
+    work.billingStatus ||
+    work.internalId ||
+    work.serviceDate ||
+    work.scheduledDate ||
+    work.techId ||
+    work.serviceStopTypeId
+  );
+  if (looksLikeStandaloneWorkRecord && !hasExplicitSuggestedWorkMarker) return false;
+
+  const sourceType = normalizeRecordKey(work.sourceType || work.sourceRecordType);
+  if (SUGGESTED_WORK_SOURCE_TYPES.has(sourceType) && (work.title || work.description || work.note || work.customerId)) {
+    return true;
+  }
+
+  const sourcePath = normalizeRecordKey(work.sourcePath);
+  const sourceCollection = normalizeRecordKey(work.sourceCollection);
+  if (sourcePath.includes("suggestedwork") || sourceCollection.includes("suggestedwork")) return true;
+
+  return Boolean(
+    hasExplicitSuggestedWorkMarker ||
+    work.priorityLabel ||
+    work.solutionTierLabel
+  );
+};
+
+export const isCurrentSuggestedWorkRecord = (work = {}) =>
+  isSuggestedWorkRecord(work) && isOpenSuggestedWorkStatus(suggestedWorkStatusValue(work));
+
 export const suggestedWorkIdForSource = (sourceType, sourceId) => {
   const cleanSourceType = String(sourceType || "manual").replace(/[^a-zA-Z0-9_-]/g, "_");
   const cleanSourceId = String(sourceId || "").replace(/[^a-zA-Z0-9_-]/g, "_");

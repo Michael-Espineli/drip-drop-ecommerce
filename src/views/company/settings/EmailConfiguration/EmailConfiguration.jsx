@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useContext, useMemo } from "react";
+import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
+import { ArrowLeftIcon } from "@heroicons/react/24/outline";
 import {
   FaBriefcase,
   FaClipboardList,
@@ -169,24 +171,45 @@ const chunkArray = (items, size) => {
   return chunks;
 };
 
-const EmailTypeCard = ({ icon: Icon, title, subtitle, status, meta, helper, onClick, selected }) => (
+const inputClass =
+  "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+
+const textareaClass =
+  "mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+
+const summaryToneClassNames = {
+  blue: "border-blue-200 bg-blue-50 text-blue-700",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  slate: "border-slate-200 bg-slate-100 text-slate-700",
+};
+
+const SummaryCard = ({ label, value, helper, tone = "slate" }) => (
+  <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${summaryToneClassNames[tone]}`}>
+      {label}
+    </div>
+    <p className="mt-3 text-2xl font-bold text-slate-950">{value}</p>
+    <p className="mt-1 text-sm text-slate-500">{helper}</p>
+  </section>
+);
+
+const EmailTypeCard = ({ icon: Icon, title, subtitle, status, helper, onClick, selected }) => (
   <button
     type="button"
     onClick={onClick}
-    className={`w-full rounded-lg border bg-white p-4 text-left shadow-sm transition hover:border-blue-300 hover:bg-blue-50/40 ${
-      selected ? "border-blue-400 ring-2 ring-blue-100" : "border-slate-200"
+    className={`w-full border-l-4 px-5 py-4 text-left transition hover:bg-slate-50 ${
+      selected ? "border-l-blue-600 bg-blue-50/70" : "border-l-transparent bg-white"
     }`}
   >
     <div className="flex items-start justify-between gap-3">
       <div className="flex min-w-0 gap-3">
-        <span className="mt-0.5 rounded-md bg-slate-100 p-2 text-slate-600">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
           <Icon />
         </span>
         <div className="min-w-0">
           <p className="font-semibold text-slate-950">{title}</p>
           <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
           {helper && <p className="mt-2 text-xs text-slate-500">{helper}</p>}
-          {meta && <p className="mt-2 break-all text-xs font-semibold text-slate-500">{meta}</p>}
         </div>
       </div>
       {status && (
@@ -227,7 +250,24 @@ export default function EmailConfiguration() {
     ...(serviceStopCategorySettings[selectedCategoryKey] || {}),
     category: selectedCategoryKey,
   };
+  const editableCategoryKeys = useMemo(
+    () => [...new Set(serviceStopEmailBuckets.map(resolveEditableCategoryKey))],
+    []
+  );
+  const activeServiceTemplateCount = editableCategoryKeys.filter((categoryKey) => {
+    const categorySettings = {
+      ...(defaultCategorySettings[categoryKey] || {}),
+      ...(serviceStopCategorySettings[categoryKey] || {}),
+    };
+
+    return categorySettings.sendEmailOnFinish === true;
+  }).length;
+  const customerEmailsEnabledCount = customerConfigList.filter((customer) => customer.emailIsOn === true).length;
   const allCustomersSelected = customerConfigList.length > 0 && customerConfigList.every((customer) => customer.emailIsOn === true);
+  const senderDetailsAreSet = Boolean(fromEmail.trim() || replyToEmail.trim());
+  const selectedTemplateDescription = selectedBucket.fallbackCategoryKey
+    ? `${selectedBucket.label} uses the ${selectedCategoryKey} template.`
+    : selectedBucket.helper;
 
   useEffect(() => {
     const onLoad = async () => {
@@ -512,65 +552,91 @@ export default function EmailConfiguration() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+    <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
+        <header className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <Link
+            to="/company/settings"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900"
+          >
+            <ArrowLeftIcon className="h-4 w-4" />
+            Settings
+          </Link>
+
+          <div className="mt-4 flex items-start gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
+              <FaEnvelope className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-xs font-bold text-blue-700">
                 {recentlySelectedCompanyName || "Selected company"}
               </p>
-              <h1 className="text-3xl font-bold text-slate-950">Email Configuration</h1>
-              <p className="max-w-3xl text-sm text-slate-600">
-                Configure service stop templates, billing senders, and customer email opt-ins.
+              <h1 className="mt-1 text-3xl font-bold text-slate-950">Email Configuration</h1>
+              <p className="mt-1 max-w-3xl text-sm text-slate-500">
+                Sender details, service report templates, and customer email recipients.
               </p>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <span className="inline-flex rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-                Service Stops
-              </span>
-              <span className="inline-flex rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
-                Billing
-              </span>
-              <span className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                Editable While Off
-              </span>
-            </div>
           </div>
-        </section>
+        </header>
 
         {isLoading ? (
           <div className="rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
-            <div className="text-sm font-semibold text-slate-800">Loading...</div>
-            <div className="mt-1 text-sm text-slate-500">Fetching configuration and customers.</div>
+            <div className="text-sm font-semibold text-slate-800">Loading email configuration...</div>
+            <div className="mt-1 text-sm text-slate-500">Fetching templates and active customers.</div>
           </div>
         ) : (
           <div className="space-y-6">
+            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <SummaryCard
+                label="Company sending"
+                value={enabledLabel(emailIsOn)}
+                helper="Master service email switch"
+                tone={emailIsOn ? "emerald" : "slate"}
+              />
+              <SummaryCard
+                label="Service templates"
+                value={`${activeServiceTemplateCount}/${editableCategoryKeys.length}`}
+                helper="sending when a stop is finished"
+                tone={activeServiceTemplateCount > 0 ? "blue" : "slate"}
+              />
+              <SummaryCard
+                label="Customer recipients"
+                value={customerConfigList.length ? `${customerEmailsEnabledCount}/${customerConfigList.length}` : "0"}
+                helper="active customers opted in"
+                tone={customerEmailsEnabledCount > 0 ? "emerald" : "slate"}
+              />
+              <SummaryCard
+                label="Sender details"
+                value={senderDetailsAreSet ? "Set" : "Not set"}
+                helper="from and reply-to addresses"
+                tone={senderDetailsAreSet ? "blue" : "slate"}
+              />
+            </section>
+
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="flex items-center justify-between gap-4 border-b border-slate-200 p-5">
+              <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-slate-900">Company Email Sending</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Turning this off pauses company-triggered sends, but the templates and customer selections below remain editable.
-                  </div>
+                  <h2 className="text-lg font-semibold text-slate-950">Company Delivery</h2>
+                  <p className="mt-1 text-sm text-slate-500">Global sender fields and default delivery rules.</p>
                 </div>
 
-                <span
-                  className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
-                    emailIsOn ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => saveEmailConfiguration()}
+                  disabled={isSavingGeneral}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {enabledLabel(emailIsOn)}
-                </span>
+                  <FaSave className="h-4 w-4" />
+                  {isSavingGeneral ? "Saving..." : "Save Settings"}
+                </button>
               </div>
 
-              <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+              <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="block">
-                    <span className="text-sm font-semibold text-slate-800">From Email</span>
+                    <span className="text-sm font-semibold text-slate-800">From email address</span>
                     <input
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      className={inputClass}
                       value={fromEmail}
                       onChange={(event) => setFromEmail(event.target.value)}
                       placeholder="info@dripdrop-poolapp.com"
@@ -579,9 +645,9 @@ export default function EmailConfiguration() {
                   </label>
 
                   <label className="block">
-                    <span className="text-sm font-semibold text-slate-800">Reply-To Email</span>
+                    <span className="text-sm font-semibold text-slate-800">Reply-to email address</span>
                     <input
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      className={inputClass}
                       value={replyToEmail}
                       onChange={(event) => setReplyToEmail(event.target.value)}
                       placeholder="office@example.com"
@@ -589,10 +655,10 @@ export default function EmailConfiguration() {
                     />
                   </label>
 
-                  <label className="md:col-span-2 block">
-                    <span className="text-sm font-semibold text-slate-800">Default Email Body</span>
+                  <label className="block md:col-span-2">
+                    <span className="text-sm font-semibold text-slate-800">Default message</span>
                     <textarea
-                      className="mt-1 min-h-[110px] w-full resize-y rounded-md border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      className={`${textareaClass} min-h-[110px]`}
                       value={emailBody}
                       onChange={(event) => setEmailBody(event.target.value)}
                       name="emailBody"
@@ -601,55 +667,64 @@ export default function EmailConfiguration() {
                   </label>
                 </div>
 
-                <div className="flex flex-col gap-3">
-                  <button
-                    className={`relative inline-flex h-10 w-16 items-center rounded-full border transition ${
-                      emailIsOn ? "border-emerald-600 bg-emerald-600" : "border-slate-200 bg-slate-200"
-                    } ${isSavingGeneral ? "opacity-70" : ""}`}
-                    type="button"
-                    onClick={toggleCompanyEmail}
-                    disabled={isSavingGeneral}
-                    aria-label="Toggle company email sending"
-                  >
-                    <span
-                      className={`inline-block h-8 w-8 transform rounded-full bg-white shadow-sm transition ${
-                        emailIsOn ? "translate-x-7" : "translate-x-1"
-                      }`}
-                    />
-                  </button>
+                <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+                  <div className="flex items-center justify-between gap-4 px-4 py-4">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Email sending</p>
+                      <p className="mt-1 text-xs text-slate-500">Company-wide service email switch.</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${statusTone(emailIsOn)}`}>
+                        {enabledLabel(emailIsOn)}
+                      </span>
+                      <button
+                        className={`relative inline-flex h-9 w-16 items-center rounded-full border transition ${
+                          emailIsOn ? "border-emerald-600 bg-emerald-600" : "border-slate-200 bg-slate-200"
+                        } ${isSavingGeneral ? "opacity-70" : ""}`}
+                        type="button"
+                        onClick={toggleCompanyEmail}
+                        disabled={isSavingGeneral}
+                        aria-label="Toggle company email sending"
+                        aria-pressed={emailIsOn}
+                      >
+                        <span
+                          className={`inline-block h-7 w-7 transform rounded-full bg-white shadow-sm transition ${
+                            emailIsOn ? "translate-x-7" : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
 
-                  <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                  <label className="flex items-start gap-3 border-t border-slate-200 px-4 py-4 text-sm text-slate-700">
                     <input
                       type="checkbox"
-                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                       checked={requirePhoto}
                       onChange={(event) => setRequirePhoto(event.target.checked)}
                     />
-                    Require photo by default
+                    <span>
+                      <span className="block font-semibold text-slate-900">Require photo by default</span>
+                      <span className="mt-1 block text-xs text-slate-500">Default requirement for service email completion.</span>
+                    </span>
                   </label>
-
-                  <button
-                    type="button"
-                    onClick={() => saveEmailConfiguration()}
-                    disabled={isSavingGeneral}
-                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <FaSave />
-                    {isSavingGeneral ? "Saving..." : "Save Settings"}
-                  </button>
                 </div>
               </div>
             </section>
 
-            <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-              <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 p-5">
-                  <h2 className="text-lg font-bold text-slate-950">Service Stop Emails</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Turn each service email type on or off and edit the SendGrid template details.
-                  </p>
+            <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-950">Service Stop Templates</h2>
+                  <p className="mt-1 text-sm text-slate-500">Select a stop type, then edit the subject, message, footer, and template ID.</p>
                 </div>
-                <div className="grid gap-4 p-5 md:grid-cols-2">
+                <span className="inline-flex w-fit rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+                  {activeServiceTemplateCount} of {editableCategoryKeys.length} active
+                </span>
+              </div>
+
+              <div className="grid lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]">
+                <div className="divide-y divide-slate-100 border-b border-slate-200 lg:border-b-0 lg:border-r">
                   {serviceStopEmailBuckets.map((bucket) => {
                     const editableCategoryKey = resolveEditableCategoryKey(bucket);
                     const categorySettings = {
@@ -668,7 +743,6 @@ export default function EmailConfiguration() {
                         title={bucket.label}
                         subtitle={subject}
                         helper={bucket.fallbackCategoryKey ? `Uses ${editableCategoryKey} when the category is unknown.` : bucket.helper}
-                        meta={bucket.sourceId}
                         onClick={() => setSelectedBucketId(bucket.id)}
                         selected={selectedBucketId === bucket.id}
                         status={{
@@ -679,152 +753,147 @@ export default function EmailConfiguration() {
                     );
                   })}
                 </div>
-              </div>
 
-              <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 p-5">
-                  <h2 className="text-lg font-bold text-slate-950">Billing Emails</h2>
-                  <p className="mt-1 text-sm text-slate-500">Invoice and payment email types sent by billing workflows.</p>
-                </div>
-                <div className="space-y-4 p-5">
-                  {billingEmailTypes.map((emailType) => (
-                    <div key={emailType.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                      <div className="flex gap-3">
-                        <span className="mt-0.5 rounded-md bg-slate-100 p-2 text-slate-600">
-                          <emailType.Icon />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="font-semibold text-slate-950">{emailType.label}</p>
-                          <p className="mt-1 text-sm text-slate-500">{emailType.helper}</p>
-                          <p className="mt-2 break-all text-xs font-semibold text-slate-500">{emailType.callableName}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="flex flex-col gap-2 border-b border-slate-200 p-5 md:flex-row md:items-start md:justify-between">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-950">{selectedCategoryKey} Template</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    These settings can be changed even while company email sending is disabled.
-                  </p>
-                </div>
-                <span
-                  className={`inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-semibold ${
-                    selectedCategorySetting.sendEmailOnFinish ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700"
-                  }`}
-                >
-                  {selectedCategorySetting.sendEmailOnFinish ? "Sends on Finish" : "Not Sending"}
-                </span>
-              </div>
-
-              <div className="grid gap-5 p-5 lg:grid-cols-2">
-                <div className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        checked={selectedCategorySetting.sendEmailOnFinish === true}
-                        onChange={(event) => updateCategorySetting(selectedCategoryKey, "sendEmailOnFinish", event.target.checked)}
-                      />
-                      Send when finished
-                    </label>
-
-                    <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        checked={selectedCategorySetting.requirePhotoOnFinish === true}
-                        onChange={(event) => updateCategorySetting(selectedCategoryKey, "requirePhotoOnFinish", event.target.checked)}
-                      />
-                      Require photo
-                    </label>
+                  <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-950">{selectedBucket.label} Template</h3>
+                      <p className="mt-1 text-sm text-slate-500">{selectedTemplateDescription}</p>
+                    </div>
+                    <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-bold ${statusTone(selectedCategorySetting.sendEmailOnFinish)}`}>
+                      {selectedCategorySetting.sendEmailOnFinish ? "Sends on finish" : "Not sending"}
+                    </span>
                   </div>
 
-                  <label className="block">
-                    <span className="text-sm font-semibold text-slate-800">Subject</span>
-                    <input
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      value={selectedCategorySetting.emailSubject || ""}
-                      onChange={(event) => updateCategorySetting(selectedCategoryKey, "emailSubject", event.target.value)}
-                      placeholder="Email subject"
-                    />
-                  </label>
+                  <div className="grid gap-5 p-5 xl:grid-cols-2">
+                    <div className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={selectedCategorySetting.sendEmailOnFinish === true}
+                            onChange={(event) => updateCategorySetting(selectedCategoryKey, "sendEmailOnFinish", event.target.checked)}
+                          />
+                          Send when finished
+                        </label>
 
-                  <label className="block">
-                    <span className="text-sm font-semibold text-slate-800">SendGrid Template ID</span>
-                    <input
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      value={selectedCategorySetting.sendGridTemplateId || ""}
-                      onChange={(event) => updateCategorySetting(selectedCategoryKey, "sendGridTemplateId", event.target.value)}
-                      placeholder="d-..."
-                    />
-                  </label>
-                </div>
+                        <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={selectedCategorySetting.requirePhotoOnFinish === true}
+                            onChange={(event) => updateCategorySetting(selectedCategoryKey, "requirePhotoOnFinish", event.target.checked)}
+                          />
+                          Require photo
+                        </label>
+                      </div>
 
-                <div className="space-y-4">
-                  <label className="block">
-                    <span className="text-sm font-semibold text-slate-800">Body</span>
-                    <textarea
-                      className="mt-1 min-h-[130px] w-full resize-y rounded-md border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      value={selectedCategorySetting.emailBody || ""}
-                      onChange={(event) => updateCategorySetting(selectedCategoryKey, "emailBody", event.target.value)}
-                      placeholder="Template body or preheader message"
-                    />
-                  </label>
+                      <label className="block">
+                        <span className="text-sm font-semibold text-slate-800">Subject line</span>
+                        <input
+                          className={inputClass}
+                          value={selectedCategorySetting.emailSubject || ""}
+                          onChange={(event) => updateCategorySetting(selectedCategoryKey, "emailSubject", event.target.value)}
+                          placeholder="Email subject"
+                        />
+                      </label>
 
-                  <label className="block">
-                    <span className="text-sm font-semibold text-slate-800">Footer</span>
-                    <textarea
-                      className="mt-1 min-h-[80px] w-full resize-y rounded-md border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      value={selectedCategorySetting.emailFooter || ""}
-                      onChange={(event) => updateCategorySetting(selectedCategoryKey, "emailFooter", event.target.value)}
-                      placeholder="Footer text"
-                    />
-                  </label>
-                </div>
+                      <label className="block">
+                        <span className="text-sm font-semibold text-slate-800">SendGrid template ID</span>
+                        <input
+                          className={inputClass}
+                          value={selectedCategorySetting.sendGridTemplateId || ""}
+                          onChange={(event) => updateCategorySetting(selectedCategoryKey, "sendGridTemplateId", event.target.value)}
+                          placeholder="d-..."
+                        />
+                      </label>
+                    </div>
 
-                <div className="flex flex-wrap gap-3 lg:col-span-2">
-                  <button
-                    type="button"
-                    onClick={() => saveCategorySetting(selectedCategoryKey)}
-                    disabled={savingCategoryKey === selectedCategoryKey}
-                    className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <FaSave />
-                    {savingCategoryKey === selectedCategoryKey ? "Saving..." : "Save Template"}
-                  </button>
+                    <div className="space-y-4">
+                      <label className="block">
+                        <span className="text-sm font-semibold text-slate-800">Message body</span>
+                        <textarea
+                          className={`${textareaClass} min-h-[130px]`}
+                          value={selectedCategorySetting.emailBody || ""}
+                          onChange={(event) => updateCategorySetting(selectedCategoryKey, "emailBody", event.target.value)}
+                          placeholder="Template body or preheader message"
+                        />
+                      </label>
 
-                  <button
-                    type="button"
-                    onClick={() => resetCategoryToDefault(selectedCategoryKey)}
-                    className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                  >
-                    Reset to Default
-                  </button>
+                      <label className="block">
+                        <span className="text-sm font-semibold text-slate-800">Footer message</span>
+                        <textarea
+                          className={`${textareaClass} min-h-[80px]`}
+                          value={selectedCategorySetting.emailFooter || ""}
+                          onChange={(event) => updateCategorySetting(selectedCategoryKey, "emailFooter", event.target.value)}
+                          placeholder="Footer text"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3 xl:col-span-2">
+                      <button
+                        type="button"
+                        onClick={() => saveCategorySetting(selectedCategoryKey)}
+                        disabled={savingCategoryKey === selectedCategoryKey}
+                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <FaSave className="h-4 w-4" />
+                        {savingCategoryKey === selectedCategoryKey ? "Saving..." : "Save Template"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => resetCategoryToDefault(selectedCategoryKey)}
+                        className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                      >
+                        Reset to Default
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>
 
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="flex flex-col gap-4 border-b border-slate-200 p-5 md:flex-row md:items-center md:justify-between">
+              <div className="border-b border-slate-200 px-5 py-4">
+                <h2 className="text-lg font-semibold text-slate-950">Billing Emails</h2>
+                <p className="mt-1 text-sm text-slate-500">Invoice and payment confirmations sent with the company sender details.</p>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {billingEmailTypes.map((emailType) => (
+                  <article key={emailType.id} className="flex gap-3 px-5 py-4">
+                    <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
+                      <emailType.Icon />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-950">{emailType.label}</p>
+                      <p className="mt-1 text-sm text-slate-500">{emailType.helper}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-slate-900">Customer Email Selection</div>
-                  <div className="mt-1 text-xs text-slate-500">Control per-customer service email sending.</div>
+                  <h2 className="text-lg font-semibold text-slate-950">Customer Recipients</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {customerConfigList.length
+                      ? `${customerEmailsEnabledCount} of ${customerConfigList.length} active customers have service emails on.`
+                      : "No active customers are available for email selection."}
+                  </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   <span
-                    className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
-                      allCustomersSelected ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700"
+                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold ${
+                      allCustomersSelected ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-700"
                     }`}
                   >
-                    {allCustomersSelected ? "All Enabled" : "Not All Enabled"}
+                    {customerConfigList.length === 0 ? "No customers" : allCustomersSelected ? "All on" : "Needs review"}
                   </span>
                   <button
                     type="button"
@@ -832,7 +901,7 @@ export default function EmailConfiguration() {
                     onClick={() => setAllCustomerEmailsEnabled(!allCustomersSelected)}
                     className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {savingCustomerId === "all" ? "Saving..." : allCustomersSelected ? "Disable All" : "Enable All"}
+                    {savingCustomerId === "all" ? "Saving..." : allCustomersSelected ? "Turn All Off" : "Turn All On"}
                   </button>
                 </div>
               </div>
@@ -840,10 +909,10 @@ export default function EmailConfiguration() {
               <div className="overflow-x-auto">
                 <table className="min-w-full">
                   <thead className="bg-white">
-                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <th className="border-b border-slate-200 px-5 py-3">Name</th>
-                      <th className="border-b border-slate-200 px-5 py-3">Email</th>
-                      <th className="border-b border-slate-200 px-5 py-3">Config</th>
+                    <tr className="text-left text-xs font-semibold text-slate-500">
+                      <th className="border-b border-slate-200 px-5 py-3">Customer</th>
+                      <th className="border-b border-slate-200 px-5 py-3">Email address</th>
+                      <th className="border-b border-slate-200 px-5 py-3">Service emails</th>
                     </tr>
                   </thead>
 
@@ -857,15 +926,16 @@ export default function EmailConfiguration() {
                           <td className="px-5 py-3 text-sm text-slate-600">{customer.email || "-"}</td>
                           <td className="px-5 py-3">
                             <button
+                              type="button"
                               onClick={() => setCustomerEmailEnabled(customer, !customer.emailIsOn)}
                               disabled={isSaving}
-                              className={`inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                              className={`inline-flex min-w-[92px] items-center justify-center rounded-md px-3 py-2 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                 customer.emailIsOn
                                   ? "bg-emerald-600 text-white hover:bg-emerald-700"
                                   : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                               }`}
                             >
-                              {isSaving ? "Saving..." : customer.emailIsOn ? "Sends Email" : "Does Not Send Email"}
+                              {isSaving ? "Saving..." : customer.emailIsOn ? "On" : "Off"}
                             </button>
                           </td>
                         </tr>

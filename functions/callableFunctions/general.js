@@ -1311,6 +1311,210 @@ const userCanAccessCompany = async (firestore, userId, companyId) => {
   return isCompanyAccessActive(accessSnap.data() || {});
 };
 
+const cleanAlertString = (value) => String(value || "").trim();
+
+const parseAlertTimestamp = (value) => {
+  if (!value) return null;
+  if (typeof value.toDate === "function") return value;
+  if (value._seconds !== undefined) {
+    return new Timestamp(value._seconds, value._nanoseconds || 0);
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+};
+
+const normalizeAlertEntity = (entity = {}) => {
+  const type = cleanAlertString(entity.type);
+  const id = cleanAlertString(entity.id || entity.recordId);
+  const label = cleanAlertString(entity.label || entity.title);
+
+  if (!type || (!id && type !== "other")) return null;
+
+  return removeUndefinedDeep({
+    type,
+    id: id || `other_${Date.now()}`,
+    label,
+    companyId: cleanAlertString(entity.companyId),
+    collectionPath: cleanAlertString(entity.collectionPath),
+    webPath: cleanAlertString(entity.webPath),
+    companyWebPath: cleanAlertString(entity.companyWebPath),
+    clientWebPath: cleanAlertString(entity.clientWebPath),
+    deeplinkUrl: cleanAlertString(entity.deeplinkUrl),
+  });
+};
+
+const alertCompanyUserId = (companyUser = {}, fallbackId = "") => (
+  cleanAlertString(companyUser.userId || companyUser.uid || companyUser.authUserId || fallbackId)
+);
+
+const normalizeAlertRecipients = (companyUserDocs = [], requestedUserIds = []) => {
+  const requested = new Set(requestedUserIds.map(cleanAlertString).filter(Boolean));
+  const recipients = [];
+  const seenUserIds = new Set();
+
+  companyUserDocs.forEach((companyUserDoc) => {
+    const companyUser = companyUserDoc.data() || {};
+    const userId = alertCompanyUserId(companyUser, companyUserDoc.id);
+    const possibleIds = [
+      userId,
+      companyUserDoc.id,
+      cleanAlertString(companyUser.id),
+      cleanAlertString(companyUser.uid),
+      cleanAlertString(companyUser.authUserId),
+    ].filter(Boolean);
+
+    if (!possibleIds.some((id) => requested.has(id)) || !userId || seenUserIds.has(userId)) return;
+
+    seenUserIds.add(userId);
+    recipients.push({
+      userId,
+      companyUserDocId: companyUserDoc.id,
+      name: getAdminListUserName(companyUser) || userId,
+    });
+  });
+
+  return recipients;
+};
+
+exports.createCompanyAlertNotification = functions.https.onCall(async (data, context) => {
+  const payload = getCallablePayload(data);
+  const authContext = await getVerifiedCallableAuth(payload, context);
+  const authUserId = authContext?.uid;
+
+  if (!authUserId) {
+    throw new functions.https.HttpsError("unauthenticated", "You must be signed in to create notifications.");
+  }
+
+  const firestore = getFirestore();
+  const companyId = cleanAlertString(payload.companyId);
+  const title = cleanAlertString(payload.title || payload.name);
+  const message = cleanAlertString(payload.message || payload.description);
+  const targetScope = cleanAlertString(payload.targetScope || "team").toLowerCase() === "specific"
+    ? "specific"
+    : "team";
+
+  if (!companyId || !title) {
+    throw new functions.https.HttpsError("invalid-argument", "companyId and title are required.");
+  }
+
+  const hasAccess = await userCanAccessCompany(firestore, authUserId, companyId);
+  if (!hasAccess) {
+    throw new functions.https.HttpsError("permission-denied", "You do not have access to this company.");
+  }
+
+  const companyRef = firestore.collection("companies").doc(companyId);
+  const [companySnap, companyUsersSnap] = await Promise.all([
+    companyRef.get(),
+    companyRef.collection("companyUsers").get(),
+  ]);
+
+  if (!companySnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Company not found.");
+  }
+
+  const requestedUserIds = [
+    ...(Array.isArray(payload.recipientUserIds) ? payload.recipientUserIds : []),
+    payload.recipientUserId,
+    payload.assignedToUserId,
+  ].map(cleanAlertString).filter(Boolean);
+  const recipients = normalizeAlertRecipients(companyUsersSnap.docs, requestedUserIds);
+
+  if (targetScope === "specific" && recipients.length === 0) {
+    throw new functions.https.HttpsError("invalid-argument", "Choose at least one valid company user recipient.");
+  }
+
+  const relatedEntity = normalizeAlertEntity(payload.relatedEntity || {});
+  const scheduledFor = parseAlertTimestamp(payload.scheduledFor);
+  const alertId = cleanAlertString(payload.id || payload.alertId || `alert_${uuidv4()}`);
+  const route = cleanAlertString(payload.route || "/company/alerts");
+  const severity = cleanAlertString(payload.severity || "info").toLowerCase();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const baseAlert = removeUndefinedDeep({
+    id: alertId,
+    companyId,
+    recipientCompanyId: companyId,
+    title,
+    name: title,
+    message,
+    description: message,
+    status: "unread",
+    read: false,
+    severity,
+    type: cleanAlertString(payload.type || "manual_notification"),
+    source: cleanAlertString(payload.source || "alerts"),
+    sourceId: alertId,
+    route,
+    category: cleanAlertString(payload.category || relatedEntity?.type || "alerts"),
+    hasItem: Boolean(relatedEntity),
+    itemId: relatedEntity?.id || "",
+    itemName: relatedEntity?.label || "",
+    targetScope,
+    deliveryTargets: Array.isArray(payload.deliveryTargets) && payload.deliveryTargets.length
+      ? payload.deliveryTargets
+      : ["web", "ios"],
+    channels: {
+      dashboard: payload.channels?.dashboard !== false,
+      ios: payload.channels?.ios !== false,
+      push: payload.channels?.push !== false,
+    },
+    scheduledFor,
+    relatedEntity,
+    createdByUserId: authUserId,
+    createdByName: cleanAlertString(payload.createdByName || authContext.token?.name || authContext.token?.email || "Company user"),
+    createdAt: now,
+    updatedAt: now,
+    date: now,
+  });
+
+  const batch = firestore.batch();
+  const createdAlertIds = [];
+
+  if (targetScope === "specific") {
+    recipients.forEach((recipient) => {
+      const personalAlertId = recipients.length === 1 ? alertId : `${alertId}_${recipient.userId}`;
+      batch.set(
+        firestore.collection("users").doc(recipient.userId).collection("alerts").doc(personalAlertId),
+        {
+          ...baseAlert,
+          id: personalAlertId,
+          targetScope: "specific",
+          recipientUserId: recipient.userId,
+          assignedToUserId: recipient.userId,
+          assignedToCompanyUserDocId: recipient.companyUserDocId,
+          assignedToName: recipient.name,
+          notificationGroupId: alertId,
+        },
+        { merge: true }
+      );
+      createdAlertIds.push(personalAlertId);
+    });
+  } else {
+    batch.set(
+      companyRef.collection("alerts").doc(alertId),
+      {
+        ...baseAlert,
+        targetScope: "team",
+        assignedToUserId: "",
+        assignedToCompanyUserDocId: "",
+        assignedToName: "",
+      },
+      { merge: true }
+    );
+    createdAlertIds.push(alertId);
+  }
+
+  await batch.commit();
+
+  return {
+    status: 200,
+    alertId,
+    createdAlertIds,
+    recipientCount: targetScope === "specific" ? recipients.length : 0,
+    scope: targetScope,
+  };
+});
+
 const MAX_LINKED_SERVICE_HISTORY_RECORDS = 104;
 const SERVICE_HISTORY_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 365 * 2;
 
@@ -7069,6 +7273,99 @@ exports.makeUpdatesToRecurringRoutes = functions.https.onCall(async (data, conte
   };
 });
 
+function isNonEmptyRouteId(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function routeOrderSortValue(item = {}) {
+  const value = Number(item.order || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getRecurringRouteOrder(routeData = {}) {
+  const order = Array.isArray(routeData.order) ? routeData.order : [];
+  const legacyOrder = Array.isArray(routeData.recurringRouteOrder)
+    ? routeData.recurringRouteOrder
+    : [];
+  const source = order.length ? order : legacyOrder;
+
+  return [...source].sort((left, right) => routeOrderSortValue(left) - routeOrderSortValue(right));
+}
+
+function reindexRecurringRouteOrder(order = []) {
+  return [...order]
+    .sort((left, right) => routeOrderSortValue(left) - routeOrderSortValue(right))
+    .map((item, index) => ({
+      ...item,
+      order: index + 1,
+    }));
+}
+
+function getRecurringRouteRssIds(routeData = {}, orderOverride = null) {
+  const order = Array.isArray(orderOverride) ? orderOverride : getRecurringRouteOrder(routeData);
+  const ids = [
+    ...order.map((item) => item?.recurringServiceStopId),
+    ...(Array.isArray(routeData.rssIds) ? routeData.rssIds : []),
+  ];
+
+  return [
+    ...new Set(
+      ids
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function removeRssFromRecurringRouteData(routeData = {}, rssId = "") {
+  const currentOrder = getRecurringRouteOrder(routeData);
+  const currentRssIds = getRecurringRouteRssIds(routeData, currentOrder);
+  const removedOrderIndex = currentOrder.findIndex(
+    (item) => item?.recurringServiceStopId === rssId
+  );
+  const removedOrderItem = removedOrderIndex >= 0 ? currentOrder[removedOrderIndex] : null;
+  const nextOrder = reindexRecurringRouteOrder(
+    currentOrder.filter((item) => item?.recurringServiceStopId !== rssId)
+  );
+  const nextRssIds = currentRssIds.filter((id) => id !== rssId);
+  const changed = removedOrderIndex >= 0 || currentRssIds.includes(rssId);
+
+  return {
+    changed,
+    order: nextOrder,
+    recurringRouteOrder: nextOrder,
+    rssIds: nextRssIds,
+    removedOrderIndex,
+    removedOrderItem,
+    isEmpty: nextOrder.length === 0 && nextRssIds.length === 0,
+  };
+}
+
+function buildRecurringRouteOrderItemFromRSS(updatedRSS = {}, existingOrderItem = {}) {
+  const rssId = updatedRSS.id;
+
+  return {
+    ...existingOrderItem,
+    id: existingOrderItem.id || uuidv4(),
+    recurringServiceStopId: rssId,
+    customerId: updatedRSS.customerId || existingOrderItem.customerId || "",
+    customerName: updatedRSS.customerName || existingOrderItem.customerName || "",
+    locationId: updatedRSS.serviceLocationId || existingOrderItem.locationId || "",
+    type: updatedRSS.type || existingOrderItem.type || "Recurring Service Stop",
+    typeId: updatedRSS.typeId || existingOrderItem.typeId || "",
+    typeImage: updatedRSS.typeImage || existingOrderItem.typeImage || "",
+    category: updatedRSS.category || existingOrderItem.category || "",
+    serviceStopTypeUseCaseRawValue:
+      updatedRSS.serviceStopTypeUseCaseRawValue ||
+      existingOrderItem.serviceStopTypeUseCaseRawValue ||
+      "recurringRoute",
+    day: updatedRSS.day || existingOrderItem.day || "",
+    tech: updatedRSS.tech || existingOrderItem.tech || "",
+    techId: updatedRSS.techId || existingOrderItem.techId || "",
+    order: Number(existingOrderItem.order || 0),
+  };
+}
+
 
 async function deleteRecurringServiceStopCascade({
   db,
@@ -7211,14 +7508,10 @@ exports.deleteRecurringRoute = functions.https.onCall(async (data, context) => {
   }
 
   const routeData = routeSnap.data() || {};
-  const routeOrder = Array.isArray(routeData.order) ? routeData.order : [];
-  const routeRssIds = Array.isArray(routeData.rssIds) ? routeData.rssIds : [];
-  const recurringServiceStopIds = [
-    ...new Set([
-      ...routeOrder.map((item) => item?.recurringServiceStopId),
-      ...routeRssIds
-    ].filter((id) => typeof id === "string" && id.trim().length > 0))
-  ];
+  const recurringServiceStopIds = getRecurringRouteRssIds(
+    routeData,
+    getRecurringRouteOrder(routeData)
+  );
   const deletedRecurringServiceStops = [];
   const missingRecurringServiceStops = [];
   let deletedServiceStopCount = 0;
@@ -7262,12 +7555,24 @@ exports.deleteRecurringRoute = functions.https.onCall(async (data, context) => {
 
 async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
   try {
+    const rssId = rss?.id;
+    if (!isNonEmptyRouteId(rssId)) {
+      return {
+        updatedRouteIds: [],
+        deletedRouteIds: [],
+        removedFromRouteIds: [],
+      };
+    }
+
     const ROUTES_COL = `companies/${companyId}/recurringRoutes`;
     const routeSnapshots = await Promise.all([
       db.collection(ROUTES_COL).get(),
-      db.collection(ROUTES_COL).where("rssIds", "array-contains", rss.id).get(),
+      db.collection(ROUTES_COL).where("rssIds", "array-contains", rssId).get(),
     ]);
     const routesById = new Map();
+    const updatedRouteIds = [];
+    const deletedRouteIds = [];
+    const removedFromRouteIds = [];
 
     routeSnapshots.forEach((querySnapshot) => {
       querySnapshot.docs.forEach((routeDoc) => {
@@ -7277,31 +7582,10 @@ async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
 
     for (const routeDoc of routesById.values()) {
       const documentData = routeDoc.data();
-      const currentOrder = Array.isArray(documentData.order) ? documentData.order : [];
+      const removal = removeRssFromRecurringRouteData(documentData, rssId);
 
-      const filteredOrder = currentOrder.filter(
-        (item) => item.recurringServiceStopId !== rss.id
-      );
-
-      const hadOrderMatch = filteredOrder.length !== currentOrder.length;
-      const hadRssIdMatch = Array.isArray(documentData.rssIds) && documentData.rssIds.includes(rss.id);
-
-      if (!hadOrderMatch && !hadRssIdMatch) {
+      if (!removal.changed) {
         continue;
-      }
-
-      // Re-index order to keep it aligned with handleSaveTemplate
-      const updatedOrder = filteredOrder.map((item, index) => ({
-        ...item,
-        order: index + 1,
-      }));
-      const updates = {
-        order: updatedOrder,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-
-      if (Array.isArray(documentData.rssIds)) {
-        updates.rssIds = documentData.rssIds.filter((rssId) => rssId !== rss.id);
       }
 
       const routeRef = db
@@ -7310,10 +7594,34 @@ async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
         .collection("recurringRoutes")
         .doc(routeDoc.id);
 
+      removedFromRouteIds.push(routeDoc.id);
+
+      if (removal.isEmpty) {
+        if (typeof db.recursiveDelete === "function") {
+          await db.recursiveDelete(routeRef);
+        } else {
+          await routeRef.delete();
+        }
+        deletedRouteIds.push(routeDoc.id);
+        continue;
+      }
+
+      const updates = {
+        order: removal.order,
+        recurringRouteOrder: removal.recurringRouteOrder,
+        rssIds: removal.rssIds,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
       await routeRef.set(updates, { merge: true });
+      updatedRouteIds.push(routeDoc.id);
     }
 
-    return [...routesById.values()];
+    return {
+      updatedRouteIds,
+      deletedRouteIds,
+      removedFromRouteIds,
+    };
   } catch (error) {
     console.log("Error removing RSS from recurring route:", error);
     throw error;
@@ -7538,6 +7846,15 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
+  function serviceStopUpdateStartDate(value) {
+    const requestedStart = parseDate(value);
+    if (requestedStart) return requestedStart;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return today;
+  }
+
   function endOfDay(value) {
     const parsed = parseDate(value);
     if (!parsed) return null;
@@ -7548,7 +7865,18 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
   }
 
   function isFinishedServiceStop(serviceStop) {
-    return String(serviceStop?.operationStatus || "").toLowerCase() === "finished";
+    const terminalStatuses = new Set(["finished", "complete", "completed", "done"]);
+    const hasTerminalStatus = [
+      serviceStop?.operationStatus,
+      serviceStop?.status,
+      serviceStop?.serviceStatus,
+      serviceStop?.serviceStopStatus,
+    ].some((value) => terminalStatuses.has(String(value || "").trim().toLowerCase()));
+
+    return (
+      hasTerminalStatus ||
+      Boolean(serviceStop?.finishedAt || serviceStop?.completedAt || serviceStop?.endTime)
+    );
   }
 
   function shouldDeleteFutureServiceStopForEndDate(rss, serviceStop) {
@@ -7662,7 +7990,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     });
     const targetDayIndex = dayIndexes[rss.day];
     const dayChanged = previousRSS?.day !== rss.day;
-    const isFinished = String(serviceStop?.operationStatus || "").toLowerCase() === "finished";
+    const isFinished = isFinishedServiceStop(serviceStop);
 
     if (dayChanged && targetDayIndex !== undefined && !isFinished) {
       patch.serviceDate = admin.firestore.Timestamp.fromDate(
@@ -7718,9 +8046,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
 
     const syncRoute = receivedData.syncRoute !== false;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
+    const today = serviceStopUpdateStartDate(receivedData.futureServiceStopsStartAt);
     const todayTimestamp = admin.firestore.Timestamp.fromDate(today);
 
     const futureServiceStopsSnapshot = await serviceStopsRef
@@ -7730,6 +8056,8 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
 
     const writeOperations = [];
     const futureServiceStopDeleteRefs = [];
+    let updatedFutureServiceStopCount = 0;
+    let skippedFinishedServiceStopCount = 0;
     const serviceScheduleUpdate = serviceScheduleUpdateFromRSS({
       ...previousRSS,
       ...normalizedRecurringServiceStop
@@ -7758,6 +8086,11 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     futureServiceStopsSnapshot.docs.forEach((serviceStopDoc) => {
       const serviceStopData = serviceStopDoc.data() || {};
 
+      if (isFinishedServiceStop(serviceStopData)) {
+        skippedFinishedServiceStopCount += 1;
+        return;
+      }
+
       if (shouldDeleteFutureServiceStopForEndDate(recurringServiceStop, serviceStopData)) {
         futureServiceStopDeleteRefs.push(serviceStopDoc.ref);
         return;
@@ -7772,6 +8105,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
           serviceStopData
         )
       });
+      updatedFutureServiceStopCount += 1;
     });
 
     if (linkedAgreementId) {
@@ -7815,7 +8149,8 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
         db,
         companyId,
         previousRSS,
-        updatedRSS: recurringServiceStop
+        updatedRSS: recurringServiceStop,
+        destinationRouteId: receivedData.destinationRouteId,
       })
       : {
         skipped: true,
@@ -7825,8 +8160,9 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     return {
       success: true,
       recurringServiceStopId: recurringServiceStop.id,
-      updatedServiceStopCount: futureServiceStopsSnapshot.size - deletedFutureServiceStopCount,
+      updatedServiceStopCount: updatedFutureServiceStopCount,
       deletedFutureServiceStopCount,
+      skippedFinishedServiceStopCount,
       committedWrites: committedWrites,
       recurringRouteResult: recurringRouteResult
     };
@@ -7856,7 +8192,8 @@ async function updateRecurringRouteOrderForRSS({
   db,
   companyId,
   previousRSS,
-  updatedRSS
+  updatedRSS,
+  destinationRouteId = "",
 }) {
   const recurringRoutesRef = db
     .collection("companies")
@@ -7880,9 +8217,16 @@ async function updateRecurringRouteOrderForRSS({
       updatedTechId
     });
 
+    const removalResult = await removeRSSFromRecurringRoute({
+      db,
+      companyId,
+      rss: { id: rssId },
+    });
+
     return {
       skipped: true,
-      reason: "Missing day or techId."
+      reason: "Missing day or techId.",
+      ...removalResult,
     };
   }
 
@@ -7893,92 +8237,128 @@ async function updateRecurringRouteOrderForRSS({
     previousDay !== updatedDay ||
     previousTechId !== updatedTechId;
 
-  const updatedOrderItem = {
-    id: rssId,
-    recurringServiceStopId: rssId,
-    customerId: updatedRSS.customerId,
-    customerName: updatedRSS.customerName,
-    locationId: updatedRSS.serviceLocationId,
-    order: 0
-  };
-
   let removedFromRouteIds = [];
+  let updatedRouteIds = [];
+  let deletedRouteIds = [];
   let updatedRouteId = null;
   let createdRouteId = null;
+  let removedOrderItem = null;
+  let destinationInsertIndex = null;
+  const preferredDestinationRouteId = isNonEmptyRouteId(destinationRouteId)
+    ? destinationRouteId.trim()
+    : "";
+  const routeRemovalResults = new Map();
 
-  // 1) Remove this RSS from every route where it currently appears.
-  // This prevents duplicates and handles day/tech moves cleanly.
+  // 1) Remove this RSS from every route where it currently appears. This
+  // prevents duplicates, handles day/tech moves, and cleans up empty source
+  // routes after the last RSS leaves.
   const allRoutesSnap = await recurringRoutesRef.get();
+  const preferredDestinationRouteDoc = preferredDestinationRouteId
+    ? allRoutesSnap.docs.find((routeDoc) => routeDoc.id === preferredDestinationRouteId) || null
+    : null;
+  const destinationRouteDoc = preferredDestinationRouteDoc || allRoutesSnap.docs.find((routeDoc) => {
+    const routeData = routeDoc.data() || {};
+    return routeData.day === updatedDay && routeData.techId === updatedTechId;
+  }) || null;
 
   for (const routeDoc of allRoutesSnap.docs) {
-    const routeData = routeDoc.data();
+    const routeData = routeDoc.data() || {};
+    const removal = removeRssFromRecurringRouteData(routeData, rssId);
 
-    const currentOrder = Array.isArray(routeData.order)
-      ? routeData.order
-      : [];
-
-    const filteredOrder = currentOrder.filter((item) => {
-      return item.recurringServiceStopId !== rssId;
-    });
-
-    if (filteredOrder.length !== currentOrder.length) {
-      const reIndexedOrder = filteredOrder.map((item, index) => ({
-        ...item,
-        order: index + 1
-      }));
-
-      await routeDoc.ref.update({
-        order: reIndexedOrder,
-        rssIds: admin.firestore.FieldValue.arrayRemove(rssId),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      removedFromRouteIds.push(routeDoc.id);
+    if (!removal.changed) {
+      continue;
     }
+
+    if (!removedOrderItem && removal.removedOrderItem) {
+      removedOrderItem = removal.removedOrderItem;
+    }
+
+    const isDestinationRoute = destinationRouteDoc?.id === routeDoc.id;
+    if (isDestinationRoute && removal.removedOrderIndex >= 0) {
+      destinationInsertIndex = removal.removedOrderIndex;
+    }
+
+    removedFromRouteIds.push(routeDoc.id);
+
+    if (removal.isEmpty && !isDestinationRoute) {
+      if (typeof db.recursiveDelete === "function") {
+        await db.recursiveDelete(routeDoc.ref);
+      } else {
+        await routeDoc.ref.delete();
+      }
+      deletedRouteIds.push(routeDoc.id);
+      continue;
+    }
+
+    const updates = {
+      order: removal.order,
+      recurringRouteOrder: removal.recurringRouteOrder,
+      rssIds: removal.rssIds,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    await routeDoc.ref.set(updates, { merge: true });
+    updatedRouteIds.push(routeDoc.id);
+    routeRemovalResults.set(routeDoc.id, removal);
   }
 
-  // 2) Find the destination route: same day + techId as the updated RSS.
-  const destinationRoutesSnap = await recurringRoutesRef
-    .where("day", "==", updatedDay)
-    .where("techId", "==", updatedTechId)
-    .limit(1)
-    .get();
+  const updatedOrderItem = buildRecurringRouteOrderItemFromRSS(
+    updatedRSS,
+    removedOrderItem || {}
+  );
 
-  // 3) If destination route exists, add this RSS at the end.
-  if (!destinationRoutesSnap.empty) {
-    const routeDoc = destinationRoutesSnap.docs[0];
-    const routeData = routeDoc.data();
+  // 2) If destination route exists, add this RSS back at the same position for
+  // same-route edits, or at the end for day/technician moves.
+  if (destinationRouteDoc) {
+    const routeDoc = destinationRouteDoc;
+    const routeData = routeDoc.data() || {};
+    const removal = routeRemovalResults.get(routeDoc.id);
+    const baseOrder = removal
+      ? removal.order
+      : reindexRecurringRouteOrder(
+        getRecurringRouteOrder(routeData).filter(
+          (item) => item?.recurringServiceStopId !== rssId
+        )
+      );
+    const baseRssIds = removal
+      ? removal.rssIds
+      : getRecurringRouteRssIds(routeData, baseOrder).filter((id) => id !== rssId);
+    const nextOrderDraft = [...baseOrder];
+    const insertIndex = Number.isInteger(destinationInsertIndex)
+      ? Math.min(destinationInsertIndex, nextOrderDraft.length)
+      : nextOrderDraft.length;
 
-    const currentOrder = Array.isArray(routeData.order)
-      ? routeData.order
-      : [];
+    nextOrderDraft.splice(insertIndex, 0, {
+      ...updatedOrderItem,
+      order: insertIndex + 1
+    });
 
-    const nextOrder = [
-      ...currentOrder,
-      {
-        ...updatedOrderItem,
-        order: currentOrder.length + 1
-      }
-    ].map((item, index) => ({
-      ...item,
-      order: index + 1
-    }));
+    const nextOrder = reindexRecurringRouteOrder(nextOrderDraft);
+    const nextRssIds = [...new Set([...baseRssIds, rssId])];
 
-    await routeDoc.ref.update({
+    await routeDoc.ref.set({
       tech: updatedTech,
       techId: updatedTechId,
       day: updatedDay,
       order: nextOrder,
-      rssIds: admin.firestore.FieldValue.arrayUnion(rssId),
+      recurringRouteOrder: nextOrder,
+      rssIds: nextRssIds,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    }, { merge: true });
 
     updatedRouteId = routeDoc.id;
+    if (!updatedRouteIds.includes(routeDoc.id)) {
+      updatedRouteIds.push(routeDoc.id);
+    }
   }
 
-  // 4) If destination route does not exist, create it.
+  // 3) If destination route does not exist, create it.
   else {
-    const newRouteRef = recurringRoutesRef.doc();
+    const newRouteRef = recurringRoutesRef.doc(`com_rr_${uuidv4()}`);
+    const nextOrder = [{
+      ...updatedOrderItem,
+      order: 1
+    }];
 
     await newRouteRef.set({
       id: newRouteRef.id,
@@ -7986,12 +8366,8 @@ async function updateRecurringRouteOrderForRSS({
       techId: updatedTechId,
       day: updatedDay,
       description: "",
-      order: [
-        {
-          ...updatedOrderItem,
-          order: 1
-        }
-      ],
+      order: nextOrder,
+      recurringRouteOrder: nextOrder,
       rssIds: [rssId],
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -8004,7 +8380,10 @@ async function updateRecurringRouteOrderForRSS({
     skipped: false,
     routeChanged,
     removedFromRouteIds,
+    updatedRouteIds,
+    deletedRouteIds,
     updatedRouteId,
-    createdRouteId
+    createdRouteId,
+    destinationRouteId: destinationRouteDoc?.id || createdRouteId || null
   };
 }

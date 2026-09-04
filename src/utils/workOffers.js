@@ -23,6 +23,27 @@ const normalizeWorkOfferTypeKey = (value) =>
     .toLowerCase();
 
 const BOARD_WORK_OFFER_TYPES = new Set(["board", "internal board"]);
+const DIRECT_WORK_OFFER_TYPES = new Set(["direct", "direct user"]);
+const EXTERNAL_WORK_OFFER_TYPES = new Set(["external", "external company"]);
+const WORK_OFFER_CATEGORY_KEYS = new Set([
+  "full route",
+  "partial route",
+  "route",
+  "route stops",
+  "one off job",
+  "recurring work",
+]);
+const WORK_OFFER_SOURCE_KEYS = new Set([
+  "full route",
+  "partial route",
+  "route",
+  "route stops",
+  "one off job",
+  "recurring work",
+  "work offer",
+  "work offers",
+  "offered work",
+]);
 
 const cents = (value) => {
   const n = Number(value || 0);
@@ -31,6 +52,45 @@ const cents = (value) => {
 
 const workOfferOrEmpty = (offer) =>
   offer && typeof offer === "object" ? offer : {};
+
+export const isWorkOfferRecord = (offer = {}) => {
+  const safeOffer = workOfferOrEmpty(offer);
+  if (Object.keys(safeOffer).length === 0) return false;
+
+  const id = String(safeOffer.id || safeOffer.workOfferId || safeOffer.boardPostId || "");
+  if (id.startsWith("comp_work_offer")) return true;
+
+  const offerType = normalizeWorkOfferTypeKey(safeOffer.offerType);
+  if (
+    DIRECT_WORK_OFFER_TYPES.has(offerType) ||
+    BOARD_WORK_OFFER_TYPES.has(offerType) ||
+    EXTERNAL_WORK_OFFER_TYPES.has(offerType)
+  ) {
+    return true;
+  }
+
+  const category = normalizeWorkOfferTypeKey(safeOffer.workOfferCategory || safeOffer.workCategory);
+  if (WORK_OFFER_CATEGORY_KEYS.has(category)) return true;
+
+  const sourceType = normalizeWorkOfferTypeKey(safeOffer.sourceType || safeOffer.sourceRecordType);
+  if (WORK_OFFER_SOURCE_KEYS.has(sourceType)) return true;
+
+  return Boolean(
+    safeOffer.postedToBoard ||
+    safeOffer.isBoardPost ||
+    safeOffer.boardId ||
+    safeOffer.boardName ||
+    (Array.isArray(safeOffer.boardIds) && safeOffer.boardIds.length > 0) ||
+    safeOffer.offeredToUserId ||
+    safeOffer.offeredToUserName ||
+    safeOffer.acceptedByUserId ||
+    safeOffer.acceptedByUserName ||
+    safeOffer.canTechnicianSchedule ||
+    safeOffer.allowsTechnicianSelfScheduling ||
+    safeOffer.offeredAmountCents !== undefined ||
+    safeOffer.estimatedPayWithIncentiveCents !== undefined
+  );
+};
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -86,11 +146,13 @@ export const normalizedWorkOfferStatusKey = (status) =>
 
 export const isOpenWorkOffer = (offer = {}) => {
   const safeOffer = workOfferOrEmpty(offer);
+  if (!isWorkOfferRecord(safeOffer)) return false;
   return OPEN_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status));
 };
 
 export const isAcceptedWorkOffer = (offer = {}) => {
   const safeOffer = workOfferOrEmpty(offer);
+  if (!isWorkOfferRecord(safeOffer)) return false;
   return ACCEPTED_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status));
 };
 
@@ -101,6 +163,7 @@ export const isAcceptedReadyToScheduleWorkOffer = (offer = {}) => {
 
 export const isScheduledWorkOffer = (offer = {}) => {
   const safeOffer = workOfferOrEmpty(offer);
+  if (!isWorkOfferRecord(safeOffer)) return false;
   return (
     SCHEDULED_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status)) ||
     Boolean(safeOffer.serviceStopId || safeOffer.scheduledServiceStopId)
@@ -109,6 +172,7 @@ export const isScheduledWorkOffer = (offer = {}) => {
 
 export const isFinalWorkOffer = (offer = {}) => {
   const safeOffer = workOfferOrEmpty(offer);
+  if (!isWorkOfferRecord(safeOffer)) return false;
   return FINAL_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status));
 };
 
@@ -290,6 +354,8 @@ export const getWorkOfferCanSelfSchedule = (offer = {}) => {
 };
 
 export const workOfferMatchesStatusFilter = (offer = {}, filter = "open") => {
+  if (!isWorkOfferRecord(offer)) return false;
+
   switch (filter) {
     case "all":
       return true;

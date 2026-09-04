@@ -40,10 +40,35 @@ export const isProductAvailableForPartPurchase = (product = {}) =>
   product.availableForPurchase ??
   product.active !== false;
 
+export const isProductAvailableForPartApproval = (product = {}) =>
+  product.availableForPartApproval ??
+  product.partApprovalAvailable ??
+  product.availableForCustomerSale ??
+  product.customerSaleAvailable ??
+  product.directSaleAvailable ??
+  product.active !== false;
+
+export const isProductAvailableForJobs = (product = {}) =>
+  product.availableForJobs ??
+  product.availableForJob ??
+  product.jobProductAvailable ??
+  product.availableForWorkOrders ??
+  product.active !== false;
+
 export const productPartPurchaseAvailabilityFields = (product = {}) => ({
   active: product.active ?? true,
   availableForPartPurchase: isProductAvailableForPartPurchase(product),
   partPurchaseAvailable: isProductAvailableForPartPurchase(product),
+});
+
+export const productCatalogAvailabilityFields = (product = {}) => ({
+  ...productPartPurchaseAvailabilityFields(product),
+  availableForPartApproval: isProductAvailableForPartApproval(product),
+  partApprovalAvailable: isProductAvailableForPartApproval(product),
+  availableForCustomerSale: isProductAvailableForPartApproval(product),
+  availableForJobs: isProductAvailableForJobs(product),
+  availableForJob: isProductAvailableForJobs(product),
+  jobProductAvailable: isProductAvailableForJobs(product),
 });
 
 export const productOptionSearchText = (product = {}) =>
@@ -57,6 +82,8 @@ export const productOptionSearchText = (product = {}) =>
     product.subCategory,
     product.UOM,
     product.sku,
+    isProductAvailableForPartApproval(product) ? "part approval customer sale direct sale" : "job only",
+    isProductAvailableForJobs(product) ? "job work order service" : "sales only",
   ]
     .filter(Boolean)
     .join(" ");
@@ -101,10 +128,16 @@ export const buildProductFromVendorItem = ({
     vendorItemIds: vendorItemId ? [vendorItemId] : [],
     preferredVendorItemId: vendorItemId,
     source,
-    ...productPartPurchaseAvailabilityFields({
+    ...productCatalogAvailabilityFields({
       active: overrides.active,
       availableForPartPurchase: overrides.availableForPartPurchase ?? true,
       partPurchaseAvailable: overrides.partPurchaseAvailable ?? true,
+      availableForPartApproval: overrides.availableForPartApproval ?? true,
+      partApprovalAvailable: overrides.partApprovalAvailable ?? true,
+      availableForCustomerSale: overrides.availableForCustomerSale ?? true,
+      availableForJobs: overrides.availableForJobs ?? true,
+      availableForJob: overrides.availableForJob ?? true,
+      jobProductAvailable: overrides.jobProductAvailable ?? true,
     }),
   };
 };

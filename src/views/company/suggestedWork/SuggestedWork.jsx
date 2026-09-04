@@ -20,8 +20,10 @@ import {
   SUGGESTED_WORK_TIER_OPTIONS,
   getSuggestedWorkTierLabel,
   getSuggestedWorkTierTone,
-  isOpenSuggestedWorkStatus,
+  isCurrentSuggestedWorkRecord,
+  isSuggestedWorkRecord,
   normalizeSuggestedWorkTier,
+  suggestedWorkStatusValue,
 } from "../../../utils/models/SuggestedWork";
 
 const toMillis = (value) => {
@@ -145,7 +147,7 @@ const SuggestedWork = () => {
         getDocs(collection(db, "companies", recentlySelectedCompany, "customers")),
       ]);
 
-      setSuggestions(suggestionsSnap.docs.map((item) => ({ id: item.id, ...item.data() })));
+      setSuggestions(suggestionsSnap.docs.map((item) => ({ id: item.id, ...item.data() })).filter(isSuggestedWorkRecord));
       setCustomers(
         customersSnap.docs
           .map((item) => ({ id: item.id, ...item.data() }))
@@ -165,7 +167,7 @@ const SuggestedWork = () => {
   }, [recentlySelectedCompany]);
 
   const summary = useMemo(() => {
-    const current = suggestions.filter((item) => isOpenSuggestedWorkStatus(item.status));
+    const current = suggestions.filter(isCurrentSuggestedWorkRecord);
     const mustFix = current.filter((item) => normalizeSuggestedWorkTier(item.priorityLevel || item.solutionTier) === 1);
 
     return {
@@ -180,8 +182,9 @@ const SuggestedWork = () => {
 
     return suggestions
       .filter((item) => {
-        if (statusFilter === "current" && !isOpenSuggestedWorkStatus(item.status)) return false;
-        if (statusFilter !== "current" && statusFilter !== "all" && item.status !== statusFilter) return false;
+        const itemStatus = suggestedWorkStatusValue(item);
+        if (statusFilter === "current" && !isCurrentSuggestedWorkRecord(item)) return false;
+        if (statusFilter !== "current" && statusFilter !== "all" && itemStatus !== statusFilter) return false;
         if (tierFilter !== "all" && normalizeSuggestedWorkTier(item.priorityLevel || item.solutionTier) !== Number(tierFilter)) return false;
         if (customerFilter !== "all" && item.customerId !== customerFilter) return false;
 
@@ -360,6 +363,7 @@ const SuggestedWork = () => {
   const renderSuggestion = (suggestion) => {
     const priorityLevel = normalizeSuggestedWorkTier(suggestion.priorityLevel || suggestion.solutionTier);
     const priceCents = suggestion.estimatedPriceCents || suggestion.jobRateCents || 0;
+    const suggestionStatus = suggestedWorkStatusValue(suggestion);
     const sourceLabel =
       suggestion.sourceType === "job"
         ? "Job"
@@ -402,8 +406,8 @@ const SuggestedWork = () => {
           )}
         </td>
         <td className="px-4 py-4">
-          <Pill className={statusClasses(suggestion.status)}>
-            {suggestion.status || SUGGESTED_WORK_STATUS.OPEN}
+          <Pill className={statusClasses(suggestionStatus)}>
+            {suggestionStatus}
           </Pill>
           <p className="mt-2 text-xs text-slate-500">{sourceLabel}</p>
         </td>
@@ -429,7 +433,7 @@ const SuggestedWork = () => {
                   ))}
                 </select>
                 <select
-                  value={suggestion.status || SUGGESTED_WORK_STATUS.OPEN}
+                  value={suggestionStatus}
                   onChange={(event) => updateSuggestion(suggestion, { status: event.target.value, suggestionStatus: event.target.value })}
                   className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
                 >
@@ -449,7 +453,7 @@ const SuggestedWork = () => {
                   Source
                 </button>
               )}
-              {canCreateJobs && isOpenSuggestedWorkStatus(suggestion.status) && (
+              {canCreateJobs && isCurrentSuggestedWorkRecord(suggestion) && (
                 <button
                   type="button"
                   onClick={() => createJobFromSuggestion(suggestion)}

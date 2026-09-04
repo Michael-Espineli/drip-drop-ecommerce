@@ -1,5 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
+import { ArrowLeftIcon, PencilSquareIcon, PhotoIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
 import { getDocs, setDoc, writeBatch } from "firebase/firestore";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
@@ -11,6 +12,8 @@ import {
   getProductSellPriceCents,
   getVendorItemCostCents,
   getVendorItemDisplayName,
+  isProductAvailableForJobs,
+  isProductAvailableForPartApproval,
   isProductAvailableForPartPurchase,
   productCatalogCollectionRef,
   productCatalogDocRef,
@@ -42,6 +45,8 @@ const PRODUCT_FORM_DEFAULTS = {
   sellPrice: "",
   billable: true,
   active: true,
+  availableForJobs: true,
+  availableForPartApproval: true,
   availableForPartPurchase: true,
 };
 
@@ -106,6 +111,33 @@ const formatDateValue = (value) => {
   }).format(date);
 };
 
+const getProductImageUrl = (product = {}) => {
+  const directUrl =
+    product.imageUrl ||
+    product.imageURL ||
+    product.photoUrl ||
+    product.photoURL ||
+    product.thumbnailUrl ||
+    product.thumbnailURL ||
+    product.productImageUrl ||
+    product.pictureUrl ||
+    product.picture;
+
+  if (typeof directUrl === "string" && directUrl.trim()) return directUrl.trim();
+
+  const imageCollection = product.images || product.photos || product.productImages;
+  if (!Array.isArray(imageCollection)) return "";
+
+  const firstImage = imageCollection.find(Boolean);
+  if (typeof firstImage === "string") return firstImage;
+  return firstImage?.url || firstImage?.downloadURL || firstImage?.src || "";
+};
+
+const getProductInitials = (product = {}) => {
+  const words = getProductDisplayName(product).split(/\s+/).filter(Boolean);
+  return `${words[0]?.[0] || "P"}${words[1]?.[0] || ""}`.toUpperCase();
+};
+
 const normalizeProduct = (productId, data = {}) => ({
   ...data,
   id: data.id || productId,
@@ -120,6 +152,8 @@ const normalizeProduct = (productId, data = {}) => ({
   billingRate: Number(data.billingRate ?? data.sellPrice ?? data.defaultSellPrice ?? 0),
   billable: Boolean(data.billable),
   active: data.active !== false,
+  availableForJobs: isProductAvailableForJobs(data),
+  availableForPartApproval: isProductAvailableForPartApproval(data),
   availableForPartPurchase: isProductAvailableForPartPurchase(data),
   dateUpdatedMillis: valueToMillis(data.dateUpdated || data.updatedAt || data.createdAt),
 });
@@ -159,6 +193,8 @@ const productSearchText = (product = {}) =>
     product.UOM,
     product.sku,
     product.source,
+    product.availableForJobs ? "jobs work orders service" : "sales only",
+    product.availableForPartApproval ? "part approvals customer sale direct sale" : "job only",
   ]
     .filter(Boolean)
     .join(" ")
@@ -202,6 +238,8 @@ const productPatchFromForm = (form, productId, now = new Date()) => {
   const specificName = form.specificName.trim() || description || name;
   const sellPrice = centsFromDollarInput(form.sellPrice);
   const availableForPartPurchase = Boolean(form.availableForPartPurchase);
+  const availableForPartApproval = Boolean(form.availableForPartApproval);
+  const availableForJobs = Boolean(form.availableForJobs);
 
   return {
     id: productId,
@@ -218,6 +256,12 @@ const productPatchFromForm = (form, productId, now = new Date()) => {
     billingRate: sellPrice,
     billable: Boolean(form.billable),
     active: Boolean(form.active),
+    availableForJobs,
+    availableForJob: availableForJobs,
+    jobProductAvailable: availableForJobs,
+    availableForPartApproval,
+    partApprovalAvailable: availableForPartApproval,
+    availableForCustomerSale: availableForPartApproval,
     availableForPartPurchase,
     partPurchaseAvailable: availableForPartPurchase,
     dateUpdated: now,
@@ -225,11 +269,57 @@ const productPatchFromForm = (form, productId, now = new Date()) => {
   };
 };
 
-const DetailField = ({ label, value }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4">
-    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-    <p className="mt-1 break-words text-sm font-semibold text-slate-900">{value || "--"}</p>
-  </div>
+const pillToneClasses = {
+  slate: "border-slate-200 bg-slate-100 text-slate-600",
+  blue: "border-blue-200 bg-blue-50 text-blue-700",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  amber: "border-amber-200 bg-amber-50 text-amber-700",
+};
+
+const dotToneClasses = {
+  blue: "bg-blue-500",
+  emerald: "bg-emerald-500",
+  indigo: "bg-indigo-500",
+};
+
+const StatusPill = ({ children, tone = "slate" }) => (
+  <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold ${pillToneClasses[tone] || pillToneClasses.slate}`}>
+    {children}
+  </span>
+);
+
+const DetailRow = ({ label, value, children }) => {
+  const content = children ?? value;
+  const hasContent = content !== null && content !== undefined && content !== "";
+
+  return (
+    <div className="grid gap-1 border-b border-slate-100 py-4 last:border-b-0 sm:grid-cols-[170px_minmax(0,1fr)] sm:gap-6">
+      <dt className="text-xs font-bold uppercase text-slate-500">{label}</dt>
+      <dd className="min-w-0 break-words text-sm font-semibold leading-6 text-slate-900">{hasContent ? content : "--"}</dd>
+    </div>
+  );
+};
+
+const SummaryRow = ({ label, value }) => {
+  const hasValue = value !== null && value !== undefined && value !== "";
+
+  return (
+    <div className="flex justify-between gap-4 border-b border-slate-100 py-3 last:border-b-0">
+      <span className="text-sm font-semibold text-slate-500">{label}</span>
+      <span className="max-w-[190px] break-words text-right text-sm font-semibold text-slate-900">{hasValue ? value : "--"}</span>
+    </div>
+  );
+};
+
+const AvailabilityRow = ({ label, description, available, tone = "blue" }) => (
+  <li className="flex gap-3 py-3">
+    <span className={`mt-2 h-2.5 w-2.5 flex-none rounded-full ${available ? dotToneClasses[tone] || dotToneClasses.blue : "bg-slate-300"}`} />
+    <span className="min-w-0">
+      <span className="block text-sm font-bold text-slate-900">{label}</span>
+      <span className="mt-0.5 block text-sm leading-6 text-slate-500">{available ? description : "Not available for this workflow."}</span>
+    </span>
+  </li>
 );
 
 const ProductCatalog = () => {
@@ -432,6 +522,8 @@ const ProductCatalog = () => {
       sellPrice: dollarsFromCents(getProductSellPriceCents(product)),
       billable: Boolean(product.billable),
       active: product.active !== false,
+      availableForJobs: isProductAvailableForJobs(product),
+      availableForPartApproval: isProductAvailableForPartApproval(product),
       availableForPartPurchase: isProductAvailableForPartPurchase(product),
     });
   };
@@ -463,6 +555,12 @@ const ProductCatalog = () => {
           sellPrice: centsFromDollarInput(form.sellPrice),
           billable: form.billable,
           active: form.active,
+          availableForJobs: form.availableForJobs,
+          availableForJob: form.availableForJobs,
+          jobProductAvailable: form.availableForJobs,
+          availableForPartApproval: form.availableForPartApproval,
+          partApprovalAvailable: form.availableForPartApproval,
+          availableForCustomerSale: form.availableForPartApproval,
           availableForPartPurchase: form.availableForPartPurchase,
           partPurchaseAvailable: form.availableForPartPurchase,
         },
@@ -643,7 +741,7 @@ const ProductCatalog = () => {
                 </label>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                   <input
                     type="checkbox"
@@ -667,6 +765,32 @@ const ProductCatalog = () => {
                   <span>
                     <span className="block font-bold text-slate-900">Active</span>
                     <span className="mt-1 block text-xs text-slate-500">Shown in catalog pickers.</span>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={form.availableForJobs}
+                    onChange={(event) => updateForm({ availableForJobs: event.target.checked })}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <span className="block font-bold text-slate-900">Jobs</span>
+                    <span className="mt-1 block text-xs text-slate-500">Selectable for job materials and work orders.</span>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={form.availableForPartApproval}
+                    onChange={(event) => updateForm({ availableForPartApproval: event.target.checked })}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <span className="block font-bold text-slate-900">Part Approval Sales</span>
+                    <span className="mt-1 block text-xs text-slate-500">Sell directly to customers without a job.</span>
                   </span>
                 </label>
 
@@ -720,187 +844,250 @@ const ProductCatalog = () => {
 
   if (detailMode) {
     const linkedCount = vendorItemsLoading ? linkedVendorItemCount(detailProduct || {}) : vendorItems.length;
+    const productImageUrl = detailProduct ? getProductImageUrl(detailProduct) : "";
+    const productTitle = detailProduct ? getProductDisplayName(detailProduct) : "";
+    const productDescription = detailProduct?.description || detailProduct?.specificName || "";
+    const categoryTrail = [detailProduct?.category, detailProduct?.subCategory].filter(Boolean).join(" / ") || "Uncategorized";
+    const linkedVendorItemIds = detailProduct ? Array.from(productLinkedVendorItemIds(detailProduct)) : [];
+    const updatedDate = detailProduct ? formatDateValue(detailProduct.dateUpdated || detailProduct.updatedAt || detailProduct.createdAt) : "--";
 
     return (
       <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-        <div className="w-full space-y-6">
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0">
-                <Link to={productCatalogBasePath} className="text-sm font-bold text-blue-700 hover:text-blue-900">
-                  &larr; Back to Products
-                </Link>
-                <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Product Catalog</p>
-                <h1 className="mt-1 break-words text-3xl font-bold text-slate-950">
-                  {loading ? "Loading product..." : detailProduct ? getProductDisplayName(detailProduct) : "Product not found"}
-                </h1>
-                {detailProduct ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700">
-                      Updated {formatDateValue(detailProduct.dateUpdated || detailProduct.updatedAt || detailProduct.createdAt)}
-                    </span>
-                    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold ${detailProduct.billable ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-600"}`}>
-                      {detailProduct.billable ? "Billable" : "Not Billable"}
-                    </span>
-                    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold ${detailProduct.active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-100 text-slate-600"}`}>
-                      {detailProduct.active ? "Active" : "Inactive"}
-                    </span>
-                  </div>
-                ) : null}
-              </div>
-
-              {detailProduct ? (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openEditModal(detailProduct)}
-                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
-                  >
-                    Edit
-                  </button>
-                  <Link
-                    to={vendorItemsPath}
-                    className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                  >
-                    Vendor Items
-                  </Link>
-                </div>
-              ) : null}
-            </div>
-          </section>
+        <div className="mx-auto w-full max-w-7xl space-y-6">
 
           {loading ? (
             <section className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
               Loading product details...
             </section>
           ) : detailProduct ? (
-            <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,360px)]">
-              <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
-                  <h2 className="text-lg font-bold text-slate-950">Product Details</h2>
-                  <p className="mt-1 text-sm text-slate-500">Pricing, classification, and catalog identifiers.</p>
+            <>
+              <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-5 py-3 sm:px-6">
+                  <Link to={productCatalogBasePath} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700 hover:text-blue-900">
+                    <ArrowLeftIcon className="h-4 w-4" />
+                    Back to Products
+                  </Link>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
-                  <DetailField label="Name" value={getProductDisplayName(detailProduct)} />
-                  <DetailField label="Specific Name" value={detailProduct.specificName} />
-                  <DetailField label="Product ID" value={detailProduct.id} />
-                  <DetailField label="SKU" value={detailProduct.sku} />
-                  <DetailField label="Category" value={detailProduct.category} />
-                  <DetailField label="Subcategory" value={detailProduct.subCategory} />
-                  <DetailField label="UOM" value={detailProduct.UOM} />
-                  <DetailField label="Sell Price" value={money(getProductSellPriceCents(detailProduct))} />
-                  <DetailField label="Billing" value={detailProduct.billable ? "Billable" : "Not Billable"} />
-                  <DetailField label="Status" value={detailProduct.active ? "Active" : "Inactive"} />
-                  <DetailField label="Part Purchase" value={isProductAvailableForPartPurchase(detailProduct) ? "Available" : "Unavailable"} />
-                  <DetailField label="Source" value={detailProduct.source} />
-                </div>
-
-                <div className="border-t border-slate-200 p-5">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Description</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{detailProduct.description || "--"}</p>
-                </div>
-
-                <div className="border-t border-slate-200">
-                  <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <h2 className="text-lg font-bold text-slate-950">Connected Vendor Items</h2>
-                      <p className="mt-1 text-sm text-slate-500">Supplier-specific items linked to this database product.</p>
+                <div className="grid lg:grid-cols-[minmax(280px,38%)_minmax(0,1fr)]">
+                  <div className="border-b border-slate-200 bg-slate-100 p-5 sm:p-6 lg:border-b-0 lg:border-r">
+                    <div className="flex aspect-[4/3] min-h-[250px] items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-white">
+                      {productImageUrl ? (
+                        <img
+                          src={productImageUrl}
+                          alt={productTitle}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-32 w-32 flex-col items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-400">
+                          <PhotoIcon className="h-9 w-9" />
+                          <span className="mt-2 text-2xl font-bold text-slate-600">{getProductInitials(detailProduct)}</span>
+                        </div>
+                      )}
                     </div>
-                    <span className="rounded-md bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                      {linkedCount} linked
-                    </span>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <StatusPill tone="blue">{detailProduct.category || "Uncategorized"}</StatusPill>
+                      {detailProduct.subCategory ? <StatusPill>{detailProduct.subCategory}</StatusPill> : null}
+                      <StatusPill>{detailProduct.UOM || "Unit"}</StatusPill>
+                    </div>
                   </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="min-w-[880px] w-full">
-                      <thead className="bg-white">
-                        <tr className="text-left text-xs font-bold uppercase tracking-wide text-slate-500">
-                          <th className="border-b border-slate-200 px-5 py-3">Vendor Item</th>
-                          <th className="border-b border-slate-200 px-5 py-3">Vendor</th>
-                          <th className="border-b border-slate-200 px-5 py-3">Category</th>
-                          <th className="border-b border-slate-200 px-5 py-3">Cost</th>
-                          <th className="border-b border-slate-200 px-5 py-3">Sell Price</th>
-                          <th className="border-b border-slate-200 px-5 py-3">SKU</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200 bg-white">
-                        {vendorItemsLoading ? (
-                          <tr>
-                            <td colSpan={6} className="px-5 py-8 text-sm text-slate-500">Loading linked vendor items...</td>
-                          </tr>
-                        ) : vendorItems.length ? (
-                          vendorItems.map((vendorItem) => (
-                            <tr key={vendorItem.id} className="align-top hover:bg-slate-50">
-                              <td className="px-5 py-3">
-                                <Link
-                                  to={`${vendorItemsPath}/detail/${vendorItem.id}`}
-                                  className="font-semibold text-blue-700 hover:text-blue-900"
-                                >
-                                  {getVendorItemDisplayName(vendorItem)}
-                                </Link>
-                                <p className="mt-1 text-xs leading-5 text-slate-500">{vendorItem.description || "--"}</p>
-                              </td>
-                              <td className="px-5 py-3 text-sm text-slate-700">{vendorItem.storeName || "--"}</td>
-                              <td className="px-5 py-3 text-sm text-slate-700">
-                                {vendorItem.category || "--"}
-                                {vendorItem.subCategory ? <span className="block text-xs text-slate-500">{vendorItem.subCategory}</span> : null}
-                              </td>
-                              <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(vendorItem.costCents)}</td>
-                              <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(vendorItem.sellPriceCents)}</td>
-                              <td className="px-5 py-3 text-sm text-slate-700">{vendorItem.sku || "--"}</td>
-                            </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
-                              No vendor items are connected to this product yet.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Catalog Summary</h2>
-                <div className="mt-4 space-y-3 text-sm text-slate-700">
-                  <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                    <span className="font-semibold text-slate-500">Linked Vendor Items</span>
-                    <span className="text-right font-semibold text-slate-900">{linkedCount}</span>
-                  </div>
-                  <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                    <span className="font-semibold text-slate-500">Preferred Vendor Item</span>
-                    <span className="max-w-[180px] break-words text-right font-semibold text-slate-900">{detailProduct.preferredVendorItemId || "--"}</span>
-                  </div>
-                  <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                    <span className="font-semibold text-slate-500">Updated</span>
-                    <span className="text-right font-semibold text-slate-900">{formatDateValue(detailProduct.dateUpdated || detailProduct.updatedAt || detailProduct.createdAt)}</span>
-                  </div>
-                  <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                    <span className="font-semibold text-slate-500">Created</span>
-                    <span className="text-right font-semibold text-slate-900">{formatDateValue(detailProduct.createdAt)}</span>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Vendor Item IDs</p>
-                    {productLinkedVendorItemIds(detailProduct).size ? (
-                      <div className="mt-2 space-y-1">
-                        {Array.from(productLinkedVendorItemIds(detailProduct)).map((linkedId) => (
-                          <p key={linkedId} className="break-words text-xs font-semibold text-slate-900">{linkedId}</p>
-                        ))}
+                  <div className="p-5 sm:p-6 lg:p-8">
+                    <p className="text-xs font-bold uppercase text-blue-700">Product Catalog Item</p>
+                    <div className="mt-2 flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <h1 className="break-words text-3xl font-bold leading-tight text-slate-950 sm:text-4xl">{productTitle}</h1>
+                        <p className="mt-3 text-sm font-semibold text-slate-500">{categoryTrail}</p>
+                        <p className="mt-4 max-w-3xl whitespace-pre-wrap text-base leading-7 text-slate-600">
+                          {productDescription || "No description has been added yet."}
+                        </p>
                       </div>
-                    ) : (
-                      <p className="mt-2 text-sm font-semibold text-slate-900">--</p>
-                    )}
+                      <div className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 xl:min-w-[180px] xl:text-right">
+                        <p className="text-xs font-bold uppercase text-slate-500">Sell Price</p>
+                        <p className="mt-1 text-3xl font-bold text-slate-950">{money(getProductSellPriceCents(detailProduct))}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{detailProduct.UOM ? `per ${detailProduct.UOM}` : "Unit price"}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 flex flex-wrap gap-2">
+                      <StatusPill>Updated {updatedDate}</StatusPill>
+                      <StatusPill tone={detailProduct.active ? "blue" : "slate"}>{detailProduct.active ? "Active" : "Inactive"}</StatusPill>
+                      <StatusPill tone={detailProduct.billable ? "emerald" : "slate"}>{detailProduct.billable ? "Billable" : "Not Billable"}</StatusPill>
+                      <StatusPill tone={isProductAvailableForJobs(detailProduct) ? "indigo" : "slate"}>
+                        {isProductAvailableForJobs(detailProduct) ? "Jobs" : "No Jobs"}
+                      </StatusPill>
+                      <StatusPill tone={isProductAvailableForPartApproval(detailProduct) ? "emerald" : "slate"}>
+                        {isProductAvailableForPartApproval(detailProduct) ? "Part Approval Sales" : "Job Only"}
+                      </StatusPill>
+                      <StatusPill tone={isProductAvailableForPartPurchase(detailProduct) ? "blue" : "slate"}>
+                        {isProductAvailableForPartPurchase(detailProduct) ? "Part Purchase" : "No Part Purchase"}
+                      </StatusPill>
+                    </div>
+
+                    <div className="mt-6 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(detailProduct)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
+                      >
+                        <PencilSquareIcon className="h-4 w-4" />
+                        Edit
+                      </button>
+                      <Link
+                        to={vendorItemsPath}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                      >
+                        <ShoppingBagIcon className="h-4 w-4" />
+                        Vendor Items
+                      </Link>
+                    </div>
                   </div>
                 </div>
-              </aside>
-            </section>
+              </section>
+
+              <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+                <article className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
+                    <h2 className="text-lg font-bold text-slate-950">Product Sheet</h2>
+                    <p className="mt-1 text-sm text-slate-500">Readable catalog facts for purchasing, billing, and field use.</p>
+                  </div>
+
+                  <dl className="px-5 sm:px-6">
+                    <DetailRow label="Display Name" value={productTitle} />
+                    <DetailRow label="Specific Name" value={detailProduct.specificName} />
+                    <DetailRow label="Description">
+                      <p className="whitespace-pre-wrap font-normal text-slate-700">{detailProduct.description || "--"}</p>
+                    </DetailRow>
+                    <DetailRow label="Product ID" value={detailProduct.id} />
+                    <DetailRow label="SKU" value={detailProduct.sku} />
+                    <DetailRow label="Category" value={detailProduct.category} />
+                    <DetailRow label="Subcategory" value={detailProduct.subCategory} />
+                    <DetailRow label="Unit of Measure" value={detailProduct.UOM} />
+                    <DetailRow label="Source" value={detailProduct.source} />
+                  </dl>
+                </article>
+
+                <aside className="space-y-6">
+                  <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <h2 className="text-lg font-bold text-slate-950">Availability</h2>
+                    <p className="mt-1 text-sm text-slate-500">Where this product can be selected.</p>
+                    <ul className="mt-3 divide-y divide-slate-100">
+                      <AvailabilityRow
+                        label="Jobs"
+                        description="Selectable for job materials and work orders."
+                        available={isProductAvailableForJobs(detailProduct)}
+                        tone="indigo"
+                      />
+                      <AvailabilityRow
+                        label="Part Approval Sales"
+                        description="Can be sold directly through customer approvals."
+                        available={isProductAvailableForPartApproval(detailProduct)}
+                        tone="emerald"
+                      />
+                      <AvailabilityRow
+                        label="Part Purchase"
+                        description="Available for purchasing workflows."
+                        available={isProductAvailableForPartPurchase(detailProduct)}
+                        tone="blue"
+                      />
+                    </ul>
+                  </section>
+
+                  <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <h2 className="text-lg font-bold text-slate-950">Catalog Summary</h2>
+                    <div className="mt-3">
+                      <SummaryRow label="Linked Vendor Items" value={linkedCount} />
+                      <SummaryRow label="Preferred Vendor Item" value={detailProduct.preferredVendorItemId} />
+                      <SummaryRow label="Updated" value={updatedDate} />
+                      <SummaryRow label="Created" value={formatDateValue(detailProduct.createdAt)} />
+                    </div>
+
+                    <div className="mt-4 border-t border-slate-100 pt-4">
+                      <p className="text-xs font-bold uppercase text-slate-500">Vendor Item IDs</p>
+                      {linkedVendorItemIds.length ? (
+                        <div className="mt-2 space-y-1">
+                          {linkedVendorItemIds.map((linkedId) => (
+                            <p key={linkedId} className="break-words text-xs font-semibold leading-5 text-slate-900">{linkedId}</p>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm font-semibold text-slate-900">--</p>
+                      )}
+                    </div>
+                  </section>
+                </aside>
+              </section>
+
+              <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-950">Connected Vendor Items</h2>
+                    <p className="mt-1 text-sm text-slate-500">Supplier-specific items linked to this database product.</p>
+                  </div>
+                  <span className="rounded-md bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+                    {linkedCount} linked
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-[880px] w-full">
+                    <thead className="bg-white">
+                      <tr className="text-left text-xs font-bold uppercase text-slate-500">
+                        <th className="border-b border-slate-200 px-5 py-3">Vendor Item</th>
+                        <th className="border-b border-slate-200 px-5 py-3">Vendor</th>
+                        <th className="border-b border-slate-200 px-5 py-3">Category</th>
+                        <th className="border-b border-slate-200 px-5 py-3">Cost</th>
+                        <th className="border-b border-slate-200 px-5 py-3">Sell Price</th>
+                        <th className="border-b border-slate-200 px-5 py-3">SKU</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 bg-white">
+                      {vendorItemsLoading ? (
+                        <tr>
+                          <td colSpan={6} className="px-5 py-8 text-sm text-slate-500">Loading linked vendor items...</td>
+                        </tr>
+                      ) : vendorItems.length ? (
+                        vendorItems.map((vendorItem) => (
+                          <tr key={vendorItem.id} className="align-top hover:bg-slate-50">
+                            <td className="px-5 py-3">
+                              <Link
+                                to={`${vendorItemsPath}/detail/${vendorItem.id}`}
+                                className="font-semibold text-blue-700 hover:text-blue-900"
+                              >
+                                {getVendorItemDisplayName(vendorItem)}
+                              </Link>
+                              <p className="mt-1 text-xs leading-5 text-slate-500">{vendorItem.description || "--"}</p>
+                            </td>
+                            <td className="px-5 py-3 text-sm text-slate-700">{vendorItem.storeName || "--"}</td>
+                            <td className="px-5 py-3 text-sm text-slate-700">
+                              {vendorItem.category || "--"}
+                              {vendorItem.subCategory ? <span className="block text-xs text-slate-500">{vendorItem.subCategory}</span> : null}
+                            </td>
+                            <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(vendorItem.costCents)}</td>
+                            <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(vendorItem.sellPriceCents)}</td>
+                            <td className="px-5 py-3 text-sm text-slate-700">{vendorItem.sku || "--"}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
+                            No vendor items are connected to this product yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
           ) : (
             <section className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
-              This product could not be found in the Product Catalog.
+              <Link to={productCatalogBasePath} className="mb-4 inline-flex items-center gap-2 text-sm font-bold text-blue-700 hover:text-blue-900">
+                <ArrowLeftIcon className="h-4 w-4" />
+                Back to Products
+              </Link>
+              <p>This product could not be found in the Product Catalog.</p>
             </section>
           )}
         </div>
@@ -1081,7 +1268,7 @@ const ProductCatalog = () => {
                   <th className="border-b border-slate-200 px-5 py-3">Category</th>
                   <th className="border-b border-slate-200 px-5 py-3">Subcategory</th>
                   <th className="border-b border-slate-200 px-5 py-3">UOM</th>
-                  <th className="border-b border-slate-200 px-5 py-3">Billable</th>
+                  <th className="border-b border-slate-200 px-5 py-3">Availability</th>
                   <th className="border-b border-slate-200 px-5 py-3">Sell Price</th>
                   <th className="border-b border-slate-200 px-5 py-3">Vendor Items</th>
                   <th className="border-b border-slate-200 px-5 py-3">Actions</th>
@@ -1109,6 +1296,12 @@ const ProductCatalog = () => {
                         <div className="flex flex-wrap gap-1">
                           <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.billable ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
                             {product.billable ? "Billable" : "Not Billable"}
+                          </span>
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.availableForJobs ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"}`}>
+                            {product.availableForJobs ? "Jobs" : "No Jobs"}
+                          </span>
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.availableForPartApproval ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                            {product.availableForPartApproval ? "Part Approvals" : "Job Only"}
                           </span>
                           <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.availableForPartPurchase ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
                             {product.availableForPartPurchase ? "Part Purchase" : "Unavailable"}

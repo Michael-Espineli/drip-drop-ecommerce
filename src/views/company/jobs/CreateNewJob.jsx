@@ -29,6 +29,17 @@ import {
     taskTypeRequiresInstallItem,
 } from "../../../utils/jobTaskTypes";
 import {
+    equipmentAssignmentPatch,
+    equipmentSummaryForIds,
+    getJobScopeBodyOfWaterIds,
+    getJobScopeEquipmentIds,
+    getMissingEquipmentAssignments,
+    jobScopeItemRequiresBodyOfWater as itemRequiresBodyOfWaterContext,
+    jobScopeItemRequiresEquipment as itemRequiresEquipmentContext,
+    recordOptionById,
+    uniqueStringList,
+} from "../../../utils/jobEquipmentScope";
+import {
     SUGGESTED_WORK_STATUS,
 } from "../../../utils/models/SuggestedWork";
 import {
@@ -115,24 +126,6 @@ const buildEquipmentDatabaseItemOption = (data = {}, docId = "") => {
         ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(data)),
     };
 };
-
-const templateContextValues = (item = {}) => [
-    item.name,
-    item.title,
-    item.type,
-    item.jobType,
-    item.taskType,
-    item.taskTypeName,
-    item.catalogItemName,
-].filter(Boolean);
-
-const itemRequiresEquipmentContext = (item = {}) => (
-    templateContextValues(item).some((value) => taskTypeRequiresEquipment(value))
-);
-
-const itemRequiresBodyOfWaterContext = (item = {}) => (
-    templateContextValues(item).some((value) => taskTypeRequiresBodyOfWater(value))
-);
 
 const getTaskBillingLaborPriceCents = (task = {}) => {
     const explicitBillingValue =
@@ -358,6 +351,33 @@ const CreateNewJob = () => {
     const equipmentById = useMemo(() => (
         new Map(equipmentList.map((item) => [item.id, item]))
     ), [equipmentList]);
+    const equipmentOptionForId = (equipmentId) => recordOptionById(equipmentList, equipmentId);
+    const bodyOfWaterOptionForId = (bodyOfWaterId) => recordOptionById(bodyOfWaterList, bodyOfWaterId);
+    const buildEquipmentPatch = (equipmentOption) => equipmentAssignmentPatch(
+        equipmentOption,
+        bodyOfWaterOptionForId(equipmentOption?.bodyOfWaterId) || selectedBodyOfWater
+    );
+    const withEquipmentAssignment = (item, equipmentOption) => ({
+        ...item,
+        ...buildEquipmentPatch(equipmentOption),
+    });
+    const updateTaskEquipment = (taskId, equipmentOption) => {
+        setTaskList((previousTasks) => previousTasks.map((task) => (
+            task.id === taskId ? withEquipmentAssignment(task, equipmentOption) : task
+        )));
+    };
+    const updatePlannedStopEquipment = (plannedStopId, equipmentOption) => {
+        setPlannedServiceStops((previousStops) => previousStops.map((stop) => (
+            stop.id === plannedStopId ? withEquipmentAssignment(stop, equipmentOption) : stop
+        )));
+    };
+    const updateLaborLineEquipment = (laborLineId, equipmentOption) => {
+        setLaborLineItems((previousLines) => previousLines.map((line) => (
+            line.id === laborLineId || line.laborLineId === laborLineId
+                ? withEquipmentAssignment(line, equipmentOption)
+                : line
+        )));
+    };
 
     const rateCents = useMemo(() => dollarsToCents(rate), [rate]);
     const laborCostCents = useMemo(() => dollarsToCents(laborCost), [laborCost]);
@@ -457,14 +477,70 @@ const CreateNewJob = () => {
     }, [laborLineItems, selectedTemplate, taskList]);
 
     const resolvedBodyOfWaterId = selectedBodyOfWater?.id || selectedEquipment?.bodyOfWaterId || "";
+    const resolvedBodyOfWaterName = selectedBodyOfWater?.label || selectedBodyOfWater?.name || selectedEquipment?.bodyOfWaterName || "";
+    const selectedEquipmentId = selectedEquipment?.id || "";
+    const selectedEquipmentName = selectedEquipment?.label || selectedEquipment?.name || "";
+
+    const missingEquipmentAssignments = useMemo(() => (
+        getMissingEquipmentAssignments({
+            tasks: taskList,
+            laborLineItems,
+            plannedServiceStops,
+            fallbackEquipmentId: "",
+            validEquipmentIds: equipmentList.map((equipment) => equipment.id),
+            requireAllTasks: selectedTemplateRequiresEquipment,
+            requireAllLaborLineItems: selectedTemplateRequiresEquipment,
+            requireAllPlannedServiceStops: selectedTemplateRequiresEquipment,
+        })
+    ), [
+        laborLineItems,
+        equipmentList,
+        plannedServiceStops,
+        selectedTemplateRequiresEquipment,
+        taskList,
+    ]);
+
+    const assignedEquipmentIds = useMemo(() => (
+        getJobScopeEquipmentIds({
+            primaryEquipmentId: selectedEquipmentId,
+            tasks: taskList,
+            plannedServiceStops,
+            laborLineItems,
+            shoppingItems: shoppingList,
+        })
+    ), [laborLineItems, plannedServiceStops, selectedEquipmentId, shoppingList, taskList]);
+    const assignedEquipmentSummary = useMemo(() => (
+        equipmentSummaryForIds({
+            equipmentIds: assignedEquipmentIds,
+            equipmentById,
+            primaryEquipmentId: selectedEquipmentId || assignedEquipmentIds[0] || "",
+            primaryEquipmentName: selectedEquipmentName,
+        })
+    ), [assignedEquipmentIds, equipmentById, selectedEquipmentId, selectedEquipmentName]);
+    const assignedBodyOfWaterIds = useMemo(() => (
+        getJobScopeBodyOfWaterIds({
+            primaryBodyOfWaterId: resolvedBodyOfWaterId,
+            tasks: taskList,
+            plannedServiceStops,
+            laborLineItems,
+            shoppingItems: shoppingList,
+        })
+    ), [laborLineItems, plannedServiceStops, resolvedBodyOfWaterId, shoppingList, taskList]);
+    const resolvedJobBodyOfWaterId = resolvedBodyOfWaterId || assignedBodyOfWaterIds[0] || "";
+    const resolvedJobBodyOfWaterName =
+        resolvedBodyOfWaterName ||
+        bodyOfWaterOptionForId(resolvedJobBodyOfWaterId)?.label ||
+        bodyOfWaterOptionForId(resolvedJobBodyOfWaterId)?.name ||
+        "";
 
     const canCreateJob =
         !!recentlySelectedCompany &&
         !!selectedAdmin?.id &&
         !!selectedCustomer?.id &&
         !!selectedServiceLocation?.id &&
-        (!selectedTemplateRequiresEquipment || !!selectedEquipment?.id) &&
-        (!selectedTemplateRequiresBodyOfWater || !!resolvedBodyOfWaterId);
+        missingEquipmentAssignments.length === 0 &&
+        (!selectedTemplateRequiresEquipment || assignedEquipmentIds.length > 0) &&
+        (!selectedTemplateRequiresBodyOfWater || !!resolvedJobBodyOfWaterId);
 
     const missingJobInfo = useMemo(() => {
         const missing = [];
@@ -485,23 +561,66 @@ const CreateNewJob = () => {
             missing.push("Service Location");
         }
 
-        if (selectedTemplateRequiresEquipment && !selectedEquipment?.id) {
+        if (missingEquipmentAssignments.length > 0) {
+            missing.push("Equipment Assignments");
+        }
+
+        if (selectedTemplateRequiresEquipment && assignedEquipmentIds.length === 0) {
             missing.push("Equipment");
         }
 
-        if (selectedTemplateRequiresBodyOfWater && !resolvedBodyOfWaterId) {
+        if (selectedTemplateRequiresBodyOfWater && !resolvedJobBodyOfWaterId) {
             missing.push("Body Of Water");
         }
 
         return missing;
     }, [
         recentlySelectedCompany,
-        resolvedBodyOfWaterId,
+        assignedEquipmentIds.length,
+        missingEquipmentAssignments.length,
+        resolvedJobBodyOfWaterId,
         selectedAdmin,
         selectedCustomer,
-        selectedEquipment,
         selectedServiceLocation,
+        selectedTemplateRequiresEquipment,
         selectedTemplateRequiresBodyOfWater,
+    ]);
+
+    useEffect(() => {
+        if (!selectedEquipmentId) return;
+
+        const patch = equipmentAssignmentPatch(
+            selectedEquipment,
+            selectedEquipment?.bodyOfWaterId ? bodyOfWaterById.get(selectedEquipment.bodyOfWaterId) : selectedBodyOfWater
+        );
+        const applyDefaultEquipment = (items, shouldAssign) => {
+            let changed = false;
+            const nextItems = items.map((item) => {
+                if (!shouldAssign(item) || item.equipmentId) return item;
+                changed = true;
+                return { ...item, ...patch };
+            });
+
+            return changed ? nextItems : items;
+        };
+
+        setTaskList((previousTasks) => applyDefaultEquipment(
+            previousTasks,
+            (task) => selectedTemplateRequiresEquipment || itemRequiresEquipmentContext(task)
+        ));
+        setLaborLineItems((previousLines) => applyDefaultEquipment(
+            previousLines,
+            (line) => selectedTemplateRequiresEquipment || itemRequiresEquipmentContext(line)
+        ));
+        setPlannedServiceStops((previousStops) => applyDefaultEquipment(
+            previousStops,
+            (stop) => selectedTemplateRequiresEquipment || itemRequiresEquipmentContext(stop)
+        ));
+    }, [
+        bodyOfWaterById,
+        selectedBodyOfWater,
+        selectedEquipment,
+        selectedEquipmentId,
         selectedTemplateRequiresEquipment,
     ]);
 
@@ -767,6 +886,9 @@ const CreateNewJob = () => {
                     internalLaborCostCents: Number(line.internalCostCents || 0),
                     taskIds: line.taskIds || [],
                     plannedServiceStopIds: line.plannedServiceStopIds || [],
+                    equipmentId: line.equipmentId || "",
+                    serviceLocationId: line.serviceLocationId || "",
+                    bodyOfWaterId: line.bodyOfWaterId || "",
                     taxable: Boolean(line.taxable),
                     stripeConnectedAccountId: line.stripeConnectedAccountId || "",
                     stripeProductId: line.stripeProductId || "",
@@ -790,6 +912,9 @@ const CreateNewJob = () => {
                         unitAmountCents: amount,
                         totalAmountCents: amount,
                         amount,
+                        equipmentId: stop.equipmentId || "",
+                        serviceLocationId: stop.serviceLocationId || "",
+                        bodyOfWaterId: stop.bodyOfWaterId || "",
                         taxable: false,
                         displayAmount: moneyFromCents(amount),
                     };
@@ -812,6 +937,9 @@ const CreateNewJob = () => {
                         amount,
                         billingLaborPriceCents: amount,
                         internalLaborCostCents,
+                        equipmentId: task.equipmentId || "",
+                        serviceLocationId: task.serviceLocationId || "",
+                        bodyOfWaterId: task.bodyOfWaterId || "",
                         taxable: false,
                         displayAmount: moneyFromCents(amount),
                     };
@@ -834,6 +962,9 @@ const CreateNewJob = () => {
                 unitAmountCents,
                 totalAmountCents: amount,
                 amount,
+                equipmentId: item.equipmentId || "",
+                serviceLocationId: item.serviceLocationId || "",
+                bodyOfWaterId: item.bodyOfWaterId || "",
                 taxable: Boolean(item.taxable),
                 displayAmount: moneyFromCents(amount),
             };
@@ -852,6 +983,10 @@ const CreateNewJob = () => {
         normalizedPlannedStops,
         normalizedShoppingItems,
         normalizedLaborLineItems = [],
+        equipmentSummary = assignedEquipmentSummary,
+        bodyOfWaterId = resolvedJobBodyOfWaterId,
+        bodyOfWaterName = resolvedJobBodyOfWaterName,
+        bodyOfWaterIds = bodyOfWaterId ? [bodyOfWaterId] : [],
         nowTimestamp,
         nowMillis,
     }) => {
@@ -894,10 +1029,14 @@ const CreateNewJob = () => {
             customerName,
             serviceLocationId: selectedServiceLocation.id,
             serviceLocationName: selectedServiceLocation.label || "",
-            bodyOfWaterId: resolvedBodyOfWaterId,
-            bodyOfWaterName: selectedBodyOfWater?.label || selectedBodyOfWater?.name || selectedEquipment?.bodyOfWaterName || "",
-            equipmentId: selectedEquipment?.id || "",
-            equipmentName: selectedEquipment?.label || "",
+            bodyOfWaterId,
+            bodyOfWaterName,
+            bodyOfWaterIds,
+            equipmentId: equipmentSummary.equipmentId || "",
+            equipmentName: equipmentSummary.equipmentName || "",
+            equipmentIds: equipmentSummary.equipmentIds || [],
+            companyEquipmentIds: equipmentSummary.companyEquipmentIds || [],
+            equipmentNames: equipmentSummary.equipmentNames || [],
             sourceType: selectedTemplate?.id ? "template" : "initialJobPlan",
             sourceTemplateId: selectedTemplate?.id || "",
             sourceTemplateName: selectedTemplate?.name || "",
@@ -939,6 +1078,9 @@ const CreateNewJob = () => {
                     estimatedMinutes: Number(task.estimatedTime || 0),
                     plannedLaborCostCents: Number(task.contractedRate || 0),
                     billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
+                    equipmentId: task.equipmentId || "",
+                    serviceLocationId: task.serviceLocationId || "",
+                    bodyOfWaterId: task.bodyOfWaterId || "",
                 })),
                 plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
                     id: stop.id || "",
@@ -949,6 +1091,9 @@ const CreateNewJob = () => {
                     estimatedMinutes: Number(stop.estimatedMinutes || 0),
                     plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
                     taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
+                    equipmentId: stop.equipmentId || "",
+                    serviceLocationId: stop.serviceLocationId || "",
+                    bodyOfWaterId: stop.bodyOfWaterId || "",
                 })),
                 laborLineSummaries: normalizedLaborLineItems.map((line, index) => ({
                     id: line.id || "",
@@ -962,6 +1107,9 @@ const CreateNewJob = () => {
                     catalogItemId: laborLineCatalogItemId(line),
                     taskIds: Array.isArray(line.taskIds) ? line.taskIds : [],
                     plannedServiceStopIds: [],
+                    equipmentId: line.equipmentId || "",
+                    serviceLocationId: line.serviceLocationId || "",
+                    bodyOfWaterId: line.bodyOfWaterId || "",
                 })),
                 materialSummaries: normalizedShoppingItems.map((item, index) => ({
                     id: item.id || "",
@@ -971,6 +1119,9 @@ const CreateNewJob = () => {
                     quantity: item.quantity || "1",
                     plannedTotalCostCents: plannedMaterialTotalCostCents(item),
                     plannedTotalPriceCents: plannedMaterialTotalPriceCents(item),
+                    equipmentId: item.equipmentId || "",
+                    serviceLocationId: item.serviceLocationId || "",
+                    bodyOfWaterId: item.bodyOfWaterId || "",
                 })),
                 counts: {
                     tasks: normalizedTasks.length,
@@ -1915,29 +2066,42 @@ const CreateNewJob = () => {
             const normalizedStarterPlanTier = normalizeJobPlanTier(starterPlanTier);
             const starterPlanTierLabel = getJobPlanRecommendationLabel(normalizedStarterPlanTier);
             const starterPlanId = `comp_job_plan_${uuidv4()}`;
-            const normalizedPlannedStops = plannedServiceStops.map((plannedStop) => ({
-                ...plannedStop,
-                companyId: recentlySelectedCompany,
-                jobId,
-                createdAt: plannedStop.createdAt || nowTimestamp,
-                createdByUserId: plannedStop.createdByUserId || createdByUserId || "",
-                sourcePlanId: starterPlanId,
-                sourceSolutionId: starterPlanId,
-                serviceLocationId: plannedStop.serviceLocationId || selectedServiceLocation.id || "",
-                bodyOfWaterId: plannedStop.bodyOfWaterId || resolvedBodyOfWaterId,
-                equipmentId: plannedStop.equipmentId || selectedEquipment?.id || "",
-            }));
             const normalizedTasks = taskList.map((task) =>
                 normalizeJobTask(task, {
                     companyId: recentlySelectedCompany,
                     jobId,
                     serviceLocationId: task.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: task.bodyOfWaterId || resolvedBodyOfWaterId,
-                    equipmentId: task.equipmentId || selectedEquipment?.id || "",
+                    bodyOfWaterId: task.bodyOfWaterId || resolvedJobBodyOfWaterId,
+                    equipmentId: task.equipmentId || selectedEquipmentId,
                     sourcePlanId: starterPlanId,
                     sourceSolutionId: starterPlanId,
                 })
             );
+            const normalizedTaskById = new Map(normalizedTasks.map((task) => [task.id, task]));
+            const getLinkedTaskScope = (taskIds = []) => {
+                const linkedTasks = taskIds.map((taskId) => normalizedTaskById.get(taskId)).filter(Boolean);
+                const equipmentIds = uniqueStringList(linkedTasks.map((task) => task.equipmentId));
+                const bodyOfWaterIds = uniqueStringList(linkedTasks.map((task) => task.bodyOfWaterId));
+                return {
+                    equipmentId: equipmentIds[0] || "",
+                    bodyOfWaterId: bodyOfWaterIds[0] || "",
+                };
+            };
+            const normalizedPlannedStops = plannedServiceStops.map((plannedStop) => {
+                const linkedScope = getLinkedTaskScope(Array.isArray(plannedStop.taskIds) ? plannedStop.taskIds : []);
+                return {
+                    ...plannedStop,
+                    companyId: recentlySelectedCompany,
+                    jobId,
+                    createdAt: plannedStop.createdAt || nowTimestamp,
+                    createdByUserId: plannedStop.createdByUserId || createdByUserId || "",
+                    sourcePlanId: starterPlanId,
+                    sourceSolutionId: starterPlanId,
+                    serviceLocationId: plannedStop.serviceLocationId || selectedServiceLocation.id || "",
+                    bodyOfWaterId: plannedStop.bodyOfWaterId || linkedScope.bodyOfWaterId || resolvedJobBodyOfWaterId,
+                    equipmentId: plannedStop.equipmentId || linkedScope.equipmentId || selectedEquipmentId,
+                };
+            });
             const normalizedShoppingItems = shoppingList.map((item) =>
                 normalizeShoppingItemForJob(item, {
                     companyId: recentlySelectedCompany,
@@ -1951,11 +2115,17 @@ const CreateNewJob = () => {
                     sourcePlanId: starterPlanId,
                     solutionId: starterPlanId,
                     sourceSolutionId: starterPlanId,
+                    equipmentId: item.equipmentId || selectedEquipmentId,
+                    serviceLocationId: item.serviceLocationId || selectedServiceLocation.id || "",
+                    bodyOfWaterId: item.bodyOfWaterId || resolvedJobBodyOfWaterId,
                 })
             );
             const normalizedLaborLineItems = laborLineItems.map((line, index) => {
                 const catalogItemId = laborLineCatalogItemId(line);
                 const laborLineId = line.id || line.laborLineId || `comp_job_labor_line_${uuidv4()}`;
+                const taskIds = getLaborLineTaskIds(line);
+                const plannedServiceStopIds = getLaborLinePlannedStopIds(line);
+                const linkedScope = getLinkedTaskScope(taskIds);
                 return {
                     ...line,
                     id: laborLineId,
@@ -1970,13 +2140,13 @@ const CreateNewJob = () => {
                     totalPriceCents: laborLineTotalPriceCents(line),
                     internalCostCents: laborLineInternalCostCents(line),
                     unitCostCents: laborLineInternalCostCents(line),
-                    taskIds: getLaborLineTaskIds(line),
-                    laborLineTaskIds: getLaborLineTaskIds(line),
-                    plannedServiceStopIds: getLaborLinePlannedStopIds(line),
-                    laborLinePlannedServiceStopIds: getLaborLinePlannedStopIds(line),
-                    equipmentId: line.equipmentId || selectedEquipment?.id || "",
+                    taskIds,
+                    laborLineTaskIds: taskIds,
+                    plannedServiceStopIds,
+                    laborLinePlannedServiceStopIds: plannedServiceStopIds,
+                    equipmentId: line.equipmentId || linkedScope.equipmentId || selectedEquipmentId,
                     serviceLocationId: line.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: line.bodyOfWaterId || resolvedBodyOfWaterId,
+                    bodyOfWaterId: line.bodyOfWaterId || linkedScope.bodyOfWaterId || resolvedJobBodyOfWaterId,
                     salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
                     billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
                     sourceType: line.sourceType || SalesCatalogSourceType.manual,
@@ -1998,6 +2168,33 @@ const CreateNewJob = () => {
                     updatedAtMillis: nowMillis,
                 };
             });
+            const createdEquipmentIds = getJobScopeEquipmentIds({
+                primaryEquipmentId: selectedEquipmentId,
+                tasks: normalizedTasks,
+                plannedServiceStops: normalizedPlannedStops,
+                laborLineItems: normalizedLaborLineItems,
+                shoppingItems: normalizedShoppingItems,
+            });
+            const createdEquipmentSummary = equipmentSummaryForIds({
+                equipmentIds: createdEquipmentIds,
+                equipmentById,
+                primaryEquipmentId: selectedEquipmentId || createdEquipmentIds[0] || "",
+                primaryEquipmentName: selectedEquipmentName,
+            });
+            const createdBodyOfWaterIds = getJobScopeBodyOfWaterIds({
+                primaryBodyOfWaterId: resolvedJobBodyOfWaterId,
+                tasks: normalizedTasks,
+                plannedServiceStops: normalizedPlannedStops,
+                laborLineItems: normalizedLaborLineItems,
+                shoppingItems: normalizedShoppingItems,
+            });
+            const primaryBodyOfWaterId = resolvedJobBodyOfWaterId || createdBodyOfWaterIds[0] || "";
+            const primaryBodyOfWaterRecord = bodyOfWaterById.get(primaryBodyOfWaterId);
+            const primaryBodyOfWaterName =
+                resolvedJobBodyOfWaterName ||
+                primaryBodyOfWaterRecord?.label ||
+                primaryBodyOfWaterRecord?.name ||
+                "";
             const starterPlanRecord = buildStarterPlanRecord({
                 planId: starterPlanId,
                 nextInternalId,
@@ -2010,6 +2207,10 @@ const CreateNewJob = () => {
                 normalizedPlannedStops,
                 normalizedShoppingItems,
                 normalizedLaborLineItems,
+                equipmentSummary: createdEquipmentSummary,
+                bodyOfWaterId: primaryBodyOfWaterId,
+                bodyOfWaterName: primaryBodyOfWaterName,
+                bodyOfWaterIds: createdBodyOfWaterIds,
                 nowTimestamp,
                 nowMillis,
             });
@@ -2088,12 +2289,14 @@ const CreateNewJob = () => {
                 invoiceNotes: "",
 
                 // Legacy / web convenience fields
-                bodyOfWaterId: resolvedBodyOfWaterId,
-                bodyOfWaterName: selectedBodyOfWater?.label || selectedBodyOfWater?.name || selectedEquipment?.bodyOfWaterName || "",
-                equipmentId: selectedEquipment?.id || "",
-                equipmentIds: selectedEquipment?.id ? [selectedEquipment.id] : [],
-                companyEquipmentIds: selectedEquipment?.id ? [selectedEquipment.id] : [],
-                equipmentName: selectedEquipment?.label || "",
+                bodyOfWaterId: primaryBodyOfWaterId,
+                bodyOfWaterName: primaryBodyOfWaterName,
+                bodyOfWaterIds: createdBodyOfWaterIds,
+                equipmentId: createdEquipmentSummary.equipmentId || "",
+                equipmentIds: createdEquipmentSummary.equipmentIds || [],
+                companyEquipmentIds: createdEquipmentSummary.companyEquipmentIds || [],
+                equipmentName: createdEquipmentSummary.equipmentName || "",
+                equipmentNames: createdEquipmentSummary.equipmentNames || [],
                 equipmentContext: equipmentContext || null,
                 customerContext: customerContext || null,
                 jobIntent,
@@ -2252,6 +2455,9 @@ const CreateNewJob = () => {
                         { field: "laborLineItems", label: "Service Lines", before: "—", after: String(normalizedLaborLineItems.length) },
                         { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(normalizedPlannedStops.length) },
                         { field: "shoppingItems", label: "Planned Materials", before: "—", after: String(normalizedShoppingItems.length) },
+                        ...(createdEquipmentSummary.equipmentNames?.length
+                            ? [{ field: "equipmentNames", label: "Equipment", before: "—", after: createdEquipmentSummary.equipmentNames.join(", ") }]
+                            : []),
                     ],
                     metadata: {
                         sourceTemplateId: selectedTemplate?.id || "",
@@ -2263,8 +2469,11 @@ const CreateNewJob = () => {
                         suggestedWorkId: suggestedWork?.id || "",
                         leadId: leadContext?.id || "",
                         leadSourcePath: leadContext?.id ? leadSourcePath : "",
-                        equipmentId: selectedEquipment?.id || "",
-                        bodyOfWaterId: resolvedBodyOfWaterId,
+                        equipmentId: createdEquipmentSummary.equipmentId || "",
+                        equipmentIds: createdEquipmentSummary.equipmentIds || [],
+                        equipmentNames: createdEquipmentSummary.equipmentNames || [],
+                        bodyOfWaterId: primaryBodyOfWaterId,
+                        bodyOfWaterIds: createdBodyOfWaterIds,
                         jobIntent,
                         createdFromCustomerDetail,
                         createdFromEquipmentCard,
@@ -2393,7 +2602,7 @@ const CreateNewJob = () => {
 
 	                                    <div>
 	                                        <label className={fieldLabelClasses}>
-                                                Equipment {selectedTemplateRequiresEquipment ? <span className="text-rose-600">*</span> : null}
+                                                Default Equipment
                                             </label>
 	                                        <Select
 	                                            options={equipmentList}
@@ -2402,7 +2611,7 @@ const CreateNewJob = () => {
 	                                            placeholder="Select Equipment"
 	                                            styles={selectStyles}
 	                                            isDisabled={!selectedServiceLocation}
-	                                            isClearable={!selectedTemplateRequiresEquipment}
+	                                            isClearable
 	                                        />
 	                                    </div>
 	                                </div>
@@ -2411,7 +2620,7 @@ const CreateNewJob = () => {
                                             This template needs {[
                                                 selectedTemplateRequiresEquipment ? "equipment" : "",
                                                 selectedTemplateRequiresBodyOfWater ? "body of water" : "",
-                                            ].filter(Boolean).join(" and ")} before it can be created.
+                                            ].filter(Boolean).join(" and ")}. Use default equipment for one-piece jobs, or assign equipment per service/task row.
                                         </p>
                                     )}
 	                            </SectionCard>
@@ -2607,52 +2816,146 @@ const CreateNewJob = () => {
                                     {plannedServiceStops
                                         .slice()
                                         .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0))
-                                        .map((stop) => (
-                                            <div
-                                                key={stop.id}
-                                                className="rounded-lg border border-gray-200 bg-white p-4"
-                                            >
-                                                <div className="flex items-start justify-between gap-3">
-                                                    <div>
-                                                        <p className="font-bold text-gray-800">
-                                                            {stop.name || stop.serviceStopTypeName}
-                                                        </p>
-                                                        <p className="text-sm text-gray-600 mt-1">
-                                                            {stop.serviceStopTypeName || "Service Type"} •{" "}
-                                                            {stop.estimatedMinutes || 0} min
-                                                        </p>
-                                                        <p className="text-sm text-gray-600 mt-1">
-                                                            Planned labor: {moneyFromCents(stop.plannedLaborCostCents)}
-                                                        </p>
-                                                        {Array.isArray(stop.taskIds) && stop.taskIds.length > 0 && (
-                                                            <p className="text-xs text-gray-500 mt-1">
-                                                                {stop.taskIds.length} linked task(s)
-                                                            </p>
-                                                        )}
-                                                    </div>
+                                        .map((stop) => {
+                                            const stopNeedsEquipment = selectedTemplateRequiresEquipment || itemRequiresEquipmentContext(stop);
+                                            const stopEquipment = equipmentOptionForId(stop.equipmentId);
 
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => removePlannedStop(stop.id)}
-                                                        className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 hover:bg-red-100"
-                                                    >
-                                                        Remove
-                                                    </button>
+                                            return (
+                                                <div
+                                                    key={stop.id}
+                                                    className="rounded-lg border border-gray-200 bg-white p-4"
+                                                >
+                                                    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,280px)_auto] md:items-start">
+                                                        <div>
+                                                            <p className="font-bold text-gray-800">
+                                                                {stop.name || stop.serviceStopTypeName}
+                                                            </p>
+                                                            <p className="text-sm text-gray-600 mt-1">
+                                                                {stop.serviceStopTypeName || "Service Type"} •{" "}
+                                                                {stop.estimatedMinutes || 0} min
+                                                            </p>
+                                                            <p className="text-sm text-gray-600 mt-1">
+                                                                Planned labor: {moneyFromCents(stop.plannedLaborCostCents)}
+                                                            </p>
+                                                            {Array.isArray(stop.taskIds) && stop.taskIds.length > 0 && (
+                                                                <p className="text-xs text-gray-500 mt-1">
+                                                                    {stop.taskIds.length} linked task(s)
+                                                                </p>
+                                                            )}
+                                                        </div>
+
+                                                        {stopNeedsEquipment && (
+                                                            <div className="text-sm">
+                                                                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                                                                    Stop Equipment
+                                                                </label>
+                                                                <Select
+                                                                    options={equipmentList}
+                                                                    value={stopEquipment}
+                                                                    onChange={(option) => updatePlannedStopEquipment(stop.id, option)}
+                                                                    placeholder="Assign equipment"
+                                                                    styles={selectStyles}
+                                                                    isDisabled={!selectedServiceLocation}
+                                                                    isClearable
+                                                                />
+                                                            </div>
+                                                        )}
+
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removePlannedStop(stop.id)}
+                                                            className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 hover:bg-red-100"
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                 </div>
+                            </div>
+                        )}
+
+                        {laborLineItems.length > 0 && (
+                            <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h4 className="font-bold text-slate-800">Service Lines</h4>
+                                        <p className="mt-1 text-sm text-slate-600">
+                                            Assign equipment when a service line targets a specific piece.
+                                        </p>
+                                    </div>
+
+                                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                                        {laborLineItems.length}
+                                    </span>
+                                </div>
+
+                                <div className="mt-4 divide-y divide-slate-100">
+                                    {laborLineItems.map((line, index) => {
+                                        const lineNeedsEquipment = selectedTemplateRequiresEquipment || itemRequiresEquipmentContext(line);
+                                        const lineEquipment = equipmentOptionForId(line.equipmentId);
+
+                                        return (
+                                            <div key={line.id || line.laborLineId || index} className="grid gap-4 py-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,280px)] md:items-center">
+                                                <div>
+                                                    <p className="font-semibold text-slate-800">
+                                                        {line.name || line.title || `Service ${index + 1}`}
+                                                    </p>
+                                                    <p className="mt-1 text-sm text-slate-600">
+                                                        Qty: {line.quantity || 1} • Price: {moneyFromCents(laborLineTotalPriceCents(line))}
+                                                    </p>
+                                                    {Array.isArray(line.taskIds) && line.taskIds.length > 0 && (
+                                                        <p className="mt-1 text-xs text-slate-500">
+                                                            {line.taskIds.length} linked task{line.taskIds.length === 1 ? "" : "s"}
+                                                        </p>
+                                                    )}
+                                                </div>
+
+                                                {lineNeedsEquipment && (
+                                                    <div className="text-sm">
+                                                        <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                                                            Service Equipment
+                                                        </label>
+                                                        <Select
+                                                            options={equipmentList}
+                                                            value={lineEquipment}
+                                                            onChange={(option) => updateLaborLineEquipment(line.id || line.laborLineId, option)}
+                                                            placeholder="Assign equipment"
+                                                            styles={selectStyles}
+                                                            isDisabled={!selectedServiceLocation}
+                                                            isClearable
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {missingEquipmentAssignments.length > 0 && (
+                            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                Assign equipment for {missingEquipmentAssignments.length} service/task item{missingEquipmentAssignments.length === 1 ? "" : "s"} before creating this job.
+                            </div>
+                        )}
+
+                        {selectedTemplateRequiresEquipment && assignedEquipmentIds.length === 0 && missingEquipmentAssignments.length === 0 && (
+                            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                Select default equipment before creating this job.
                             </div>
                         )}
 
                         {taskList.length > 0 ? (
                             <div className="divide-y divide-gray-200 mb-6">
                                 {taskList.map((task) => {
-                                    const taskEquipment = equipmentById.get(task.equipmentId) || null;
+                                    const taskNeedsEquipmentAssignment = selectedTemplateRequiresEquipment || itemRequiresEquipmentContext(task);
+                                    const taskEquipment = equipmentOptionForId(task.equipmentId);
                                     const taskBodyOfWater = bodyOfWaterById.get(task.bodyOfWaterId) || null;
 
                                     return (
-                                        <div key={task.id} className="flex justify-between items-center py-3 gap-4">
+                                        <div key={task.id} className="grid gap-4 py-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,280px)_auto] md:items-center">
                                             <div>
                                                 <p className="font-semibold text-gray-800">{task.name}</p>
                                                 <p className="text-sm text-gray-600">
@@ -2669,6 +2972,23 @@ const CreateNewJob = () => {
                                                     </p>
                                                 )}
                                             </div>
+
+                                            {taskNeedsEquipmentAssignment && (
+                                                <div className="text-sm">
+                                                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                                                        Task Equipment
+                                                    </label>
+                                                    <Select
+                                                        options={equipmentList}
+                                                        value={taskEquipment}
+                                                        onChange={(option) => updateTaskEquipment(task.id, option)}
+                                                        placeholder="Assign equipment"
+                                                        styles={selectStyles}
+                                                        isDisabled={!selectedServiceLocation}
+                                                        isClearable
+                                                    />
+                                                </div>
+                                            )}
 
                                             <div className="text-right">
                                                 <p className="text-sm font-semibold text-slate-800">

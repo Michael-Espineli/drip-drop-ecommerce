@@ -238,7 +238,7 @@ const CreateJobFlowLauncher = ({
 
   const openCreateOptions = () => {
     if (!canCreateAnyJobs) {
-      appAlert("You do not have permission to create jobs or basic work orders.");
+      appAlert("You do not have permission to create jobs or basic jobs.");
       return;
     }
     setShowCreateOptionsModal(true);
@@ -332,9 +332,9 @@ const CreateJobFlowLauncher = ({
                     </div>
 
                     <div>
-                      <p className="font-bold text-blue-900">Basic Work Order</p>
+                      <p className="font-bold text-blue-900">Basic Job</p>
                       <p className="mt-1 text-sm text-blue-800">
-                        Schedule a technician-safe template or custom work order with a generated price.
+                        Schedule a technician-safe template or simple custom job with a generated price.
                       </p>
                     </div>
                   </div>

@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   FaBriefcase,
@@ -86,37 +86,46 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const TypeBadge = ({ row }) => {
-  const typeTone = row.estimateCategory === 'service'
-    ? 'border-blue-200 bg-blue-50 text-blue-700'
-    : 'border-violet-200 bg-violet-50 text-violet-700';
+const statusFilterFromParams = (searchParams) => normalizeStatus(searchParams.get('status')) || 'all';
 
-  return (
-    <div className="flex flex-wrap gap-2">
-      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${typeTone}`}>
-        {row.kindLabel}
-      </span>
-      <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
-        {row.cadenceLabel}
-      </span>
-    </div>
-  );
-};
+const estimateListPathForStatus = (statusKey) => (
+  !statusKey || statusKey === 'all'
+    ? '/company/estimates'
+    : `/company/estimates?status=${encodeURIComponent(statusKey)}`
+);
 
-const StatTile = ({ icon: Icon, label, value, helper }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+const StatTileContent = ({ icon: Icon, label, value, helper, selected }) => (
+  <>
     <div className="flex items-start justify-between gap-3">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+        <p className={`text-xs font-semibold uppercase tracking-wide ${selected ? 'text-blue-700' : 'text-slate-500'}`}>{label}</p>
+        <p className={`mt-2 text-2xl font-bold ${selected ? 'text-blue-950' : 'text-slate-950'}`}>{value}</p>
       </div>
-      <span className="rounded-md bg-slate-100 p-2 text-slate-600">
+      <span className={`rounded-md p-2 ${selected ? 'bg-white text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
         <Icon />
       </span>
     </div>
-    {helper && <p className="mt-3 text-sm text-slate-500">{helper}</p>}
-  </div>
+    {helper && <p className={`mt-3 text-sm ${selected ? 'text-blue-700' : 'text-slate-500'}`}>{helper}</p>}
+  </>
 );
+
+const StatTile = ({ icon, label, value, helper, to, selected = false }) => {
+  const tileClasses = `block rounded-lg border p-4 shadow-sm transition ${selected ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white'} ${to ? 'hover:border-blue-200 hover:bg-blue-50/60 focus:outline-none focus:ring-2 focus:ring-blue-100' : ''}`;
+
+  if (to) {
+    return (
+      <Link to={to} className={tileClasses}>
+        <StatTileContent icon={icon} label={label} value={value} helper={helper} selected={selected} />
+      </Link>
+    );
+  }
+
+  return (
+    <div className={tileClasses}>
+      <StatTileContent icon={icon} label={label} value={value} helper={helper} selected={selected} />
+    </div>
+  );
+};
 
 const getLineItemsTotalCents = (lineItems = []) => (
   Array.isArray(lineItems)
@@ -198,14 +207,6 @@ const cadenceLabelForAgreement = (agreement) => {
 
   if (!interval || interval === 'recurring') return 'Recurring';
   if (count > 1) return `Every ${count} ${labelize(interval).toLowerCase()}s`;
-  return labelize(interval);
-};
-
-const cadenceLabelForRecurringContract = (contract) => {
-  const interval = contract.rateInterval || contract.serviceCadence || 'Recurring';
-  const count = Number(contract.rateIntervalAmount || contract.serviceCadenceCount || 1);
-
-  if (count > 1 && interval) return `Every ${count} ${labelize(interval).toLowerCase()}s`;
   return labelize(interval);
 };
 
@@ -348,41 +349,6 @@ const normalizeLegacyContract = (docSnap) => {
   };
 };
 
-const normalizeLegacyRecurringContract = (docSnap) => {
-  const data = docSnap.data();
-
-  return {
-    id: docSnap.id,
-    sourceCollection: 'recurringContracts',
-    sourceLabel: 'Legacy Recurring',
-    estimateCategory: 'service',
-    cadenceType: 'recurring',
-    kindLabel: 'Service Agreement',
-    cadenceLabel: cadenceLabelForRecurringContract(data),
-    title: data.title || data.notes || 'Recurring Service Agreement',
-    customerName: data.customerName || data.receiverName || 'Customer',
-    customerDetail: data.email || (data.receiverId || data.customerId ? 'Linked customer' : data.id ? 'Recurring agreement' : ''),
-    status: data.status || 'Draft',
-    statusKey: normalizeStatus(data.status || 'Draft'),
-    amountCents: Number(data.rate || 0),
-    updatedAt: data.updatedAt || data.dateSent || data.createdAt || null,
-    sentAt: data.dateSent || null,
-    acceptBy: data.dateToAccept || data.lastDateToAccept || null,
-    jobId: '',
-    leadId: '',
-    searchText: [
-      data.title,
-      data.customerName,
-      data.receiverName,
-      data.status,
-      data.notes,
-      data.rateInterval,
-      data.customerId,
-    ].join(' '),
-    raw: data,
-  };
-};
-
 const EstimatesTable = ({ rows, loading }) => {
   if (loading) {
     return <div className="p-5 text-sm text-slate-500">Loading estimates...</div>;
@@ -393,7 +359,7 @@ const EstimatesTable = ({ rows, loading }) => {
       <div className="p-8 text-center">
         <p className="font-semibold text-slate-800">No estimates found</p>
         <p className="mt-1 text-sm text-slate-500">
-          Create a service agreement or job estimate, or adjust your filters.
+          Create a job estimate, or adjust your filters.
         </p>
       </div>
     );
@@ -406,7 +372,6 @@ const EstimatesTable = ({ rows, loading }) => {
           <tr>
             <th className="px-5 py-3">Estimate</th>
             <th className="px-5 py-3">Customer</th>
-            <th className="px-5 py-3">Type</th>
             <th className="px-5 py-3">Amount</th>
             <th className="px-5 py-3">Status</th>
             <th className="px-5 py-3">Updated</th>
@@ -436,9 +401,6 @@ const EstimatesTable = ({ rows, loading }) => {
                 <td className="px-5 py-4 align-top">
                   <p className="font-medium text-slate-900">{row.customerName}</p>
                   <p className="mt-1 text-xs text-slate-500">{row.customerDetail || 'No customer detail'}</p>
-                </td>
-                <td className="px-5 py-4 align-top">
-                  <TypeBadge row={row} />
                 </td>
                 <td className="px-5 py-4 align-top font-semibold text-slate-950">
                   {row.amountLabel || formatCurrency(row.amountCents)}
@@ -480,34 +442,35 @@ const EstimatesTable = ({ rows, loading }) => {
 };
 
 function Estimates() {
-  const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
+  const { recentlySelectedCompany } = useContext(Context);
   const { can } = useCompanyPermissions();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsString = searchParams.toString();
 
   const [salesAgreementRows, setSalesAgreementRows] = useState([]);
   const [legacyContractRows, setLegacyContractRows] = useState([]);
-  const [legacyRecurringRows, setLegacyRecurringRows] = useState([]);
   const [loadingSources, setLoadingSources] = useState({
     salesAgreements: true,
     contracts: true,
-    recurringContracts: true,
   });
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState('job');
-  const [cadenceFilter, setCadenceFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState(() => statusFilterFromParams(searchParams));
+
+  useEffect(() => {
+    setStatusFilter(statusFilterFromParams(new URLSearchParams(searchParamsString)));
+  }, [searchParamsString]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setSalesAgreementRows([]);
       setLegacyContractRows([]);
-      setLegacyRecurringRows([]);
-      setLoadingSources({ salesAgreements: false, contracts: false, recurringContracts: false });
+      setLoadingSources({ salesAgreements: false, contracts: false });
       return undefined;
     }
 
     setError('');
-    setLoadingSources({ salesAgreements: true, contracts: true, recurringContracts: true });
+    setLoadingSources({ salesAgreements: true, contracts: true });
 
     const unsubscribeSalesAgreements = onSnapshot(
       query(
@@ -541,30 +504,16 @@ function Estimates() {
       }
     );
 
-    const unsubscribeRecurringContracts = onSnapshot(
-      query(
-        collection(db, 'recurringContracts'),
-        where('senderId', '==', recentlySelectedCompany)
-      ),
-      (snapshot) => {
-        setLegacyRecurringRows(snapshot.docs.map(normalizeLegacyRecurringContract));
-        setLoadingSources((prev) => ({ ...prev, recurringContracts: false }));
-      },
-      (snapshotError) => {
-        console.error('Error loading recurring contract estimates:', snapshotError);
-        setError('Unable to load recurring service agreements.');
-        setLoadingSources((prev) => ({ ...prev, recurringContracts: false }));
-      }
-    );
-
     return () => {
       unsubscribeSalesAgreements();
       unsubscribeContracts();
-      unsubscribeRecurringContracts();
     };
   }, [recentlySelectedCompany]);
 
   const allRows = useMemo(() => {
+    const jobSalesAgreementRows = salesAgreementRows.filter((row) => (
+      row.estimateCategory === 'job' && row.cadenceType !== 'recurring'
+    ));
     const linkedAgreementIds = new Set(
       salesAgreementRows
         .map((row) => row.id)
@@ -575,9 +524,9 @@ function Estimates() {
       !row.linkedSalesAgreementId || !linkedAgreementIds.has(row.linkedSalesAgreementId)
     ));
 
-    return [...salesAgreementRows, ...unlinkedLegacyContracts, ...legacyRecurringRows]
+    return [...jobSalesAgreementRows, ...unlinkedLegacyContracts]
       .sort((a, b) => toMillis(b.updatedAt || b.sentAt) - toMillis(a.updatedAt || a.sentAt));
-  }, [legacyContractRows, legacyRecurringRows, salesAgreementRows]);
+  }, [legacyContractRows, salesAgreementRows]);
 
   const statusOptions = useMemo(() => {
     const statuses = new Map();
@@ -594,8 +543,6 @@ function Estimates() {
     const search = normalizeText(searchTerm);
 
     return allRows.filter((row) => {
-      if (typeFilter !== 'all' && row.estimateCategory !== typeFilter) return false;
-      if (cadenceFilter !== 'all' && row.cadenceType !== cadenceFilter) return false;
       if (statusFilter !== 'all' && row.statusKey !== statusFilter) return false;
 
       if (!search) return true;
@@ -611,25 +558,33 @@ function Estimates() {
         row.searchText,
       ].join(' ')).includes(search);
     });
-  }, [allRows, cadenceFilter, searchTerm, statusFilter, typeFilter]);
+  }, [allRows, searchTerm, statusFilter]);
 
   const summary = useMemo(() => {
-    const serviceRows = allRows.filter((row) => row.estimateCategory === 'service');
-    const jobRows = allRows.filter((row) => row.estimateCategory === 'job');
-    const recurringRows = allRows.filter((row) => row.cadenceType === 'recurring');
-    const oneTimeRows = allRows.filter((row) => row.cadenceType === 'oneTime');
-
     return {
-      serviceCount: serviceRows.length,
-      jobCount: jobRows.length,
-      recurringCount: recurringRows.length,
-      oneTimeCount: oneTimeRows.length,
+      jobCount: allRows.length,
+      draftCount: allRows.filter((row) => row.statusKey === 'draft').length,
+      sentCount: allRows.filter((row) => row.statusKey === 'sent').length,
+      acceptedCount: allRows.filter((row) => row.statusKey === 'accepted').length,
       totalValueCents: allRows.reduce((total, row) => total + Number(row.amountCents || 0), 0),
     };
   }, [allRows]);
 
   const loading = Object.values(loadingSources).some(Boolean);
-  const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
+
+  const handleStatusFilterChange = (event) => {
+    const nextStatusFilter = event.target.value;
+    const nextParams = new URLSearchParams(searchParamsString);
+
+    setStatusFilter(nextStatusFilter);
+    if (nextStatusFilter === 'all') {
+      nextParams.delete('status');
+    } else {
+      nextParams.set('status', nextStatusFilter);
+    }
+
+    setSearchParams(nextParams);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
@@ -637,38 +592,21 @@ function Estimates() {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-                  {selectedCompanyName}
-                </span>
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  One-time and recurring
-                </span>
-              </div>
-              <h1 className="mt-3 text-3xl font-bold text-slate-950">Estimates</h1>
+              <h1 className="text-3xl font-bold text-slate-950">Estimates</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Review job estimates by default, or switch filters to include service agreements.
+                Review one-time job estimates without service agreement or recurring agreement records.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
               {can('622') && (
-                <>
-                  <Link
-                    to="/company/sales/agreements/new"
-                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                  >
-                    <FaPlus className="text-xs" />
-                    Service Agreement
-                  </Link>
-                  <Link
-                    to="/company/jobs/createNew"
-                    className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                  >
-                    <FaPlus className="text-xs" />
-                    Job Estimate
-                  </Link>
-                </>
+                <Link
+                  to="/company/jobs/createNew"
+                  className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                >
+                  <FaPlus className="text-xs" />
+                  Job Estimate
+                </Link>
               )}
             </div>
           </div>
@@ -681,15 +619,15 @@ function Estimates() {
         )}
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-          <StatTile icon={FaFileSignature} label="Service Agreements" value={summary.serviceCount} helper="Recurring estimate flow" />
-          <StatTile icon={FaBriefcase} label="Job Estimates" value={summary.jobCount} helper="One-time job flow" />
-          <StatTile icon={FaSyncAlt} label="Recurring" value={summary.recurringCount} helper="Service cadence" />
-          <StatTile icon={FaCalendarAlt} label="One-Time" value={summary.oneTimeCount} helper="Job or lead work" />
-          <StatTile icon={FaFileContract} label="Quoted Value" value={formatCurrency(summary.totalValueCents)} helper="Current visible sources" />
+          <StatTile icon={FaBriefcase} label="Job Estimates" value={summary.jobCount} helper="One-time job flow" to={estimateListPathForStatus('all')} selected={statusFilter === 'all'} />
+          <StatTile icon={FaFileSignature} label="Draft" value={summary.draftCount} helper="Needs review" to={estimateListPathForStatus('draft')} selected={statusFilter === 'draft'} />
+          <StatTile icon={FaSyncAlt} label="Sent" value={summary.sentCount} helper="Waiting on customer" to={estimateListPathForStatus('sent')} selected={statusFilter === 'sent'} />
+          <StatTile icon={FaCalendarAlt} label="Accepted" value={summary.acceptedCount} helper="Approved estimates" to={estimateListPathForStatus('accepted')} selected={statusFilter === 'accepted'} />
+          <StatTile icon={FaFileContract} label="Quoted Value" value={formatCurrency(summary.totalValueCents)} helper="Job estimates only" to={estimateListPathForStatus('all')} />
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid gap-3 border-b border-slate-200 p-5 xl:grid-cols-[minmax(0,1fr)_180px_180px_180px]">
+          <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(0,1fr)_180px]">
             <div className="relative">
               <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -697,30 +635,12 @@ function Estimates() {
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 className="w-full rounded-md border border-slate-300 py-2 pl-10 pr-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                placeholder="Search customer, job, agreement, status, or source"
+                placeholder="Search customer, job, status, or source"
               />
             </div>
             <select
-              value={typeFilter}
-              onChange={(event) => setTypeFilter(event.target.value)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-            >
-              <option value="all">All Types</option>
-              <option value="service">Service Agreements</option>
-              <option value="job">Job Estimates</option>
-            </select>
-            <select
-              value={cadenceFilter}
-              onChange={(event) => setCadenceFilter(event.target.value)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-            >
-              <option value="all">All Cadence</option>
-              <option value="recurring">Recurring</option>
-              <option value="oneTime">One Time</option>
-            </select>
-            <select
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
+              onChange={handleStatusFilterChange}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
               <option value="all">All Statuses</option>

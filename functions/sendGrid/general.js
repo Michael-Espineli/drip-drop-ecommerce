@@ -2107,12 +2107,12 @@ exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => 
     return sendSalesInvoiceEmailCore({ companyId, invoiceId, invoiceBaseUrl });
 });
 
-exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context) => {
+const sendServiceReportOnFinishCore = async (payload = {}) => {
     console.log("Send Service Report On Finish");
 
     try {
-        const companyId = data?.data?.companyId || data?.companyId;
-        const serviceStopId = data?.data?.serviceStopId || data?.serviceStopId;
+        const companyId = payload.companyId;
+        const serviceStopId = payload.serviceStopId;
 
         if (!companyId) {
             throw new Error("Missing companyId");
@@ -2267,7 +2267,7 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
                 customerId: serviceStopData.customerId || stopData.customerId || "",
             })
         );
-        const serviceReportBaseUrl = data?.data?.serviceReportBaseUrl || data?.serviceReportBaseUrl || process.env.SERVICE_REPORT_BASE_URL || process.env.APP_BASE_URL || "";
+        const serviceReportBaseUrl = payload.serviceReportBaseUrl || process.env.SERVICE_REPORT_BASE_URL || process.env.APP_BASE_URL || "";
         const serviceReportUrl = buildUrl(serviceReportBaseUrl, `/serviceStop/detail/${serviceStopId}`);
         const customerAccess = await buildCustomerAccessTemplateData({
             companyId,
@@ -2470,6 +2470,13 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
             error: error.response?.body || error.message
         };
     }
+};
+
+exports.sendServiceReportOnFinishCore = sendServiceReportOnFinishCore;
+
+exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context) => {
+    const payload = data?.data || data || {};
+    return sendServiceReportOnFinishCore(payload);
 });
 exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
 

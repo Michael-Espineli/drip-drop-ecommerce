@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useMemo } from 'react';
+import React, { useState, useEffect, useContext, useMemo, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
@@ -19,8 +19,21 @@ import {
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { appConfirm } from '../../../utils/appDialog';
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from '../../../utils/companyUsers';
+import {
+  getPlannedRouteOrder,
+  getPlannedRouteRssIds,
+  mergePlannedRouteOrders,
+  removeRecurringServiceStopsFromOtherPlannedRoutes,
+} from '../../../utils/recurringRouteSync';
 
 const functions = getFunctions();
+
+const localStartOfTodayMs = () => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today.getTime();
+};
+
 // Reusable form components
 const Input = ({ className = "", ...props }) => (
   <input
@@ -173,10 +186,9 @@ const RouteBuilder = () => {
     };
   };
 
-  const buildRouteStopsFromRouteOrder = async (route, stopList) => {
-    const orderedStops = Array.isArray(route?.order)
-      ? [...route.order].sort((a, b) => Number(a.order || 0) - Number(b.order || 0))
-      : [];
+  const buildRouteStopsFromRouteOrder = useCallback(async (route, stopList) => {
+    const orderedStops = [...getPlannedRouteOrder(route)]
+      .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
 
     const recurringStopEntries = await Promise.all(
       orderedStops
@@ -247,9 +259,9 @@ const RouteBuilder = () => {
         };
       })
       .filter(Boolean);
-  };
+  }, [recentlySelectedCompany]);
 
-  const buildRouteStopFromRecurringStop = (recurringStop, stopList = allStops) => {
+  const buildRouteStopFromRecurringStop = useCallback((recurringStop, stopList = allStops) => {
     if (!recurringStop?.id) return null;
 
     const serviceLocation = stopList.find((location) => location.id === recurringStop.serviceLocationId);
@@ -285,7 +297,7 @@ const RouteBuilder = () => {
       contractedCompanyId: recurringStop.contractedCompanyId ?? serviceLocation?.contractedCompanyId ?? null,
       mainCompanyId: recurringStop.mainCompanyId ?? serviceLocation?.mainCompanyId ?? null,
     };
-  };
+  }, [allStops]);
 
   // =============================
   // iOS helper -> React helper
@@ -448,6 +460,7 @@ const RouteBuilder = () => {
       companyId: recentlySelectedCompany,
       recurringServiceStop,
       syncRoute: false,
+      futureServiceStopsStartAt: localStartOfTodayMs(),
     });
 
     return result.data;
@@ -474,48 +487,6 @@ const RouteBuilder = () => {
       category: resolvedTypeFields.category,
       serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
     };
-  };
-
-  const removeRouteStopsFromOtherRoutes = async (recurringServiceStopIds, destinationRouteId) => {
-    const idsToMove = new Set(recurringServiceStopIds.filter(Boolean));
-    if (!idsToMove.size) return 0;
-
-    const routesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes'));
-    const batch = writeBatch(db);
-    let changedRoutes = 0;
-
-    routesSnapshot.docs.forEach((routeDoc) => {
-      if (routeDoc.id === destinationRouteId) return;
-
-      const routeData = routeDoc.data();
-      const currentOrder = Array.isArray(routeData.order) ? routeData.order : [];
-      const nextOrder = currentOrder
-        .filter((item) => !idsToMove.has(item.recurringServiceStopId))
-        .map((item, index) => ({
-          ...item,
-          order: index + 1,
-        }));
-
-      if (nextOrder.length === currentOrder.length) return;
-
-      const updates = {
-        order: nextOrder,
-        updatedAt: serverTimestamp(),
-      };
-
-      if (Array.isArray(routeData.rssIds)) {
-        updates.rssIds = routeData.rssIds.filter((rssId) => !idsToMove.has(rssId));
-      }
-
-      batch.set(routeDoc.ref, updates, { merge: true });
-      changedRoutes += 1;
-    });
-
-    if (changedRoutes > 0) {
-      await batch.commit();
-    }
-
-    return changedRoutes;
   };
 
   // Fetch initial data (technicians and all potential stops)
@@ -572,7 +543,7 @@ const RouteBuilder = () => {
       })
       .catch(() => toast.error("Failed to fetch initial data."))
       .finally(() => setIsLoading(false));
-  }, [recentlySelectedCompany, editingTemplate]);
+  }, [recentlySelectedCompany, editingTemplate, buildRouteStopsFromRouteOrder, state?.defaultTechnicianId]);
 
   useEffect(() => {
     if (selectedServiceStopType || !serviceStopTypeOptions.length) return;
@@ -621,7 +592,7 @@ const RouteBuilder = () => {
     };
 
     findAndLoadRoute();
-  }, [selectedDay, selectedTechnician, editingTemplate, recentlySelectedCompany, allStops]);
+  }, [selectedDay, selectedTechnician, editingTemplate, recentlySelectedCompany, allStops, buildRouteStopsFromRouteOrder]);
 
   // =============================
   // Save logic:
@@ -650,14 +621,11 @@ const RouteBuilder = () => {
       // UPDATE EXISTING TEMPLATE
       // -------------------------
       if (editingTemplate) {
-        const batch = writeBatch(db);
         const routeId = editingTemplate.id;
         const routeRef = doc(db, 'companies', recentlySelectedCompany, 'recurringRoutes', routeId);
 
         // RSS ids that were previously on the template
-        const previousRssIds = (editingTemplate.order || [])
-          .map(item => item.recurringServiceStopId)
-          .filter(Boolean);
+        const previousRssIds = getPlannedRouteRssIds(editingTemplate);
 
         // RSS ids that are still present in the edited routeStops
         const currentRssIds = routeStops
@@ -699,21 +667,44 @@ const RouteBuilder = () => {
         const routeRecurringServiceStopIds = newRouteOrder
           .map((item) => item.recurringServiceStopId)
           .filter(Boolean);
-        await removeRouteStopsFromOtherRoutes(routeRecurringServiceStopIds, routeId);
+        const destinationRoutesSnapshot = await getDocs(query(
+          collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes'),
+          where("day", "==", selectedDay.value),
+          where("techId", "==", selectedTechnician.value)
+        ));
+        const destinationRouteDoc = destinationRoutesSnapshot.docs.find((routeDoc) => routeDoc.id !== routeId) || null;
+        const destinationRouteData = destinationRouteDoc?.data() || {};
+        const destinationRouteId = destinationRouteDoc?.id || routeId;
+        const destinationRouteRef = destinationRouteDoc?.ref || routeRef;
+        const routeOrderToSave = destinationRouteDoc
+          ? mergePlannedRouteOrders(getPlannedRouteOrder(destinationRouteData), newRouteOrder)
+          : newRouteOrder;
+        const routeRssIdsToSave = destinationRouteDoc
+          ? getPlannedRouteRssIds(destinationRouteData, routeOrderToSave)
+          : getPlannedRouteRssIds({}, routeOrderToSave);
+
+        await removeRecurringServiceStopsFromOtherPlannedRoutes({
+          db,
+          companyId: recentlySelectedCompany,
+          recurringServiceStopIds: routeRecurringServiceStopIds,
+          destinationRouteId,
+        });
 
         const templateData = {
-          id: routeId,
-          description,
+          id: destinationRouteId,
+          description: description || destinationRouteData.description || "",
           day: selectedDay.value,
           tech: selectedTechnician.label,
           techId: selectedTechnician.value,
-          order: newRouteOrder,
-          rssIds: routeRecurringServiceStopIds,
+          order: routeOrderToSave,
+          recurringRouteOrder: routeOrderToSave,
+          rssIds: routeRssIdsToSave,
           companyId: recentlySelectedCompany,
           updatedAt: serverTimestamp(),
         };
 
-        batch.set(routeRef, templateData, { merge: true });
+        const batch = writeBatch(db);
+        batch.set(destinationRouteRef, templateData, { merge: true });
         setRouteSaveProgress({
           action: saveAction,
           current: totalRouteStops,
@@ -722,7 +713,7 @@ const RouteBuilder = () => {
         });
         await batch.commit();
 
-        toast.success("Route successfully updated!");
+        toast.success(destinationRouteDoc ? "Route merged successfully!" : "Route successfully updated!");
         navigate('/company/route-management');
         return;
       }
@@ -733,10 +724,6 @@ const RouteBuilder = () => {
       // 2) build binder order[]
       // 3) save recurringRoute doc
       // -------------------------
-
-      const batch = writeBatch(db);
-      const routeId = `com_rr_${uuidv4()}`;
-      const routeRef = doc(db, 'companies', recentlySelectedCompany, 'recurringRoutes', routeId);
 
       const binder = [];
 
@@ -756,21 +743,44 @@ const RouteBuilder = () => {
       const routeRecurringServiceStopIds = binder
         .map((item) => item.recurringServiceStopId)
         .filter(Boolean);
-      await removeRouteStopsFromOtherRoutes(routeRecurringServiceStopIds, routeId);
+      const destinationRoutesSnapshot = await getDocs(query(
+        collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes'),
+        where("day", "==", selectedDay.value),
+        where("techId", "==", selectedTechnician.value)
+      ));
+      const destinationRouteDoc = destinationRoutesSnapshot.docs[0] || null;
+      const destinationRouteData = destinationRouteDoc?.data() || {};
+      const routeId = destinationRouteDoc?.id || `com_rr_${uuidv4()}`;
+      const routeRef = destinationRouteDoc?.ref || doc(db, 'companies', recentlySelectedCompany, 'recurringRoutes', routeId);
+      const routeOrderToSave = destinationRouteDoc
+        ? mergePlannedRouteOrders(getPlannedRouteOrder(destinationRouteData), binder)
+        : binder;
+      const routeRssIdsToSave = destinationRouteDoc
+        ? getPlannedRouteRssIds(destinationRouteData, routeOrderToSave)
+        : getPlannedRouteRssIds({}, routeOrderToSave);
+
+      await removeRecurringServiceStopsFromOtherPlannedRoutes({
+        db,
+        companyId: recentlySelectedCompany,
+        recurringServiceStopIds: routeRecurringServiceStopIds,
+        destinationRouteId: routeId,
+      });
 
       const templateData = {
         id: routeId,
-        description,
+        description: description || destinationRouteData.description || "",
         day: selectedDay.value,
         tech: selectedTechnician.label,
         techId: selectedTechnician.value,
-        order: binder,
-        rssIds: routeRecurringServiceStopIds,
+        order: routeOrderToSave,
+        recurringRouteOrder: routeOrderToSave,
+        rssIds: routeRssIdsToSave,
         companyId: recentlySelectedCompany,
-        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+        ...(destinationRouteDoc ? {} : { createdAt: serverTimestamp() }),
       };
 
+      const batch = writeBatch(db);
       batch.set(routeRef, templateData, { merge: true });
       setRouteSaveProgress({
         action: saveAction,
@@ -780,7 +790,7 @@ const RouteBuilder = () => {
       });
       await batch.commit();
 
-      toast.success("Route successfully created!");
+      toast.success(destinationRouteDoc ? "Route merged successfully!" : "Route successfully created!");
       navigate('/company/route-management');
 
     } catch (error) {
@@ -851,7 +861,7 @@ const RouteBuilder = () => {
       .filter((stop) => matchesSearch(stop));
 
     return [...recurringStopOptions, ...serviceLocationOptions];
-  }, [allRecurringStops, allStops, routeStops, searchTerm, technicianNameById]);
+  }, [allRecurringStops, allStops, routeStops, searchTerm, technicianNameById, buildRouteStopFromRecurringStop]);
 
   // const mapLocations = useMemo(
   //   () =>

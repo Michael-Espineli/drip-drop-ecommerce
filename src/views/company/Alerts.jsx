@@ -5,14 +5,13 @@ import {
   doc,
   onSnapshot,
   serverTimestamp,
-  setDoc,
-  Timestamp,
   updateDoc,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import toast from "react-hot-toast";
 import { FaBell, FaCheckCircle, FaExclamationTriangle, FaRegBell } from "react-icons/fa";
 import { MdNotificationsActive, MdNotificationsOff, MdOutlineSchedule } from "react-icons/md";
-import { db } from "../../utils/config";
+import { db, functions } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
 import {
   getConversationLinkLabel,
@@ -54,15 +53,6 @@ const emptyAlertForm = () => ({
   relatedEntityId: "",
   relatedEntityLabel: "",
 });
-
-const makeId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-
-const timestampFromInput = (value) => {
-  if (!value) return null;
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
-};
 
 const severityTone = (severity) => {
   const tones = {
@@ -272,53 +262,39 @@ const Alerts = () => {
         type: form.relatedEntityType,
         id: form.relatedEntityId.trim(),
         label: form.relatedEntityLabel.trim(),
+        companyId: recentlySelectedCompany,
       }
       : null;
 
-    const scheduledFor = timestampFromInput(form.scheduledFor);
-    const alertId = makeId("alert");
     const message = form.message.trim();
 
     setSaving(true);
 
     try {
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "alerts", alertId), {
-        id: alertId,
+      const createCompanyAlertNotification = httpsCallable(functions, "createCompanyAlertNotification");
+      const result = await createCompanyAlertNotification({
         companyId: recentlySelectedCompany,
         title,
-        name: title,
         message,
-        description: message,
-        status: ALERT_STATUS.unread,
-        read: false,
         severity: form.severity,
-        type: "manual_notification",
-        source: "alerts",
-        sourceId: alertId,
-        route: "/company/alerts",
-        hasItem: Boolean(relatedEntity),
-        itemId: relatedEntity?.id || "",
-        itemName: relatedEntity?.label || "",
         targetScope: form.targetScope,
+        recipientUserIds: assignee?.userId ? [assignee.userId] : [],
         assignedToUserId: assignee?.userId || "",
         assignedToCompanyUserDocId: assignee?.id || "",
         assignedToName: assignee?.userName || "",
-        deliveryTargets: ["web", "ios"],
-        channels: {
-          dashboard: true,
-          ios: true,
-          push: true,
-        },
-        scheduledFor,
+        scheduledFor: form.scheduledFor || null,
         relatedEntity,
-        createdByUserId: user.uid,
         createdByName: name || user.email || "Company user",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
       });
+      const response = result.data || {};
+      if (response.status && response.status >= 400) {
+        throw new Error(response.error || "Failed to create alert.");
+      }
 
       setForm(emptyAlertForm());
-      toast.success("Alert created.");
+      toast.success(response.recipientCount > 0
+        ? `Alert sent to ${response.recipientCount} recipient${response.recipientCount === 1 ? "" : "s"}.`
+        : "Alert created.");
     } catch (error) {
       console.error("Failed to create alert:", error);
       toast.error("Failed to create alert.");

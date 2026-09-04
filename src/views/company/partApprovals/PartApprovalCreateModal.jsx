@@ -5,7 +5,6 @@ import {
   collection,
   doc,
   getDocs,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -20,6 +19,7 @@ import { buildPartApprovalShoppingItemPayload } from '../../../utils/partApprova
 import {
   getProductDisplayName,
   getProductSellPriceCents,
+  isProductAvailableForPartApproval,
   productCatalogCollectionRef,
 } from '../../../utils/productCatalog';
 
@@ -178,10 +178,14 @@ const normalizeDbItemOption = (docId, data = {}) => {
   const unitCostCents = Number(data.rate || data.cost || 0);
   const unitPriceCents = getProductSellPriceCents(data) || Number(data.rate || data.cost || 0);
   const photoFields = itemPhotoFieldsFromSource(data, name);
+  const availableForPartApproval = isProductAvailableForPartApproval(data);
 
   return {
     ...data,
     id,
+    active: data.active !== false,
+    availableForPartApproval,
+    partApprovalAvailable: availableForPartApproval,
     name,
     description: data.description || '',
     genericItemId: id,
@@ -274,7 +278,7 @@ const PartApprovalCreateModal = ({
       setLoading(true);
 
       try {
-        const itemsPromise = getDocs(query(productCatalogCollectionRef(db, companyId), orderBy('commonName')));
+        const itemsPromise = getDocs(productCatalogCollectionRef(db, companyId));
         const customersPromise = fixedCustomerOption
           ? Promise.resolve(null)
           : getDocs(collection(db, 'companies', companyId, 'customers'));
@@ -285,6 +289,7 @@ const PartApprovalCreateModal = ({
         setDbItems(
           itemsSnap.docs
             .map((itemDoc) => normalizeDbItemOption(itemDoc.id, itemDoc.data()))
+            .filter((item) => item.active !== false && item.availableForPartApproval)
             .sort((left, right) => left.name.localeCompare(right.name))
         );
 
@@ -703,6 +708,7 @@ const PartApprovalCreateModal = ({
                   isLoading={loading}
                   isSearchable
                   placeholder="Select a Product"
+                  noOptionsMessage={() => 'No part approval products available'}
                   styles={selectStyles}
                 />
               </div>

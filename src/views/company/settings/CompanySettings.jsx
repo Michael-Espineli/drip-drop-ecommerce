@@ -127,7 +127,7 @@ const getBookmarkCandidateItems = ({
         .filter((item) => item.category !== COMPANY_PINNED_CATEGORY)
         .filter((item) => !BOOKMARK_EXCLUDED_PATHS.has(item.path))
         .filter((item) => (
-            (!item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId)) &&
+            permissionsEnabledForItem(item, (permissionId) => companyRoleLoading || hasCompanyPermission(permissionId)) &&
             featureFlagsEnabledForItem(item, featureFlagsLoaded, isFeatureEnabled)
         ));
 };

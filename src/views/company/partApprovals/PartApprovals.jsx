@@ -9,7 +9,6 @@ import {
   getDocs,
   increment,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   Timestamp,
@@ -43,6 +42,7 @@ import { buildPartApprovalShoppingItemPayload } from '../../../utils/partApprova
 import {
   getProductDisplayName,
   getProductSellPriceCents,
+  isProductAvailableForPartApproval,
   productCatalogCollectionRef,
 } from '../../../utils/productCatalog';
 import { SHOPPING_LIST_STATUS } from '../../../utils/shoppingListStatus';
@@ -223,10 +223,14 @@ const normalizeDbItemOption = (docId, data = {}) => {
   const unitCostCents = Number(data.rate || data.cost || 0);
   const unitPriceCents = getProductSellPriceCents(data) || Number(data.sellPrice || data.rate || data.cost || 0);
   const photoFields = itemPhotoFieldsFromSource(data, name);
+  const availableForPartApproval = isProductAvailableForPartApproval(data);
 
   return {
     ...data,
     id,
+    active: data.active !== false,
+    availableForPartApproval,
+    partApprovalAvailable: availableForPartApproval,
     name,
     description: data.description || '',
     genericItemId: id,
@@ -1894,11 +1898,12 @@ const PartApprovalEditModal = ({ approval, working, onClose, onSave, onDelete })
     const loadDbItems = async () => {
       setLoadingDbItems(true);
       try {
-        const itemsSnap = await getDocs(query(productCatalogCollectionRef(db, recentlySelectedCompany), orderBy('commonName')));
+        const itemsSnap = await getDocs(productCatalogCollectionRef(db, recentlySelectedCompany));
         if (!active) return;
 
         const options = itemsSnap.docs
           .map((itemDoc) => normalizeDbItemOption(itemDoc.id, itemDoc.data()))
+          .filter((item) => item.active !== false && item.availableForPartApproval)
           .sort((left, right) => left.name.localeCompare(right.name));
         setDbItems(options);
 
@@ -1988,6 +1993,7 @@ const PartApprovalEditModal = ({ approval, working, onClose, onSave, onDelete })
                   isLoading={loadingDbItems}
                   isSearchable
                   placeholder="Select a product"
+                  noOptionsMessage={() => 'No part approval products available'}
                   styles={selectStyles}
                 />
               </div>

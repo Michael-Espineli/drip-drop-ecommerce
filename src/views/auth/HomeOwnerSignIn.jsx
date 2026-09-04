@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { getAuth, sendPasswordResetEmail, signInWithEmailAndPassword } from 'firebase/auth';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import toast from 'react-hot-toast';
 import { Context } from "../../context/AuthContext";
+import {
+    PASSWORD_RESET_RECENTLY_SENT_CODE,
+    sendAccountPasswordResetEmail,
+} from "../../utils/passwordReset";
 
 export default function HomeOwnerSignIn() {
     const [email, setEmail] = useState('');
@@ -78,6 +82,8 @@ export default function HomeOwnerSignIn() {
     };
 
     const handlePasswordReset = async () => {
+        if (resetLoading) return;
+
         const trimmedEmail = email.trim();
 
         if (!trimmedEmail) {
@@ -87,7 +93,7 @@ export default function HomeOwnerSignIn() {
 
         setResetLoading(true);
         try {
-            await sendPasswordResetEmail(auth, trimmedEmail);
+            await sendAccountPasswordResetEmail(auth, trimmedEmail);
             toast.success('Password reset email sent.');
         } catch (error) {
             console.error("Firebase Password Reset Error:", error);
@@ -97,6 +103,9 @@ export default function HomeOwnerSignIn() {
                     break;
                 case 'auth/user-not-found':
                     toast.error('No account found for that email address.');
+                    break;
+                case PASSWORD_RESET_RECENTLY_SENT_CODE:
+                    toast.error('A reset email was just sent. Please wait a minute before sending another one.');
                     break;
                 default:
                     toast.error('Unable to send reset email. Please try again.');

@@ -15,13 +15,17 @@ import {
 } from "firebase/firestore";
 import toast from "react-hot-toast";
 import {
+  FiAlertCircle,
   FiArrowUpRight,
+  FiBriefcase,
   FiCalendar,
   FiCheckCircle,
   FiClock,
+  FiClipboard,
   FiDollarSign,
   FiEdit2,
   FiFilter,
+  FiFlag,
   FiGift,
   FiPlus,
   FiRefreshCw,
@@ -70,6 +74,7 @@ import {
   isAcceptedWorkOffer,
   isOpenWorkOffer,
   isScheduledWorkOffer,
+  isWorkOfferRecord,
   normalizedWorkOfferStatusKey,
   normalizeWorkOfferIncentive,
   normalizeWorkOfferStatus,
@@ -147,6 +152,49 @@ const dateAtEndOfDay = (dateValue) => {
   const date = new Date(`${dateValue || todayInputDate()}T23:59:59`);
   date.setHours(23, 59, 59, 999);
   return date;
+};
+
+const dateTimeFromInput = (dateValue, timeValue, fallbackHour = 8, fallbackMinute = 0) => {
+  const hour = String(fallbackHour).padStart(2, "0");
+  const minute = String(fallbackMinute).padStart(2, "0");
+  const parsed = new Date(`${dateValue || todayInputDate()}T${timeValue || `${hour}:${minute}`}:00`);
+  return Number.isNaN(parsed.getTime()) ? dateAtStartOfDay(dateValue) : parsed;
+};
+
+const getWorkOfferTimelineStart = (offer = {}) =>
+  offer.timelineStartAt ||
+  offer.availableFromAt ||
+  offer.availableFrom ||
+  offer.proposedStartDate ||
+  offer.routeDate ||
+  offer.serviceDate;
+
+const getWorkOfferDeadline = (offer = {}) =>
+  offer.completionDeadlineAt ||
+  offer.deadlineAt ||
+  offer.dueAt ||
+  offer.mustCompleteBy ||
+  offer.completeBy ||
+  offer.proposedEndDate;
+
+const workOfferDeadlineState = (offer = {}) => {
+  const deadlineMillis = toMillis(getWorkOfferDeadline(offer));
+  if (!deadlineMillis) return { label: "No deadline", tone: "missing" };
+
+  const now = Date.now();
+  const hoursAway = (deadlineMillis - now) / (60 * 60 * 1000);
+  if (hoursAway < 0) return { label: "Overdue", tone: "overdue" };
+  if (hoursAway <= 24) return { label: "Due today", tone: "today" };
+  if (hoursAway <= 72) return { label: "Due soon", tone: "soon" };
+  return { label: "Scheduled", tone: "scheduled" };
+};
+
+const deadlineClasses = (tone) => {
+  if (tone === "overdue") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (tone === "today") return "border-orange-200 bg-orange-50 text-orange-800";
+  if (tone === "soon") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (tone === "missing") return "border-slate-200 bg-slate-50 text-slate-500";
+  return "border-blue-200 bg-blue-50 text-blue-700";
 };
 
 const dayNameFromDate = (dateValue) =>
@@ -315,6 +363,11 @@ const emptyOfferForm = (currentUserId = "") => ({
   jobId: "",
   title: "",
   notes: "",
+  timelineStartDate: todayInputDate(),
+  timelineStartTime: "08:00",
+  completionDeadlineDate: todayInputDate(),
+  completionDeadlineTime: "17:00",
+  timelineNotes: "",
   estimatedMinutes: "",
   basePayAmount: "",
   allowsTechnicianSelfScheduling: true,
@@ -330,20 +383,57 @@ const SummaryTile = ({ icon: Icon, label, value, detail, tone = "slate" }) => {
     green: "border-emerald-200 bg-emerald-50 text-emerald-700",
     amber: "border-amber-200 bg-amber-50 text-amber-800",
     violet: "border-violet-200 bg-violet-50 text-violet-700",
-    slate: "border-slate-200 bg-white text-slate-700",
+    slate: "border-theme bg-surface-soft text-theme-muted",
   };
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-lg border border-theme bg-surface p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-          <p className="mt-1 text-xl font-bold text-slate-950">{value}</p>
-          <p className="mt-1 text-xs text-slate-500">{detail}</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">{label}</p>
+          <p className="mt-1 text-xl font-bold text-theme">{value}</p>
+          <p className="mt-1 text-xs text-theme-subtle">{detail}</p>
         </div>
         <span className={`flex h-10 w-10 items-center justify-center rounded-lg border ${toneClasses[tone] || toneClasses.slate}`}>
           <Icon className="h-5 w-5" />
         </span>
+      </div>
+    </div>
+  );
+};
+
+const ManagementLane = ({ icon: Icon, title, value, detail, actionLabel, onClick, tone = "slate" }) => {
+  const toneClasses = {
+    blue: "border-blue-200 bg-blue-50 text-blue-700",
+    green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-800",
+    rose: "border-rose-200 bg-rose-50 text-rose-700",
+    slate: "border-theme bg-surface-soft text-theme-muted",
+  };
+
+  return (
+    <div className="rounded-lg border border-theme bg-surface p-4 shadow-sm">
+      <div className="flex items-start gap-3">
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${toneClasses[tone] || toneClasses.slate}`}>
+          <Icon className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-bold text-theme">{title}</p>
+            <p className="text-lg font-bold text-theme">{value}</p>
+          </div>
+          <p className="mt-1 text-xs text-theme-subtle">{detail}</p>
+          {onClick && (
+            <button
+              type="button"
+              onClick={onClick}
+              className="mt-3 inline-flex items-center gap-2 rounded-md border border-theme bg-surface px-3 py-1.5 text-xs font-bold text-theme-muted transition hover:bg-surface-soft"
+            >
+              {actionLabel}
+              <FiArrowUpRight className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -443,7 +533,7 @@ const OfferedWork = () => {
         getDoc(doc(db, "companies", recentlySelectedCompany, "settings", COMPANY_WIDE_SETTINGS_DOC_ID)),
       ]);
 
-      setOffers(offersSnap.docs.map((item) => ({ id: item.id, ...item.data() })));
+      setOffers(offersSnap.docs.map((item) => ({ id: item.id, ...item.data() })).filter(isWorkOfferRecord));
       setBoards(boardsSnap.docs.map(normalizeBoard).sort((a, b) => a.name.localeCompare(b.name)));
       setCompanyUsers(sortCompanyUsersByName(usersSnap.docs.map((item) => ({ id: item.id, ...item.data() }))));
       setCompanySettings(normalizeCompanyWorkSettings(settingsSnap.exists() ? settingsSnap.data() : {}));
@@ -461,12 +551,14 @@ const OfferedWork = () => {
   }, [recentlySelectedCompany]);
 
   const visibleOffers = useMemo(() => (
-    offers.filter((offer) => workOfferVisibleToUser({
-      offer,
-      currentUserIds,
-      userBoardIds,
-      canViewAll: canViewAllOffers,
-    }))
+    offers
+      .filter(isWorkOfferRecord)
+      .filter((offer) => workOfferVisibleToUser({
+        offer,
+        currentUserIds,
+        userBoardIds,
+        canViewAll: canViewAllOffers,
+      }))
   ), [canViewAllOffers, currentUserIds, offers, userBoardIds]);
 
   const technicianOptions = useMemo(() => {
@@ -488,8 +580,22 @@ const OfferedWork = () => {
     const ready = visibleOffers.filter(isAcceptedReadyToScheduleWorkOffer);
     const scheduled = visibleOffers.filter(isScheduledWorkOffer);
     const board = visibleOffers.filter((offer) => getWorkOfferTypeText(offer).toLowerCase() === "internal board");
+    const openBoard = board.filter(isOpenWorkOffer);
+    const direct = visibleOffers.filter((offer) => getWorkOfferTypeText(offer).toLowerCase() === "direct user");
     const selfSchedule = visibleOffers.filter(getWorkOfferCanSelfSchedule);
     const incentives = visibleOffers.reduce((total, offer) => total + getWorkOfferIncentiveCents(offer), 0);
+    const needsApproval = visibleOffers.filter((offer) =>
+      ["pending approval", "acceptance pending approval"].includes(normalizedWorkOfferStatusKey(offer.status))
+    );
+    const routeCoverage = visibleOffers.filter((offer) =>
+      ["fullRoute", "partialRoute", "route", "routeStops"].includes(offer.workOfferCategory || offer.workCategory || offer.sourceType || "")
+    );
+    const openMissingDeadline = open.filter((offer) => !toMillis(getWorkOfferDeadline(offer)));
+    const openOverdue = open.filter((offer) => workOfferDeadlineState(offer).tone === "overdue");
+    const openDueSoon = open.filter((offer) => ["today", "soon"].includes(workOfferDeadlineState(offer).tone));
+    const final = visibleOffers.filter((offer) =>
+      ["rejected", "cancelled", "canceled", "expired"].includes(normalizedWorkOfferStatusKey(offer.status))
+    );
 
     return {
       total: visibleOffers.length,
@@ -498,11 +604,54 @@ const OfferedWork = () => {
       ready: ready.length,
       scheduled: scheduled.length,
       board: board.length,
+      openBoard: openBoard.length,
+      direct: direct.length,
       selfSchedule: selfSchedule.length,
       incentives,
+      needsApproval: needsApproval.length,
+      routeCoverage: routeCoverage.length,
+      missingDeadline: openMissingDeadline.length,
+      overdue: openOverdue.length,
+      dueSoon: openDueSoon.length,
+      final: final.length,
       estimatedPayCents: visibleOffers.reduce((total, offer) => total + getWorkOfferEstimatedPayCents(offer), 0),
     };
   }, [visibleOffers]);
+
+  const boardMemberCount = useMemo(() => (
+    uniqueStrings(boards.flatMap((board) => [
+      ...(board.memberUserIds || []),
+      ...(board.memberCompanyUserDocIds || []),
+    ])).length
+  ), [boards]);
+
+  const boardOfferCountsById = useMemo(() => (
+    visibleOffers.reduce((counts, offer) => {
+      if (getWorkOfferTypeText(offer) !== "Internal Board" || !isOpenWorkOffer(offer)) return counts;
+      offerBoardIds(offer).forEach((boardId) => {
+        counts[boardId] = (counts[boardId] || 0) + 1;
+      });
+      return counts;
+    }, {})
+  ), [visibleOffers]);
+
+  const applyManagementView = ({
+    status = "all",
+    type = "all",
+    category = "all",
+    board = "all",
+    technician = "all",
+    scheduling = "all",
+    search = "",
+  } = {}) => {
+    setStatusFilter(status);
+    setTypeFilter(type);
+    setCategoryFilter(category);
+    setBoardFilter(board);
+    setTechnicianFilter(technician);
+    setSchedulingFilter(scheduling);
+    setSearchTerm(search);
+  };
 
   const filteredOffers = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -542,6 +691,14 @@ const OfferedWork = () => {
 
         const openDifference = Number(isOpenWorkOffer(right)) - Number(isOpenWorkOffer(left));
         if (openDifference !== 0) return openDifference;
+
+        const leftDeadline = toMillis(getWorkOfferDeadline(left));
+        const rightDeadline = toMillis(getWorkOfferDeadline(right));
+        if (leftDeadline || rightDeadline) {
+          if (!leftDeadline) return 1;
+          if (!rightDeadline) return -1;
+          if (leftDeadline !== rightDeadline) return leftDeadline - rightDeadline;
+        }
 
         return toMillis(right.createdAt || right.postedAt || right.sentAt) -
           toMillis(left.createdAt || left.postedAt || left.sentAt);
@@ -590,6 +747,18 @@ const OfferedWork = () => {
         : 0;
   const effectiveOfferIncentive = offerIncentiveCents > 0 ? offerIncentive : normalizeWorkOfferIncentive();
   const offerEstimatedTotalCents = offerBasePayCents + offerIncentiveCents;
+  const offerTimelineStartAt = dateTimeFromInput(
+    offerForm.timelineStartDate || offerForm.routeDate,
+    offerForm.timelineStartTime,
+    8,
+    0
+  );
+  const offerCompletionDeadlineAt = dateTimeFromInput(
+    offerForm.completionDeadlineDate || offerForm.routeDate,
+    offerForm.completionDeadlineTime,
+    17,
+    0
+  );
 
   useEffect(() => {
     if (!offerModalOpen || !recentlySelectedCompany) return undefined;
@@ -658,6 +827,10 @@ const OfferedWork = () => {
       if (field === "offerType" && value === "Direct User") next.boardIds = [];
       if (field === "offerType" && value === "Internal Board") next.directUserId = "";
       if (field === "routeId") next.selectedStopIds = [];
+      if (field === "routeDate") {
+        if (!current.timelineStartDate || current.timelineStartDate === current.routeDate) next.timelineStartDate = value;
+        if (!current.completionDeadlineDate || current.completionDeadlineDate === current.routeDate) next.completionDeadlineDate = value;
+      }
       return next;
     });
   };
@@ -752,6 +925,14 @@ const OfferedWork = () => {
       toast.error("Select at least one work offer board.");
       return;
     }
+    if (!offerForm.completionDeadlineDate || !offerForm.completionDeadlineTime) {
+      toast.error("Set a completion deadline before creating the offer.");
+      return;
+    }
+    if (offerCompletionDeadlineAt < offerTimelineStartAt) {
+      toast.error("The completion deadline must be after the available-from time.");
+      return;
+    }
 
     const routeTech =
       companyUsers.find((item) => getCompanyUserId(item) === offerForm.routeTechId) ||
@@ -801,6 +982,8 @@ const OfferedWork = () => {
       sourceType: offerForm.workOfferCategory,
       postedToBoard: isBoardPost,
       isBoardPost,
+      boardVisibility: isBoardPost ? "Employees & Contractors" : "Contractors Only",
+      boardPostId: isBoardPost ? id : "",
       boardIds: isBoardPost ? selectedBoards.map((board) => board.id) : [],
       boardNames: isBoardPost ? selectedBoards.map((board) => board.name) : [],
       boardName: isBoardPost ? selectedBoards.map((board) => board.name).join(", ") : "",
@@ -831,8 +1014,13 @@ const OfferedWork = () => {
       customerName: selectedJob?.customerName || "",
       serviceLocationId: selectedJob?.serviceLocationId || "",
       serviceLocationName: selectedJob?.serviceLocationName || "",
-      proposedStartDate: isRouteOffer ? Timestamp.fromDate(dateAtStartOfDay(offerForm.routeDate)) : null,
-      proposedEndDate: null,
+      timelineStartAt: Timestamp.fromDate(offerTimelineStartAt),
+      proposedStartDate: Timestamp.fromDate(offerTimelineStartAt),
+      proposedEndDate: Timestamp.fromDate(offerCompletionDeadlineAt),
+      completionDeadlineAt: Timestamp.fromDate(offerCompletionDeadlineAt),
+      deadlineAt: Timestamp.fromDate(offerCompletionDeadlineAt),
+      dueAt: Timestamp.fromDate(offerCompletionDeadlineAt),
+      timelineNotes: offerForm.timelineNotes.trim(),
       estimatedMinutes: Number(offerForm.estimatedMinutes || 0),
       paySource: offerBasePayCents > 0 ? "Offered Amount" : "Technician Rate",
       offeredAmountCents: offerBasePayCents,
@@ -891,6 +1079,12 @@ const OfferedWork = () => {
         ...payload,
         createdAt: new Date(),
         updatedAt: new Date(),
+        timelineStartAt: offerTimelineStartAt,
+        proposedStartDate: offerTimelineStartAt,
+        proposedEndDate: offerCompletionDeadlineAt,
+        completionDeadlineAt: offerCompletionDeadlineAt,
+        deadlineAt: offerCompletionDeadlineAt,
+        dueAt: offerCompletionDeadlineAt,
         postedAt: isBoardPost && status === "Posted" ? new Date() : null,
         sentAt: !isBoardPost && status === "Sent" ? new Date() : null,
       }, ...current]);
@@ -1147,22 +1341,22 @@ const OfferedWork = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+    <div className="min-h-screen bg-page px-2 py-6 text-theme sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-lg border border-theme bg-surface p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-3xl">
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company operations</p>
-              <h1 className="mt-1 text-3xl font-bold text-slate-950">Offered Work</h1>
-              <p className="mt-1 text-sm text-slate-500">
-                Route coverage, partial routes, direct offers, board posts, incentives, and accepted work.
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Work offer management</p>
+              <h1 className="mt-1 text-3xl font-bold text-theme">Offered Work Management</h1>
+              <p className="mt-1 text-sm text-theme-subtle">
+                Manage what has been posted, sent, claimed, approved, scheduled, and incentivized.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <Link
                 to="/company/settings/company-wide"
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                className="inline-flex items-center gap-2 rounded-md border border-theme bg-surface px-4 py-2 text-sm font-bold text-theme-muted shadow-sm transition hover:bg-surface-soft"
               >
                 <FiSettings className="h-4 w-4" />
                 Settings
@@ -1171,7 +1365,7 @@ const OfferedWork = () => {
                 <button
                   type="button"
                   onClick={openBoardModal}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                  className="inline-flex items-center gap-2 rounded-md border border-theme bg-surface px-4 py-2 text-sm font-bold text-theme-muted shadow-sm transition hover:bg-surface-soft"
                 >
                   <FiUsers className="h-4 w-4" />
                   Boards
@@ -1180,7 +1374,7 @@ const OfferedWork = () => {
               <button
                 type="button"
                 onClick={loadOffers}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                className="inline-flex items-center gap-2 rounded-md border border-theme bg-surface px-4 py-2 text-sm font-bold text-theme-muted shadow-sm transition hover:bg-surface-soft"
               >
                 <FiRefreshCw className="h-4 w-4" />
                 Refresh
@@ -1213,7 +1407,55 @@ const OfferedWork = () => {
           <SummaryTile icon={FiDollarSign} label="Estimated Pay" value={moneyFromCents(summary.estimatedPayCents)} detail={`${summary.total} visible offers`} tone="violet" />
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3 xl:grid-cols-5">
+          <ManagementLane
+            icon={FiFlag}
+            title="Deadline Watch"
+            value={summary.overdue}
+            detail={`${summary.dueSoon} due soon - ${summary.missingDeadline} missing deadline`}
+            actionLabel="Open"
+            tone={summary.overdue ? "rose" : "amber"}
+            onClick={() => applyManagementView({ status: "open" })}
+          />
+          <ManagementLane
+            icon={FiAlertCircle}
+            title="Approval Queue"
+            value={summary.needsApproval}
+            detail="Posts and claims waiting for manager review"
+            actionLabel="Review"
+            tone="rose"
+            onClick={() => applyManagementView({ status: "open", search: "pending approval" })}
+          />
+          <ManagementLane
+            icon={FiCalendar}
+            title="Schedule Queue"
+            value={summary.ready}
+            detail="Accepted offers not linked to service stops"
+            actionLabel="Schedule"
+            tone="green"
+            onClick={() => applyManagementView({ status: "ready" })}
+          />
+          <ManagementLane
+            icon={FiClipboard}
+            title="Board Posts"
+            value={summary.board}
+            detail={`${boards.length} board${boards.length === 1 ? "" : "s"} with ${boardMemberCount} member${boardMemberCount === 1 ? "" : "s"}`}
+            actionLabel="Manage"
+            tone="blue"
+            onClick={() => applyManagementView({ status: "open", type: "internal board" })}
+          />
+          <ManagementLane
+            icon={FiBriefcase}
+            title="Direct Assignments"
+            value={summary.direct}
+            detail={`${summary.routeCoverage} route coverage offer${summary.routeCoverage === 1 ? "" : "s"}`}
+            actionLabel="Open"
+            tone="slate"
+            onClick={() => applyManagementView({ status: "all", type: "direct user" })}
+          />
+        </section>
+
+        <section className="rounded-lg border border-theme bg-surface shadow-sm">
           <div className="grid grid-cols-1 gap-3 p-5 xl:grid-cols-[minmax(260px,1fr)_repeat(6,minmax(145px,170px))]">
             <label className="relative block">
               <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -1222,7 +1464,7 @@ const OfferedWork = () => {
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 placeholder="Search offered work..."
-                className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="h-10 w-full rounded-md border border-theme bg-surface pl-9 pr-3 text-sm text-theme shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               />
             </label>
 
@@ -1231,7 +1473,7 @@ const OfferedWork = () => {
               <select
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value)}
-                className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="h-10 w-full rounded-md border border-theme bg-surface pl-9 pr-3 text-sm font-medium text-theme-muted shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               >
                 {WORK_OFFER_STATUS_FILTERS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -1242,7 +1484,7 @@ const OfferedWork = () => {
             <select
               value={categoryFilter}
               onChange={(event) => setCategoryFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-theme bg-surface px-3 text-sm font-medium text-theme-muted shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               {WORK_OFFER_CATEGORY_FILTERS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -1252,7 +1494,7 @@ const OfferedWork = () => {
             <select
               value={typeFilter}
               onChange={(event) => setTypeFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-theme bg-surface px-3 text-sm font-medium text-theme-muted shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               {WORK_OFFER_TYPE_FILTERS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -1262,7 +1504,7 @@ const OfferedWork = () => {
             <select
               value={boardFilter}
               onChange={(event) => setBoardFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-theme bg-surface px-3 text-sm font-medium text-theme-muted shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               {boardOptions.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -1272,7 +1514,7 @@ const OfferedWork = () => {
             <select
               value={technicianFilter}
               onChange={(event) => setTechnicianFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-theme bg-surface px-3 text-sm font-medium text-theme-muted shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               {technicianOptions.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -1282,7 +1524,7 @@ const OfferedWork = () => {
             <select
               value={schedulingFilter}
               onChange={(event) => setSchedulingFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-theme bg-surface px-3 text-sm font-medium text-theme-muted shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               <option value="all">All Scheduling</option>
               <option value="self">Tech Can Schedule</option>
@@ -1293,35 +1535,41 @@ const OfferedWork = () => {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-            <div>Showing {filteredOffers.length} of {visibleOffers.length} visible offer{visibleOffers.length === 1 ? "" : "s"}</div>
-            <div>{statusFilter === "all" ? "All statuses" : statusFilter} - {categoryFilter === "all" ? "All work" : categoryFilter}</div>
+        <section className="overflow-hidden rounded-lg border border-theme bg-surface shadow-sm">
+          <div className="flex flex-col gap-1 border-b border-theme px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-bold text-theme">Offer Operations Board</p>
+              <p className="mt-0.5 text-xs text-theme-subtle">
+                Showing {filteredOffers.length} of {visibleOffers.length} visible offer{visibleOffers.length === 1 ? "" : "s"}
+              </p>
+            </div>
+            <div className="text-xs font-semibold text-theme-subtle">{statusFilter === "all" ? "All statuses" : statusFilter} - {categoryFilter === "all" ? "All work" : categoryFilter}</div>
           </div>
 
           {loading ? (
-            <div className="p-8 text-center text-sm font-medium text-slate-500">Loading offered work...</div>
+            <div className="p-8 text-center text-sm font-medium text-theme-subtle">Loading offered work...</div>
           ) : filteredOffers.length === 0 ? (
             <div className="p-8 text-center">
-              <p className="text-sm font-semibold text-slate-700">No offered work found.</p>
-              <p className="mt-1 text-sm text-slate-500">Adjust the search or filters to see more offers.</p>
+              <p className="text-sm font-semibold text-theme-muted">No offered work found.</p>
+              <p className="mt-1 text-sm text-theme-subtle">Adjust the search or filters to see more offers.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-full bg-white">
-                <thead className="bg-slate-50">
+              <table className="min-w-full bg-surface">
+                <thead className="bg-surface-soft">
                   <tr>
-                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Work</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Audience</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Source</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Scope</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Pay</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Created</th>
-                    <th className="border-b border-slate-200 px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Work</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Status</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Audience</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Source</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Scope</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Pay</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Deadline</th>
+                    <th className="border-b border-theme px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-theme-subtle">Created</th>
+                    <th className="border-b border-theme px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-theme-subtle">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 bg-white">
+                <tbody className="divide-y divide-slate-200 bg-surface">
                   {filteredOffers.map((offer) => {
                     const targetText = getWorkOfferTargetText(offer);
                     const typeText = getWorkOfferTypeText(offer);
@@ -1333,21 +1581,24 @@ const OfferedWork = () => {
                     const totalPayCents = getWorkOfferEstimatedPayCents(offer);
                     const showAccept = canAcceptOffers && isOpenWorkOffer(offer) && statusKey !== "pending approval";
                     const showApprove = canApproveOffers && ["pending approval", "acceptance pending approval"].includes(statusKey);
+                    const timelineStart = getWorkOfferTimelineStart(offer);
+                    const deadline = getWorkOfferDeadline(offer);
+                    const deadlineState = workOfferDeadlineState(offer);
 
                     return (
-                      <tr key={offer.id} className="align-top transition hover:bg-slate-50">
+                      <tr key={offer.id} className="align-top transition hover:bg-surface-soft">
                         <td className="px-5 py-3">
                           <div className="max-w-sm">
-                            <p className="font-semibold text-slate-950">
+                            <p className="font-semibold text-theme">
                               {offer.title || offer.name || offer.serviceStopTypeName || "Offered Work"}
                             </p>
-                            <p className="mt-1 text-xs text-slate-500">
+                            <p className="mt-1 text-xs text-theme-subtle">
                               {[offer.jobInternalId || offer.jobName || offer.jobId, getWorkOfferCategoryText(offer)].filter(Boolean).join(" - ") || "No job reference"}
                             </p>
-                            {(offer.proposedStartDate || offer.routeDate) && (
+                            {timelineStart && (
                               <p className="mt-2 inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
                                 <FiCalendar className="h-3.5 w-3.5" />
-                                {formatDateTime(offer.proposedStartDate || offer.routeDate)}
+                                Available {formatDateTime(timelineStart)}
                               </p>
                             )}
                           </div>
@@ -1361,37 +1612,52 @@ const OfferedWork = () => {
                           )}
                         </td>
                         <td className="px-5 py-3">
-                          <div className="flex items-start gap-2 text-sm text-slate-700">
-                            <FiUser className="mt-0.5 h-4 w-4 text-slate-400" />
+                          <div className="flex items-start gap-2 text-sm text-theme-muted">
+                            <FiUser className="mt-0.5 h-4 w-4 text-theme-subtle" />
                             <div>
                               <p className="font-semibold">{targetText}</p>
-                              <p className="text-xs text-slate-500">
+                              <p className="text-xs text-theme-subtle">
                                 {typeText === "Internal Board" ? offerBoardNames(offer).join(", ") || "Board post" : typeText}
                               </p>
                             </div>
                           </div>
                         </td>
                         <td className="px-5 py-3">
-                          <p className="text-sm font-semibold text-slate-800">{offer.routeName || offer.jobName || offer.customerName || "-"}</p>
-                          <p className="mt-1 text-xs text-slate-500">{offer.routeTechName || offer.serviceLocationName || offer.address?.streetAddress || "-"}</p>
+                          <p className="text-sm font-semibold text-theme-muted">{offer.routeName || offer.jobName || offer.customerName || "-"}</p>
+                          <p className="mt-1 text-xs text-theme-subtle">{offer.routeTechName || offer.serviceLocationName || offer.address?.streetAddress || "-"}</p>
                         </td>
                         <td className="px-5 py-3">
-                          <p className="text-sm font-semibold text-slate-800">
+                          <p className="text-sm font-semibold text-theme-muted">
                             {offer.stopCount || offerServiceStopIds(offer).length || getWorkOfferTaskCount(offer)} item{(offer.stopCount || offerServiceStopIds(offer).length || getWorkOfferTaskCount(offer)) === 1 ? "" : "s"}
                           </p>
-                          <p className="mt-1 text-xs text-slate-500">{formatDurationMinutes(offer.estimatedMinutes)}</p>
+                          <p className="mt-1 text-xs text-theme-subtle">{formatDurationMinutes(offer.estimatedMinutes)}</p>
                         </td>
                         <td className="px-5 py-3">
-                          <p className="text-sm font-semibold text-slate-800">{moneyFromCents(totalPayCents)}</p>
+                          <p className="text-sm font-semibold text-theme-muted">{moneyFromCents(totalPayCents)}</p>
                           {incentiveCents > 0 ? (
                             <p className="mt-1 text-xs font-semibold text-emerald-700">
                               {getWorkOfferIncentiveText(offer)} on {moneyFromCents(basePayCents)}
                             </p>
                           ) : (
-                            <p className="mt-1 text-xs text-slate-500">{offer.paySource || "Pay snapshot"}</p>
+                            <p className="mt-1 text-xs text-theme-subtle">{offer.paySource || "Pay snapshot"}</p>
                           )}
                         </td>
-                        <td className="px-5 py-3 text-sm text-slate-600">{formatDate(offer.createdAt)}</td>
+                        <td className="px-5 py-3">
+                          <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-bold ${deadlineClasses(deadlineState.tone)}`}>
+                            <FiFlag className="h-3.5 w-3.5" />
+                            {deadlineState.label}
+                          </span>
+                          <p className="mt-2 text-xs font-semibold text-theme-muted">
+                            {deadline ? formatDateTime(deadline) : "Add a completion deadline"}
+                          </p>
+                          {timelineStart && (
+                            <p className="mt-1 text-xs text-theme-subtle">Starts {formatDateTime(timelineStart)}</p>
+                          )}
+                          {offer.timelineNotes && (
+                            <p className="mt-1 max-w-[220px] text-xs text-theme-subtle line-clamp-2">{offer.timelineNotes}</p>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-sm text-theme-muted">{formatDate(offer.createdAt)}</td>
                         <td className="px-5 py-3 text-right">
                           <div className="flex flex-col items-end gap-2">
                             {showApprove && (
@@ -1418,7 +1684,7 @@ const OfferedWork = () => {
                               <button
                                 type="button"
                                 onClick={() => openIncentiveModal(offer)}
-                                className="inline-flex items-center justify-end gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                className="inline-flex items-center justify-end gap-2 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted transition hover:bg-surface-soft"
                               >
                                 Incentive
                                 <FiGift className="h-4 w-4" />
@@ -1426,7 +1692,7 @@ const OfferedWork = () => {
                             )}
                             <Link
                               to={jobPath}
-                              className="inline-flex items-center justify-end gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                              className="inline-flex items-center justify-end gap-2 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted transition hover:bg-surface-soft"
                             >
                               Open
                               <FiArrowUpRight className="h-4 w-4" />
@@ -1445,16 +1711,16 @@ const OfferedWork = () => {
 
       {offerModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg border border-theme bg-surface shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-theme px-5 py-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Offer Work</h2>
-                <p className="mt-1 text-sm text-slate-500">Post route coverage, route stops, or one-off job work.</p>
+                <h2 className="text-xl font-bold text-theme">Offer Work</h2>
+                <p className="mt-1 text-sm text-theme-subtle">Post route coverage, route stops, or one-off job work.</p>
               </div>
               <button
                 type="button"
                 onClick={closeCreateOfferModal}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-theme-subtle transition hover:bg-surface-soft hover:text-theme"
                 aria-label="Close offer work modal"
               >
                 <FiX className="h-5 w-5" />
@@ -1503,7 +1769,7 @@ const OfferedWork = () => {
               </div>
 
               {["fullRoute", "partialRoute"].includes(offerForm.workOfferCategory) && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="rounded-lg border border-theme bg-surface-soft p-4">
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                     <label className="block">
                       <span className="text-sm font-semibold text-slate-700">Route Date</span>
@@ -1557,20 +1823,20 @@ const OfferedWork = () => {
                         <button
                           type="button"
                           onClick={() => updateOfferForm("selectedStopIds", offerForm.selectedStopIds.length === selectedRouteStopIds.length ? [] : selectedRouteStopIds)}
-                          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          className="rounded-md border border-theme bg-surface px-3 py-1.5 text-xs font-semibold text-theme-muted hover:bg-surface-soft"
                         >
                           {offerForm.selectedStopIds.length === selectedRouteStopIds.length ? "Clear" : "Select All"}
                         </button>
                       </div>
                       <div className="mt-3 grid max-h-64 grid-cols-1 gap-2 overflow-y-auto md:grid-cols-2">
                         {selectedRouteStops.length === 0 ? (
-                          <p className="rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+                          <p className="rounded-md border border-dashed border-theme bg-surface p-4 text-sm text-theme-subtle">
                             No service stops found for this route date.
                           </p>
                         ) : selectedRouteStops.map((stop) => {
                           const checked = offerForm.selectedStopIds.includes(stop.id);
                           return (
-                            <label key={stop.id} className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm hover:bg-blue-50">
+                            <label key={stop.id} className="flex cursor-pointer items-start gap-3 rounded-md border border-theme bg-surface p-3 text-sm hover:bg-blue-50">
                               <input
                                 type="checkbox"
                                 checked={checked}
@@ -1578,8 +1844,8 @@ const OfferedWork = () => {
                                 className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
                               />
                               <span>
-                                <span className="block font-semibold text-slate-800">{serviceStopLabel(stop)}</span>
-                                <span className="mt-1 block text-xs text-slate-500">{formatDateTime(stop.serviceDate)}</span>
+                                <span className="block font-semibold text-theme-muted">{serviceStopLabel(stop)}</span>
+                                <span className="mt-1 block text-xs text-theme-subtle">{formatDateTime(stop.serviceDate)}</span>
                               </span>
                             </label>
                           );
@@ -1591,7 +1857,7 @@ const OfferedWork = () => {
               )}
 
               {offerForm.workOfferCategory === "oneOffJob" && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="rounded-lg border border-theme bg-surface-soft p-4">
                   <label className="block">
                     <span className="text-sm font-semibold text-slate-700">Job</span>
                     <select
@@ -1610,19 +1876,93 @@ const OfferedWork = () => {
                 </div>
               )}
 
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-blue-900">Job Timeline</p>
+                    <p className="text-xs text-blue-700">Set when the work becomes available and when it must be completed.</p>
+                  </div>
+                  <span className={`mt-2 inline-flex w-fit items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-bold sm:mt-0 ${deadlineClasses(offerCompletionDeadlineAt < offerTimelineStartAt ? "overdue" : "scheduled")}`}>
+                    <FiFlag className="h-3.5 w-3.5" />
+                    {offerCompletionDeadlineAt < offerTimelineStartAt ? "Fix timeline" : "Deadline required"}
+                  </span>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <label className="block">
+                    <span className="text-sm font-semibold text-slate-700">Available Date</span>
+                    <input
+                      type="date"
+                      value={offerForm.timelineStartDate}
+                      onChange={(event) => updateOfferForm("timelineStartDate", event.target.value)}
+                      className="mt-1 h-11 w-full rounded-md border border-blue-200 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-sm font-semibold text-slate-700">Available Time</span>
+                    <input
+                      type="time"
+                      value={offerForm.timelineStartTime}
+                      onChange={(event) => updateOfferForm("timelineStartTime", event.target.value)}
+                      className="mt-1 h-11 w-full rounded-md border border-blue-200 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-sm font-semibold text-slate-700">Complete By Date</span>
+                    <input
+                      type="date"
+                      value={offerForm.completionDeadlineDate}
+                      onChange={(event) => updateOfferForm("completionDeadlineDate", event.target.value)}
+                      className="mt-1 h-11 w-full rounded-md border border-blue-200 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-sm font-semibold text-slate-700">Complete By Time</span>
+                    <input
+                      type="time"
+                      value={offerForm.completionDeadlineTime}
+                      onChange={(event) => updateOfferForm("completionDeadlineTime", event.target.value)}
+                      className="mt-1 h-11 w-full rounded-md border border-blue-200 bg-white px-3 text-sm"
+                    />
+                  </label>
+                </div>
+
+                <textarea
+                  rows={2}
+                  value={offerForm.timelineNotes}
+                  onChange={(event) => updateOfferForm("timelineNotes", event.target.value)}
+                  className="mt-3 w-full rounded-md border border-blue-200 bg-surface p-3 text-sm text-theme"
+                  placeholder="Timeline notes, gate access, timing preferences, or completion expectations"
+                />
+
+                <div className="mt-3 grid grid-cols-1 gap-3 text-xs md:grid-cols-2">
+                  <div className="rounded-md border border-blue-100 bg-surface p-3">
+                    <p className="font-bold uppercase tracking-wide text-blue-700">Available From</p>
+                    <p className="mt-1 font-semibold text-theme">{formatDateTime(offerTimelineStartAt)}</p>
+                  </div>
+                  <div className="rounded-md border border-blue-100 bg-surface p-3">
+                    <p className="font-bold uppercase tracking-wide text-blue-700">Must Be Done By</p>
+                    <p className="mt-1 font-semibold text-theme">{formatDateTime(offerCompletionDeadlineAt)}</p>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 {offerForm.offerType === "Internal Board" ? (
                   <div>
                     <p className="text-sm font-semibold text-slate-700">Boards</p>
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                       {boards.length === 0 ? (
-                        <p className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                        <p className="rounded-md border border-dashed border-theme p-4 text-sm text-theme-subtle">
                           Create a work offer board before posting to a board.
                         </p>
                       ) : boards.map((board) => {
                         const checked = offerForm.boardIds.includes(board.id);
                         return (
-                          <label key={board.id} className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 text-sm hover:bg-blue-50">
+                          <label key={board.id} className="flex cursor-pointer items-start gap-3 rounded-md border border-theme p-3 text-sm hover:bg-blue-50">
                             <input
                               type="checkbox"
                               checked={checked}
@@ -1630,8 +1970,8 @@ const OfferedWork = () => {
                               className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
                             />
                             <span>
-                              <span className="block font-semibold text-slate-800">{board.name}</span>
-                              <span className="mt-1 block text-xs text-slate-500">{board.memberNames.length} member{board.memberNames.length === 1 ? "" : "s"}</span>
+                              <span className="block font-semibold text-theme-muted">{board.name}</span>
+                              <span className="mt-1 block text-xs text-theme-subtle">{board.memberNames.length} member{board.memberNames.length === 1 ? "" : "s"}</span>
                             </span>
                           </label>
                         );
@@ -1728,15 +2068,15 @@ const OfferedWork = () => {
                 <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Base Pay</p>
-                    <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(offerBasePayCents)}</p>
+                    <p className="mt-1 font-bold text-emerald-900">{moneyFromCents(offerBasePayCents)}</p>
                   </div>
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Incentive</p>
-                    <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(canAddIncentives ? offerIncentiveCents : 0)}</p>
+                    <p className="mt-1 font-bold text-emerald-900">{moneyFromCents(canAddIncentives ? offerIncentiveCents : 0)}</p>
                   </div>
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Offer Total</p>
-                    <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(canAddIncentives ? offerEstimatedTotalCents : offerBasePayCents)}</p>
+                    <p className="mt-1 font-bold text-emerald-900">{moneyFromCents(canAddIncentives ? offerEstimatedTotalCents : offerBasePayCents)}</p>
                   </div>
                 </div>
                 {canAddIncentives && offerForm.incentiveType !== "none" && (
@@ -1744,7 +2084,7 @@ const OfferedWork = () => {
                     rows={2}
                     value={offerForm.incentiveNotes}
                     onChange={(event) => updateOfferForm("incentiveNotes", event.target.value)}
-                    className="mt-3 w-full rounded-md border border-emerald-200 bg-white p-3 text-sm text-emerald-950"
+                    className="mt-3 w-full rounded-md border border-emerald-200 bg-surface p-3 text-sm text-emerald-900"
                     placeholder="Incentive notes"
                   />
                 )}
@@ -1762,7 +2102,7 @@ const OfferedWork = () => {
                 </label>
               </div>
 
-              <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <label className="flex items-center gap-3 rounded-lg border border-theme bg-surface-soft p-4">
                 <input
                   type="checkbox"
                   checked={offerForm.allowsTechnicianSelfScheduling}
@@ -1773,12 +2113,12 @@ const OfferedWork = () => {
               </label>
             </div>
 
-            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:justify-end">
+            <div className="flex flex-col-reverse gap-3 border-t border-theme bg-surface-soft px-5 py-4 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={closeCreateOfferModal}
                 disabled={savingOffer}
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
+                className="rounded-md border border-theme bg-surface px-4 py-2 text-sm font-semibold text-theme-muted transition hover:bg-surface-soft disabled:opacity-60"
               >
                 Cancel
               </button>
@@ -1797,26 +2137,41 @@ const OfferedWork = () => {
 
       {boardModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border border-theme bg-surface shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-theme px-5 py-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Work Offer Boards</h2>
-                <p className="mt-1 text-sm text-slate-500">Boards control which technicians can see internal offers.</p>
+                <h2 className="text-xl font-bold text-theme">Work Offer Boards</h2>
+                <p className="mt-1 text-sm text-theme-subtle">Manage board membership and the internal posts available to each group.</p>
               </div>
               <button
                 type="button"
                 onClick={() => setBoardModalOpen(false)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-theme-subtle transition hover:bg-surface-soft"
                 aria-label="Close board manager"
               >
                 <FiX className="h-5 w-5" />
               </button>
             </div>
 
+            <div className="grid grid-cols-1 gap-3 border-b border-theme bg-surface-soft px-5 py-4 sm:grid-cols-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Boards</p>
+                <p className="mt-1 text-xl font-bold text-theme">{boards.length}</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Members</p>
+                <p className="mt-1 text-xl font-bold text-theme">{boardMemberCount}</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Open Posts</p>
+                <p className="mt-1 text-xl font-bold text-theme">{summary.openBoard}</p>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-[1fr_320px]">
               <div className="space-y-3">
                 {boards.length === 0 ? (
-                  <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                  <div className="rounded-md border border-dashed border-theme p-4 text-sm text-theme-subtle">
                     No work offer boards yet.
                   </div>
                 ) : boards.map((board) => (
@@ -1824,20 +2179,23 @@ const OfferedWork = () => {
                     key={board.id}
                     type="button"
                     onClick={() => editBoard(board)}
-                    className="flex w-full items-start justify-between gap-3 rounded-md border border-slate-200 bg-white p-4 text-left transition hover:bg-slate-50"
+                    className="flex w-full items-start justify-between gap-3 rounded-md border border-theme bg-surface p-4 text-left transition hover:bg-surface-soft"
                   >
-                    <span>
-                      <span className="block font-semibold text-slate-950">{board.name}</span>
-                      <span className="mt-1 block text-xs text-slate-500">
-                        {board.memberNames.length ? board.memberNames.join(", ") : "No members"}
+                      <span>
+                        <span className="block font-semibold text-theme">{board.name}</span>
+                        <span className="mt-1 block text-xs text-theme-subtle">
+                          {board.memberNames.length ? board.memberNames.join(", ") : "No members"}
+                        </span>
+                        <span className="mt-2 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">
+                          {boardOfferCountsById[board.id] || 0} open post{(boardOfferCountsById[board.id] || 0) === 1 ? "" : "s"}
+                        </span>
                       </span>
-                    </span>
-                    <FiEdit2 className="mt-1 h-4 w-4 text-slate-400" />
+                    <FiEdit2 className="mt-1 h-4 w-4 text-theme-subtle" />
                   </button>
                 ))}
               </div>
 
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-lg border border-theme bg-surface-soft p-4">
                 <label className="block">
                   <span className="text-sm font-semibold text-slate-700">Board Name</span>
                   <input
@@ -1854,7 +2212,7 @@ const OfferedWork = () => {
                       const memberId = getCompanyUserId(member);
                       const checked = boardForm.memberUserIds.includes(memberId);
                       return (
-                        <label key={memberId} className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
+                        <label key={memberId} className="flex cursor-pointer items-start gap-3 rounded-md border border-theme bg-surface p-3 text-sm">
                           <input
                             type="checkbox"
                             checked={checked}
@@ -1862,8 +2220,8 @@ const OfferedWork = () => {
                             className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
                           />
                           <span>
-                            <span className="block font-semibold text-slate-800">{getCompanyUserName(member)}</span>
-                            <span className="mt-1 block text-xs text-slate-500">{getCompanyUserWorkerType(member)}</span>
+                            <span className="block font-semibold text-theme-muted">{getCompanyUserName(member)}</span>
+                            <span className="mt-1 block text-xs text-theme-subtle">{getCompanyUserWorkerType(member)}</span>
                           </span>
                         </label>
                       );
@@ -1875,7 +2233,7 @@ const OfferedWork = () => {
                   <button
                     type="button"
                     onClick={() => setBoardForm({ id: "", name: "", memberUserIds: [] })}
-                    className="flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                    className="flex-1 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted hover:bg-surface-soft"
                   >
                     New
                   </button>
@@ -1896,16 +2254,16 @@ const OfferedWork = () => {
 
       {incentiveOffer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div className="w-full max-w-lg rounded-lg border border-theme bg-surface shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-theme px-5 py-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Offer Incentive</h2>
-                <p className="mt-1 text-sm text-slate-500">{incentiveOffer.title || "Offered Work"}</p>
+                <h2 className="text-xl font-bold text-theme">Offer Incentive</h2>
+                <p className="mt-1 text-sm text-theme-subtle">{incentiveOffer.title || "Offered Work"}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setIncentiveOffer(null)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-theme-subtle transition hover:bg-surface-soft"
                 aria-label="Close incentive editor"
               >
                 <FiX className="h-5 w-5" />
@@ -1959,7 +2317,7 @@ const OfferedWork = () => {
               <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="font-semibold text-emerald-800">Base pay</span>
-                  <span className="font-bold text-emerald-950">{moneyFromCents(getWorkOfferBasePayCents(incentiveOffer))}</span>
+                  <span className="font-bold text-emerald-900">{moneyFromCents(getWorkOfferBasePayCents(incentiveOffer))}</span>
                 </div>
               </div>
 
@@ -1974,12 +2332,12 @@ const OfferedWork = () => {
               </label>
             </div>
 
-            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:justify-end">
+            <div className="flex flex-col-reverse gap-3 border-t border-theme bg-surface-soft px-5 py-4 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => setIncentiveOffer(null)}
                 disabled={savingIncentive}
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                className="rounded-md border border-theme bg-surface px-4 py-2 text-sm font-semibold text-theme-muted hover:bg-surface-soft disabled:opacity-60"
               >
                 Cancel
               </button>

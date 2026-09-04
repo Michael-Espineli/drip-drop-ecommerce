@@ -1423,6 +1423,40 @@ function normalizeDay(day) {
   return null;
 }
 
+function recurringRouteOrderItems(routeData = {}) {
+  const order = Array.isArray(routeData.order) ? routeData.order : [];
+  const legacyOrder = Array.isArray(routeData.recurringRouteOrder)
+    ? routeData.recurringRouteOrder
+    : [];
+  return order.length ? order : legacyOrder;
+}
+
+function reindexRecurringRouteOrderItems(order = []) {
+  return [...order]
+    .sort((left, right) => Number(left?.order || 0) - Number(right?.order || 0))
+    .map((item, index) => ({
+      ...item,
+      order: index + 1,
+    }));
+}
+
+function recurringRouteRssIds(routeData = {}, orderOverride = null) {
+  const order = Array.isArray(orderOverride) ? orderOverride : recurringRouteOrderItems(routeData);
+  return [
+    ...new Set([
+      ...order.map((item) => item?.recurringServiceStopId),
+      ...(Array.isArray(routeData.rssIds) ? routeData.rssIds : []),
+    ].filter((id) => typeof id === "string" && id.trim().length > 0)),
+  ];
+}
+
+function recurringRouteReferencesRss(routeData = {}, rssId = "") {
+  if (!rssId) return false;
+  const order = recurringRouteOrderItems(routeData);
+  return order.some((item) => item?.recurringServiceStopId === rssId) ||
+    recurringRouteRssIds(routeData, order).includes(rssId);
+}
+
 function comparableRssRouteField(rss = {}, field) {
   if (field === "day") return normalizeDay(rss.day) || "";
   return String(rss[field] ?? "").trim();
@@ -1437,11 +1471,14 @@ function didRouteRelevantRssChange(before = {}, after = {}) {
 // Build a patch for one route based on current RSS docs.
 // This keeps route.order entries consistent and removes missing references.
 async function reconcileRouteForRssChange({ db, companyId, routeRef, routeData, changedRssId }) {
-  const order = Array.isArray(routeData.order) ? routeData.order : [];
-  const rssIds = Array.isArray(routeData.rssIds) ? routeData.rssIds : order.map(o => o.recurringServiceStopId).filter(Boolean);
+  const order = recurringRouteOrderItems(routeData);
+  const rssIds = recurringRouteRssIds(routeData, order);
 
   // Fetch all RSS docs referenced by this route (bounded by the route size)
-  const uniqueRssIds = Array.from(new Set(order.map(o => o.recurringServiceStopId).filter(Boolean)));
+  const uniqueRssIds = Array.from(new Set([
+    ...order.map(o => o.recurringServiceStopId).filter(Boolean),
+    ...rssIds,
+  ]));
 
   const rssSnaps = await Promise.all(
     uniqueRssIds.map(id => db.doc(`${RSS_COL(companyId)}/${id}`).get())
@@ -1503,6 +1540,7 @@ async function reconcileRouteForRssChange({ db, companyId, routeRef, routeData, 
 
   const patch = {
     order: reconciledOrder,
+    recurringRouteOrder: reconciledOrder,
     rssIds: newRssIds,
     isValid,
     invalidReason: mismatchReason,
@@ -1516,14 +1554,15 @@ async function reconcileRouteForRssChange({ db, companyId, routeRef, routeData, 
   await routeRef.set(patch, { merge: true });
 }
 
-// Find all routes that reference rssId using rssIds array-contains.
+// Find all routes that reference rssId, including older docs where rssIds is missing.
 async function findRoutesContainingRss({ db, companyId, rssId }) {
   const routesSnap = await db
     .collection(ROUTES_COL(companyId))
-    .where("rssIds", "array-contains", rssId)
     .get();
 
-  return routesSnap.docs;
+  return routesSnap.docs.filter((routeDoc) => (
+    recurringRouteReferencesRss(routeDoc.data() || {}, rssId)
+  ));
 }
 
 // --------- SALES MANUAL RECURRING INVOICES ---------
@@ -2000,15 +2039,24 @@ exports.onRssDeleted = onDocumentDeleted(
     for (const routeDoc of routeDocs) {
       const routeRef = routeDoc.ref;
       const routeData = routeDoc.data();
-      const order = Array.isArray(routeData.order) ? routeData.order : [];
+      const order = recurringRouteOrderItems(routeData);
+      const currentRssIds = recurringRouteRssIds(routeData, order);
 
       // Remove entries referencing deleted RSS
-      const newOrder = order.filter((o) => o.recurringServiceStopId !== rssId);
-      const newRssIds = newOrder.map(o => o.recurringServiceStopId);
+      const newOrder = reindexRecurringRouteOrderItems(
+        order.filter((o) => o.recurringServiceStopId !== rssId)
+      );
+      const newRssIds = currentRssIds.filter((id) => id !== rssId);
+
+      if (newOrder.length === 0 && newRssIds.length === 0) {
+        await routeRef.delete();
+        continue;
+      }
 
       await routeRef.set(
         {
           order: newOrder,
+          recurringRouteOrder: newOrder,
           rssIds: newRssIds,
           lastValidatedAt: FieldValue.serverTimestamp(),
           lastValidatedBy: "cf_rss_listener",

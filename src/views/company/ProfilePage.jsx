@@ -1,5 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from "react";
-import { sendPasswordResetEmail, updateProfile } from "firebase/auth";
+import { updateProfile } from "firebase/auth";
 import { httpsCallable } from 'firebase/functions';
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { Link } from "react-router-dom";
@@ -8,6 +8,12 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, updateDoc, whe
 import { auth, db, functions, storage } from '../../utils/config';
 import { FaExternalLinkAlt } from "react-icons/fa";
 import toast from 'react-hot-toast';
+import { appConfirm } from "../../utils/appDialog";
+import {
+    PASSWORD_RESET_RECENTLY_SENT_CODE,
+    getPasswordResetRecipientEmail,
+    sendAccountPasswordResetEmail,
+} from "../../utils/passwordReset";
 
 const buttonBaseClass = "inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60";
 const primaryButtonClass = `${buttonBaseClass} bg-blue-600 text-white shadow-sm hover:bg-blue-700 focus:ring-blue-100`;
@@ -442,21 +448,33 @@ export default function ProfilePage() {
     };
 
     const handlePasswordReset = async () => {
-        const email = dataBaseUser?.email || user?.email || auth.currentUser?.email;
+        if (passwordResetLoading) return;
+
+        const email = getPasswordResetRecipientEmail(auth.currentUser?.email, user?.email, dataBaseUser?.email);
         if (!email) {
             toast.error("No email address found for this account.");
             return;
         }
 
+        const confirmed = await appConfirm({
+            title: "Send Password Reset Email?",
+            message: `Send a password reset email to ${email}? The person with access to that inbox will be able to change this account's password.`,
+            confirmLabel: "Send Reset Email",
+        });
+        if (!confirmed) return;
+
         setPasswordResetLoading(true);
         const toastId = toast.loading("Sending password reset email...");
 
         try {
-            await sendPasswordResetEmail(auth, email);
+            await sendAccountPasswordResetEmail(auth, email);
             toast.success(`Password reset email sent to ${email}.`, { id: toastId });
         } catch (error) {
             console.error("Error sending password reset email:", error);
-            toast.error("Failed to send password reset email.", { id: toastId });
+            const message = error?.code === PASSWORD_RESET_RECENTLY_SENT_CODE
+                ? "A password reset email was just sent. Please wait a minute before sending another one."
+                : "Failed to send password reset email.";
+            toast.error(message, { id: toastId });
         } finally {
             setPasswordResetLoading(false);
         }
@@ -833,7 +851,7 @@ export default function ProfilePage() {
                                 disabled={passwordResetLoading}
                                 className={`${subtleButtonClass} w-full justify-start`}
                             >
-                                {passwordResetLoading ? "Sending reset email..." : "Update Password"}
+                                {passwordResetLoading ? "Sending reset email..." : "Send Password Reset Email"}
                             </button>
                             <button
                                 type="button"
