@@ -1,5 +1,5 @@
-import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { collection, getDocs, query } from "firebase/firestore";
+import React, { useContext, useEffect, useMemo, useState } from "react";
+import { collection, onSnapshot, query } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { Link, useNavigate } from "react-router-dom";
 import Select from "react-select";
@@ -21,13 +21,7 @@ import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../util
 import { getPlannedRouteOrder, getPlannedRouteRssIds } from "../../../utils/recurringRouteSync";
 import {
   RSS_DAY_OPTIONS,
-  RSS_FREQUENCY_OPTIONS,
-  buildRecurringServiceStopUpdatePayload,
-  formatDateInputValue,
   optionForValue,
-  payTypeOptionFromDoc,
-  recurringRoutePayTypeOptions,
-  selectedPayTypeOptionForStop,
   selectedTechOptionForStop,
 } from "../../../utils/recurringServiceStopEdit";
 
@@ -74,6 +68,46 @@ const stopAddressLabel = (stop = {}) => {
     address.state || stop.state,
     address.zip || stop.zip,
   ].filter(Boolean).join(", ");
+};
+
+const normalizeSearchValue = (value = "") => (
+  String(value || "").toLowerCase().replace(/\s+/g, " ").trim()
+);
+
+const stopSearchValue = (stop = {}) => {
+  const address = stop.address || {};
+  const addressParts = typeof address === "string"
+    ? [address]
+    : [
+      address.streetAddress,
+      address.street,
+      address.addressLine1,
+      address.addressLine2,
+      address.city,
+      address.state,
+      address.zip,
+      address.postalCode,
+    ];
+
+  return normalizeSearchValue([
+    stop.customerName,
+    stop.customerDisplayName,
+    stop.customerCompanyName,
+    stop.locationName,
+    stop.serviceLocationName,
+    stop.nickName,
+    stop.streetAddress,
+    stop.city,
+    stop.state,
+    stop.zip,
+    ...addressParts,
+  ].filter(Boolean).join(" "));
+};
+
+const stopMatchesSearch = (stop, normalizedSearchTerm) => {
+  if (!normalizedSearchTerm) return true;
+  const haystack = stopSearchValue(stop);
+  return normalizedSearchTerm.split(" ").every((token) => haystack.includes(token));
 };
 
 const stopTechnicianLabel = (stop = {}, techniciansById = new Map()) => {
@@ -313,6 +347,7 @@ const DaySection = ({
   day,
   routes,
   recurringStopsById,
+  visibleRouteStopsById,
   techniciansById,
   collapsed,
   onToggleCollapsed,
@@ -327,7 +362,10 @@ const DaySection = ({
   onMergeRoute,
   onAssignStop,
 }) => {
-  const totalStops = routes.reduce((total, route) => total + stopCount(route), 0);
+  const totalStops = routes.reduce(
+    (total, route) => total + (visibleRouteStopsById.get(route.id) || routeStopsForRoute(route, recurringStopsById)).length,
+    0
+  );
   const collapseLabel = collapsed ? `Expand ${day}` : `Collapse ${day}`;
 
   return (
@@ -359,7 +397,7 @@ const DaySection = ({
 
       {collapsed ? null : routes.length ? (
         routes.map((route) => {
-          const routeStops = routeStopsForRoute(route, recurringStopsById);
+          const routeStops = visibleRouteStopsById.get(route.id) || routeStopsForRoute(route, recurringStopsById);
 
           return (
             <RouteRow
@@ -394,10 +432,10 @@ const RouteManagement = () => {
   const [allRoutes, setAllRoutes] = useState([]);
   const [recurringStops, setRecurringStops] = useState([]);
   const [technicians, setTechnicians] = useState([]);
-  const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [dayFilter, setDayFilter] = useState(null);
   const [techFilter, setTechFilter] = useState(null);
+  const [stopSearchTerm, setStopSearchTerm] = useState("");
   const [collapsedDays, setCollapsedDays] = useState(() => new Set(daysOfWeek));
   const [expandedRouteIds, setExpandedRouteIds] = useState(() => new Set());
   const [openActionRouteId, setOpenActionRouteId] = useState("");
@@ -408,59 +446,88 @@ const RouteManagement = () => {
   const [savingAssignment, setSavingAssignment] = useState(false);
 
   const dayOptions = daysOfWeek.map((day) => ({ value: day, label: day }));
+  const normalizedStopSearchTerm = useMemo(() => normalizeSearchValue(stopSearchTerm), [stopSearchTerm]);
 
-  const loadPlannedRouteData = useCallback(async () => {
+  useEffect(() => {
     if (!recentlySelectedCompany) {
       setAllRoutes([]);
       setRecurringStops([]);
       setTechnicians([]);
-      setCompanyServiceStopTypes([]);
       setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
-    try {
-      const routesRef = collection(db, "companies", recentlySelectedCompany, "recurringRoutes");
-      const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
-      const recurringStopsRef = collection(db, "companies", recentlySelectedCompany, "recurringServiceStop");
-      const payTypesRef = collection(db, "companies", recentlySelectedCompany, "companyPayTypes");
-      const [routesSnapshot, usersSnapshot, recurringStopsSnapshot, payTypesSnapshot] = await Promise.all([
-        getDocs(query(routesRef)),
-        getDocs(query(usersRef)),
-        getDocs(query(recurringStopsRef)),
-        getDocs(query(payTypesRef)),
-      ]);
-
-      setAllRoutes(routesSnapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
-      setRecurringStops(recurringStopsSnapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
-      setCompanyServiceStopTypes(payTypesSnapshot.docs.map(payTypeOptionFromDoc));
-      setTechnicians(
-        sortCompanyUsersByName(usersSnapshot.docs
-          .map((docSnap) => {
-            const data = docSnap.data();
-            return {
-              id: data.userId || docSnap.id,
-              userId: data.userId || docSnap.id,
-              value: data.userId || docSnap.id,
-              label: getCompanyUserDisplayName(data, docSnap.id),
-              ...data,
-            };
-          })
-          .filter((user) => String(user.status || "Active").toLowerCase() === "active")
-        )
-      );
-    } catch (error) {
-      console.error("Error fetching planned routes:", error);
-      toast.error("Failed to load planned routes.");
-    } finally {
+    const firstSnapshots = {
+      routes: false,
+      users: false,
+      recurringStops: false,
+    };
+    let didError = false;
+    const completeInitialLoad = (key) => {
+      firstSnapshots[key] = true;
+      if (Object.values(firstSnapshots).every(Boolean)) {
+        setIsLoading(false);
+      }
+    };
+    const handleSnapshotError = (error) => {
+      console.error("Error listening to planned routes:", error);
+      if (!didError) {
+        toast.error("Failed to load planned routes.");
+      }
+      didError = true;
       setIsLoading(false);
-    }
-  }, [recentlySelectedCompany]);
+    };
 
-  useEffect(() => {
-    loadPlannedRouteData();
-  }, [loadPlannedRouteData]);
+    const routesRef = collection(db, "companies", recentlySelectedCompany, "recurringRoutes");
+    const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
+    const recurringStopsRef = collection(db, "companies", recentlySelectedCompany, "recurringServiceStop");
+
+    const unsubscribeRoutes = onSnapshot(
+      query(routesRef),
+      (routesSnapshot) => {
+        setAllRoutes(routesSnapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
+        completeInitialLoad("routes");
+      },
+      handleSnapshotError
+    );
+    const unsubscribeUsers = onSnapshot(
+      query(usersRef),
+      (usersSnapshot) => {
+        setTechnicians(
+          sortCompanyUsersByName(usersSnapshot.docs
+            .map((docSnap) => {
+              const data = docSnap.data();
+              return {
+                id: data.userId || docSnap.id,
+                userId: data.userId || docSnap.id,
+                value: data.userId || docSnap.id,
+                label: getCompanyUserDisplayName(data, docSnap.id),
+                ...data,
+              };
+            })
+            .filter((user) => String(user.status || "Active").toLowerCase() === "active")
+          )
+        );
+        completeInitialLoad("users");
+      },
+      handleSnapshotError
+    );
+    const unsubscribeRecurringStops = onSnapshot(
+      query(recurringStopsRef),
+      (recurringStopsSnapshot) => {
+        setRecurringStops(recurringStopsSnapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
+        completeInitialLoad("recurringStops");
+      },
+      handleSnapshotError
+    );
+
+    return () => {
+      unsubscribeRoutes();
+      unsubscribeUsers();
+      unsubscribeRecurringStops();
+    };
+  }, [recentlySelectedCompany]);
 
   const visibleDays = useMemo(
     () => (dayFilter ? daysOfWeek.filter((day) => day === dayFilter.value) : daysOfWeek),
@@ -482,11 +549,6 @@ const RouteManagement = () => {
     recurringStops.forEach((stop) => nextStops.set(String(stop.id), stop));
     return nextStops;
   }, [recurringStops]);
-
-  const serviceStopTypeOptions = useMemo(
-    () => recurringRoutePayTypeOptions(companyServiceStopTypes),
-    [companyServiceStopTypes]
-  );
 
   const routedTechnicianOptions = useMemo(() => {
     const optionsById = new Map();
@@ -512,7 +574,7 @@ const RouteManagement = () => {
     }
   }, [routedTechnicianOptions, techFilter]);
 
-  const visibleRoutes = useMemo(
+  const routeFilteredRoutes = useMemo(
     () =>
       allRoutes.filter((route) => {
         const dayMatch = !dayFilter || route.day === dayFilter.value;
@@ -520,6 +582,28 @@ const RouteManagement = () => {
         return dayMatch && techMatch;
       }),
     [allRoutes, dayFilter, techFilter]
+  );
+
+  const visibleRouteStopsById = useMemo(() => {
+    const nextStopsByRouteId = new Map();
+
+    routeFilteredRoutes.forEach((route) => {
+      const routeStops = routeStopsForRoute(route, recurringStopsById);
+      const visibleStops = normalizedStopSearchTerm
+        ? routeStops.filter((stop) => stopMatchesSearch(stop, normalizedStopSearchTerm))
+        : routeStops;
+
+      if (!normalizedStopSearchTerm || visibleStops.length > 0) {
+        nextStopsByRouteId.set(route.id, visibleStops);
+      }
+    });
+
+    return nextStopsByRouteId;
+  }, [routeFilteredRoutes, recurringStopsById, normalizedStopSearchTerm]);
+
+  const visibleRoutes = useMemo(
+    () => routeFilteredRoutes.filter((route) => visibleRouteStopsById.has(route.id)),
+    [routeFilteredRoutes, visibleRouteStopsById]
   );
 
   const routesByDay = useMemo(() => {
@@ -545,7 +629,10 @@ const RouteManagement = () => {
     return nextRoutes;
   }, [visibleRoutes, techniciansById]);
 
-  const totalStops = visibleRoutes.reduce((total, route) => total + stopCount(route), 0);
+  const totalStops = visibleRoutes.reduce(
+    (total, route) => total + (visibleRouteStopsById.get(route.id) || []).length,
+    0
+  );
   const visibleTechnicianCount = useMemo(
     () => new Set(visibleRoutes.map((route) => routeTechnicianId(route)).filter(Boolean)).size,
     [visibleRoutes]
@@ -554,26 +641,26 @@ const RouteManagement = () => {
     const locationIds = new Set();
 
     visibleRoutes.forEach((route) => {
-      routeStopsForRoute(route, recurringStopsById).forEach((stop) => {
+      (visibleRouteStopsById.get(route.id) || []).forEach((stop) => {
         const locationId = stop.serviceLocationId || stop.locationId || "";
         if (locationId) locationIds.add(String(locationId));
       });
     });
 
     return locationIds.size;
-  }, [visibleRoutes, recurringStopsById]);
+  }, [visibleRoutes, visibleRouteStopsById]);
   const visibleCustomerCount = useMemo(() => {
     const customerIds = new Set();
 
     visibleRoutes.forEach((route) => {
-      routeStopsForRoute(route, recurringStopsById).forEach((stop) => {
+      (visibleRouteStopsById.get(route.id) || []).forEach((stop) => {
         const customerId = stop.customerId || stop.customerName || "";
         if (customerId) customerIds.add(String(customerId));
       });
     });
 
     return customerIds.size;
-  }, [visibleRoutes, recurringStopsById]);
+  }, [visibleRoutes, visibleRouteStopsById]);
   const allVisibleDaysCollapsed = visibleDays.length > 0 && visibleDays.every((day) => collapsedDays.has(day));
 
   const destinationRouteOptions = useMemo(() => {
@@ -717,35 +804,21 @@ const RouteManagement = () => {
 
     setSavingAssignment(true);
     try {
-      const callable = httpsCallable(functions, "updateRecurringServiceStop");
-      const futureServiceStopsStartAt = localStartOfTodayMs();
+      const callable = httpsCallable(functions, "updateRecurringServiceStopsRouteAssignment");
+      const result = await callable({
+        companyId: recentlySelectedCompany,
+        recurringServiceStopIds: loadedStops.map((stop) => stop.id),
+        targetDay,
+        targetTech: {
+          userId: targetTechnician.value,
+          userName: targetTechnician.label || targetTechnician.userName || targetTechnician.name || "",
+        },
+        destinationRouteId: targetRoute?.id || "",
+        futureServiceStopsStartAt: localStartOfTodayMs(),
+      });
 
-      for (const stop of loadedStops) {
-        const form = {
-          payType: selectedPayTypeOptionForStop(stop, serviceStopTypeOptions),
-          frequency: optionForValue(RSS_FREQUENCY_OPTIONS, stop.frequency, stop.frequency),
-          technician: targetTechnician,
-          day: optionForValue(RSS_DAY_OPTIONS, targetDay, targetDay),
-          startDate: formatDateInputValue(stop.startDate),
-          noEndDate: stop.noEndDate !== false,
-          endDate: formatDateInputValue(stop.endDate),
-        };
-        const recurringServiceStopPayload = buildRecurringServiceStopUpdatePayload({
-          stop,
-          form,
-          companyServiceStopTypes,
-        });
-        const result = await callable({
-          companyId: recentlySelectedCompany,
-          recurringServiceStop: recurringServiceStopPayload,
-          syncRoute: true,
-          destinationRouteId: targetRoute?.id || "",
-          futureServiceStopsStartAt,
-        });
-
-        if (result.data?.success === false || (result.data?.status && Number(result.data.status) >= 400)) {
-          throw new Error(result.data?.error || `Recurring service stop ${stop.internalId || stop.id} failed to update.`);
-        }
+      if (result.data?.success === false || (result.data?.status && Number(result.data.status) >= 400)) {
+        throw new Error(result.data?.error || "Recurring service stops failed to update.");
       }
 
       const countLabel = `${loadedStops.length} RSS record${loadedStops.length === 1 ? "" : "s"}`;
@@ -754,7 +827,6 @@ const RouteManagement = () => {
       setAssignmentDay(null);
       setAssignmentTechnician(null);
       setAssignmentDestinationRoute(null);
-      await loadPlannedRouteData();
     } catch (error) {
       console.error("Error assigning planned route RSS:", error);
       toast.error(error.message || "Failed to assign recurring service stops.");
@@ -838,10 +910,20 @@ const RouteManagement = () => {
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-4 md:grid-cols-[180px_1fr_1fr] md:items-center">
-            <h2 className="font-semibold text-slate-800">Filters</h2>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[180px_1fr_1fr_2fr] lg:items-center">
+            <h2 className="font-semibold text-slate-800 md:col-span-2 lg:col-span-1">Filters</h2>
             <Select options={dayOptions} value={dayFilter} onChange={setDayFilter} placeholder="Filter by day..." isClearable />
             <Select options={routedTechnicianOptions} value={techFilter} onChange={setTechFilter} placeholder="Filter by technician..." isLoading={isLoading} isClearable />
+            <label className="block md:col-span-2 lg:col-span-1">
+              <span className="sr-only">Search customer names and addresses</span>
+              <input
+                type="search"
+                value={stopSearchTerm}
+                onChange={(event) => setStopSearchTerm(event.target.value)}
+                placeholder="Search customer or address..."
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </label>
           </div>
         </section>
 
@@ -855,6 +937,7 @@ const RouteManagement = () => {
                 day={day}
                 routes={routesByDay.get(day) || []}
                 recurringStopsById={recurringStopsById}
+                visibleRouteStopsById={visibleRouteStopsById}
                 techniciansById={techniciansById}
                 collapsed={collapsedDays.has(day)}
                 onToggleCollapsed={toggleDayCollapsed}
@@ -878,9 +961,9 @@ const RouteManagement = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
           <form
             onSubmit={saveAssignment}
-            className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl"
+            className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl"
           >
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
               <div>
                 <h3 className="text-lg font-bold text-slate-950">{assignmentModalTitle}</h3>
                 <p className="mt-1 text-sm text-slate-600">{assignmentModalSubtitle}</p>
@@ -896,7 +979,7 @@ const RouteManagement = () => {
               </button>
             </div>
 
-            <div className="grid gap-4 overflow-y-auto px-5 py-5">
+            <div className="grid gap-5 overflow-y-auto px-6 py-6">
               <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3">
                 <ReadonlyDatum label="RSS Records" value={assignmentStops.length} />
                 <ReadonlyDatum
@@ -954,7 +1037,7 @@ const RouteManagement = () => {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-6 py-5">
               <button
                 type="button"
                 onClick={closeAssignmentModal}

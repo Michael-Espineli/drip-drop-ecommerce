@@ -10,6 +10,7 @@ import { salesCollectionNames } from '../../../utils/models/Sales';
 import { recurringFrequencyToAgreementService } from '../../../utils/sales/agreementCadence';
 import { reportAppError } from '../../../utils/errorReporting';
 import Select from 'react-select';
+import CompanyUserSelect from '../../../components/CompanyUserSelect';
 import DatePicker from "react-datepicker";
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
@@ -996,7 +997,10 @@ const CreateNewRecurringServiceStop = () => {
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <SelectField label="Customer" value={customer} options={customerList} onChange={handleCustomerChange} placeholder="Select a Customer" isDisabled={!!customerId && customerId !== 'NA'} isLoading={isLoading} />
                             <SelectField label="Service Location" value={serviceLocation} options={serviceLocationList} onChange={setServiceLocation} placeholder="Select a Service Location" isDisabled={!customer} />
-                            <SelectField label="Assigned Technician" value={tech} options={techList} onChange={setTech} placeholder="Assign a Technician" />
+                            <div className="min-w-0">
+                                <label className="mb-2 block text-sm font-semibold text-slate-700" htmlFor="recurring-stop-technician">Assigned Technician</label>
+                                <CompanyUserSelect inputId="recurring-stop-technician" value={tech} options={techList} onChange={setTech} placeholder="Assign a Technician" />
+                            </div>
                             <SelectField label="Pay Type" value={selectedServiceStopType} options={serviceStopTypeOptions} onChange={setSelectedServiceStopType} placeholder="Select a Pay Type" />
                             <SelectField label="Day of Week" value={dayOfWeek} options={dayOptions} onChange={setDayOfWeek} placeholder="Select a Day" />
                             <SelectField label="Frequency" value={frequency} options={frequencyOptions} onChange={setFrequency} placeholder="Select Frequency" />

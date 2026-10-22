@@ -29,7 +29,7 @@ const HeaderBadge = ({ count }) => {
     if (!count) return null;
 
     return (
-        <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm">
+        <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-red-500 px-1 text-[0.625rem] font-bold text-white shadow-sm">
             {count > 99 ? '99+' : count}
         </span>
     );
@@ -278,8 +278,8 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         companyRoleLoading || hasCompanyPermission("800")
     );
     const shellMarginClass = accountType === 'Company' && recentlySelectedCompany && isCompanySidebarCollapsed
-        ? "lg:ml-[76px]"
-        : "lg:ml-[260px]";
+        ? "lg:ml-[4.75rem]"
+        : "lg:ml-[16.25rem]";
     const canStartChat = messagingEnabled && (
         (accountType === 'Company' && recentlySelectedCompany)
         || accountType === 'Client'
@@ -306,7 +306,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         </button>
 
                         {accountType === 'Company' && (
-                            <div className='hidden min-w-[180px] flex-1 md:block'>
+                            <div className='hidden min-w-[11.25rem] flex-1 md:block'>
                                 <CompanyCommandSearch />
                             </div>
                         )}
@@ -321,7 +321,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                                     value={selectedCustomerRegionTag || ""}
                                     onChange={(event) => setSelectedCustomerRegionTag(event.target.value)}
                                     disabled={isRegionLoading}
-                                    className="h-8 max-w-[150px] rounded-md border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                    className="h-8 max-w-[9.375rem] rounded-md border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-70"
                                     aria-label="Customer area filter"
                                 >
                                     <option value="">{customerRegionEmptyLabel}</option>
@@ -383,17 +383,17 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                             </Link>
                         )}
                         <div>
-                            <Link to={profileLink} className="w-auto h-[50px]">
+                            <Link to={profileLink} className="w-auto h-[3.125rem]">
                                 <div className='flex justify-center items-center gap-3'>
-                                    <div className='hidden max-w-[220px] flex-col items-end justify-center text-end sm:flex'>
+                                    <div className='hidden max-w-[13.75rem] flex-col items-end justify-center text-end sm:flex'>
                                         <h2 className='line-clamp-1 text-md font-bold'>
                                             {accountType === 'Company' ? `${name} - ${accountType}` : name}
                                         </h2>
                                         {accountType === 'Company' && recentlySelectedCompanyName && (
-                                            <span className='app-header-muted w-full truncate text-[14px] font-medium'>{recentlySelectedCompanyName}</span>
+                                            <span className='app-header-muted w-full truncate text-[0.875rem] font-medium'>{recentlySelectedCompanyName}</span>
                                         )}
                                     </div>
-                                    <img className='h-[45px] w-[45px] rounded-full bg-white object-cover ring-2 ring-white/35' src={photoUrl} alt="profile" />
+                                    <img className='h-[2.8125rem] w-[2.8125rem] rounded-full bg-white object-cover ring-2 ring-white/35' src={photoUrl} alt="profile" />
                                 </div>
                             </Link>
                         </div>

@@ -323,17 +323,59 @@ const getOrderedRouteStops = (route, stops) => {
     return stops.filter(stop => stop.techId === route.techId || stop.tech === route.techName);
 };
 
-const mergeStopsIntoRouteOrder = (route, stops) => {
+const routeHasWorkActivity = (route) => Boolean(
+    route?.startTime ||
+    route?.endTime ||
+    route?.startMilage ||
+    route?.startMileage ||
+    route?.endMilage ||
+    route?.endMileage ||
+    (route?.status && route.status !== 'Did Not Start')
+);
+
+const plannedRouteOrderItems = (route) => {
+    if (!route) return [];
+
+    const order = Array.isArray(route.order) ? route.order : [];
+    const recurringRouteOrder = Array.isArray(route.recurringRouteOrder) ? route.recurringRouteOrder : [];
+    const rssIds = Array.isArray(route.rssIds) ? route.rssIds : [];
+
+    if (order.length || recurringRouteOrder.length) {
+        return [...(order.length ? order : recurringRouteOrder)]
+            .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
+    }
+
+    return rssIds.map((recurringServiceStopId, index) => ({
+        recurringServiceStopId,
+        order: index + 1,
+    }));
+};
+
+const mergeStopsIntoRouteOrder = (route, stops, plannedRoute = null) => {
     const stopById = new Map(stops.map(stop => [stop.id, stop]));
-    const orderedIds = route?.serviceStopsIds?.length
+    const stopByRecurringId = new Map(
+        stops
+            .filter(stop => stop.recurringServiceStopId)
+            .map(stop => [stop.recurringServiceStopId, stop])
+    );
+    const activeRouteOrderIds = route?.serviceStopsIds?.length
         ? route.serviceStopsIds
         : (Array.isArray(route?.order) ? [...route.order]
             .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
             .map(item => item.serviceStopId || item.id)
             .filter(Boolean) : []);
+    const plannedRouteOrderIds = !routeHasWorkActivity(route)
+        ? plannedRouteOrderItems(plannedRoute)
+            .map(item => item.recurringServiceStopId || item.rssId || item.id)
+            .filter(Boolean)
+        : [];
+    const orderedIds = plannedRouteOrderIds.length ? plannedRouteOrderIds : activeRouteOrderIds;
+    const getStopForOrderedId = plannedRouteOrderIds.length
+        ? (stopId) => stopByRecurringId.get(stopId) || stopById.get(stopId)
+        : (stopId) => stopById.get(stopId);
     const includedStopIds = new Set();
     const orderedStops = orderedIds
-        .map(stopId => stopById.get(stopId))
+        .map(getStopForOrderedId)
         .filter(Boolean)
         .filter(stop => {
             if (includedStopIds.has(stop.id)) return false;
@@ -416,12 +458,6 @@ const autoOrderStopsFromAnchor = (stops, anchorCoordinate, anchorPosition) => {
         missingCoordinateCount: missingCoordinateStops.length,
     };
 };
-
-const routeHasWorkActivity = (route) => Boolean(
-    route.startTime ||
-    route.endTime ||
-    (route.status && route.status !== 'Did Not Start')
-);
 
 const getRouteStopCount = (route) => (
     Array.isArray(route?.serviceStopsIds)
@@ -1398,11 +1434,26 @@ const RouteDashboard = () => {
         const existingRoutes = routesSnapshot.docs
             .map(doc => ({ id: doc.id, ...doc.data() }))
             .filter(route => !route.duplicateOf);
+        const plannedRoutesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes'));
+        const selectedDayName = format(date, 'EEEE');
+        const plannedRoutes = plannedRoutesSnapshot.docs
+            .map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))
+            .filter(route => route.day === selectedDayName);
+        const plannedRouteByTechId = new Map();
+        plannedRoutes
+            .forEach(route => {
+                const techId = route.techId || route.userId || "";
+                if (techId && !plannedRouteByTechId.has(techId)) {
+                    plannedRouteByTechId.set(techId, route);
+                }
+            });
 
         for (const tech of techs) {
             const techStops = stops.filter(stop => stop.techId === tech.userId || stop.tech === tech.userName);
             const routesForTech = existingRoutes.filter(route => route.techId === tech.userId);
             const routeForTech = pickCanonicalRoute(routesForTech);
+            const plannedRouteForTech = plannedRouteByTechId.get(tech.userId)
+                || plannedRoutes.find(route => route.tech === tech.userName || route.techName === tech.userName);
 
             if (techStops.length === 0) {
                 if (routeForTech) {
@@ -1440,7 +1491,7 @@ const RouteDashboard = () => {
 
             if (routeForTech) {
                 const routeRef = doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', routeForTech.id);
-                const orderedTechStops = mergeStopsIntoRouteOrder(routeForTech, techStops);
+                const orderedTechStops = mergeStopsIntoRouteOrder(routeForTech, techStops, plannedRouteForTech);
                 await updateDoc(routeRef, {
                     totalStops: totalStopsCount,
                     finishedStops: finishedStopsCount,
@@ -1462,13 +1513,14 @@ const RouteDashboard = () => {
                 )));
             } else {
                 const id = activeRouteDocumentId(new Date(startOfDay), tech.userId);
+                const orderedTechStops = mergeStopsIntoRouteOrder(null, techStops, plannedRouteForTech);
                 const newRoute = {
                     id,
                     name: `${tech.userName}'s Route - ${format(date, 'MM/dd/yyyy')}`,
                     date: Timestamp.fromDate(new Date(startOfDay)),
                     techId: tech.userId,
                     techName: tech.userName,
-                    serviceStopsIds: techStops.map(stop => stop.id),
+                    serviceStopsIds: orderedTechStops.map(stop => stop.id),
                     totalStops: totalStopsCount,
                     finishedStops: finishedStopsCount,
                     status: newStatus,
@@ -1480,7 +1532,7 @@ const RouteDashboard = () => {
                     vehicleLabel: "",
                     vehiclePlate: "",
                     vehicleKind: "",
-                    order: buildActiveRouteOrder(null, techStops)
+                    order: buildActiveRouteOrder(null, orderedTechStops)
                 };
 
                 await setDoc(doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', id), newRoute);

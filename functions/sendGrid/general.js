@@ -1004,6 +1004,7 @@ const buildServiceAgreementTemplateData = ({
     const separatelyBilledChemicalIds = normalizeAgreementList(agreement.separatelyBilledChemicalIds);
     const customerPurchasedChemicalKeywords = normalizeAgreementList(agreement.customerPurchasedChemicalKeywords);
     const customerPurchasedChemicalIds = normalizeAgreementList(agreement.customerPurchasedChemicalIds);
+    const customerMessage = agreement.customerMessage || agreement.customerFacingNote || agreement.estimateNote || agreement.description || "";
 
     return {
         subject: `${companyName} ${documentLabel}`,
@@ -1101,6 +1102,10 @@ const buildServiceAgreementTemplateData = ({
         terms,
         companyPhone: companyData.phoneNumber || companyData.phone || "",
         companyEmail: companyData.email || companyData.companyEmail || "",
+        description: customerMessage,
+        customerMessage,
+        customerFacingNote: customerMessage,
+        estimateNote: customerMessage,
         supportUrl: process.env.SUPPORT_URL || "https://dripdrop-poolapp.com/support",
         contactUrl: companyData.email ? `mailto:${companyData.email}` : "https://dripdrop-poolapp.com/contact",
         legalUrl: process.env.LEGAL_URL || "https://dripdrop-poolapp.com/legal"
@@ -1128,6 +1133,9 @@ const publicServiceAgreementSnapshot = (agreement = {}, options = {}) => {
         email: agreementEmail,
         title: agreement.title || "Service Agreement",
         description: agreement.description || "",
+        customerMessage: agreement.customerMessage || agreement.customerFacingNote || agreement.estimateNote || agreement.description || "",
+        customerFacingNote: agreement.customerFacingNote || agreement.customerMessage || agreement.estimateNote || agreement.description || "",
+        estimateNote: agreement.estimateNote || agreement.customerMessage || agreement.customerFacingNote || agreement.description || "",
         status: agreement.status || "",
         serviceLocationIds: Array.isArray(agreement.serviceLocationIds) ? agreement.serviceLocationIds : [],
         serviceLocationSnapshots: Array.isArray(agreement.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : [],

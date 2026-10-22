@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { Context } from "../../../context/AuthContext";
+import CompanyUserSelect from "../../../components/CompanyUserSelect";
 import { db } from "../../../utils/config";
 import {
   arrayUnion,
@@ -14,6 +15,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
@@ -57,6 +59,7 @@ import {
 import {
   DEFAULT_ISSUE_PRIORITY,
   DEFAULT_JOB_PLAN_TIER,
+  ISSUE_PRIORITY_OPTIONS,
   JOB_PLAN_STATUS,
   getIssuePriorityLabel,
   getJobPlanRecommendationLabel,
@@ -81,17 +84,22 @@ import {
   uniqueStringList,
 } from "../../../utils/jobEquipmentScope";
 import {
+  DEFAULT_UPCOMING_MAINTENANCE_WEEKS,
+  UPCOMING_MAINTENANCE_WEEK_OPTIONS,
   buildCustomerActiveById,
   equipmentDateIsDueThroughToday as dateIsDue,
   equipmentMatchesActiveFilter,
   equipmentNeedsMaintenance as isNeedsMaintenance,
   equipmentNeedsMaintenanceForActiveBoard,
+  equipmentUpcomingMaintenanceForActiveBoard,
+  normalizeUpcomingMaintenanceWeeks,
 } from "../../../utils/equipmentMaintenance";
 import { normalizeAddress } from "../../../utils/customerLocationData";
 
 const EMPTY_TOP_COUNTS = {
   all: 0,
   maintenance: 0,
+  upcoming: 0,
   repair: 0,
   nonOperational: 0,
 };
@@ -106,6 +114,7 @@ const ACTIVE_STATUS_FILTER_LABELS = {
 const EQUIPMENT_FILTER_PATH_SEGMENTS = {
   all: "all-equipment",
   maintenance: "needs-maintenance",
+  upcoming: "upcoming",
   repair: "needs-repair",
   nonOperational: "non-operational",
 };
@@ -114,6 +123,8 @@ const EQUIPMENT_FILTER_ALIASES = {
   "all-equipment": "all",
   maintenance: "maintenance",
   "needs-maintenance": "maintenance",
+  upcoming: "upcoming",
+  "upcoming-maintenance": "upcoming",
   repair: "repair",
   "needs-repair": "repair",
   nonOperational: "nonOperational",
@@ -154,6 +165,7 @@ const TERMINAL_JOB_BILLING_STATUSES = new Set([
   normalizeJobStatus(JOB_BILLING_STATUS.paid),
   normalizeJobStatus(JOB_BILLING_STATUS.comped),
   normalizeJobStatus(JOB_BILLING_STATUS.customerResolved),
+  normalizeJobStatus(JOB_BILLING_STATUS.canceled),
   normalizeJobStatus(JOB_BILLING_STATUS.expired),
   normalizeJobStatus(JOB_BILLING_STATUS.rejected),
 ]);
@@ -306,12 +318,28 @@ const laborLineCatalogItemId = (line = {}) => (
   ""
 );
 
+const localDateOnly = (value) => (
+  value instanceof Date && !Number.isNaN(value.getTime())
+    ? new Date(value.getFullYear(), value.getMonth(), value.getDate())
+    : null
+);
+
 const dateInputToLocalDate = (value) => {
   if (!value) return null;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
+  if (value instanceof Date) return localDateOnly(value);
+  if (typeof value.toDate === "function") return localDateOnly(value.toDate());
+
+  if (typeof value === "string") {
+    const [year, month, day] = value.split("-").map(Number);
+    if (year && month && day) return new Date(year, month - 1, day);
+  }
+
+  return localDateOnly(new Date(value));
 };
+
+const noteTextValue = (value) => (
+  value === undefined || value === null ? "" : String(value)
+);
 
 const dateToInputValue = (value) => {
   if (!value) return "";
@@ -333,10 +361,10 @@ const Field = ({ label, children }) => (
   </div>
 );
 
-const ModalShell = ({ title, description = "Make a quick update without leaving the list.", children, onClose, footer }) => (
+const ModalShell = ({ title, description = "Make a quick update without leaving the list.", children, onClose, footer, wide = false }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-    <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-5 flex items-start justify-between gap-3">
+    <div className={`${wide ? "flex max-h-[calc(100dvh-2rem)] max-w-6xl flex-col overflow-hidden" : "max-h-[90vh] max-w-xl overflow-y-auto"} w-full rounded-lg border border-slate-200 bg-white p-5 shadow-sm`}>
+      <div className="mb-5 flex shrink-0 items-start justify-between gap-3">
         <div>
           <h3 className="text-xl font-bold text-slate-950">{title}</h3>
           {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
@@ -350,8 +378,8 @@ const ModalShell = ({ title, description = "Make a quick update without leaving 
           x
         </button>
       </div>
-      {children}
-      {footer && <div className="mt-6">{footer}</div>}
+      <div className={wide ? "min-h-0 overflow-y-auto" : undefined}>{children}</div>
+      {footer && <div className={wide ? "mt-4 shrink-0 border-t border-slate-200 pt-4" : "mt-6"}>{footer}</div>}
     </div>
   </div>
 );
@@ -534,7 +562,10 @@ const isActiveEquipmentJob = (job = {}) => {
   const operationStatus = normalizeJobStatus(job.operationStatus || job.status);
   const billingStatus = normalizeJobStatus(job.billingStatus);
 
-  if (operationStatus === normalizeJobStatus(JOB_OPERATION_STATUS.finished)) return false;
+  if (
+    operationStatus === normalizeJobStatus(JOB_OPERATION_STATUS.finished) ||
+    operationStatus === normalizeJobStatus(JOB_OPERATION_STATUS.canceled)
+  ) return false;
   return !TERMINAL_JOB_BILLING_STATUSES.has(billingStatus);
 };
 
@@ -866,6 +897,7 @@ export default function EquipmentList() {
   // ✅ NEW: routine maintenance filter (needsService)
   // "" | "true" | "false"
   const [needsServiceFilter, setNeedsServiceFilter] = useState("");
+  const [upcomingMaintenanceWeeks, setUpcomingMaintenanceWeeks] = useState(DEFAULT_UPCOMING_MAINTENANCE_WEEKS);
   const [activeStatusFilter, setActiveStatusFilter] = useState(DEFAULT_ACTIVE_STATUS_FILTER);
   const [showFilterModal, setShowFilterModal] = useState(false);
 
@@ -877,7 +909,7 @@ export default function EquipmentList() {
   const [loadingEquipment, setLoadingEquipment] = useState(false);
   const [equipmentError, setEquipmentError] = useState("");
 
-  // all | maintenance | repair | nonOperational
+  // all | maintenance | upcoming | repair | nonOperational
   const [topFilter, setTopFilter] = useState(() => getEquipmentFilterFromTab(tab));
   const [openActionMenuId, setOpenActionMenuId] = useState("");
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
@@ -894,6 +926,9 @@ export default function EquipmentList() {
   const [scheduleAdminId, setScheduleAdminId] = useState("");
   const [scheduleTechnicianId, setScheduleTechnicianId] = useState("");
   const [scheduleDateTime, setScheduleDateTime] = useState(defaultScheduledAt);
+  const [schedulePriorityOverride, setSchedulePriorityOverride] = useState(null);
+  const [scheduleOperationStatus, setScheduleOperationStatus] = useState(JOB_OPERATION_STATUS.scheduled);
+  const [scheduleBillingStatus, setScheduleBillingStatus] = useState(JOB_BILLING_STATUS.draft);
   const [scheduleNotes, setScheduleNotes] = useState("");
   const [schedulingJob, setSchedulingJob] = useState(false);
   const [equipmentTypes, setEquipmentTypes] = useState([]);
@@ -971,7 +1006,7 @@ export default function EquipmentList() {
 
     setTopFilter(nextFilter);
 
-    if (nextFilter === "maintenance") {
+    if (nextFilter === "maintenance" || nextFilter === "upcoming") {
       setSearchTerm("");
       setTypeFilter("");
       setNeedsServiceFilter("");
@@ -1109,7 +1144,7 @@ export default function EquipmentList() {
     setNoteDrafts((currentDrafts) => {
       const nextDrafts = {};
       equipmentList.forEach((equipment) => {
-        nextDrafts[equipment.id] = currentDrafts[equipment.id] ?? equipment.notes ?? "";
+        nextDrafts[equipment.id] = currentDrafts[equipment.id] ?? noteTextValue(equipment.notes);
       });
       return nextDrafts;
     });
@@ -1547,13 +1582,21 @@ export default function EquipmentList() {
     const maintenanceBoardCount = equipmentList
       .filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById))
       .length;
+    const upcomingMaintenanceBoardCount = equipmentList
+      .filter((equipment) => equipmentUpcomingMaintenanceForActiveBoard(
+        equipment,
+        customerActiveById,
+        upcomingMaintenanceWeeks
+      ))
+      .length;
 
     setTypes(uniqueTypes);
     setTopCounts({
       ...nextTopCounts,
       maintenance: maintenanceBoardCount,
+      upcoming: upcomingMaintenanceBoardCount,
     });
-  }, [activeStatusFilter, customerActiveById, equipmentList, needsServiceFilter, typeFilter]);
+  }, [activeStatusFilter, customerActiveById, equipmentList, needsServiceFilter, typeFilter, upcomingMaintenanceWeeks]);
 
   // -----------------------------
   // ✅ Unique customer count
@@ -1571,6 +1614,13 @@ export default function EquipmentList() {
     equipmentList.filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById))
   ), [customerActiveById, equipmentList]);
   const maintenanceDueCount = maintenanceBoardEquipment.length;
+  const upcomingMaintenanceBoardEquipment = useMemo(() => (
+    equipmentList.filter((equipment) => equipmentUpcomingMaintenanceForActiveBoard(
+      equipment,
+      customerActiveById,
+      upcomingMaintenanceWeeks
+    ))
+  ), [customerActiveById, equipmentList, upcomingMaintenanceWeeks]);
   const maintenanceScheduledJobSummary = useMemo(() => {
     const scheduledEquipmentIds = new Set();
     const scheduledJobIds = new Set();
@@ -1643,6 +1693,8 @@ export default function EquipmentList() {
   const selectedScheduleTemplate = useMemo(() => (
     scheduleTemplateOptions.find((template) => template.id === scheduleTemplateId) || null
   ), [scheduleTemplateId, scheduleTemplateOptions]);
+
+  const schedulePriorityLevel = schedulePriorityOverride ?? getTemplateDefaultIssuePriority(selectedScheduleTemplate || {});
 
   const selectedScheduleAdmin = useMemo(() => (
     scheduleAdminOptions.find((admin) => admin.userId === scheduleAdminId || admin.id === scheduleAdminId) || null
@@ -1970,6 +2022,8 @@ export default function EquipmentList() {
   useEffect(() => {
     let filtered = topFilter === "maintenance"
       ? [...maintenanceBoardEquipment]
+      : topFilter === "upcoming"
+        ? [...upcomingMaintenanceBoardEquipment]
       : equipmentList.filter((equipment) => equipmentMatchesDetailFilters(equipment, {
         activeStatusFilter,
         customerActiveById,
@@ -1977,7 +2031,7 @@ export default function EquipmentList() {
         needsServiceFilter,
       }));
 
-    if (topFilter === "maintenance") {
+    if (topFilter === "maintenance" || topFilter === "upcoming") {
       filtered = filtered.filter((equipment) => equipmentMatchesDetailFilters(equipment, {
         activeStatusFilter: DEFAULT_ACTIVE_STATUS_FILTER,
         customerActiveById,
@@ -2071,6 +2125,7 @@ export default function EquipmentList() {
     sortOrder,
     topFilter,
     typeFilter,
+    upcomingMaintenanceBoardEquipment,
   ]);
 
   const handleSort = (field) => {
@@ -2083,10 +2138,16 @@ export default function EquipmentList() {
     setTopFilter(filter);
     navigate(`/company/equipment/${getEquipmentFilterPath(filter)}`);
 
-    if (filter === "maintenance") {
+    if (filter === "maintenance" || filter === "upcoming") {
       setSortBy("nextServiceDate");
       setSortOrder("asc");
     }
+  };
+
+  const handleUpcomingMaintenanceWeeksChange = (event) => {
+    setUpcomingMaintenanceWeeks(normalizeUpcomingMaintenanceWeeks(event.target.value));
+    setSortBy("nextServiceDate");
+    setSortOrder("asc");
   };
 
   const activeStatusFilterLabel = ACTIVE_STATUS_FILTER_LABELS[activeStatusFilter] || ACTIVE_STATUS_FILTER_LABELS.active;
@@ -2095,13 +2156,16 @@ export default function EquipmentList() {
     : needsServiceFilter === "false"
       ? "Needs Service: No"
       : "Needs Service: All";
+  const upcomingLookAheadLabel = `${upcomingMaintenanceWeeks} week${upcomingMaintenanceWeeks === 1 ? "" : "s"} forward`;
   const topFilterLabel = topFilter === "all"
     ? "All equipment"
     : topFilter === "maintenance"
       ? "Needs maintenance"
-      : topFilter === "repair"
-        ? "Needs repair"
-        : "Non-operational";
+      : topFilter === "upcoming"
+        ? "Upcoming"
+        : topFilter === "repair"
+          ? "Needs repair"
+          : "Non-operational";
   const appliedDetailFilterCount = [
     typeFilter,
     needsServiceFilter,
@@ -2219,7 +2283,7 @@ export default function EquipmentList() {
     if (Object.prototype.hasOwnProperty.call(updates, "notes")) {
       setNoteDrafts((current) => ({
         ...current,
-        [equipmentId]: updates.notes || "",
+        [equipmentId]: noteTextValue(updates.notes),
       }));
     }
   };
@@ -2245,7 +2309,7 @@ export default function EquipmentList() {
       setQuickModelId(equipment.modelId || "");
       setQuickUniversalEquipmentId(equipment.universalEquipmentId || equipment.modelId || "");
       setQuickManualPdfLink(equipment.manualPdfLink || "");
-      setQuickNotes(equipment.notes || "");
+      setQuickNotes(noteTextValue(equipment.notes));
       setQuickNeedsService(!!equipment.needsService || shouldDefaultNeedsService);
       setQuickLastServiceDate(dateToInputValue(equipment.lastServiceDate));
       setQuickServiceFrequency(
@@ -2264,7 +2328,7 @@ export default function EquipmentList() {
     }
 
     if (modalName === "notes") {
-      setQuickNotes(equipment.notes || "");
+      setQuickNotes(noteTextValue(equipment.notes));
     }
 
     if (modalName === "status") {
@@ -2307,6 +2371,9 @@ export default function EquipmentList() {
       setScheduleAdminId(defaultAdmin?.userId || defaultAdmin?.id || "");
       setScheduleTechnicianId(defaultTechnician?.userId || defaultTechnician?.id || "");
       setScheduleDateTime(defaultScheduledAt());
+      setSchedulePriorityOverride(null);
+      setScheduleOperationStatus(JOB_OPERATION_STATUS.scheduled);
+      setScheduleBillingStatus(JOB_BILLING_STATUS.draft);
       setScheduleNotes(`${intentConfig.label} for ${getEquipmentDisplayName(equipment)}`);
     }
   };
@@ -2428,7 +2495,7 @@ export default function EquipmentList() {
       modelId: quickModelId,
       universalEquipmentId: quickUniversalEquipmentId,
       manualPdfLink: quickManualPdfLink,
-      notes: quickNotes,
+      notes: noteTextValue(quickNotes),
       needsService: finalNeedsService,
       lastServiceDate: finalNeedsService ? finalLastServiceDate : null,
       nextServiceDate: nextMaintenanceDate,
@@ -2453,7 +2520,7 @@ export default function EquipmentList() {
   const handleSaveNotes = async () => {
     if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
 
-    const updates = { notes: quickNotes };
+    const updates = { notes: noteTextValue(quickNotes) };
 
     try {
       await updateDoc(
@@ -2486,8 +2553,8 @@ export default function EquipmentList() {
   const handleInlineNoteSave = async (equipment) => {
     if (!equipment || !recentlySelectedCompany || !can("64")) return;
 
-    const draft = noteDrafts[equipment.id] ?? "";
-    const currentNotes = equipment.notes || "";
+    const draft = noteTextValue(noteDrafts[equipment.id]);
+    const currentNotes = noteTextValue(equipment.notes);
     if (draft === currentNotes) return;
 
     try {
@@ -2499,7 +2566,7 @@ export default function EquipmentList() {
         return next;
       });
 
-      const updates = { notes: draft };
+      const updates = { notes: noteTextValue(draft) };
       await updateDoc(
         doc(db, "companies", recentlySelectedCompany, "equipment", equipment.id),
         updates
@@ -3048,7 +3115,7 @@ export default function EquipmentList() {
       const profitMarginPercent = totalAmountCents > 0
         ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
         : 0;
-      const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedScheduleTemplate);
+      const issuePriorityLevel = normalizeIssuePriority(schedulePriorityLevel);
       const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
       const planTierLabel = getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER);
       const planName = selectedScheduleTemplate.name ? `${selectedScheduleTemplate.name} Plan` : `${scheduleJobIntentConfig.label} Plan`;
@@ -3208,8 +3275,8 @@ export default function EquipmentList() {
         lastHistoryEventTitle: scheduleJobIntentConfig.historyTitle,
         lastHistoryEventType: "Created",
         description,
-        operationStatus: "Scheduled",
-        billingStatus: "Draft",
+        operationStatus: scheduleOperationStatus,
+        billingStatus: scheduleBillingStatus,
         issuePriorityLevel,
         issuePriorityLabel,
         priorityLevel: issuePriorityLevel,
@@ -3462,7 +3529,6 @@ export default function EquipmentList() {
         scheduledServiceStopInternalId: serviceStopInternalId,
         assignedTechId: techId,
         assignedTechName: techName,
-        operationStatus: "Scheduled",
       });
 
       await Promise.all((scheduledEquipmentSummary.equipmentIds || []).map((equipmentId) => {
@@ -3499,6 +3565,9 @@ export default function EquipmentList() {
         title: scheduleJobIntentConfig.historyTitle,
         description: `Scheduled from equipment list using template: ${selectedScheduleTemplate.name || "Template"}`,
         changes: [
+          { field: "issuePriorityLevel", label: "Priority", before: "-", after: issuePriorityLabel },
+          { field: "operationStatus", label: "Operation Status", before: "-", after: scheduleOperationStatus },
+          { field: "billingStatus", label: "Billing Status", before: "-", after: scheduleBillingStatus },
           { field: "adminName", label: "Admin", before: "-", after: adminName || "-" },
           { field: "assignedTechName", label: "Technician", before: "-", after: techName || "-" },
           { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
@@ -3548,6 +3617,8 @@ export default function EquipmentList() {
       };
 
       setActiveJobsByEquipmentId((current) => {
+        if (!isActiveEquipmentJob(scheduledJobForLookup)) return current;
+
         const next = { ...current };
         (createdEquipmentSummary.equipmentIds || []).forEach((equipmentId) => {
           const equipmentTasks = normalizedTasks.filter((task) => getRecordEquipmentIds(task).includes(equipmentId));
@@ -3601,19 +3672,19 @@ export default function EquipmentList() {
         selectedQuickEquipment.serviceFrequencyEvery
       );
 
-      await setDoc(serviceHistoryDoc, {
+      const serviceHistoryRecord = {
         id: serviceId,
         name: (maintenanceName || "").trim(),
         type: "Maintenance",
         date: maintenanceDateValue,
         performedBy,
         addedBy: "Manual",
-        description: maintenanceNotes,
+        description: noteTextValue(maintenanceNotes),
         techId,
         techName,
         jobId: "",
         partIds: [],
-      });
+      };
 
       const updates = {
         lastServiceDate: maintenanceDateValue,
@@ -3624,7 +3695,10 @@ export default function EquipmentList() {
         updates.status = EQUIPMENT_STATUS.OPERATIONAL;
       }
 
-      await updateDoc(equipmentRef, updates);
+      const batch = writeBatch(db);
+      batch.set(serviceHistoryDoc, serviceHistoryRecord);
+      batch.update(equipmentRef, updates);
+      await batch.commit();
       updateEquipmentInLists(selectedQuickEquipment.id, updates);
       closeQuickModal();
       toast.success("Maintenance record saved");
@@ -3845,7 +3919,7 @@ export default function EquipmentList() {
         </section>
 
         {/* TOP FILTER BUTTONS */}
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <TopFilterButton
             label="All Equipment"
             count={topCounts.all}
@@ -3857,6 +3931,12 @@ export default function EquipmentList() {
             count={topCounts.maintenance}
             active={topFilter === "maintenance"}
             onClick={() => handleTopFilterChange("maintenance")}
+          />
+          <TopFilterButton
+            label="Upcoming"
+            count={topCounts.upcoming}
+            active={topFilter === "upcoming"}
+            onClick={() => handleTopFilterChange("upcoming")}
           />
           <TopFilterButton
             label="Needs Repair"
@@ -3933,6 +4013,23 @@ export default function EquipmentList() {
                 placeholder="Search customer, address, job, make, model, status, notes..."
               />
 
+              {topFilter === "upcoming" && (
+                <label className="flex w-full shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm md:w-auto">
+                  <span className="whitespace-nowrap">Look ahead</span>
+                  <select
+                    value={upcomingMaintenanceWeeks}
+                    onChange={handleUpcomingMaintenanceWeeksChange}
+                    className="min-w-[150px] rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  >
+                    {UPCOMING_MAINTENANCE_WEEK_OPTIONS.map((weeks) => (
+                      <option key={weeks} value={weeks}>
+                        {weeks} week{weeks === 1 ? "" : "s"} forward
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowFilterModal(true)}
@@ -3946,7 +4043,15 @@ export default function EquipmentList() {
 
           <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
             <div>Showing {filteredEquipmentList.length} of {equipmentList.length} item{equipmentList.length === 1 ? "" : "s"}</div>
-            <div>{[topFilterLabel, activeStatusFilterLabel, typeFilter || "All types", routineServiceFilterLabel].join(" - ")}</div>
+            <div>
+              {[
+                topFilterLabel,
+                topFilter === "upcoming" ? upcomingLookAheadLabel : "",
+                activeStatusFilterLabel,
+                typeFilter || "All types",
+                routineServiceFilterLabel,
+              ].filter(Boolean).join(" - ")}
+            </div>
           </div>
 
           {/* Table */}
@@ -4557,6 +4662,7 @@ export default function EquipmentList() {
         {activeQuickModal === SCHEDULE_JOB_MODAL && selectedQuickEquipment && (
           <ModalShell
             title={scheduleJobIntentConfig.actionLabel}
+            wide
             onClose={schedulingJob ? undefined : closeQuickModal}
             footer={
               <div className="flex justify-end gap-3">
@@ -4601,263 +4707,308 @@ export default function EquipmentList() {
                 </div>
               )}
 
-              <Field label="Template">
-                <select
-                  value={scheduleTemplateId}
-                  onChange={(event) => setScheduleTemplateId(event.target.value)}
-                  disabled={loadingJobTemplates || schedulingJob}
-                  className={inputBase}
-                >
-                  <option value="">Select template</option>
-                  {scheduleTemplateOptions.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.name || "Template"}
-                    </option>
-                  ))}
-                </select>
-                {!loadingJobTemplates && scheduleTemplateOptions.length === 0 && (
-                  <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                    No active technician-enabled templates found.
-                  </p>
-                )}
-              </Field>
-
-              {selectedScheduleTemplate && (
-                <div className="grid gap-3 text-sm sm:grid-cols-5">
-                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
-                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.tasks.length}</p>
-                  </div>
-                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Services</p>
-                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.laborLineItems.length}</p>
-                  </div>
-                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Stops</p>
-                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.plannedServiceStops.length || 1}</p>
-                  </div>
-                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Items</p>
-                    <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.shoppingItems.length}</p>
-                  </div>
-                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Price</p>
-                    <p className="mt-1 font-bold text-slate-950">{moneyFromCents(scheduleGeneratedPriceCents)}</p>
-                  </div>
-                </div>
-              )}
-
-              {selectedScheduleTemplate && selectedScheduleTemplateRequiresEquipment && (
-                <div className="space-y-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-bold text-slate-950">Equipment Assignments</p>
-                      <p className="mt-1 text-sm text-slate-600">
-                        Each required service item or task must point at the equipment it services.
+              <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
+                <div className="min-w-0 space-y-3">
+                  <Field label="Template">
+                    <select
+                      value={scheduleTemplateId}
+                      onChange={(event) => {
+                        setScheduleTemplateId(event.target.value);
+                        setSchedulePriorityOverride(null);
+                      }}
+                      disabled={loadingJobTemplates || schedulingJob}
+                      className={inputBase}
+                    >
+                      <option value="">Select template</option>
+                      {scheduleTemplateOptions.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.name || "Template"}
+                        </option>
+                      ))}
+                    </select>
+                    {!loadingJobTemplates && scheduleTemplateOptions.length === 0 && (
+                      <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        No active technician-enabled templates found.
                       </p>
-                    </div>
-                    <p className="text-sm font-semibold text-slate-700">
-                      {scheduleAssignedEquipmentSummary.equipmentNames?.join(", ") || "No equipment assigned"}
-                    </p>
+                    )}
+                  </Field>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Admin">
+                      <CompanyUserSelect
+                        aria-label="Admin"
+                        value={selectedScheduleAdmin}
+                        options={scheduleAdminOptions}
+                        onChange={(admin) => setScheduleAdminId(admin?.userId || admin?.id || "")}
+                        isDisabled={schedulingJob}
+                        placeholder="Select admin"
+                      />
+                    </Field>
+
+                    <Field label="Technician">
+                      <CompanyUserSelect
+                        aria-label="Technician"
+                        value={selectedScheduleTechnician}
+                        options={scheduleTechnicianOptions}
+                        onChange={(technician) => setScheduleTechnicianId(technician?.userId || technician?.id || "")}
+                        isDisabled={schedulingJob || !canScheduleTemplateForOthers}
+                        placeholder="Select technician"
+                      />
+                    </Field>
                   </div>
 
-                  {scheduleTemplateDetails.plannedServiceStops.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Planned Stops</p>
-                      {scheduleTemplateDetails.plannedServiceStops.map((stop, index) => {
-                        const stopNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(stop);
-                        if (!stopNeedsEquipment) return null;
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <Field label="Priority">
+                      <select
+                        aria-label="Priority"
+                        value={schedulePriorityLevel}
+                        onChange={(event) => setSchedulePriorityOverride(normalizeIssuePriority(event.target.value))}
+                        disabled={schedulingJob}
+                        className={inputBase}
+                      >
+                        {ISSUE_PRIORITY_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.value} - {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
 
-                        return (
-                          <div key={stop.id || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-800">
-                                {stop.name || stop.serviceStopTypeName || `Visit ${index + 1}`}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                {stop.serviceStopTypeName || "Job Visit"} - {Number(stop.estimatedMinutes || 0)} min
-                              </p>
-                            </div>
-                            <select
-                              value={stop.equipmentId || ""}
-                              onChange={(event) => updateScheduleTemplateDetailEquipment(
-                                "plannedServiceStops",
-                                stop.id,
-                                scheduleEquipmentOptionForId(event.target.value)
-                              )}
-                              disabled={schedulingJob || loadingScheduleTemplateDetails}
-                              className={inputBase}
-                            >
-                              <option value="">Assign equipment</option>
-                              {scheduleEquipmentOptions.map((equipment) => (
-                                <option key={equipment.id} value={equipment.id}>
-                                  {equipment.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                    <Field label="Operation Status">
+                      <select
+                        aria-label="Operation Status"
+                        value={scheduleOperationStatus}
+                        onChange={(event) => setScheduleOperationStatus(event.target.value)}
+                        disabled={schedulingJob}
+                        className={inputBase}
+                      >
+                        {Object.values(JOB_OPERATION_STATUS).map((status) => (
+                          <option key={status} value={status}>{status}</option>
+                        ))}
+                      </select>
+                    </Field>
 
-                  {scheduleTemplateDetails.laborLineItems.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Service Lines</p>
-                      {scheduleTemplateDetails.laborLineItems.map((line, index) => {
-                        const lineNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(line);
-                        if (!lineNeedsEquipment) return null;
+                    <Field label="Billing Status">
+                      <select
+                        aria-label="Billing Status"
+                        value={scheduleBillingStatus}
+                        onChange={(event) => setScheduleBillingStatus(event.target.value)}
+                        disabled={schedulingJob}
+                        className={inputBase}
+                      >
+                        {Object.values(JOB_BILLING_STATUS).map((status) => (
+                          <option key={status} value={status}>{status}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
 
-                        return (
-                          <div key={line.id || line.laborLineId || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-800">
-                                {line.name || line.title || `Service ${index + 1}`}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                Qty: {line.quantity || line.defaultQuantity || 1} - Price: {moneyFromCents(laborLineTotalPriceCents(line))}
-                              </p>
-                            </div>
-                            <select
-                              value={line.equipmentId || ""}
-                              onChange={(event) => updateScheduleTemplateDetailEquipment(
-                                "laborLineItems",
-                                line.id || line.laborLineId,
-                                scheduleEquipmentOptionForId(event.target.value)
-                              )}
-                              disabled={schedulingJob || loadingScheduleTemplateDetails}
-                              className={inputBase}
-                            >
-                              <option value="">Assign equipment</option>
-                              {scheduleEquipmentOptions.map((equipment) => (
-                                <option key={equipment.id} value={equipment.id}>
-                                  {equipment.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                  <Field label="Scheduled Time">
+                    <input
+                      type="datetime-local"
+                      value={scheduleDateTime}
+                      onChange={(event) => setScheduleDateTime(event.target.value)}
+                      disabled={schedulingJob}
+                      className={inputBase}
+                    />
+                  </Field>
 
-                  {scheduleTemplateDetails.tasks.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
-                      {scheduleTemplateDetails.tasks.map((task, index) => {
-                        const taskNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(task);
-                        if (!taskNeedsEquipment) return null;
-
-                        return (
-                          <div key={task.id || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-800">
-                                {task.name || task.description || `Task ${index + 1}`}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                {task.type || "Task"} - {Number(task.estimatedTime || 0)} min
-                              </p>
-                            </div>
-                            <select
-                              value={task.equipmentId || ""}
-                              onChange={(event) => updateScheduleTemplateDetailEquipment(
-                                "tasks",
-                                task.id,
-                                scheduleEquipmentOptionForId(event.target.value)
-                              )}
-                              disabled={schedulingJob || loadingScheduleTemplateDetails}
-                              className={inputBase}
-                            >
-                              <option value="">Assign equipment</option>
-                              {scheduleEquipmentOptions.map((equipment) => (
-                                <option key={equipment.id} value={equipment.id}>
-                                  {equipment.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                  <Field label="Work Notes">
+                    <textarea
+                      value={scheduleNotes}
+                      onChange={(event) => setScheduleNotes(event.target.value)}
+                      disabled={schedulingJob}
+                      className={inputBase}
+                      rows={2}
+                    />
+                  </Field>
                 </div>
-              )}
 
-              {scheduleMissingEquipmentAssignments.length > 0 && (
-                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                  Assign equipment for {scheduleMissingEquipmentAssignments.length} service/task item{scheduleMissingEquipmentAssignments.length === 1 ? "" : "s"} before scheduling this job.
-                </p>
-              )}
+                <section className="min-w-0 space-y-3 lg:max-h-[calc(100dvh-21rem)] lg:overflow-y-auto lg:pr-2" aria-label="Template preview" tabIndex={0}>
+                  {selectedScheduleTemplate && (
+                    <div className="grid gap-3 text-sm sm:grid-cols-5">
+                      <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
+                        <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.tasks.length}</p>
+                      </div>
+                      <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Services</p>
+                        <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.laborLineItems.length}</p>
+                      </div>
+                      <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Stops</p>
+                        <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.plannedServiceStops.length || 1}</p>
+                      </div>
+                      <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Items</p>
+                        <p className="mt-1 font-bold text-slate-950">{scheduleTemplateDetails.shoppingItems.length}</p>
+                      </div>
+                      <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Price</p>
+                        <p className="mt-1 font-bold text-slate-950">{moneyFromCents(scheduleGeneratedPriceCents)}</p>
+                      </div>
+                    </div>
+                  )}
 
-              {selectedScheduleTemplateRequiresEquipment && scheduleAssignedEquipmentIds.length === 0 && scheduleMissingEquipmentAssignments.length === 0 && (
-                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                  Assign at least one equipment item before scheduling this job.
-                </p>
-              )}
+                  {selectedScheduleTemplate && selectedScheduleTemplateRequiresEquipment && (
+                    <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">Equipment Assignments</p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            Each required service item or task must point at the equipment it services.
+                          </p>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-700">
+                          {scheduleAssignedEquipmentSummary.equipmentNames?.join(", ") || "No equipment assigned"}
+                        </p>
+                      </div>
 
-              {selectedScheduleTemplateRequiresBodyOfWater && !scheduleResolvedBodyOfWaterId && (
-                <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                  Assign equipment with a body of water before scheduling this job.
-                </p>
-              )}
+                      {scheduleTemplateDetails.plannedServiceStops.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Planned Stops</p>
+                          {scheduleTemplateDetails.plannedServiceStops.map((stop, index) => {
+                            const stopNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(stop);
+                            if (!stopNeedsEquipment) return null;
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Admin">
-                  <select
-                    value={scheduleAdminId}
-                    onChange={(event) => setScheduleAdminId(event.target.value)}
-                    disabled={schedulingJob}
-                    className={inputBase}
-                  >
-                    <option value="">Select admin</option>
-                    {scheduleAdminOptions.map((admin) => (
-                      <option key={admin.id || admin.userId} value={admin.userId || admin.id}>
-                        {admin.label || admin.userName || "Admin"}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                            return (
+                              <div key={stop.id || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-800">
+                                    {stop.name || stop.serviceStopTypeName || `Visit ${index + 1}`}
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    {stop.serviceStopTypeName || "Job Visit"} - {Number(stop.estimatedMinutes || 0)} min
+                                  </p>
+                                </div>
+                                <select
+                                  value={stop.equipmentId || ""}
+                                  onChange={(event) => updateScheduleTemplateDetailEquipment(
+                                    "plannedServiceStops",
+                                    stop.id,
+                                    scheduleEquipmentOptionForId(event.target.value)
+                                  )}
+                                  disabled={schedulingJob || loadingScheduleTemplateDetails}
+                                  className={inputBase}
+                                >
+                                  <option value="">Assign equipment</option>
+                                  {scheduleEquipmentOptions.map((equipment) => (
+                                    <option key={equipment.id} value={equipment.id}>
+                                      {equipment.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
 
-                <Field label="Technician">
-                  <select
-                    value={scheduleTechnicianId}
-                    onChange={(event) => setScheduleTechnicianId(event.target.value)}
-                    disabled={schedulingJob || !canScheduleTemplateForOthers}
-                    className={inputBase}
-                  >
-                    <option value="">Select technician</option>
-                    {scheduleTechnicianOptions.map((technician) => (
-                      <option key={technician.id || technician.userId} value={technician.userId || technician.id}>
-                        {technician.label || technician.userName || "Technician"}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                      {scheduleTemplateDetails.laborLineItems.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Service Lines</p>
+                          {scheduleTemplateDetails.laborLineItems.map((line, index) => {
+                            const lineNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(line);
+                            if (!lineNeedsEquipment) return null;
+
+                            return (
+                              <div key={line.id || line.laborLineId || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-800">
+                                    {line.name || line.title || `Service ${index + 1}`}
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    Qty: {line.quantity || line.defaultQuantity || 1} - Price: {moneyFromCents(laborLineTotalPriceCents(line))}
+                                  </p>
+                                </div>
+                                <select
+                                  value={line.equipmentId || ""}
+                                  onChange={(event) => updateScheduleTemplateDetailEquipment(
+                                    "laborLineItems",
+                                    line.id || line.laborLineId,
+                                    scheduleEquipmentOptionForId(event.target.value)
+                                  )}
+                                  disabled={schedulingJob || loadingScheduleTemplateDetails}
+                                  className={inputBase}
+                                >
+                                  <option value="">Assign equipment</option>
+                                  {scheduleEquipmentOptions.map((equipment) => (
+                                    <option key={equipment.id} value={equipment.id}>
+                                      {equipment.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {scheduleTemplateDetails.tasks.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Tasks</p>
+                          {scheduleTemplateDetails.tasks.map((task, index) => {
+                            const taskNeedsEquipment = selectedScheduleTemplateRequiresEquipment || jobScopeItemRequiresEquipment(task);
+                            if (!taskNeedsEquipment) return null;
+
+                            return (
+                              <div key={task.id || index} className="grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(200px,260px)] sm:items-center">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-800">
+                                    {task.name || task.description || `Task ${index + 1}`}
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    {task.type || "Task"} - {Number(task.estimatedTime || 0)} min
+                                  </p>
+                                </div>
+                                <select
+                                  value={task.equipmentId || ""}
+                                  onChange={(event) => updateScheduleTemplateDetailEquipment(
+                                    "tasks",
+                                    task.id,
+                                    scheduleEquipmentOptionForId(event.target.value)
+                                  )}
+                                  disabled={schedulingJob || loadingScheduleTemplateDetails}
+                                  className={inputBase}
+                                >
+                                  <option value="">Assign equipment</option>
+                                  {scheduleEquipmentOptions.map((equipment) => (
+                                    <option key={equipment.id} value={equipment.id}>
+                                      {equipment.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {scheduleMissingEquipmentAssignments.length > 0 && (
+                    <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                      Assign equipment for {scheduleMissingEquipmentAssignments.length} service/task item{scheduleMissingEquipmentAssignments.length === 1 ? "" : "s"} before scheduling this job.
+                    </p>
+                  )}
+
+                  {selectedScheduleTemplateRequiresEquipment && scheduleAssignedEquipmentIds.length === 0 && scheduleMissingEquipmentAssignments.length === 0 && (
+                    <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                      Assign at least one equipment item before scheduling this job.
+                    </p>
+                  )}
+
+                  {selectedScheduleTemplateRequiresBodyOfWater && !scheduleResolvedBodyOfWaterId && (
+                    <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                      Assign equipment with a body of water before scheduling this job.
+                    </p>
+                  )}
+
+                  {loadingScheduleTemplateDetails && (
+                    <p className="text-sm font-semibold text-blue-700">Loading template details...</p>
+                  )}
+                </section>
               </div>
-
-              <Field label="Scheduled Time">
-                <input
-                  type="datetime-local"
-                  value={scheduleDateTime}
-                  onChange={(event) => setScheduleDateTime(event.target.value)}
-                  disabled={schedulingJob}
-                  className={inputBase}
-                />
-              </Field>
-
-              <Field label="Work Notes">
-                <textarea
-                  value={scheduleNotes}
-                  onChange={(event) => setScheduleNotes(event.target.value)}
-                  disabled={schedulingJob}
-                  className={inputBase}
-                  rows={4}
-                />
-              </Field>
-
-              {loadingScheduleTemplateDetails && (
-                <p className="text-sm font-semibold text-blue-700">Loading template details...</p>
-              )}
             </div>
           </ModalShell>
         )}
@@ -4927,21 +5078,12 @@ export default function EquipmentList() {
 
               {maintenancePerformedBy === "Company" ? (
                 <Field label="Company User">
-                  <select
-                    value={maintenanceCompanyUserId}
-                    onChange={(event) => setMaintenanceCompanyUserId(event.target.value)}
-                    className={inputBase}
-                  >
-                    {companyUsers.length === 0 ? (
-                      <option value="">No company users found</option>
-                    ) : (
-                      companyUsers.map((user) => (
-                        <option key={user.id} value={user.id}>
-                          {companyUserDisplayName(user) || "Technician"}
-                        </option>
-                      ))
-                    )}
-                  </select>
+                  <CompanyUserSelect
+                    aria-label="Company User"
+                    value={companyUsers.find((user) => user.id === maintenanceCompanyUserId) || null}
+                    options={companyUsers}
+                    onChange={(user) => setMaintenanceCompanyUserId(user?.id || "")}
+                  />
                 </Field>
               ) : (
                 <Field label="Customer Name">
@@ -5030,21 +5172,12 @@ export default function EquipmentList() {
 
               {repairPerformedBy === "Company" ? (
                 <Field label="Company User">
-                  <select
-                    value={repairCompanyUserId}
-                    onChange={(event) => setRepairCompanyUserId(event.target.value)}
-                    className={inputBase}
-                  >
-                    {companyUsers.length === 0 ? (
-                      <option value="">No company users found</option>
-                    ) : (
-                      companyUsers.map((user) => (
-                        <option key={user.id} value={user.id}>
-                          {companyUserDisplayName(user) || "Technician"}
-                        </option>
-                      ))
-                    )}
-                  </select>
+                  <CompanyUserSelect
+                    aria-label="Company User"
+                    value={companyUsers.find((user) => user.id === repairCompanyUserId) || null}
+                    options={companyUsers}
+                    onChange={(user) => setRepairCompanyUserId(user?.id || "")}
+                  />
                 </Field>
               ) : (
                 <Field label="Customer Name">

@@ -4,6 +4,7 @@ import {
     query,
     where,
     getDocs,
+    onSnapshot,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import {
@@ -20,6 +21,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { format, subDays } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { sortCompanyUsersByName } from "../../../utils/companyUsers";
+import PublicRepairRequestLink from "../../../components/PublicRepairRequestLink";
 
 const getRequestDateValue = (request) => (
     request.date || request.dateCreated || request.createdAt || null
@@ -39,6 +41,8 @@ const toDateSortValue = (request) => {
     return date ? date.getTime() : 0;
 };
 
+const getRequestCommentKey = (request, companyId) => `${companyId}:${request.sourcePath}:${request.id}`;
+
 const RepairRequests = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const navigate = useNavigate();
@@ -46,6 +50,7 @@ const RepairRequests = () => {
 
     const [internalRequests, setInternalRequests] = useState([]);
     const [externalRequests, setExternalRequests] = useState([]);
+    const [commentCounts, setCommentCounts] = useState({});
 
     const [companyUsers, setCompanyUsers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -99,15 +104,16 @@ const RepairRequests = () => {
                 const request = RepairRequest.fromFirestore(docSnap);
 
                 return {
+                    ...data,
                     ...request,
                     dateCreated: toDate(data.dateCreated),
                     createdAt: toDate(data.createdAt),
-                    source: "internal",
+                    source: data.source === "publicTechnician" ? "external" : "internal",
                     sourcePath: "company",
                 };
             });
 
-            setInternalRequests(internal);
+            setInternalRequests(internal.filter((request) => request.source === "internal"));
 
             const externalSnap = await getDocs(
                 query(
@@ -121,6 +127,7 @@ const RepairRequests = () => {
                 const request = RepairRequest.fromFirestore(docSnap);
 
                 return {
+                    ...data,
                     ...request,
                     dateCreated: toDate(data.dateCreated),
                     createdAt: toDate(data.createdAt),
@@ -129,7 +136,7 @@ const RepairRequests = () => {
                 };
             });
 
-            setExternalRequests(external);
+            setExternalRequests([...internal.filter((request) => request.source === "external"), ...external]);
         } catch (error) {
             console.error("Error fetching repair requests:", error);
         } finally {
@@ -177,6 +184,9 @@ const RepairRequests = () => {
                 request.notes,
                 displayRepairRequestStatus(request.status),
                 request.serviceLocationName,
+                request.serviceLocationAddress,
+                request.customerEmail,
+                request.customerPhone,
                 request.id,
             ]
                 .filter(Boolean)
@@ -192,6 +202,32 @@ const RepairRequests = () => {
             return dateSortDirection === "asc" ? result : -result;
         });
     }, [selectedRequests, selectedStatuses, searchTerm, startDate, endDate, dateSortDirection]);
+
+    useEffect(() => {
+        setCommentCounts({});
+        if (!recentlySelectedCompany) return undefined;
+        let canceled = false;
+        const unsubscribers = filteredRequests.map((request) => {
+            const key = getRequestCommentKey(request, recentlySelectedCompany);
+            const commentsRef = request.sourcePath === "homeowner"
+                ? collection(db, "homeownerRepairRequests", request.id, "comments")
+                : collection(db, "companies", recentlySelectedCompany, "repairRequests", request.id, "comments");
+
+            return onSnapshot(commentsRef, (snapshot) => {
+                if (canceled) return;
+                const count = snapshot.docs.filter((comment) => !comment.data().resolved).length;
+                setCommentCounts((previous) => ({ ...previous, [key]: count }));
+            }, (error) => {
+                console.error("Error loading repair request comment counts:", error);
+                if (!canceled) setCommentCounts((previous) => ({ ...previous, [key]: 0 }));
+            });
+        });
+
+        return () => {
+            canceled = true;
+            unsubscribers.forEach((unsubscribe) => unsubscribe());
+        };
+    }, [filteredRequests, recentlySelectedCompany]);
 
     const internalNeedsActionCount = useMemo(() => {
         return internalRequests.filter((request) => {
@@ -303,7 +339,7 @@ const RepairRequests = () => {
                     <tbody className="divide-y divide-slate-200">
                         {requests.map((request) => (
                             <tr
-                                key={`${request.source}-${request.id}`}
+                                key={getRequestCommentKey(request, recentlySelectedCompany)}
                                 className="cursor-pointer transition hover:bg-slate-50"
                                 onClick={() => handleOpenRequest(request)}
                             >
@@ -328,9 +364,19 @@ const RepairRequests = () => {
                                 </td>
 
                                 <td className="max-w-md px-5 py-3">
-                                    <p className="line-clamp-2 text-sm text-slate-700">
-                                        {request.description || request.notes || "No description"}
-                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <p className="min-w-0 line-clamp-2 text-sm text-slate-700">
+                                            {request.description || request.notes || "No description"}
+                                        </p>
+                                        {(commentCounts[getRequestCommentKey(request, recentlySelectedCompany)] || 0) > 0 && (
+                                            <span
+                                                className="inline-flex shrink-0 items-center rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white"
+                                                aria-label={`${commentCounts[getRequestCommentKey(request, recentlySelectedCompany)]} unresolved comments`}
+                                            >
+                                                {commentCounts[getRequestCommentKey(request, recentlySelectedCompany)]}
+                                            </span>
+                                        )}
+                                    </div>
                                 </td>
 
                                 <td className="whitespace-nowrap px-5 py-3">
@@ -399,6 +445,8 @@ const RepairRequests = () => {
                         )}
                     </div>
                 </section>
+
+                <PublicRepairRequestLink companyId={recentlySelectedCompany} />
 
                 <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-slate-200 px-5 pt-4">

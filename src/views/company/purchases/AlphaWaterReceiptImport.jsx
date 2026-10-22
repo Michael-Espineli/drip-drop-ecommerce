@@ -1224,6 +1224,10 @@ const AlphaWaterReceiptImport = () => {
         next.productSellPrice = updates.billingRate;
       }
 
+      if (updates.billingRate !== undefined) {
+        next.billable = true;
+      }
+
       if (updates.shareProductSellPrice === true) {
         next.productSellPrice = next.billingRate;
       }
@@ -2502,6 +2506,14 @@ const AlphaWaterReceiptImport = () => {
                   className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                 />
               </label>
+              <label className="flex items-center gap-2 self-end rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={databaseItemForm.billable}
+                  onChange={(event) => updateDatabaseItemForm({ billable: event.target.checked })}
+                />
+                Billable
+              </label>
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 sm:col-span-2">
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -2587,14 +2599,6 @@ const AlphaWaterReceiptImport = () => {
                   onChange={(event) => updateDatabaseItemForm({ color: event.target.value })}
                   className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                 />
-              </label>
-              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={databaseItemForm.billable}
-                  onChange={(event) => updateDatabaseItemForm({ billable: event.target.checked })}
-                />
-                Billable
               </label>
             </div>
 

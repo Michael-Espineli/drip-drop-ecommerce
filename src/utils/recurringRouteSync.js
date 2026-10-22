@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteField,
   doc,
   getDocs,
   query,
@@ -120,6 +121,8 @@ export const addRecurringServiceStopToPlannedRoute = async ({
       recurringRouteOrder: nextOrder,
       rssIds: getPlannedRouteRssIds(routeData, nextOrder),
       companyId,
+      isValid: true,
+      invalidReason: deleteField(),
       updatedAt: serverTimestamp(),
       ...(existingRouteDoc ? {} : { createdAt: serverTimestamp() }),
     },
@@ -174,6 +177,8 @@ export const removeRecurringServiceStopFromPlannedRoutes = async ({
       order: updatedOrder,
       recurringRouteOrder: updatedOrder,
       rssIds: updatedRssIds,
+      isValid: true,
+      invalidReason: deleteField(),
       updatedAt: serverTimestamp(),
     };
 
@@ -231,6 +236,8 @@ export const removeRecurringServiceStopsFromOtherPlannedRoutes = async ({
         order: reindexedOrder,
         recurringRouteOrder: reindexedOrder,
         rssIds: nextRssIds,
+        isValid: true,
+        invalidReason: deleteField(),
         updatedAt: serverTimestamp(),
       },
       { merge: true }

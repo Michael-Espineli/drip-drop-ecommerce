@@ -36,6 +36,29 @@ npm run deploy:prod
 
 `firebase use development` only changes which Firebase project CLI commands target. It does not change the Firebase config baked into the React browser bundle.
 
+## Public repair requests
+
+Share `/request-repair/<companyId>` with technicians from the external technician repair form panel on the company Repair Requests or Create Internal Repair Request page. `/public/repair-request/<companyId>` is an alias. This is separate from the homeowner `/request-service/<companyId>` intake.
+
+Technicians select their name from active company users and select an existing customer. Service location, body of water, equipment, and equipment status follow the internal repair form. They can describe the issue and attach up to three JPG/PNG/WebP photos without creating an account. Each photo can be up to 2 MB, with a 5 MB combined limit. Requests appear in **External Requests** and retain company-side customer, equipment, and location links.
+
+`getPublicRepairRequestCompany` exposes company details and only IDs/display names for active users and customers. `getPublicRepairRequestOptions` exposes display names for the selected customer's locations and their pools/equipment. It excludes emails, phone numbers, access codes, billing data, and private notes. Anyone with the company form link can use these pickers. Setting `publicRepairRequestsDisabled: true` on the company disables this form; deleted companies and companies with `publicProfileDisabled: true` are also unavailable.
+
+`submitPublicRepairRequest` validates that the technician is still active and all selections belong to the company/customer/location. It resolves names server-side, rate limits submissions, uploads photos, and writes to `companies/<companyId>/repairRequests` with source `publicTechnician`. An optional equipment status update is committed with the request. Selecting a technician attributes the request to that person but does not verify identity; `requesterIdentityVerified` is false and `userId` remains blank. Firestore and Storage rules still deny anonymous direct access. The existing company repair notification workflow uses the same alert ID as the submission.
+
+Deploy all three new functions before deploying the frontend. The normal `deploy:dev` and `deploy:prod` scripts include the functions and frontend; the hosting-only GitHub workflow does not deploy functions.
+
+Focused checks:
+
+```sh
+CI=true npm run test:ci -- --runInBand src/views/public/PublicRepairRequest.test.jsx
+firebase emulators:exec --only firestore --project demo-public-repair-requests "node --test functions/publicRepairRequests.test.js"
+```
+
+## Desktop sizing
+
+At viewport widths of 1024px and above, the shared styles in `src/index.css` use an 80% root font size so desktop text, controls, and spacing are more compact at 100% browser zoom. Navigation widths and header clearance use rem units to scale with the content. Mobile/tablet and print sizing retain their normal scale.
+
 ## Available Scripts
 
 In the project directory, you can run:

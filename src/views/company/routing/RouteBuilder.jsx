@@ -466,6 +466,53 @@ const RouteBuilder = () => {
     return result.data;
   };
 
+  const syncRecurringStopRouteLinks = async (recurringServiceStopIds = [], routeId = "") => {
+    const uniqueRssIds = [...new Set(recurringServiceStopIds.filter(Boolean))];
+    if (!recentlySelectedCompany || !routeId || !uniqueRssIds.length) return;
+
+    const routeLinkPatch = {
+      recurringRouteId: routeId,
+      recurringRouteDocId: routeId,
+      plannedRouteId: routeId,
+      recurringRouteLinkedAt: serverTimestamp(),
+      recurringRouteUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const writeOperations = [];
+
+    uniqueRssIds.forEach((rssId) => {
+      writeOperations.push({
+        ref: doc(db, "companies", recentlySelectedCompany, "recurringServiceStop", rssId),
+        data: routeLinkPatch,
+      });
+    });
+
+    for (const rssId of uniqueRssIds) {
+      const futureStopsSnapshot = await getDocs(query(
+        collection(db, "companies", recentlySelectedCompany, "serviceStops"),
+        where("recurringServiceStopId", "==", rssId),
+        where("serviceDate", ">=", today)
+      ));
+
+      futureStopsSnapshot.docs.forEach((serviceStopDoc) => {
+        writeOperations.push({
+          ref: serviceStopDoc.ref,
+          data: routeLinkPatch,
+        });
+      });
+    }
+
+    for (let index = 0; index < writeOperations.length; index += 450) {
+      const batch = writeBatch(db);
+      writeOperations.slice(index, index + 450).forEach((operation) => {
+        batch.set(operation.ref, operation.data, { merge: true });
+      });
+      await batch.commit();
+    }
+  };
+
   const buildRouteOrderItem = async (stop, index, options = {}) => {
     const resolvedTypeFields = resolveStopTypeFields(stop, serviceStopTypeForStop(stop));
     const recurringServiceStopId = stop.recurringServiceStopId || await createRecurringServiceStopForRouteStop(stop);
@@ -712,6 +759,7 @@ const RouteBuilder = () => {
           detail: "Saving route...",
         });
         await batch.commit();
+        await syncRecurringStopRouteLinks(routeRecurringServiceStopIds, destinationRouteId);
 
         toast.success(destinationRouteDoc ? "Route merged successfully!" : "Route successfully updated!");
         navigate('/company/route-management');
@@ -789,6 +837,7 @@ const RouteBuilder = () => {
         detail: "Saving route...",
       });
       await batch.commit();
+      await syncRecurringStopRouteLinks(routeRecurringServiceStopIds, routeId);
 
       toast.success(destinationRouteDoc ? "Route merged successfully!" : "Route successfully created!");
       navigate('/company/route-management');

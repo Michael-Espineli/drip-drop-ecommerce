@@ -24,6 +24,7 @@ const AdminSignIn = lazy(() => import("../../views/auth/AdminSignIn"))
 const SuccessfulSubscription = lazy(() => import("../../views/SuccessfulSubscription"))
 const ClientAccountInviteLanding = lazy(() => import("../../views/client/ClientAccountInviteLanding"))
 const PublicServiceRequest = lazy(() => import("../../views/public/PublicServiceRequest"))
+const PublicRepairRequest = lazy(() => import("../../views/public/PublicRepairRequest"))
 const PublicServiceRequestVerification = lazy(() => import("../../views/public/PublicServiceRequestVerification"))
 const PublicServiceAgreementLanding = lazy(() => import("../../views/public/PublicServiceAgreementLanding"))
 const PublicServiceAgreementInspectionReport = lazy(() => import("../../views/public/PublicServiceAgreementInspectionReport"))
@@ -111,6 +112,16 @@ const publicRoutes = [
   {
     path: "/request-service/:companyId",
     element: <PublicServiceRequest />,
+  }
+  ,
+  {
+    path: "/request-repair/:companyId",
+    element: <PublicRepairRequest />,
+  }
+  ,
+  {
+    path: "/public/repair-request/:companyId",
+    element: <PublicRepairRequest />,
   }
   ,
   {

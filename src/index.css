@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Scale rem-based desktop typography, controls, and spacing together. */
+@media screen and (min-width: 1024px) {
+    html {
+        font-size: 80%;
+    }
+}
 
 
 :root,
@@ -1004,7 +1010,7 @@ body {
 .client-theme .app-main-content > :where(div, main, section):not(.app-full-bleed):not([class~="fixed"]):not([class~="absolute"]) {
     background-color: var(--color-page-bg);
     color: var(--color-text);
-    min-height: calc(100vh - 95px);
+    min-height: calc(100vh - 5.9375rem);
     padding: var(--app-page-gutter-y) var(--app-page-gutter-x) !important;
 }
 

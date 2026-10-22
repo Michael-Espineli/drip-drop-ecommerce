@@ -320,27 +320,6 @@ const CreateJobFlowLauncher = ({
             </div>
 
             <div className="space-y-3 p-5">
-              {canCreateBasicWorkOrders && (
-                <button
-                  type="button"
-                  onClick={handleCreateBasicWorkOrder}
-                  className="w-full rounded-md border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100"
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-blue-200 bg-white">
-                      <BriefcaseIcon className="h-5 w-5 text-blue-700" aria-hidden="true" />
-                    </div>
-
-                    <div>
-                      <p className="font-bold text-blue-900">Basic Job</p>
-                      <p className="mt-1 text-sm text-blue-800">
-                        Schedule a technician-safe template or simple custom job with a generated price.
-                      </p>
-                    </div>
-                  </div>
-                </button>
-              )}
-
               {canCreateJobs && (
                 <button
                   type="button"
@@ -356,6 +335,27 @@ const CreateJobFlowLauncher = ({
                       <p className="font-bold text-slate-900">Blank Job</p>
                       <p className="mt-1 text-sm text-slate-500">
                         Build a job manually from scratch.
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              )}
+
+              {canCreateBasicWorkOrders && (
+                <button
+                  type="button"
+                  onClick={handleCreateBasicWorkOrder}
+                  className="w-full rounded-md border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-md border border-blue-200 bg-white">
+                      <BriefcaseIcon className="h-5 w-5 text-blue-700" aria-hidden="true" />
+                    </div>
+
+                    <div>
+                      <p className="font-bold text-blue-900">Basic Job</p>
+                      <p className="mt-1 text-sm text-blue-800">
+                        Schedule a technician-safe template or simple custom job with a generated price.
                       </p>
                     </div>
                   </div>

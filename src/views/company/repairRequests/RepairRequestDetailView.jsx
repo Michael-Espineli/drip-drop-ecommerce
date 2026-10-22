@@ -437,27 +437,17 @@ const RepairRequestDetailView = () => {
     };
   }, [selectedPhoto]);
 
-  const handlePartApprovalCreated = async (approval) => {
+  const handlePartApprovalCreated = (approval) => {
     if (!approval?.id || !repairRequest?.id) return;
 
-    try {
-      await updateDoc(getRequestRef(), {
-        partApprovalIds: arrayUnion(approval.id),
-        lastPartApprovalId: approval.id,
-        lastPartApprovalStatus: approval.status || approval.approvalStatus || "pending",
-        updatedAt: serverTimestamp(),
-      });
-
-      setRepairRequest((prev) => ({
-        ...prev,
-        partApprovalIds: Array.from(new Set([...(prev?.partApprovalIds || []), approval.id])),
-        lastPartApprovalId: approval.id,
-        lastPartApprovalStatus: approval.status || approval.approvalStatus || "pending",
-      }));
-    } catch (error) {
-      console.error("Error linking part approval to repair request:", error);
-      appAlert("Part approval was created, but it could not be linked back to this repair request.");
-    }
+    setRepairRequest((prev) => ({
+      ...prev,
+      status: REPAIR_REQUEST_STATUS.RESOLVED,
+      partApprovalIds: Array.from(new Set([...(prev?.partApprovalIds || []), approval.id])),
+      lastPartApprovalId: approval.id,
+      lastPartApprovalStatus: approval.status || approval.approvalStatus || "pending",
+    }));
+    setFormData((prev) => ({ ...prev, status: REPAIR_REQUEST_STATUS.RESOLVED }));
   };
 
   const handleConvertToSuggestedWork = async () => {
@@ -906,8 +896,22 @@ const RepairRequestDetailView = () => {
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2 space-y-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="min-w-0 space-y-6">
+            {repairRequest.source === "publicTechnician" && (
+              <section className="rounded-lg border border-blue-200 bg-blue-50 p-5" aria-labelledby="external-repair-contact">
+                <h3 id="external-repair-contact" className="text-lg font-bold text-slate-900">External technician request</h3>
+                <p className="mt-1 text-sm text-slate-600">Submitted through the technician repair form.</p>
+                <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+                  <div><dt className="font-semibold text-slate-700">Technician</dt><dd>{repairRequest.requesterName}</dd></div>
+                  <div><dt className="font-semibold text-slate-700">Service address</dt><dd>{repairRequest.serviceLocationAddress}</dd></div>
+                  {repairRequest.customerEmail && <div><dt className="font-semibold text-slate-700">Email</dt><dd><a className="break-all text-blue-700 underline" href={`mailto:${repairRequest.customerEmail}`}>{repairRequest.customerEmail}</a></dd></div>}
+                  {repairRequest.customerPhone && <div><dt className="font-semibold text-slate-700">Phone</dt><dd><a className="text-blue-700 underline" href={`tel:${repairRequest.customerPhone.replace(/[^+\d]/g, "")}`}>{repairRequest.customerPhone}</a></dd></div>}
+                  {repairRequest.bodyOfWaterName && <div><dt className="font-semibold text-slate-700">Pool / spa</dt><dd>{repairRequest.bodyOfWaterName}</dd></div>}
+                  {repairRequest.equipmentName && <div><dt className="font-semibold text-slate-700">Equipment</dt><dd>{repairRequest.equipmentName}</dd></div>}
+                </dl>
+              </section>
+            )}
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-bold text-gray-800">Request Details</h3>
@@ -1052,129 +1056,9 @@ const RepairRequestDetailView = () => {
                 </div>
               </div>
             </div>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h3 className="text-xl font-bold text-gray-800">Comments</h3>
-                  <p className="text-xs font-semibold text-slate-500">
-                    {openCommentsCount} open of {comments.length}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-1.5">
-                  {commentFilters.map((filter) => {
-                    const active = filter === commentFilter;
-                    return (
-                      <button
-                        key={filter}
-                        type="button"
-                        onClick={() => setCommentFilter(filter)}
-                        className={[
-                          "rounded-md px-2 py-1 text-xs font-semibold transition",
-                          active ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100",
-                        ].join(" ")}
-                      >
-                        {filter}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {can("34") && (
-                <div className="mt-4 space-y-2">
-                  <textarea
-                    className="min-h-[86px] w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                    placeholder="Write a comment..."
-                    value={newComment}
-                    onChange={(event) => setNewComment(event.target.value)}
-                  />
-                  {repairRequest.customerId && (
-                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5 rounded border-slate-300"
-                        checked={copyNewCommentToCustomerNotes}
-                        disabled={addingComment}
-                        onChange={(event) => setCopyNewCommentToCustomerNotes(event.target.checked)}
-                      />
-                      Add to Customer Notes
-                    </label>
-                  )}
-                  <button
-                    type="button"
-                    onClick={addComment}
-                    disabled={addingComment || !newComment.trim()}
-                    className={[
-                      "w-full rounded-md px-3 py-2 text-xs font-semibold transition sm:w-auto",
-                      addingComment || !newComment.trim()
-                        ? "bg-slate-100 text-slate-400 cursor-not-allowed"
-                        : "bg-blue-600 text-white hover:bg-blue-700",
-                    ].join(" ")}
-                  >
-                    {addingComment ? "Adding..." : "Add Comment"}
-                  </button>
-                </div>
-              )}
-
-              <div className="mt-4 max-h-96 space-y-2 overflow-y-auto pr-1">
-                {commentsLoading ? (
-                  <div className="text-xs text-slate-500">Loading comments...</div>
-                ) : filteredComments.length === 0 ? (
-                  <div className="text-xs text-slate-500">No comments in this filter.</div>
-                ) : (
-                  filteredComments.map((comment) => {
-                    const dt = comment.date?.toDate?.() || null;
-                    const when = dt ? format(dt, "MMM d, h:mm a") : "-";
-                    const canCopyCommentToCustomerNotes = Boolean(repairRequest.customerId && String(comment.comment || "").trim());
-                    const isCopyingComment = copyingCommentToCustomerNoteId === comment.id;
-
-                    return (
-                      <div key={comment.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="text-xs font-semibold text-slate-800">
-                          {comment.userName || comment.authorName || "Unknown"}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-slate-400">{when}</div>
-                        <div className="mt-2 whitespace-pre-wrap text-xs text-slate-700">
-                          {comment.comment}
-                        </div>
-                        <div className="mt-3 flex flex-wrap items-center gap-3">
-                          <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                            <input
-                              type="checkbox"
-                              className="h-3.5 w-3.5"
-                              checked={!!comment.resolved}
-                              disabled={!can("34")}
-                              onChange={(event) => setCommentResolved(comment.id, event.target.checked)}
-                            />
-                            Resolved
-                          </label>
-                          {canCopyCommentToCustomerNotes && (
-                            <button
-                              type="button"
-                              onClick={() => copyRepairRequestCommentToCustomerNotes(comment)}
-                              disabled={!can("34") || isCopyingComment}
-                              title={can("34") ? "Copy this comment to the customer notes" : "You need permission to update repair requests"}
-                              className={[
-                                "rounded-md border px-2 py-1 text-xs font-semibold transition",
-                                can("34") && !isCopyingComment
-                                  ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                                  : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400",
-                              ].join(" ")}
-                            >
-                              {isCopyingComment ? "Copying..." : "Copy to Customer Notes"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
           </div>
 
-          <div className="space-y-6">
+          <aside className="min-w-0 space-y-6">
             <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               {can("34") && (
                 <div className="space-y-3 rounded-md border border-blue-100 bg-blue-50 p-3">
@@ -1294,6 +1178,126 @@ const RepairRequestDetailView = () => {
               )}
             </div>
 
+            <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Comments</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {openCommentsCount} open of {comments.length}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-1.5">
+                  {commentFilters.map((filter) => {
+                    const active = filter === commentFilter;
+                    return (
+                      <button
+                        key={filter}
+                        type="button"
+                        onClick={() => setCommentFilter(filter)}
+                        className={[
+                          "rounded-md px-2 py-1 text-xs font-semibold transition",
+                          active ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100",
+                        ].join(" ")}
+                      >
+                        {filter}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {can("34") && (
+                <div className="mt-3 space-y-2">
+                  <textarea
+                    className="min-h-[72px] w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                    placeholder="Write a comment..."
+                    value={newComment}
+                    onChange={(event) => setNewComment(event.target.value)}
+                  />
+                  {repairRequest.customerId && (
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-slate-300"
+                        checked={copyNewCommentToCustomerNotes}
+                        disabled={addingComment}
+                        onChange={(event) => setCopyNewCommentToCustomerNotes(event.target.checked)}
+                      />
+                      Add to Customer Notes
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    onClick={addComment}
+                    disabled={addingComment || !newComment.trim()}
+                    className={[
+                      "w-full rounded-md px-3 py-2 text-xs font-semibold transition",
+                      addingComment || !newComment.trim()
+                        ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+                        : "bg-blue-600 text-white hover:bg-blue-700",
+                    ].join(" ")}
+                  >
+                    {addingComment ? "Adding..." : "Add Comment"}
+                  </button>
+                </div>
+              )}
+
+              <div className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1">
+                {commentsLoading ? (
+                  <div className="text-xs text-slate-500">Loading comments...</div>
+                ) : filteredComments.length === 0 ? (
+                  <div className="text-xs text-slate-500">No comments in this filter.</div>
+                ) : (
+                  filteredComments.map((comment) => {
+                    const dt = comment.date?.toDate?.() || null;
+                    const when = dt ? format(dt, "MMM d, h:mm a") : "-";
+                    const canCopyCommentToCustomerNotes = Boolean(repairRequest.customerId && String(comment.comment || "").trim());
+                    const isCopyingComment = copyingCommentToCustomerNoteId === comment.id;
+
+                    return (
+                      <div key={comment.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-xs font-semibold text-slate-800">
+                          {comment.userName || comment.authorName || "Unknown"}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-slate-400">{when}</div>
+                        <div className="mt-2 whitespace-pre-wrap break-words text-xs text-slate-700">
+                          {comment.comment}
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-3">
+                          <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5"
+                              checked={!!comment.resolved}
+                              disabled={!can("34")}
+                              onChange={(event) => setCommentResolved(comment.id, event.target.checked)}
+                            />
+                            Resolved
+                          </label>
+                          {canCopyCommentToCustomerNotes && (
+                            <button
+                              type="button"
+                              onClick={() => copyRepairRequestCommentToCustomerNotes(comment)}
+                              disabled={!can("34") || isCopyingComment}
+                              title={can("34") ? "Copy this comment to the customer notes" : "You need permission to update repair requests"}
+                              className={[
+                                "rounded-md border px-2 py-1 text-xs font-semibold transition",
+                                can("34") && !isCopyingComment
+                                  ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                  : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400",
+                              ].join(" ")}
+                            >
+                              {isCopyingComment ? "Copying..." : "Copy to Customer Notes"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="text-xl font-bold text-gray-800 mb-4">Information</h3>
               <div className="space-y-3 text-gray-700">
@@ -1341,9 +1345,13 @@ const RepairRequestDetailView = () => {
                       : 'N/A'}
                 </p>
 
-                <Link to={`/company/customers/details/${repairRequest.customerId}`}>
-                  <p><strong>Customer:</strong> {repairRequest.customerName}</p>
-                </Link>
+                {repairRequest.customerId ? (
+                  <Link to={`/company/customers/details/${repairRequest.customerId}`}>
+                    <p><strong>Customer:</strong> {repairRequest.customerName}</p>
+                  </Link>
+                ) : (
+                  <p><strong>Customer:</strong> {repairRequest.customerName || 'Not linked'}</p>
+                )}
 
                 <p><strong>Requester:</strong> {repairRequest.requesterName || 'N/A'}</p>
 
@@ -1389,7 +1397,7 @@ const RepairRequestDetailView = () => {
                 )}
               </div>
             </div>
-          </div>
+          </aside>
         </div>
       </div>
 

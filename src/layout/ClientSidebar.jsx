@@ -110,10 +110,10 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
             ></div>
 
             {/* Sidebar */}
-            <div className={`app-mobile-sidebar-shell fixed top-0 z-50 h-screen w-[min(20rem,88vw)] bg-white shadow-lg transition-all lg:w-[260px] ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
+            <div className={`app-mobile-sidebar-shell fixed top-0 z-50 h-screen w-[min(20rem,88vw)] bg-white shadow-lg transition-all lg:w-[16.25rem] ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
                 <div className='flex h-full flex-col overflow-hidden'>
                     {/* Header */}
-                    <div className='h-[95px] flex items-center justify-between border-b border-b-slate-200 px-4 shrink-0 lg:justify-center'>
+                    <div className='h-[5.9375rem] flex items-center justify-between border-b border-b-slate-200 px-4 shrink-0 lg:justify-center'>
                         <Link to='/' className='text-gray-800 font-bold text-3xl'>
                             Drip Drop
                         </Link>

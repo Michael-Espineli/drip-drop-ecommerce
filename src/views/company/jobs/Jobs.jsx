@@ -10,6 +10,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import CompanyUserSelect from "../../../components/CompanyUserSelect";
 import { Job } from "../../../utils/models/Job";
 import { format } from "date-fns";
 import { useNavigate, useParams } from "react-router-dom";
@@ -986,9 +987,9 @@ const Jobs = () => {
         }
 
         const selectedLabels = [
-            bulkOperationStatus ? `operation status to ${bulkOperationStatus}` : null,
-            bulkBillingStatus ? `billing status to ${bulkBillingStatus}` : null,
             bulkPriorityLevel ? `priority to ${getIssuePriorityLabel(bulkPriorityLevel)}` : null,
+            bulkBillingStatus ? `billing status to ${bulkBillingStatus}` : null,
+            bulkOperationStatus ? `operation status to ${bulkOperationStatus}` : null,
             selectedBulkAdmin ? `admin to ${selectedBulkAdmin.name || selectedBulkAdmin.userName || "Admin"}` : null,
         ].filter(Boolean);
 
@@ -1451,6 +1452,22 @@ const Jobs = () => {
                                 Job Templates
                             </button>
 
+                            <button
+                                type="button"
+                                onClick={() => navigate("/company/sales/catalog-items")}
+                                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                            >
+                                Services
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => navigate("/company/product-catalog")}
+                                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                            >
+                                Products
+                            </button>
+
                             <CreateJobFlowLauncher />
                         </div>
                     </div>
@@ -1556,18 +1573,18 @@ const Jobs = () => {
                                 <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:max-w-5xl">
                                     <label className="block">
                                         <span className="text-xs font-bold uppercase tracking-wide text-blue-900">
-                                            Operation Status
+                                            Priority
                                         </span>
                                         <select
-                                            value={bulkOperationStatus}
-                                            onChange={(event) => setBulkOperationStatus(event.target.value)}
+                                            value={bulkPriorityLevel}
+                                            onChange={(event) => setBulkPriorityLevel(event.target.value)}
                                             disabled={bulkUpdating}
                                             className="mt-1 w-full rounded-md border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             <option value="">Leave unchanged</option>
-                                            {OPERATION_STATUS_OPTIONS.map((status) => (
-                                                <option key={status} value={status}>
-                                                    {status}
+                                            {ISSUE_PRIORITY_OPTIONS.map((option) => (
+                                                <option key={option.value} value={option.value}>
+                                                    {option.value} - {option.label}
                                                 </option>
                                             ))}
                                         </select>
@@ -1594,48 +1611,38 @@ const Jobs = () => {
 
                                     <label className="block">
                                         <span className="text-xs font-bold uppercase tracking-wide text-blue-900">
-                                            Priority
+                                            Operation Status
                                         </span>
                                         <select
-                                            value={bulkPriorityLevel}
-                                            onChange={(event) => setBulkPriorityLevel(event.target.value)}
+                                            value={bulkOperationStatus}
+                                            onChange={(event) => setBulkOperationStatus(event.target.value)}
                                             disabled={bulkUpdating}
                                             className="mt-1 w-full rounded-md border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             <option value="">Leave unchanged</option>
-                                            {ISSUE_PRIORITY_OPTIONS.map((option) => (
-                                                <option key={option.value} value={option.value}>
-                                                    {option.value} - {option.label}
+                                            {OPERATION_STATUS_OPTIONS.map((status) => (
+                                                <option key={status} value={status}>
+                                                    {status}
                                                 </option>
                                             ))}
                                         </select>
                                     </label>
 
-                                    <label className="block">
-                                        <span className="text-xs font-bold uppercase tracking-wide text-blue-900">
+                                    <div className="min-w-0">
+                                        <label htmlFor="bulk-job-admin" className="text-xs font-bold uppercase tracking-wide text-blue-900">
                                             Admin
-                                        </span>
-                                        <select
-                                            value={bulkAdminId}
-                                            onChange={(event) => setBulkAdminId(event.target.value)}
-                                            disabled={bulkUpdating || companyUserOptions.length === 0}
-                                            className="mt-1 w-full rounded-md border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            <option value="">Leave unchanged</option>
-                                            {companyUserOptions.length === 0 ? (
-                                                <option value="__no_admins__" disabled>No admins available</option>
-                                            ) : (
-                                                companyUserOptions.map((adminOption) => (
-                                                    <option
-                                                        key={`${adminOption.value}-${adminOption.companyUserId || adminOption.id}`}
-                                                        value={adminOption.value}
-                                                    >
-                                                        {adminOption.label}
-                                                    </option>
-                                                ))
-                                            )}
-                                        </select>
-                                    </label>
+                                        </label>
+                                        <CompanyUserSelect
+                                            inputId="bulk-job-admin"
+                                            value={selectedBulkAdmin}
+                                            options={companyUserOptions}
+                                            onChange={(admin) => setBulkAdminId(admin?.value || "")}
+                                            isDisabled={bulkUpdating || companyUserOptions.length === 0}
+                                            isClearable
+                                            placeholder={companyUserOptions.length ? "Leave unchanged" : "No admins available"}
+                                            className="mt-1 text-sm"
+                                        />
+                                    </div>
                                 </div>
 
                                 <div className="flex flex-col gap-2 sm:flex-row xl:flex-none">
@@ -1673,17 +1680,19 @@ const Jobs = () => {
                                     <th className="border-b border-r border-slate-200 bg-slate-100 px-5 py-3 text-left">
                                         <div className="flex items-center gap-3">
                                             {canUpdateJobs && (
-                                            <input
-                                                type="checkbox"
-                                                aria-label="Select all visible jobs"
-                                                checked={allVisibleJobsSelected}
-                                                disabled={visibleJobs.length === 0 || bulkUpdating}
-                                                onChange={(event) => handleSelectAllVisibleJobs(event.target.checked)}
-                                                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                                            />
+                                            <label className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-md p-3 transition hover:bg-slate-200 focus-within:ring-2 focus-within:ring-blue-500">
+                                                <input
+                                                    type="checkbox"
+                                                    aria-label="Select all visible jobs"
+                                                    checked={allVisibleJobsSelected}
+                                                    disabled={visibleJobs.length === 0 || bulkUpdating}
+                                                    onChange={(event) => handleSelectAllVisibleJobs(event.target.checked)}
+                                                    className="h-5 w-5 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                />
+                                            </label>
                                             )}
                                             <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                                Order
+                                                Select
                                             </span>
                                         </div>
                                     </th>
@@ -1760,20 +1769,24 @@ const Jobs = () => {
                                             ].join(" ")}
                                             onClick={() => navigate(currentJobListView === "billing" ? `/company/jobs/detail/${job.id}/billing` : `/company/jobs/detail/${job.id}`)}
                                         >
-                                            <td className="border-r border-slate-200 bg-slate-100/70 px-5 py-3 text-sm font-bold text-slate-700">
-                                                <div className="flex items-center gap-3">
+                                            <td className="border-r border-slate-200 bg-slate-100/70 px-3 py-1 text-sm font-bold text-slate-700">
+                                                <div className="flex items-center justify-center">
                                                     {canUpdateJobs && (
-                                                    <input
-                                                        type="checkbox"
-                                                        aria-label={`Select job ${job.internalId || job.id}`}
-                                                        checked={selectedJobIds.has(job.id)}
-                                                        disabled={bulkUpdating}
-                                                        onChange={() => toggleJobSelection(job.id)}
+                                                    <label
                                                         onClick={(event) => event.stopPropagation()}
-                                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                                                    />
+                                                        className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-md p-3 transition hover:bg-slate-200 focus-within:ring-2 focus-within:ring-blue-500"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            aria-label={`Select job ${job.internalId || job.id}`}
+                                                            checked={selectedJobIds.has(job.id)}
+                                                            disabled={bulkUpdating}
+                                                            onChange={() => toggleJobSelection(job.id)}
+                                                            onClick={(event) => event.stopPropagation()}
+                                                            className="h-5 w-5 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        />
+                                                    </label>
                                                     )}
-                                                    <span>{index + 1}</span>
                                                 </div>
                                             </td>
                                             <td className="whitespace-nowrap border-r border-slate-200 px-5 py-3 text-sm font-semibold text-slate-900">
@@ -1781,8 +1794,11 @@ const Jobs = () => {
                                                     <span>{job.internalId}</span>
 
                                                     {(commentCounts[job.id] || 0) > 0 && (
-                                                        <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800">
-                                                            {commentCounts[job.id]} unresolved
+                                                        <span
+                                                            className="inline-flex items-center rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white"
+                                                            aria-label={`${commentCounts[job.id]} unresolved comments`}
+                                                        >
+                                                            {commentCounts[job.id]}
                                                         </span>
                                                     )}
                                                 </div>

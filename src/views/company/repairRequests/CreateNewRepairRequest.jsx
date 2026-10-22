@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { buildCompanyRepairRequestPhotoPath, uploadRepairRequestPhoto } from "../../../utils/repairRequestPhotos";
 import { appAlert } from "../../../utils/appDialog";
+import PublicRepairRequestLink from "../../../components/PublicRepairRequestLink";
 
 const CreateNewRepairRequest = () => {
   const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
@@ -410,6 +411,10 @@ const CreateNewRepairRequest = () => {
           >
             Cancel
           </Link>
+        </div>
+
+        <div className="mb-6">
+          <PublicRepairRequestLink companyId={recentlySelectedCompany} />
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white shadow-lg rounded-xl p-8 space-y-6">

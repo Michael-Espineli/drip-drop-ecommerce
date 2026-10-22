@@ -27,10 +27,10 @@ const NoCompanySidebar = ({ showSidebar, setShowSidebar }) => {
             <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 lg:hidden ${showSidebar ? 'w-screen h-screen bg-[#8a8a8a6c] top-0 left-0 z-10' : 'w-0'}`}></div>
 
             {/* Sidebar */}
-            <div className={`app-mobile-sidebar-shell w-full lg:w-[260px] fixed bg-white z-50 top-0 h-screen shadow-[0_0_15px_0_rgb(0,0,0,0.4)] transition-all ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
+            <div className={`app-mobile-sidebar-shell w-full lg:w-[16.25rem] fixed bg-white z-50 top-0 h-screen shadow-[0_0_15px_0_rgb(0,0,0,0.4)] transition-all ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
                 <div className='flex h-full flex-col overflow-hidden'>
                     {/* Header */}
-                    <div className='h-[95px] flex items-center justify-between border-b border-b-slate-200 px-4 shrink-0 lg:justify-center'>
+                    <div className='h-[5.9375rem] flex items-center justify-between border-b border-b-slate-200 px-4 shrink-0 lg:justify-center'>
                         <Link to='/company/dashboard' className='text-gray-800 font-bold text-3xl'>
                             Drip Drop
                         </Link>

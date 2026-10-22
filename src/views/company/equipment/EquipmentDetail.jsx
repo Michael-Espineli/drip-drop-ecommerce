@@ -31,9 +31,11 @@ import {
   onSnapshot,
   serverTimestamp,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import CompanyUserSelect from "../../../components/CompanyUserSelect";
 import { format, addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { sortCompanyUsersByName } from "../../../utils/companyUsers";
 import { v4 as uuidv4 } from "uuid";
@@ -272,12 +274,28 @@ const DEFAULT_MAINTENANCE_NAME = "Clean";
 
 const todayDateInputValue = () => format(new Date(), "yyyy-MM-dd");
 
+const localDateOnly = (value) => (
+  value instanceof Date && !Number.isNaN(value.getTime())
+    ? new Date(value.getFullYear(), value.getMonth(), value.getDate())
+    : null
+);
+
 const dateInputToLocalDate = (value) => {
   if (!value) return null;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
+  if (value instanceof Date) return localDateOnly(value);
+  if (typeof value.toDate === "function") return localDateOnly(value.toDate());
+
+  if (typeof value === "string") {
+    const [year, month, day] = value.split("-").map(Number);
+    if (year && month && day) return new Date(year, month - 1, day);
+  }
+
+  return localDateOnly(new Date(value));
 };
+
+const noteTextValue = (value) => (
+  value === undefined || value === null ? "" : String(value)
+);
 
 const companyUserDisplayName = (user = {}) =>
   user.userName || user.name || user.fullName || user.displayName || user.email || "";
@@ -1206,7 +1224,7 @@ const EquipmentDetail = () => {
 		        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
 
         status,
-        notes,
+        notes: noteTextValue(notes),
       });
       const syncedEquipment = {
         ...equipment,
@@ -1221,7 +1239,7 @@ const EquipmentDetail = () => {
         universalEquipmentId,
         manualPdfLink,
         name,
-        notes,
+        notes: noteTextValue(notes),
       };
       try {
         await syncUniversalEquipmentSuggestionForEquipment({
@@ -1263,7 +1281,7 @@ const EquipmentDetail = () => {
 		        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
 
         status,
-        notes,
+        notes: noteTextValue(notes),
       }));
 
       setEdit(false);
@@ -1583,14 +1601,12 @@ const EquipmentDetail = () => {
         date: maintenanceDateValue,
         performedBy,
         addedBy: "Manual",
-        description: maintenanceNotes,
+        description: noteTextValue(maintenanceNotes),
         techId,
         techName,
         jobId: "",
         partIds: [],
       };
-
-      await setDoc(serviceHistoryDoc, newMaintenanceRecord);
 
       // ✅ compute next based on maintenance date + current schedule
       const next = computeNextServiceDate(maintenanceDateValue, serviceFrequency, serviceFrequencyEvery);
@@ -1604,7 +1620,10 @@ const EquipmentDetail = () => {
         maintenanceUpdates.status = EQUIPMENT_STATUS.OPERATIONAL;
       }
 
-      await updateDoc(docRef, maintenanceUpdates);
+      const batch = writeBatch(db);
+      batch.set(serviceHistoryDoc, newMaintenanceRecord);
+      batch.update(docRef, maintenanceUpdates);
+      await batch.commit();
 
       setEquipment((prev) => ({
         ...prev,
@@ -2963,17 +2982,12 @@ const EquipmentDetail = () => {
 
             {maintenancePerformedBy === "Company" ? (
               <Field label="Company User">
-                <select value={maintenanceCompanyUserId} onChange={(e) => setMaintenanceCompanyUserId(e.target.value)} className={inputBase}>
-                  {companyUsers.length === 0 ? (
-                    <option value="">No company users found</option>
-                  ) : (
-                    companyUsers.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {companyUserDisplayName(u) || "Technician"}
-                      </option>
-                    ))
-                  )}
-                </select>
+                <CompanyUserSelect
+                  aria-label="Company User"
+                  value={companyUsers.find((user) => user.id === maintenanceCompanyUserId) || null}
+                  options={companyUsers}
+                  onChange={(user) => setMaintenanceCompanyUserId(user?.id || "")}
+                />
               </Field>
             ) : (
               <Field label="Customer Name">
@@ -3037,17 +3051,12 @@ const EquipmentDetail = () => {
 
             {repairPerformedBy === "Company" ? (
               <Field label="Company User">
-                <select value={repairCompanyUserId} onChange={(e) => setRepairCompanyUserId(e.target.value)} className={inputBase}>
-                  {companyUsers.length === 0 ? (
-                    <option value="">No company users found</option>
-                  ) : (
-                    companyUsers.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {companyUserDisplayName(u) || "Technician"}
-                      </option>
-                    ))
-                  )}
-                </select>
+                <CompanyUserSelect
+                  aria-label="Company User"
+                  value={companyUsers.find((user) => user.id === repairCompanyUserId) || null}
+                  options={companyUsers}
+                  onChange={(user) => setRepairCompanyUserId(user?.id || "")}
+                />
               </Field>
             ) : (
               <Field label="Customer Name">

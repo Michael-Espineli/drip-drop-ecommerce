@@ -40,6 +40,7 @@ import {
     isFinishedOutstandingJob,
 } from '../utils/jobStatusFilters';
 import { isWorkOfferRecord } from '../utils/workOffers';
+import { isPartApprovalPending } from '../utils/partApprovalShopping';
 
 const normalizeBookmarkPaths = (savedBookmarks) => (
     Array.isArray(savedBookmarks)
@@ -164,7 +165,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, partApprovals: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
     const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
     const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
@@ -245,13 +246,32 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
-            setCounts({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
+            setCounts({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, partApprovals: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
             return;
         }
 
         let cancelled = false;
 
-        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 }));
+        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, partApprovals: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 }));
+
+        const unsubscribePartApprovals = onSnapshot(
+            query(
+                collection(db, "customerPartApprovals"),
+                where("companyId", "==", recentlySelectedCompany)
+            ),
+            snapshot => {
+                if (cancelled) return;
+                const partApprovals = snapshot.docs.filter((approvalDoc) => (
+                    isPartApprovalPending(approvalDoc.data())
+                )).length;
+                setCounts(prev => ({ ...prev, partApprovals }));
+            },
+            error => {
+                if (cancelled) return;
+                console.error("Error loading pending part approval count:", error);
+                setCounts(prev => ({ ...prev, partApprovals: 0 }));
+            }
+        );
 
         const leadsQuery = query(
             collection(db, "homeownerServiceRequests"),
@@ -544,6 +564,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         return () => {
             cancelled = true;
             removeForegroundRefresh();
+            unsubscribePartApprovals();
             unsubscribeMessages();
             unsubscribeNotifications();
             unsubscribePersonalNotifications();
@@ -587,10 +608,10 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 lg:hidden ${showSidebar ? 'w-screen h-screen bg-black/50 top-0 left-0 z-10' : 'w-0'}`}></div>
 
             {/* Sidebar */}
-            <div className={`app-sidebar-shell app-mobile-sidebar-shell fixed top-0 z-50 h-screen w-full transition-all duration-200 ${isCollapsed ? 'lg:w-[76px]' : 'lg:w-[260px]'} ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
+            <div className={`app-sidebar-shell app-mobile-sidebar-shell fixed top-0 z-50 h-screen w-full transition-all duration-200 ${isCollapsed ? 'lg:w-[4.75rem]' : 'lg:w-[16.25rem]'} ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
                 <div className='flex h-full flex-col overflow-hidden'>
                     {/* Header */}
-                    <div className={`app-sidebar-header h-[95px] flex items-center gap-2 border-b px-4 shrink-0 ${isCollapsed ? 'justify-between lg:justify-center lg:px-0' : 'justify-between'}`}>
+                    <div className={`app-sidebar-header h-[5.9375rem] flex items-center gap-2 border-b px-4 shrink-0 ${isCollapsed ? 'justify-between lg:justify-center lg:px-0' : 'justify-between'}`}>
                         <Link to='/' className={`app-sidebar-brand min-w-0 text-3xl font-bold ${isCollapsed ? 'lg:hidden' : ''}`}>
                             Drip Drop
                         </Link>
@@ -633,7 +654,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                         title={section.label}
                                     >
                                         <span className="app-sidebar-section-rule h-[2px] flex-1" />
-                                        <span className="app-sidebar-section-initial mx-2 shrink-0 text-[11px] font-bold uppercase leading-none">
+                                        <span className="app-sidebar-section-initial mx-2 shrink-0 text-[0.6875rem] font-bold uppercase leading-none">
                                             {categoryInitial(section.label)}
                                         </span>
                                         <span className="app-sidebar-section-rule h-[2px] flex-1" />
@@ -658,6 +679,8 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                             ? (counts.shopping || 0) + (counts.legacyShopping || 0)
                                                             : item.title === 'Repair Requests'
                                                                 ? counts.repairRequests
+                                                                : item.title === 'Part Approvals'
+                                                                    ? counts.partApprovals
                                                                 : item.title === 'Finished Jobs'
                                                                     ? counts.finishedJobs
                                                                     : item.title === 'Jobs'
@@ -677,7 +700,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                     <span className={`app-sidebar-icon flex h-6 w-6 shrink-0 items-center justify-center ${isActive ? 'app-sidebar-icon-active' : ''} [&>svg]:h-5 [&>svg]:w-5`}>{item.icon}</span>
                                                     <span className={isCollapsed ? 'lg:hidden' : ''}>{item.title}</span>
                                                     {count > 0 && (
-                                                        <span className={`ml-auto rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white ${isCollapsed ? 'lg:absolute lg:-right-1 lg:-top-1 lg:ml-0 lg:flex lg:h-[18px] lg:min-w-[18px] lg:items-center lg:justify-center lg:px-1 lg:text-[10px]' : ''}`}>
+                                                        <span className={`ml-auto rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white ${isCollapsed ? 'lg:absolute lg:-right-1 lg:-top-1 lg:ml-0 lg:flex lg:h-[1.125rem] lg:min-w-[1.125rem] lg:items-center lg:justify-center lg:px-1 lg:text-[0.625rem]' : ''}`}>
                                                             {count > 99 ? '99+' : count}
                                                         </span>
                                                     )}

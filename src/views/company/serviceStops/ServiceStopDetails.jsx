@@ -1032,6 +1032,7 @@ const ServiceStopDetails = () => {
     const [finishingStop, setFinishingStop] = useState(false);
     const [showFinishConfirm, setShowFinishConfirm] = useState(false);
     const [manualFinishTaskIds, setManualFinishTaskIds] = useState([]);
+    const [manualFinishFollowUpAction, setManualFinishFollowUpAction] = useState("stay");
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [partApprovals, setPartApprovals] = useState([]);
@@ -2714,6 +2715,7 @@ const ServiceStopDetails = () => {
         }
 
         setManualFinishTaskIds(unfinishedManualFinishTasks.map((task) => task.id));
+        setManualFinishFollowUpAction("stay");
         setShowFinishConfirm(true);
     };
 
@@ -2721,6 +2723,7 @@ const ServiceStopDetails = () => {
         if (finishingStop) return;
         setShowFinishConfirm(false);
         setManualFinishTaskIds([]);
+        setManualFinishFollowUpAction("stay");
     };
 
     const toggleManualFinishTask = (taskId) => {
@@ -2826,6 +2829,8 @@ const ServiceStopDetails = () => {
 
         const selectedTaskIdSet = new Set(manualFinishTaskIds);
         const tasksToFinish = unfinishedManualFinishTasks.filter((task) => selectedTaskIdSet.has(task.id));
+        const linkedJobId = serviceStop.jobId || "";
+        const followUpAction = linkedJobId ? manualFinishFollowUpAction : "stay";
         const taskPlans = [];
         for (const task of tasksToFinish) {
             const completionContext = validateTaskCompletionPrerequisites(task);
@@ -2930,6 +2935,7 @@ const ServiceStopDetails = () => {
             setTaskList(nextTasks);
             setShowFinishConfirm(false);
             setManualFinishTaskIds([]);
+            setManualFinishFollowUpAction("stay");
             await syncActiveRouteForServiceStops({
                 date: nextStop.serviceDate,
                 techId: nextStop.techId,
@@ -2945,6 +2951,28 @@ const ServiceStopDetails = () => {
                 });
             } catch (emailError) {
                 console.warn("Service stop finished, but the service report callable failed:", emailError);
+            }
+
+            if (followUpAction === "finishJob") {
+                toast.success("Service stop finished. Opening the linked job finish options.");
+                navigate(`/company/jobs/detail/${linkedJobId}/Actual`, {
+                    state: {
+                        openFinishJobConfirm: true,
+                        fromServiceStopId: serviceStopId,
+                    },
+                });
+                return;
+            }
+
+            if (followUpAction === "scheduleNextStop") {
+                toast.success("Service stop finished. Opening the linked job scheduler.");
+                navigate(`/company/jobs/detail/${linkedJobId}/Actual`, {
+                    state: {
+                        openScheduleServiceStop: true,
+                        fromServiceStopId: serviceStopId,
+                    },
+                });
+                return;
             }
 
             toast.success("Service stop finished");
@@ -5495,6 +5523,60 @@ const ServiceStopDetails = () => {
                         {unfinishedManualFinishTasks.length > selectedManualFinishTaskCount && (
                             <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                                 {unfinishedManualFinishTasks.length - selectedManualFinishTaskCount} task(s) will remain unfinished.
+                            </div>
+                        )}
+
+                        {serviceStop.jobId && (
+                            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                <p className="text-sm font-bold text-slate-900">
+                                    After this stop is finished
+                                </p>
+                                <div className="mt-3 grid gap-2">
+                                    {[
+                                        {
+                                            value: "stay",
+                                            title: "Keep job open",
+                                            helper: "Finish only this service stop and stay on this page.",
+                                        },
+                                        {
+                                            value: "finishJob",
+                                            title: "Finish linked job",
+                                            helper: "Open the job finish confirmation for tasks and planned products.",
+                                        },
+                                        {
+                                            value: "scheduleNextStop",
+                                            title: "Schedule next stop",
+                                            helper: "Open the linked job scheduler after the stop is finished.",
+                                        },
+                                    ].map((option) => (
+                                        <label
+                                            key={option.value}
+                                            className={[
+                                                "flex cursor-pointer items-start gap-3 rounded-md border p-3 transition",
+                                                manualFinishFollowUpAction === option.value
+                                                    ? "border-blue-300 bg-white shadow-sm"
+                                                    : "border-slate-200 bg-white/70 hover:bg-white",
+                                            ].join(" ")}
+                                        >
+                                            <input
+                                                type="radio"
+                                                name="manualFinishFollowUpAction"
+                                                checked={manualFinishFollowUpAction === option.value}
+                                                onChange={() => setManualFinishFollowUpAction(option.value)}
+                                                disabled={finishingStop}
+                                                className="mt-1 h-4 w-4 border-slate-300 text-blue-600"
+                                            />
+                                            <span className="min-w-0">
+                                                <span className="block text-sm font-semibold text-slate-900">
+                                                    {option.title}
+                                                </span>
+                                                <span className="mt-0.5 block text-xs text-slate-500">
+                                                    {option.helper}
+                                                </span>
+                                            </span>
+                                        </label>
+                                    ))}
+                                </div>
                             </div>
                         )}
 

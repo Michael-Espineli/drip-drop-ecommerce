@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState, useContext } from "react";
-import { Link, useParams, useNavigate, UNSAFE_NavigationContext } from "react-router-dom";
+import { Link, useParams, useNavigate, useLocation, UNSAFE_NavigationContext } from "react-router-dom";
 import {
   doc,
   getDoc,
@@ -23,6 +23,10 @@ import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import Select from "react-select";
+import JobDeleteOptionsDialog from "./JobDeleteOptionsDialog";
+import JobUseTemplateDialog from "./JobUseTemplateDialog";
+import { copyJobTemplateScope, combineJobTemplateScope } from "../../../utils/jobTemplateScope";
+import { formatAddressLabel } from "../../../utils/customerLocationData";
 import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import { GoHistory } from "react-icons/go";
 import {
@@ -37,6 +41,7 @@ import {
   EnvelopeIcon,
   PencilSquareIcon,
   PlusIcon,
+  TrashIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { v4 as uuidv4 } from "uuid";
@@ -498,7 +503,9 @@ const JobHeaderActionMenuItem = ({
   disabled = false,
 }) => {
   const toneClasses =
-    tone === "amber"
+    tone === "red"
+      ? "text-red-700 hover:bg-red-50 data-[focus]:bg-red-50"
+      : tone === "amber"
       ? "text-amber-700 hover:bg-amber-50 data-[focus]:bg-amber-50"
       : tone === "emerald"
         ? "text-emerald-700 hover:bg-emerald-50 data-[focus]:bg-emerald-50"
@@ -888,7 +895,7 @@ const normalizeJobLaborLineItems = (items = []) => (
         (quantity ? Math.round(totalPriceCents / quantity) : totalPriceCents)
       );
       const taskIds = laborLineSnapshotArray(item.taskIds?.length ? item.taskIds : item.laborLineTaskIds);
-      const plannedServiceStopIds = [];
+      const plannedServiceStopIds = laborLineSnapshotArray(item.plannedServiceStopIds?.length ? item.plannedServiceStopIds : item.laborLinePlannedServiceStopIds);
 
       return {
         ...item,
@@ -1112,6 +1119,7 @@ const isSharedTermsTemplate = (template = {}) => {
 const JobDetailView = () => {
   const { jobId, section } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // Auth / company context
   const authCtx = useContext(Context);
@@ -1131,6 +1139,11 @@ const JobDetailView = () => {
   const [loading, setLoading] = useState(true);
   const [sectionLoading, setSectionLoading] = useState(() => createSectionLoadingState());
   const [edit, setEdit] = useState(false);
+  const [showDeleteOptions, setShowDeleteOptions] = useState(false);
+  const [serviceLocationList, setServiceLocationList] = useState([]);
+  const [selectedServiceLocationId, setSelectedServiceLocationId] = useState("");
+  const [loadingServiceLocations, setLoadingServiceLocations] = useState(false);
+  const [serviceLocationsError, setServiceLocationsError] = useState("");
 
   const [job, setJob] = useState({
     adminId: "",
@@ -1346,6 +1359,9 @@ const JobDetailView = () => {
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [savingJobTemplate, setSavingJobTemplate] = useState(false);
+  const [showUseTemplateDialog, setShowUseTemplateDialog] = useState(false);
+  const [applyingJobTemplate, setApplyingJobTemplate] = useState(false);
+  const [jobTemplateApplyError, setJobTemplateApplyError] = useState("");
   const [showCustomerNoteModal, setShowCustomerNoteModal] = useState(false);
   const [customerNoteDraft, setCustomerNoteDraft] = useState("");
   const [customerNoteAudience, setCustomerNoteAudience] = useState("all");
@@ -1688,6 +1704,7 @@ const JobDetailView = () => {
     status: "Requested",
     customerApprovalRequired: true,
     description: "",
+    customerMessage: "",
     reason: "",
     priceImpact: "",
     laborCostImpact: "",
@@ -3839,6 +3856,7 @@ const JobDetailView = () => {
       status: "Requested",
       customerApprovalRequired: true,
       description: "",
+      customerMessage: "",
       reason: "",
       priceImpact: "",
       laborCostImpact: "",
@@ -3899,6 +3917,9 @@ const JobDetailView = () => {
         customerApprovalRequired: Boolean(changeOrderForm.customerApprovalRequired),
         approvalStatus: changeOrderForm.customerApprovalRequired ? "Needs Approval" : "Internal",
         description: changeOrderForm.description.trim(),
+        customerMessage: changeOrderForm.customerMessage.trim(),
+        customerFacingNote: changeOrderForm.customerMessage.trim(),
+        estimateNote: changeOrderForm.customerMessage.trim(),
         reason: changeOrderForm.reason.trim(),
         priceImpactCents,
         laborCostImpactCents,
@@ -3925,11 +3946,13 @@ const JobDetailView = () => {
           buildHistoryChange("laborCostImpactCents", "Labor Cost Impact", "—", moneyFromCents(laborCostImpactCents)),
           buildHistoryChange("materialCostImpactCents", "Product Cost Impact", "—", moneyFromCents(materialCostImpactCents)),
           buildHistoryChange("scheduleImpact", "Schedule Impact", "—", payload.scheduleImpact || "—"),
+          buildHistoryChange("customerMessage", "Customer Note", "—", payload.customerMessage || "—"),
         ],
         metadata: {
           requestedBy: payload.requestedBy,
           requestSource: payload.requestSource,
           customerApprovalRequired: payload.customerApprovalRequired,
+          customerMessage: payload.customerMessage,
           activePlanId: payload.activePlanId || "",
           acceptedPlanId: payload.acceptedPlanId || "",
         },
@@ -5135,51 +5158,6 @@ const JobDetailView = () => {
     )
   );
 
-  const buildPlanMaterialPrepKeys = (item = {}, linkedTaskId = "", overrides = {}) => Array.from(
-    new Set(
-      [
-        ...(Array.isArray(item.prepKeys) ? item.prepKeys : []),
-        jobId ? `job:${jobId}` : "",
-        overrides.customerId || item.customerId ? `customer:${overrides.customerId || item.customerId}` : "",
-        overrides.serviceLocationId || item.serviceLocationId ? `serviceLocation:${overrides.serviceLocationId || item.serviceLocationId}` : "",
-        linkedTaskId ? `jobTask:${linkedTaskId}` : "",
-      ].filter(Boolean)
-    )
-  );
-
-  const attachPlanMaterialsToTasks = (tasks = [], materials = []) => {
-    const materialIdsByTaskId = new Map();
-
-    materials.forEach((item) => {
-      const linkedTaskId = linkedTaskIdForPlanMaterial(item);
-      if (!linkedTaskId || !item?.id) return;
-
-      const currentIds = materialIdsByTaskId.get(linkedTaskId) || [];
-      materialIdsByTaskId.set(linkedTaskId, [...currentIds, item.id]);
-    });
-
-    return tasks.map((task) => {
-      const materialIds = materialIdsByTaskId.get(task.id) || [];
-      if (!materialIds.length) return task;
-
-      const shoppingListItemIds = Array.from(
-        new Set(
-          [
-            task.shoppingListItemId,
-            ...(Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds : []),
-            ...materialIds,
-          ].filter(Boolean)
-        )
-      );
-
-      return {
-        ...task,
-        shoppingListItemId: task.shoppingListItemId || shoppingListItemIds[0] || "",
-        shoppingListItemIds,
-      };
-    });
-  };
-
   const planLineItems = (solution = {}) => {
     if (Array.isArray(solution.estimateLineItems) && solution.estimateLineItems.length) {
       return solution.estimateLineItems;
@@ -5444,25 +5422,28 @@ const JobDetailView = () => {
     totalAmountCents,
     laborCostCents,
     status,
+    scope = null,
+    fallbackRateCents = cents(job.rate),
+    fallbackLaborCostCents = cents(job.laborCost),
   }) => {
     const priority = currentIssuePriority();
     const priorityLabel = getIssuePriorityLabel(priority);
     const planName = String(title || "").trim() || "Untitled Plan";
-    const taskSnapshots = (taskList || []).map((task, index) => ({
+    const taskSnapshots = (scope?.tasks || taskList || []).map((task, index) => ({
       ...task,
       sortOrder: Number(task.sortOrder ?? index),
       companyId: recentlySelectedCompany,
       jobId,
       sourceSolutionId: solutionId,
     }));
-    const plannedStopSnapshots = (plannedServiceStops || []).map((stop, index) => ({
+    const plannedStopSnapshots = (scope?.plannedServiceStops || plannedServiceStops || []).map((stop, index) => ({
       ...stop,
       sortOrder: Number(stop.sortOrder ?? index),
       companyId: recentlySelectedCompany,
       jobId,
       sourceSolutionId: solutionId,
     }));
-    const laborLineSnapshots = normalizeJobLaborLineItems(laborLineItems).map((line, index) => ({
+    const laborLineSnapshots = normalizeJobLaborLineItems(scope?.laborLineItems || laborLineItems).map((line, index) => ({
       ...line,
       sortOrder: Number(line.sortOrder ?? index),
       companyId: recentlySelectedCompany,
@@ -5470,7 +5451,7 @@ const JobDetailView = () => {
       sourcePlanId: solutionId,
       sourceSolutionId: solutionId,
     }));
-    const materialSnapshots = (shoppingList || []).map((item, index) => ({
+    const materialSnapshots = (scope?.shoppingItems || shoppingList || []).map((item, index) => ({
       ...item,
       sortOrder: Number(item.sortOrder ?? index),
       companyId: recentlySelectedCompany,
@@ -5488,8 +5469,17 @@ const JobDetailView = () => {
       (total, item) => total + cents(item.totalAmountCents || item.amount || 0),
       0
     );
-    const calculatedTotalAmountCents = subtotalAmountCents || totalAmountCents || cents(job.rate);
-    const calculatedLaborCostCents = plannedTotalLaborCents || laborCostCents || cents(job.laborCost);
+    const plannedTaskLaborCents = taskSnapshots.reduce((sum, task) => sum + cents(task.contractedRate), 0);
+    const plannedTaskBillingLaborCents = taskSnapshots.reduce((sum, task) => sum + getTaskBillingLaborPriceCents(task), 0);
+    const plannedStopLaborCents = plannedStopSnapshots.reduce((sum, stop) => sum + getPlannedStopCostCents(stop), 0);
+    const plannedLaborLineCostCents = laborLineSnapshots.reduce((sum, line) => sum + cents(line.internalCostCents), 0);
+    const plannedLaborLinePriceCents = laborLineSnapshots.reduce((sum, line) => sum + cents(line.totalPriceCents), 0);
+    const plannedTotalLaborCents = laborLineSnapshots.length ? plannedLaborLineCostCents : plannedTaskLaborCents + plannedStopLaborCents;
+    const plannedLaborPriceCents = laborLineSnapshots.length ? plannedLaborLinePriceCents : plannedTaskBillingLaborCents + plannedStopLaborCents;
+    const plannedMaterialCostCents = materialSnapshots.reduce((sum, item) => sum + getShoppingPlannedTotalCostCents(item), 0);
+    const plannedMaterialPriceCents = materialSnapshots.reduce((sum, item) => sum + getShoppingPlannedTotalPriceCents(item), 0);
+    const calculatedTotalAmountCents = subtotalAmountCents || totalAmountCents || fallbackRateCents;
+    const calculatedLaborCostCents = plannedTotalLaborCents || laborCostCents || fallbackLaborCostCents;
     const internalCostCents = calculatedLaborCostCents + plannedMaterialCostCents;
     const projectedProfitCents = calculatedTotalAmountCents - internalCostCents;
     const profitMarginPercent = calculatedTotalAmountCents > 0
@@ -5874,131 +5864,39 @@ const JobDetailView = () => {
     }
   };
 
-  const planWorkspaceScope = (solution, { accepted = false } = {}) => {
-    const scope = planScopeArrays(solution);
-    const taskIdMap = new Map();
-    const baseTasksToWrite = scope.tasks.map((task, index) => {
-      const sourceTaskId = task.id || "";
-      const nextTaskId = sourceTaskId || `comp_job_task_${uuidv4()}`;
-      if (sourceTaskId) taskIdMap.set(sourceTaskId, nextTaskId);
-
-      return {
-        ...task,
-        id: nextTaskId,
-        companyId: recentlySelectedCompany,
-        jobId,
-        status: task.status || "Unassigned",
-        sortOrder: Number(task.sortOrder ?? index),
-        sourcePlanId: solution.id,
-        sourceSolutionId: solution.id,
-      };
+  const replacePlannedWorkspace = async (solution, { accepted = false, recordHistory = true, agreementId = "", contractId = "" } = {}) => {
+    const applyWorkspace = httpsCallable(functions, "applyJobPlanWorkspace");
+    const authPayload = await getCallableAuthPayload();
+    await applyWorkspace({
+      companyId: recentlySelectedCompany, jobId, planId: solution.id,
+      mode: accepted ? "accept" : "load", recordHistory, agreementId, contractId, ...authPayload,
     });
-    const taskIds = new Set(baseTasksToWrite.map((task) => task.id));
-    const plannedStopsToWrite = scope.plannedServiceStops.map((stop, index) => {
-      const sourceStopId = stop.id || "";
-      const nextStopId = sourceStopId || `comp_job_plan_stop_${uuidv4()}`;
 
-      return {
-        ...stop,
-        id: nextStopId,
-        companyId: recentlySelectedCompany,
-        jobId,
-        taskIds: Array.isArray(stop.taskIds)
-          ? stop.taskIds.map((taskId) => taskIdMap.get(taskId) || taskId).filter((taskId) => taskIds.has(taskId))
-          : [],
-        sortOrder: Number(stop.sortOrder ?? index),
-        sourcePlanId: solution.id,
-        sourceSolutionId: solution.id,
-      };
-    });
-    const laborLinesToWrite = normalizeJobLaborLineItems(scope.laborLineItems).map((line, index) => ({
-      ...line,
-      id: line.id || `comp_job_labor_line_${uuidv4()}`,
-      companyId: recentlySelectedCompany,
-      jobId,
-      taskIds: getLaborLineTaskIds(line)
-        .map((taskId) => taskIdMap.get(taskId) || taskId)
-        .filter((taskId) => taskIds.has(taskId)),
-      laborLineTaskIds: getLaborLineTaskIds(line)
-        .map((taskId) => taskIdMap.get(taskId) || taskId)
-        .filter((taskId) => taskIds.has(taskId)),
-      plannedServiceStopIds: [],
-      laborLinePlannedServiceStopIds: [],
-      sortOrder: Number(line.sortOrder ?? index),
-      sourcePlanId: solution.id,
-      sourceSolutionId: solution.id,
-      acceptedPlanScope: accepted,
-    }));
-    const materialsToWrite = scope.shoppingItems.map((item, index) => {
-      const customerApprovalRequired = Boolean(item.customerApprovalRequired);
-      const customerApprovalApproved = item.customerApprovalStatus === "approved";
-      const linkedTaskId = linkedTaskIdForPlanMaterial(item);
-      const customerId = job.customerId || customer?.id || item.customerId || "";
-      const serviceLocationId = job.serviceLocationId || serviceLocation?.id || item.serviceLocationId || "";
-
-      return {
-        ...item,
-        id: item.id || `comp_shop_${uuidv4()}`,
-        companyId: recentlySelectedCompany,
-        category: "Job",
-        jobId,
-        customerId,
-        customerName: job.customerName || getCustomerDisplayName() || item.customerName || "",
-        serviceLocationId,
-        linkedTaskId,
-        status: SHOPPING_LIST_STATUS.needToPurchase,
-        estimateAccepted: accepted,
-        estimateAcceptedAt: accepted ? serverTimestamp() : null,
-        jobBillingStatus: accepted ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
-        needsAction: accepted,
-        planWorkspaceOnly: !accepted,
-        planId: solution.id,
-        sourcePlanId: solution.id,
-        solutionId: solution.id,
-        sourceSolutionId: solution.id,
-        prepKeys: buildPlanMaterialPrepKeys(item, linkedTaskId, { customerId, serviceLocationId }),
-        sortOrder: Number(item.sortOrder ?? index),
-      };
-    });
-    const tasksToWrite = attachPlanMaterialsToTasks(baseTasksToWrite, materialsToWrite);
-
-    return { tasksToWrite, plannedStopsToWrite, laborLinesToWrite, materialsToWrite };
-  };
-
-  const replacePlannedWorkspace = async (solution, { accepted = false } = {}) => {
-    const { tasksToWrite, plannedStopsToWrite, laborLinesToWrite, materialsToWrite } = planWorkspaceScope(solution, { accepted });
-
-    await Promise.all([
-      deleteQueryDocs(collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks")),
-      deleteQueryDocs(plannedServiceStopsPath(recentlySelectedCompany, jobId)),
-      deleteQueryDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
+    // The transaction has committed. Refresh the live records, including execution fields
+    // preserved by the server, instead of replacing the screen with the old snapshot.
+    const [jobSnap, tasksSnap, stopsSnap, materialsSnap] = await Promise.all([
+      getDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId)),
+      getDocs(collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks")),
+      getDocs(plannedServiceStopsPath(recentlySelectedCompany, jobId)),
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
     ]);
-
-    const writes = [
-      ...tasksToWrite.map((task) =>
-        setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task)
-      ),
-      ...plannedStopsToWrite.map((stop) =>
-        setDoc(doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), stop.id), stop)
-      ),
-      ...materialsToWrite.map((item) =>
-        setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item)
-      ),
-    ];
-
-    await Promise.all(writes);
-
+    if (!jobSnap.exists()) throw new Error("The plan was saved, but the job could not be refreshed. Reload this page.");
+    const savedJob = jobSnap.data();
+    const tasksToWrite = tasksSnap.docs.map(withFirestoreDocId);
+    const plannedStopsToWrite = stopsSnap.docs.map(withFirestoreDocId);
+    const materialsToWrite = materialsSnap.docs.map(withFirestoreDocId);
+    const laborLinesToWrite = normalizeJobLaborLineItems(savedJob.laborLineItems ?? savedJob.estimateLaborLineItems ?? []);
     setTaskList(tasksToWrite);
     setPlannedServiceStops(plannedStopsToWrite);
+    setShoppingList(materialsToWrite);
     setLaborLineItems(laborLinesToWrite);
-    setShoppingList(
-      materialsToWrite.map((item) => ({
-        ...item,
-        estimateAcceptedAt: accepted ? new Date() : null,
-      }))
-    );
-
-    return { tasksToWrite, plannedStopsToWrite, laborLinesToWrite, materialsToWrite };
+    setJob((previous) => ({
+      ...previous, ...savedJob,
+      dateCreated: savedJob.dateCreated?.toDate?.() || previous.dateCreated,
+      updatedAt: savedJob.updatedAt?.toDate?.() || previous.updatedAt,
+    }));
+    setSelectedPlanEditorId(solution.id);
+    return { tasksToWrite, plannedStopsToWrite, laborLinesToWrite, materialsToWrite, savedJob };
   };
 
   const confirmDiscardUnsavedPlanChanges = async () => (
@@ -6025,80 +5923,14 @@ const JobDetailView = () => {
 
     try {
       setLoadingPlanEditorId(solution.id);
-      const { tasksToWrite, plannedStopsToWrite, laborLinesToWrite, materialsToWrite } = await replacePlannedWorkspace(solution, {
-        accepted: false,
-      });
-      const solutionTier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
-      const solutionTierLabel = getJobPlanRecommendationLabel(solutionTier);
-      const nextStatus = normalizeJobPlanStatus(solution.status || JOB_PLAN_STATUS.DRAFT);
-      const nowMillis = Date.now();
-      const jobUpdates = {
-        activePlanId: solution.id,
-        activePlanTier: solutionTier,
-        activePlanTierLabel: solutionTierLabel,
-        activeSolutionId: solution.id,
-        activeSolutionTier: solutionTier,
-        activeSolutionTierLabel: solutionTierLabel,
-        activePlanRecommendationRank: solutionTier,
-        activePlanRecommendationRankLabel: solutionTierLabel,
-        planSelectionStatus: nextStatus,
-        solutionSelectionStatus: nextStatus,
-        laborLineItems: laborLinesToWrite,
-        estimateLaborLineItems: laborLinesToWrite,
-        updatedAt: serverTimestamp(),
-        updatedAtMillis: nowMillis,
-      };
-
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobUpdates);
-
-      await Promise.all(
-        (jobPlans || []).map((option) => {
-          const sourcePath = option._sourceCollection === "solutions"
-            ? legacyJobSolutionsPath(recentlySelectedCompany, jobId)
-            : jobPlansPath(recentlySelectedCompany, jobId);
-
-          return setDoc(doc(sourcePath, option.id), {
-            isActivePlan: option.id === solution.id,
-            updatedAt: serverTimestamp(),
-            updatedAtMillis: nowMillis,
-          }, { merge: true });
-        })
-      );
-
-      setJob((prev) => ({
-        ...prev,
-        ...jobUpdates,
-        updatedAt: new Date(nowMillis),
-      }));
-      setSelectedPlanEditorId(solution.id);
+      await replacePlannedWorkspace(solution, { accepted: false, recordHistory });
       resetPlanForm(solution);
-      if (recordHistory) {
-        await recordJobHistory({
-          eventType: "Plan",
-          title: `Plan loaded for editing: ${getJobPlanDisplayName(solution, "Untitled Plan")}`,
-          description: solution.description || "",
-          changes: [
-            buildHistoryChange("activePlanId", "Editing Plan", job.activePlanId || job.activeSolutionId || "—", solution.id),
-            buildHistoryChange("tasks", "Tasks", String(taskList.length), String(tasksToWrite.length)),
-            buildHistoryChange("plannedServiceStops", "Planned Stops", String(plannedServiceStops.length), String(plannedStopsToWrite.length)),
-            buildHistoryChange("laborLineItems", "Service Lines", String(laborLineItems.length), String(laborLinesToWrite.length)),
-            buildHistoryChange("shoppingItems", "Planned Products", String(shoppingList.length), String(materialsToWrite.length)),
-          ],
-          metadata: {
-            planId: solution.id,
-            planTier: solutionTier,
-            planTierLabel: solutionTierLabel,
-            editorLoad: true,
-          },
-        });
-      }
-
       if (showToast) toast.success("Plan loaded into Planned");
       handleJobTabChange("Planned");
       return true;
     } catch (err) {
       console.error(err);
-      toast.error("Failed to load plan");
+      toast.error(err.message || "Failed to load plan");
       return false;
     } finally {
       setLoadingPlanEditorId("");
@@ -6189,151 +6021,11 @@ const JobDetailView = () => {
     });
   };
 
-  const promotePlanToActiveWork = async (solution, { updateBillingStatus = true, historyTitle = "" } = {}) => {
+  const promotePlanToActiveWork = async (solution, options = {}) => {
     if (!solution?.id || !recentlySelectedCompany || !jobId) return { readyShoppingItemCount: 0 };
-
-    const { tasksToWrite, plannedStopsToWrite, laborLinesToWrite, materialsToWrite } =
-      planWorkspaceScope(solution, { accepted: true });
-
-    await Promise.all([
-      deleteQueryDocs(collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks")),
-      deleteQueryDocs(plannedServiceStopsPath(recentlySelectedCompany, jobId)),
-      deleteQueryDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
-    ]);
-
-    const writes = [
-      ...tasksToWrite.map((task) =>
-        setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task)
-      ),
-      ...plannedStopsToWrite.map((stop) =>
-        setDoc(doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), stop.id), stop)
-      ),
-      ...materialsToWrite.map((item) =>
-        setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item)
-      ),
-    ];
-
-    await Promise.all(writes);
-
-    const solutionTier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
-    const solutionTierLabel = getJobPlanRecommendationLabel(solutionTier);
-    const nextOperationStatus =
-      !job.operationStatus || job.operationStatus === "Estimate Pending"
-        ? "Unscheduled"
-        : job.operationStatus;
-    const jobUpdates = {
-      activePlanId: solution.id,
-      acceptedPlanId: solution.id,
-      activePlanTier: solutionTier,
-      activePlanTierLabel: solutionTierLabel,
-      acceptedPlanTier: solutionTier,
-      acceptedPlanTierLabel: solutionTierLabel,
-      activeSolutionId: solution.id,
-      acceptedSolutionId: solution.id,
-      activeSolutionTier: solutionTier,
-      activeSolutionTierLabel: solutionTierLabel,
-      acceptedSolutionTier: solutionTier,
-      acceptedSolutionTierLabel: solutionTierLabel,
-      activePlanRecommendationRank: solutionTier,
-      activePlanRecommendationRankLabel: solutionTierLabel,
-      acceptedPlanRecommendationRank: solutionTier,
-      acceptedPlanRecommendationRankLabel: solutionTierLabel,
-      solutionSelectionStatus: JOB_PLAN_STATUS.ACCEPTED,
-      planSelectionStatus: JOB_PLAN_STATUS.ACCEPTED,
-      rate: planOptionTotalCents(solution),
-      laborCost: planOptionLaborCents(solution),
-      laborLineItems: laborLinesToWrite,
-      estimateLaborLineItems: laborLinesToWrite,
-      acceptedPlanCostSummary: solution.costSummary || {},
-      acceptedPlanBillingSummary: solution.billingSummary || {},
-      updatedAt: serverTimestamp(),
-      updatedAtMillis: Date.now(),
-    };
-
-    if (updateBillingStatus) {
-      jobUpdates.billingStatus = "Accepted";
-      jobUpdates.operationStatus = nextOperationStatus;
-    }
-
-    await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobUpdates);
-
-    await Promise.all(
-      (jobPlans || []).map((option) => {
-        const isSelected = option.id === solution.id;
-        const optionUpdates = {
-          isActivePlan: isSelected,
-          isAccepted: isSelected,
-          planTier: normalizeJobPlanTier(option.planTier || option.solutionTier),
-          planTierLabel: getJobPlanRecommendationLabel(option.planTier || option.solutionTier),
-          recommendationRank: normalizeJobPlanTier(option.planTier || option.solutionTier),
-          recommendationRankLabel: getJobPlanRecommendationLabel(option.planTier || option.solutionTier),
-          updatedAt: serverTimestamp(),
-          updatedAtMillis: Date.now(),
-        };
-
-        if (isSelected) {
-          optionUpdates.status = JOB_PLAN_STATUS.ACCEPTED;
-          optionUpdates.acceptedAt = serverTimestamp();
-          optionUpdates.acceptedByUserId = getUserId() || "";
-          optionUpdates.acceptedByUserName = getAuditUserName();
-        } else if (normalizeJobPlanStatus(option.status) === JOB_PLAN_STATUS.ACCEPTED) {
-          optionUpdates.status = JOB_PLAN_STATUS.SUPERSEDED;
-          optionUpdates.supersededAt = serverTimestamp();
-        }
-
-        const sourcePath = option._sourceCollection === "solutions"
-          ? legacyJobSolutionsPath(recentlySelectedCompany, jobId)
-          : jobPlansPath(recentlySelectedCompany, jobId);
-
-        return updateDoc(doc(sourcePath, option.id), optionUpdates);
-      })
-    );
-
-    setTaskList(tasksToWrite);
-    setPlannedServiceStops(plannedStopsToWrite);
-    setLaborLineItems(laborLinesToWrite);
-    setShoppingList(materialsToWrite.map((item) => ({ ...item, estimateAcceptedAt: new Date() })));
-    setJob((prev) => ({
-      ...prev,
-      ...jobUpdates,
-      updatedAt: new Date(),
-      billingStatus: updateBillingStatus ? "Accepted" : prev.billingStatus,
-      operationStatus: updateBillingStatus ? nextOperationStatus : prev.operationStatus,
-    }));
-    setSelectedPlanEditorId(solution.id);
-    if (updateBillingStatus) {
-      setSelectedBillingStatus({ value: "Accepted", label: "Accepted" });
-      setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });
-    }
-
-    await recordJobHistory({
-      eventType: "Plan",
-      title: historyTitle || `Plan accepted: ${getJobPlanDisplayName(solution, "Untitled Plan")}`,
-      description: solution.description || "",
-      changes: [
-        buildHistoryChange("acceptedPlanId", "Accepted Plan", job.acceptedPlanId || job.acceptedSolutionId || "—", solution.id),
-        buildHistoryChange("recommendationRank", "Recommendation Rank", "—", getJobPlanRecommendationDisplay(solutionTier)),
-        buildHistoryChange("rate", "Customer Price", moneyFromCents(job.rate), moneyFromCents(planOptionTotalCents(solution))),
-        buildHistoryChange("tasks", "Tasks", String(taskList.length), String(tasksToWrite.length)),
-        buildHistoryChange("plannedServiceStops", "Planned Stops", String(plannedServiceStops.length), String(plannedStopsToWrite.length)),
-        buildHistoryChange("laborLineItems", "Service Lines", String(laborLineItems.length), String(laborLinesToWrite.length)),
-        buildHistoryChange("shoppingItems", "Planned Products", String(shoppingList.length), String(materialsToWrite.length)),
-      ],
-      metadata: {
-        planId: solution.id,
-        planTier: solutionTier,
-        planTierLabel: solutionTierLabel,
-        solutionId: solution.id,
-        solutionTier,
-        solutionTierLabel,
-        promotedTaskCount: tasksToWrite.length,
-        promotedPlannedStopCount: plannedStopsToWrite.length,
-        promotedLaborLineCount: laborLinesToWrite.length,
-        promotedMaterialCount: materialsToWrite.length,
-      },
-      severity: "success",
-    });
-
+    const { savedJob, materialsToWrite } = await replacePlannedWorkspace(solution, { ...options, accepted: true });
+    setSelectedBillingStatus({ value: savedJob.billingStatus, label: savedJob.billingStatus });
+    setSelectedOperationStatus({ value: savedJob.operationStatus, label: savedJob.operationStatus });
     return { readyShoppingItemCount: materialsToWrite.length };
   };
 
@@ -6343,7 +6035,7 @@ const JobDetailView = () => {
 
     const ok = await appConfirm({
       title: "Accept Plan",
-      message: "Accept this plan and replace the active job work with its saved scope?",
+      message: "Accept this plan as the active job scope? Existing scheduling, completed work, and purchase records will be preserved. Plans that remove work already underway cannot be accepted.",
       confirmLabel: "Accept Plan",
     });
     if (!ok) return;
@@ -6355,7 +6047,7 @@ const JobDetailView = () => {
       handleJobTabChange("Planned");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to accept plan");
+      toast.error(err.message || "Failed to accept plan");
     } finally {
       setAcceptingPlanId("");
     }
@@ -6563,54 +6255,6 @@ const JobDetailView = () => {
 
     setShoppingList((current) =>
       (current || []).map((item) => (itemsById.has(getFirestoreDocId(item)) ? { ...item, ...stateUpdates } : item))
-    );
-
-    return items.length;
-  };
-
-  const markShoppingItemsReadyForAcceptedEstimate = async () => {
-    if (!recentlySelectedCompany || !jobId) return 0;
-
-    const shoppingSnap = await getDocs(
-      query(
-        collection(db, "companies", recentlySelectedCompany, "shoppingList"),
-        where("jobId", "==", jobId)
-      )
-    );
-    const terminalStatuses = new Set(["purchased", "delivered", "installed", "invoiced", "cancelled", "canceled"]);
-    const items = shoppingSnap.docs
-      .map(withFirestoreDocId)
-      .filter((item) => {
-        if (terminalStatuses.has(String(item.status || "").toLowerCase())) return false;
-        if (item.customerApprovalRequired && item.customerApprovalStatus !== "approved") return false;
-        return true;
-      });
-
-    if (!items.length) return 0;
-
-    await Promise.all(
-      items.map((item) =>
-        updateDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", getFirestoreDocId(item)), {
-          status: SHOPPING_LIST_STATUS.needToPurchase,
-          estimateAccepted: true,
-          estimateAcceptedAt: serverTimestamp(),
-          jobBillingStatus: "accepted",
-        })
-      )
-    );
-
-    setShoppingList((current) =>
-      (current || []).map((item) =>
-        items.some((readyItem) => readyItem.id === item.id)
-          ? {
-            ...item,
-            status: SHOPPING_LIST_STATUS.needToPurchase,
-            estimateAccepted: true,
-            estimateAcceptedAt: new Date(),
-            jobBillingStatus: "accepted",
-          }
-          : item
-      )
     );
 
     return items.length;
@@ -7281,6 +6925,18 @@ const JobDetailView = () => {
     const legacyContractId = !sourceIsAgreement
       ? source?.id || existingAgreement?.contractId || ""
       : existingAgreement?.contractId || "";
+    const customerMessage =
+      source?.customerMessage ||
+      source?.customerFacingNote ||
+      source?.estimateNote ||
+      source?.description ||
+      source?.notes ||
+      existingAgreement?.customerMessage ||
+      existingAgreement?.customerFacingNote ||
+      existingAgreement?.estimateNote ||
+      existingAgreement?.description ||
+      job.description ||
+      "";
 
     const payload = {
       ...(existingAgreement || {}),
@@ -7301,7 +6957,10 @@ const JobDetailView = () => {
       sourceType: SalesAgreementSourceType.oneOffJob,
       sourceId: jobId,
       title: source?.title || `${job.internalId || "Job"} Estimate`,
-      description: source?.description || source?.notes || job.description || "",
+      description: customerMessage,
+      customerMessage,
+      customerFacingNote: customerMessage,
+      estimateNote: customerMessage,
       terms: defaultTermsText || (!termsList.length ? fallbackTerms : ""),
       termsTemplateId: source?.termsTemplateId || existingAgreement?.termsTemplateId || "",
       termsTemplateName: source?.termsTemplateName || existingAgreement?.termsTemplateName || "",
@@ -9004,6 +8663,37 @@ const JobDetailView = () => {
     resetScheduleTaskCreator();
   };
 
+  useEffect(() => {
+    if (!recentlySelectedCompany || !jobId || loading || sectionLoading.shell) return;
+
+    const routeState = location.state || {};
+    const searchParams = new URLSearchParams(location.search || "");
+    const shouldOpenFinishJob =
+      routeState.openFinishJobConfirm === true ||
+      searchParams.get("openFinishJobConfirm") === "1" ||
+      searchParams.get("finishJob") === "1";
+    const shouldOpenScheduleStop =
+      routeState.openScheduleServiceStop === true ||
+      searchParams.get("openScheduleServiceStop") === "1" ||
+      searchParams.get("scheduleNextStop") === "1";
+
+    if (!shouldOpenFinishJob && !shouldOpenScheduleStop) return;
+
+    if (shouldOpenFinishJob) {
+      openJobFinishConfirm();
+    } else {
+      openScheduleServiceStopChooser();
+    }
+
+    navigate(`/company/jobs/detail/${jobId}/Actual`, { replace: true, state: {} });
+  }, [
+    recentlySelectedCompany,
+    jobId,
+    loading,
+    sectionLoading.shell,
+    location.key,
+  ]);
+
   const updateScheduleServiceStopForm = (field, value) => {
     setScheduleServiceStopForm((prev) => ({
       ...prev,
@@ -10266,6 +9956,103 @@ const JobDetailView = () => {
     }
   };
 
+  const loadJobSiteDetails = useCallback(async (serviceLocationId) => {
+    const locSnap = serviceLocationId
+      ? await getDoc(doc(db, "companies", recentlySelectedCompany, "serviceLocations", serviceLocationId))
+      : null;
+    const site = locSnap?.exists() ? locSnap.data() : {};
+    setServiceLocation({
+      id: serviceLocationId || "",
+      bodiesOfWaterId: site.bodiesOfWaterId || [],
+      gateCode: site.gateCode || "",
+      nickName: site.nickName || "",
+      streetAddress: site.address?.streetAddress || "",
+      city: site.address?.city || "",
+      state: site.address?.state || "",
+      zip: site.address?.zip || "",
+      active: site.active,
+    });
+    if (serviceLocationId) {
+      const [bodySnap, equipmentSnap] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"),
+            where("serviceLocationId", "==", serviceLocationId)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "companies", recentlySelectedCompany, "equipment"),
+            where("serviceLocationId", "==", serviceLocationId)
+          )
+        ),
+      ]);
+
+      setTaskBodyOfWaterList(
+        bodySnap.docs.map((docSnap) => {
+          const data = docSnap.data();
+          const id = data.id || docSnap.id;
+
+          return {
+            ...data,
+            id,
+            value: id,
+            label: data.name || "Body Of Water",
+          };
+        })
+      );
+
+      setTaskEquipmentList(
+        equipmentSnap.docs.map((docSnap) => {
+          const data = docSnap.data();
+          const id = data.id || docSnap.id;
+          const label = data.name
+            ? `${data.name}${data.type ? ` — ${data.type}` : ""}`
+            : data.model || "Equipment";
+
+          return {
+            ...data,
+            id,
+            value: id,
+            label,
+          };
+        })
+      );
+    } else {
+      setTaskBodyOfWaterList([]);
+      setTaskEquipmentList([]);
+    }
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!edit || !recentlySelectedCompany || !job.customerId) return;
+    let canceled = false;
+    setLoadingServiceLocations(true);
+    setServiceLocationsError("");
+    setServiceLocationList([]);
+    getDocs(query(
+      collection(db, "companies", recentlySelectedCompany, "serviceLocations"),
+      where("customerId", "==", job.customerId)
+    )).then((snapshot) => {
+      if (canceled) return;
+      setServiceLocationList(snapshot.docs.map((snap) => {
+        const site = snap.data();
+        return {
+          ...site,
+          id: snap.id,
+          value: snap.id,
+          label: [site.nickName, formatAddressLabel(site.address || {})].filter(Boolean).join(" — ") || "Service Location",
+        };
+      }));
+    }).catch((error) => {
+      console.error("Failed to load customer sites", error);
+      if (!canceled) setServiceLocationsError("Could not load customer sites. Close Edit and try again.");
+    }).finally(() => {
+      if (!canceled) setLoadingServiceLocations(false);
+    });
+    return () => { canceled = true; };
+  }, [edit, recentlySelectedCompany, job.customerId]);
+
   // MARK: initial load
   useEffect(() => {
     if (!recentlySelectedCompany || !jobId) return;
@@ -10441,78 +10228,8 @@ const JobDetailView = () => {
           }));
         }
 
-        const locRef = doc(db, "companies", recentlySelectedCompany, "serviceLocations", j.serviceLocationId);
-        const locSnap = await getDoc(locRef);
-        if (locSnap.exists()) {
-          const l = locSnap.data();
-          setServiceLocation((prev) => ({
-            ...prev,
-            id: l.id,
-            bodiesOfWaterId: l.bodiesOfWaterId || [],
-            gateCode: l.gateCode || "",
-            nickName: l.nickName || "",
-            streetAddress: l.address?.streetAddress || "",
-            city: l.address?.city || "",
-            state: l.address?.state || "",
-            zip: l.address?.zip || "",
-            active: l.active,
-          }));
-        }
-        setSectionLoading((prev) => ({
-          ...prev,
-          snapshot: false,
-        }));
-
-        if (j.serviceLocationId) {
-          const [bodySnap, equipmentSnap] = await Promise.all([
-            getDocs(
-              query(
-                collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"),
-                where("serviceLocationId", "==", j.serviceLocationId)
-              )
-            ),
-            getDocs(
-              query(
-                collection(db, "companies", recentlySelectedCompany, "equipment"),
-                where("serviceLocationId", "==", j.serviceLocationId)
-              )
-            ),
-          ]);
-
-          setTaskBodyOfWaterList(
-            bodySnap.docs.map((docSnap) => {
-              const data = docSnap.data();
-              const id = data.id || docSnap.id;
-
-              return {
-                ...data,
-                id,
-                value: id,
-                label: data.name || "Body Of Water",
-              };
-            })
-          );
-
-          setTaskEquipmentList(
-            equipmentSnap.docs.map((docSnap) => {
-              const data = docSnap.data();
-              const id = data.id || docSnap.id;
-              const label = data.name
-                ? `${data.name}${data.type ? ` — ${data.type}` : ""}`
-                : data.model || "Equipment";
-
-              return {
-                ...data,
-                id,
-                value: id,
-                label,
-              };
-            })
-          );
-        } else {
-          setTaskBodyOfWaterList([]);
-          setTaskEquipmentList([]);
-        }
+        await loadJobSiteDetails(j.serviceLocationId);
+        setSectionLoading((prev) => ({ ...prev, snapshot: false }));
 
         const taskTypeQuery = query(collection(db, "universal", "settings", "taskTypes"));
         const taskTypeSnap = await getDocs(taskTypeQuery);
@@ -10622,7 +10339,7 @@ const JobDetailView = () => {
         setLoading(false);
       }
     })();
-  }, [recentlySelectedCompany, jobId]);
+  }, [recentlySelectedCompany, jobId, loadJobSiteDetails]);
 
   // comments subscription
   useEffect(() => {
@@ -11067,11 +10784,11 @@ const JobDetailView = () => {
     }
   };
 
-  const editJob = async (e) => {
-    e.preventDefault();
+  const editJob = async () => {
     if (!requireUpdateCurrentJob("update jobs")) return;
 
     try {
+      setSelectedServiceLocationId(job.serviceLocationId || "");
       setEdit(true);
 
       const userQuery = query(collection(db, "companies", recentlySelectedCompany, "companyUsers"));
@@ -11102,6 +10819,7 @@ const JobDetailView = () => {
   };
 
   const cancelEditJob = () => {
+    setSelectedServiceLocationId(job.serviceLocationId || "");
     setEdit(false);
     setSelectedAdmin(null);
     setCustomerPriceInput(((Number(job.rate || 0) / 100) || 0).toFixed(2));
@@ -11136,6 +10854,21 @@ const JobDetailView = () => {
       const sourceDescription = overrides.sourceDescription || "edit status";
 
       const updates = {};
+      const nextSiteId = overrides.serviceLocationId ?? (edit ? selectedServiceLocationId : job.serviceLocationId);
+      if (nextSiteId && nextSiteId !== job.serviceLocationId) {
+        const siteSnap = await getDoc(doc(db, "companies", recentlySelectedCompany, "serviceLocations", nextSiteId));
+        if (!siteSnap.exists() || siteSnap.data().customerId !== job.customerId) {
+          return toast.error("Choose a site belonging to this customer.");
+        }
+        updates.serviceLocationId = nextSiteId;
+        updates.serviceLocationName = siteSnap.data().nickName || "";
+        // These references belong to the previous site. Existing task/stop history stays intact.
+        updates.bodyOfWaterId = "";
+        updates.bodyOfWaterName = "";
+        updates.equipmentId = "";
+        updates.equipmentName = "";
+        updates.equipmentIds = [];
+      }
 
       if (
         nextSelectedAdmin?.id &&
@@ -11233,6 +10966,11 @@ const JobDetailView = () => {
         await recordJobHistory({
           title: "Job details updated",
           changes: [
+            ...(updates.serviceLocationId ? [buildHistoryChange(
+              "serviceLocationId", "Site",
+              [serviceLocation.nickName, formatAddressLabel(serviceLocation)].filter(Boolean).join(" — ") || job.serviceLocationId || "Not set",
+              serviceLocationList.find((site) => site.id === updates.serviceLocationId)?.label || updates.serviceLocationId
+            )] : []),
             buildHistoryChange("adminName", "Admin", job.adminName, updates.adminName ?? job.adminName),
             buildHistoryChange("rate", "Customer Price", moneyFromCents(job.rate), moneyFromCents(updates.rate ?? job.rate)),
             buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", updates.billingStatus ?? job.billingStatus),
@@ -11285,9 +11023,17 @@ const JobDetailView = () => {
       const jobSnap = await getDoc(jobRef);
       if (jobSnap.exists()) {
         const j = jobSnap.data();
+        if (updates.serviceLocationId) await loadJobSiteDetails(j.serviceLocationId);
 
         setJob((prev) => ({
           ...prev,
+          serviceLocationId: j.serviceLocationId || "",
+          serviceLocationName: j.serviceLocationName || "",
+          bodyOfWaterId: j.bodyOfWaterId || "",
+          bodyOfWaterName: j.bodyOfWaterName || "",
+          equipmentId: j.equipmentId || "",
+          equipmentName: j.equipmentName || "",
+          equipmentIds: j.equipmentIds || [],
           adminId: j.adminId || "",
           adminName: j.adminName || "",
           billingStatus: j.billingStatus || "",
@@ -11325,10 +11071,7 @@ const JobDetailView = () => {
   const cancelJob = async (e) => {
     e.preventDefault();
     if (!requireUpdateCurrentJob("update jobs")) return;
-    if (!edit) {
-      toast.error("Click Edit before canceling this job.");
-      return;
-    }
+    if (jobActionInProgress) return;
 
     try {
       const previousBillingStatus = job.billingStatus || "";
@@ -11436,10 +11179,7 @@ const JobDetailView = () => {
     e.preventDefault();
     if (!requireUpdateCurrentJob("update jobs")) return;
     if (cancelingJob) return;
-    if (!edit) {
-      toast.error("Click Edit before canceling this job.");
-      return;
-    }
+    if (jobActionInProgress) return;
 
     const promptedReason = await appPrompt({
       title: "Cancel Job Only",
@@ -11530,10 +11270,7 @@ const JobDetailView = () => {
     e.preventDefault();
     if (!requireUpdateCurrentJob("update jobs")) return;
     if (resolvingCustomerHandledJob) return;
-    if (!edit) {
-      toast.error("Click Edit before closing this job.");
-      return;
-    }
+    if (jobActionInProgress) return;
     if (!(job.customerId || customer.id)) {
       toast.error("Attach a customer before closing this job.");
       return;
@@ -11640,10 +11377,7 @@ const JobDetailView = () => {
   const deleteJob = async (e) => {
     e.preventDefault();
     if (!requirePermission("26", "delete jobs")) return;
-    if (!edit) {
-      toast.error("Click Edit before deleting this job.");
-      return;
-    }
+    if (jobActionInProgress) return;
     if (!recentlySelectedCompany || !jobId) return;
 
     const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
@@ -11738,6 +11472,133 @@ const JobDetailView = () => {
       toast.error(err?.message || "Failed to delete job");
     } finally {
       setDeletingJob(false);
+    }
+  };
+
+  const applyTemplateToExistingJob = async (templateId, mode) => {
+    if (!requireBuildJobEstimatePlan("use job templates")) return;
+    if (!recentlySelectedCompany || !jobId || applyingJobTemplate) return;
+    setJobTemplateApplyError("");
+    setApplyingJobTemplate(true);
+    try {
+      const companyPath = ["companies", recentlySelectedCompany];
+      const jobRef = doc(db, ...companyPath, "workOrders", jobId);
+      const templateRef = doc(db, ...companyPath, "jobTemplates", templateId);
+      const [templateSnap, latestJobSnap, ...snapshots] = await Promise.all([
+        getDoc(templateRef), getDoc(jobRef),
+        ...["tasks", "plannedServiceStops", "shoppingItems", "laborLineItems"].map((name) => getDocs(collection(templateRef, name))),
+        getDocs(collection(jobRef, "tasks")),
+        getDocs(collection(jobRef, "plannedServiceStops")),
+        getDocs(query(collection(db, ...companyPath, "shoppingList"), where("jobId", "==", jobId))),
+      ]);
+      if (!templateSnap.exists() || templateSnap.data().isActive === false || templateSnap.data().active === false) {
+        throw new Error("This template is no longer available. Choose another template.");
+      }
+      if (!latestJobSnap.exists()) throw new Error("This job is no longer available.");
+      const template = { ...templateSnap.data(), id: templateId };
+      const latestJob = { ...latestJobSnap.data(), id: jobId };
+      const templateScope = Object.fromEntries(["tasks", "plannedServiceStops", "shoppingItems", "laborLineItems"].map((name, index) => [
+        name, snapshots[index].docs.length ? snapshots[index].docs.map(withFirestoreDocId) : (Array.isArray(template[name]) ? template[name] : []),
+      ]));
+      if (!Object.values(templateScope).some((items) => items.length) && !cents(template.defaultRateCents)) {
+        throw new Error("This template has no services, tasks, visits, products, or price to apply.");
+      }
+      const existingScope = {
+        tasks: snapshots[4].docs.map(withFirestoreDocId),
+        plannedServiceStops: snapshots[5].docs.map(withFirestoreDocId),
+        shoppingItems: snapshots[6].docs.map(withFirestoreDocId),
+        laborLineItems: normalizeJobLaborLineItems(latestJob.laborLineItems || latestJob.estimateLaborLineItems || []),
+      };
+      if (mode === "add" && !existingScope.laborLineItems.length && cents(latestJob.rate) > 0) {
+        const existingPrice = buildContractSnapshotFromScope({
+          tasks: existingScope.tasks, plannedStops: existingScope.plannedServiceStops,
+          laborLines: existingScope.laborLineItems, materials: existingScope.shoppingItems,
+        }).reduce((total, item) => total + cents(item.totalAmountCents), 0);
+        if (!existingPrice) {
+          const id = `comp_job_labor_line_${uuidv4()}`;
+          existingScope.laborLineItems.push({
+            id, laborLineId: id, name: selectedEditorPlan?.title || latestJob.type || "Existing planned work",
+            quantity: 1, unitPriceCents: cents(latestJob.rate), totalPriceCents: cents(latestJob.rate),
+            internalCostCents: cents(latestJob.laborCost), taskIds: existingScope.tasks.map((task) => task.id), sortOrder: 0,
+          });
+        }
+      }
+      const accepted = selectedEditorPlan && (
+        selectedEditorPlan.isAccepted || selectedEditorPlan.acceptedAt || normalizeJobPlanStatus(selectedEditorPlan.status) === JOB_PLAN_STATUS.ACCEPTED ||
+        [latestJob.acceptedPlanId, latestJob.acceptedSolutionId].includes(selectedEditorPlan.id)
+      );
+      const existingPlan = accepted ? null : selectedEditorPlan;
+      const planId = existingPlan?.id || `comp_job_plan_${uuidv4()}`;
+      const copiedScope = copyJobTemplateScope({
+        template, scope: templateScope, job: latestJob, companyId: recentlySelectedCompany, planId,
+        userId: getUserId(), userName: getAuditUserName(),
+      });
+      const nextScope = combineJobTemplateScope(existingScope, copiedScope, mode);
+      const tier = normalizeJobPlanTier(planEditorDraft.planTier || selectedEditorPlan?.planTier || selectedEditorPlan?.solutionTier || DEFAULT_JOB_PLAN_TIER);
+      const title = mode === "overwrite" ? template.name || "Template Plan" : planEditorDraft.title.trim() || existingPlan?.title || `${template.name || "Template"} Plan`;
+      const description = mode === "overwrite" ? template.description || "" : [planEditorDraft.description.trim(), template.description || ""].filter(Boolean).join("\n\n");
+      const nowMillis = Date.now();
+      const payload = {
+        ...(existingPlan || {}),
+        ...planSnapshotFromCurrentWork({
+          solutionId: planId, solutionTier: tier, solutionTierLabel: getJobPlanRecommendationLabel(tier),
+          title, description, status: existingPlan?.status || JOB_PLAN_STATUS.DRAFT, scope: nextScope,
+          fallbackRateCents: cents(template.defaultRateCents) + (mode === "add" ? cents(latestJob.rate) : 0),
+          fallbackLaborCostCents: cents(template.defaultLaborCostCents) + (mode === "add" ? cents(latestJob.laborCost) : 0),
+        }),
+        isActivePlan: true, isAccepted: false, sourceTemplateId: templateId, sourceTemplateName: template.name || "",
+        createdAt: existingPlan?.createdAt || serverTimestamp(), createdAtMillis: existingPlan?.createdAtMillis || nowMillis,
+        createdByUserId: existingPlan?.createdByUserId || getUserId(),
+        createdByUserName: existingPlan?.createdByUserName || getAuditUserName(),
+      };
+      const jobUpdates = {
+        activePlanId: planId, activeSolutionId: planId, activePlanTier: tier, activeSolutionTier: tier,
+        activePlanTierLabel: getJobPlanRecommendationLabel(tier), activeSolutionTierLabel: getJobPlanRecommendationLabel(tier),
+        activePlanRecommendationRank: tier, activePlanRecommendationRankLabel: getJobPlanRecommendationLabel(tier),
+        planSelectionStatus: payload.status, solutionSelectionStatus: payload.status,
+        laborLineItems: nextScope.laborLineItems, estimateLaborLineItems: nextScope.laborLineItems,
+        updatedAt: serverTimestamp(), updatedAtMillis: nowMillis,
+      };
+      const removals = snapshots.slice(4).flatMap((snapshot, index) => {
+        const name = ["tasks", "plannedServiceStops", "shoppingItems"][index];
+        const keepIds = new Set(nextScope[name].map((item) => item.id));
+        return snapshot.docs.filter((snap) => !keepIds.has(snap.id));
+      });
+      const inactivePlans = jobPlans.filter((plan) => plan.id !== planId && plan.isActivePlan);
+      const writeCount = 2 + removals.length + inactivePlans.length + copiedScope.tasks.length + copiedScope.plannedServiceStops.length + copiedScope.shoppingItems.length;
+      if (writeCount > 500) throw new Error("This job and template are too large to apply in one update.");
+      const batch = writeBatch(db);
+      removals.forEach((snap) => batch.delete(snap.ref));
+      const copiedIds = new Set([...copiedScope.tasks, ...copiedScope.plannedServiceStops, ...copiedScope.shoppingItems].map((item) => item.id));
+      nextScope.tasks.filter((item) => copiedIds.has(item.id)).forEach((task) => batch.set(doc(collection(jobRef, "tasks"), task.id), task));
+      nextScope.plannedServiceStops.filter((item) => copiedIds.has(item.id)).forEach((stop) => batch.set(doc(collection(jobRef, "plannedServiceStops"), stop.id), stop));
+      nextScope.shoppingItems.filter((item) => copiedIds.has(item.id)).forEach((item) => batch.set(doc(db, ...companyPath, "shoppingList", item.id), item));
+      batch.set(doc(jobPlansPath(recentlySelectedCompany, jobId), planId), payload);
+      batch.update(jobRef, jobUpdates);
+      inactivePlans.forEach((plan) => batch.set(doc(
+        plan._sourceCollection === "solutions" ? legacyJobSolutionsPath(recentlySelectedCompany, jobId) : jobPlansPath(recentlySelectedCompany, jobId), plan.id
+      ), { isActivePlan: false, updatedAt: serverTimestamp(), updatedAtMillis: nowMillis }, { merge: true }));
+      await batch.commit();
+
+      setTaskList(nextScope.tasks);
+      setPlannedServiceStops(nextScope.plannedServiceStops);
+      setShoppingList(nextScope.shoppingItems);
+      setLaborLineItems(nextScope.laborLineItems);
+      setJob((previous) => ({ ...previous, ...jobUpdates, updatedAt: new Date(nowMillis) }));
+      upsertLocalPlanOption(payload);
+      setSelectedPlanEditorId(planId);
+      setShowUseTemplateDialog(false);
+      await recordJobHistory({
+        eventType: "Template", title: `Template ${mode === "add" ? "added" : "applied"}: ${template.name || "Job Template"}`,
+        description: mode === "add" ? "Added template scope to the current plan." : "Replaced editable planned scope with a template.",
+        metadata: { templateId, templateName: template.name || "", mode, planId, taskCount: copiedScope.tasks.length, plannedStopCount: copiedScope.plannedServiceStops.length, laborLineCount: copiedScope.laborLineItems.length, materialCount: copiedScope.shoppingItems.length, replacedRecordCount: removals.length },
+      });
+      toast.success(mode === "add" ? "Template added to job" : "Planned scope replaced with template");
+    } catch (error) {
+      console.error("Failed to apply job template", error);
+      setJobTemplateApplyError(error.message || "Could not apply the template. Please try again.");
+    } finally {
+      setApplyingJobTemplate(false);
     }
   };
 
@@ -11955,6 +11816,7 @@ const JobDetailView = () => {
             plannedTotalPriceCents,
             billable: plannedTotalPriceCents > 0,
             sortOrder: Number(item.sortOrder ?? index),
+            linkedTaskId: taskIdMap[linkedTaskIdForPlanMaterial(item)] || "",
             sourceShoppingListItemId: item.id || "",
           }
         );
@@ -12087,6 +11949,7 @@ const JobDetailView = () => {
         selectedSolutionTier: issuePrioritySelectOption(nextPriority),
         successMessage: "Job updated",
         noChangesMessage: "No changes",
+        serviceLocationId: job.serviceLocationId,
         sourceDescription: "job header dropdown",
       });
     } finally {
@@ -15912,12 +15775,25 @@ const JobDetailView = () => {
     const termsSummary = [termsText, termsLineSummary].filter(Boolean).join("\n");
     const selectedEstimatePlanId = overrides.selectedPlanId || selectedBillingPlanEstimate?.planId || "";
     const baseRecord = selectedPlanEstimateRecord || selectedSalesAgreement || selectedContract || {};
+    const estimateCustomerMessage =
+      billingEstimateDraft.description.trim() ||
+      baseRecord.customerMessage ||
+      baseRecord.customerFacingNote ||
+      baseRecord.estimateNote ||
+      baseRecord.description ||
+      baseRecord.notes ||
+      selectedBillingPlanEstimate?.description ||
+      job.description ||
+      "";
 
     return {
       ...baseRecord,
       title: billingEstimateDraft.title.trim() || baseRecord.title || `${job.internalId || "Job"} Estimate`,
-      description: billingEstimateDraft.description.trim() || baseRecord.description || selectedBillingPlanEstimate?.description || job.description || "",
-      notes: billingEstimateDraft.description.trim() || baseRecord.notes || selectedBillingPlanEstimate?.description || job.description || "",
+      description: estimateCustomerMessage,
+      notes: estimateCustomerMessage,
+      customerMessage: estimateCustomerMessage,
+      customerFacingNote: estimateCustomerMessage,
+      estimateNote: estimateCustomerMessage,
       terms: termsText,
       termsTemplateId: billingEstimateDraft.termsTemplateId || baseRecord.termsTemplateId || "",
       termsTemplateName: billingEstimateDraft.termsTemplateName || baseRecord.termsTemplateName || "",
@@ -16357,247 +16233,49 @@ const JobDetailView = () => {
     };
   };
 
-  const promoteAcceptedPlanForEstimate = async (agreementRecord = {}) => {
-    const selectedPlanId =
-      agreementRecord.selectedPlanId ||
-      agreementRecord.selectedSolutionId ||
-      agreementRecord.acceptedPlanId ||
-      agreementRecord.acceptedSolutionId ||
-      job.acceptedPlanId ||
-      job.acceptedSolutionId ||
-      job.activePlanId ||
-      job.activeSolutionId ||
-      activePlan?.id ||
-      "";
-    const solution =
-      (jobPlans || []).find((option) => option.id === selectedPlanId) ||
-      activePlan ||
-      null;
-
-    if (!solution) {
-      return markShoppingItemsReadyForAcceptedEstimate();
-    }
-
-    const result = await promotePlanToActiveWork(solution, {
-      updateBillingStatus: false,
-      historyTitle: `Accepted plan promoted: ${getJobPlanDisplayName(solution, "Untitled Plan")}`,
-    });
-
-    return result.readyShoppingItemCount || 0;
-  };
-
   const handleMarkEstimateAccepted = async () => {
+    if (!canUpdateCurrentJob && !can("400")) {
+      requirePermission(UPDATE_JOBS_PERMISSION_ID, "accept job estimates");
+      return;
+    }
     try {
       if (!recentlySelectedCompany || !jobId) return;
-
-      if (salesWorkflowEnabled) {
-        const salesAgreement = selectedSalesAgreement || await ensureJobSalesAgreement();
-        const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
-        const nextOperationStatus =
-          !job.operationStatus || job.operationStatus === "Estimate Pending"
-            ? "Unscheduled"
-            : job.operationStatus;
-        const acceptedPlanId = selectedBillingPlanEstimate?.planId || selectedPlanIdForAgreement(salesAgreement);
-        const acceptedPlanRecord = (jobPlans || []).find((plan) => String(plan.id || "") === String(acceptedPlanId || "")) || null;
-        const acceptedPlanTitle =
-          selectedBillingPlanEstimate?.title ||
-          (acceptedPlanRecord ? getJobPlanDisplayName(acceptedPlanRecord, "Untitled Plan") : "") ||
-          "selected plan";
-        if (billingPlanEstimateRows.length > 1) {
-          const confirmed = await appConfirm({
-            title: "Mark Estimate Accepted",
-            message: `Mark "${acceptedPlanTitle}" accepted? This estimate includes ${billingPlanEstimateRows.length} plan options, and this is the plan that will be promoted into Actual.`,
-            confirmLabel: "Mark Accepted",
-          });
-          if (!confirmed) return;
-        }
-        const acceptedLineItems = selectedBillingPlanEstimate?.lineItems?.length
-          ? getSalesLineItemsFromSnapshot(selectedBillingPlanEstimate.lineItems)
-          : salesAgreement.lineItems || [];
-        const acceptedTotalAmountCents =
-          selectedBillingPlanEstimate?.totalAmountCents ||
-          acceptedLineItems.reduce((total, item) => total + cents(item.totalAmountCents), 0) ||
-          salesAgreement.totalAmountCents ||
-          salesAgreement.rateAmountCents ||
-          0;
-        const agreementAcceptanceUpdates = {
-          status: SalesAgreementStatus.accepted,
-          acceptedAt: serverTimestamp(),
-          acceptedByUserId: getUserId() || "",
-          acceptedByUserName: getUserName(),
-          updatedAt: serverTimestamp(),
-          ...(acceptedPlanId
-            ? {
-              selectedPlanId: acceptedPlanId,
-              selectedSolutionId: acceptedPlanId,
-              acceptedPlanId,
-              acceptedSolutionId: acceptedPlanId,
-              defaultPlanId: acceptedPlanId,
-              defaultSolutionId: acceptedPlanId,
-            }
-            : {}),
-          ...(acceptedLineItems.length
-            ? {
-              lineItems: acceptedLineItems,
-            }
-            : {}),
-          ...(acceptedTotalAmountCents
-            ? {
-              rateAmountCents: acceptedTotalAmountCents,
-              subtotalAmountCents: acceptedLineItems.reduce((total, item) => total + cents(item.totalAmountCents), 0),
-              totalAmountCents: acceptedTotalAmountCents,
-            }
-            : {}),
-        };
-        const acceptedAgreementRecord = {
-          ...salesAgreement,
-          ...agreementAcceptanceUpdates,
-          acceptedAt: new Date(),
-        };
-
-        await updateDoc(doc(db, salesCollectionNames.agreements, salesAgreement.id), agreementAcceptanceUpdates);
-
-        if (selectedContract?.id) {
-          await updateDoc(doc(db, "contracts", selectedContract.id), {
-            status: "Accepted",
-            receiverAcceptance: true,
-            dateAccepted: serverTimestamp(),
-            salesAgreementId: salesAgreement.id,
-            updatedAt: serverTimestamp(),
-          });
-        }
-
-        await updateDoc(jobRef, {
-          billingStatus: "Accepted",
-          operationStatus: nextOperationStatus,
-          salesAgreementId: salesAgreement.id,
-          salesEstimateAgreementId: salesAgreement.id,
+      const agreement = salesWorkflowEnabled
+        ? selectedSalesAgreement || await ensureJobSalesAgreement()
+        : null;
+      const planId = selectedBillingPlanEstimate?.planId ||
+        (agreement ? selectedPlanIdForAgreement(agreement) : "") ||
+        job.activePlanId || job.activeSolutionId || activePlan?.id || "";
+      // Older jobs may predate saved plans. Capture their current scope before
+      // accepting so they receive the same transaction and preservation rules.
+      const solution = jobPlans.find((plan) => plan.id === planId) || await refreshEditorPlanBeforeEstimate();
+      if (!solution) throw new Error("Save a job plan before marking this estimate accepted.");
+      const title = getJobPlanDisplayName(solution, "Untitled Plan");
+      if (billingPlanEstimateRows.length > 1) {
+        const confirmed = await appConfirm({
+          title: "Mark Estimate Accepted",
+          message: `Mark "${title}" accepted? This is the plan that will become the active work.`,
+          confirmLabel: "Mark Accepted",
         });
-        const readyShoppingItemCount = await promoteAcceptedPlanForEstimate(acceptedAgreementRecord);
-
-        setJob((prev) => ({
-          ...prev,
-          billingStatus: "Accepted",
-          operationStatus: !prev.operationStatus || prev.operationStatus === "Estimate Pending"
-            ? "Unscheduled"
-            : prev.operationStatus,
-          salesAgreementId: salesAgreement.id,
-          salesEstimateAgreementId: salesAgreement.id,
-        }));
-        setLinkedSalesAgreement({
-          ...acceptedAgreementRecord,
-        });
-        setSelectedSalesAgreementId(salesAgreement.id);
-        if (acceptedPlanId) setSelectedBillingPlanId(acceptedPlanId);
-        setSelectedBillingStatus({ value: "Accepted", label: "Accepted" });
-        if (!job.operationStatus || job.operationStatus === "Estimate Pending") {
-          setSelectedOperationStatus({ value: "Unscheduled", label: "Unscheduled" });
-        }
-        await recordJobHistory({
-          eventType: "Billing",
-          title: "Estimate accepted",
-          changes: [
-            buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Accepted"),
-            buildHistoryChange(
-              "operationStatus",
-              "Operation Status",
-              job.operationStatus || "—",
-              nextOperationStatus
-            ),
-          ],
-          metadata: {
-            salesAgreementId: salesAgreement.id,
-            contractId: selectedContract?.id || "",
-            acceptedPlanId,
-            acceptedPlanTitle,
-            readyShoppingItemCount,
-          },
-        });
-        await addEstimateAcceptedJobComment({
-          title: "Estimate accepted",
-          salesAgreementId: salesAgreement.id,
-          contractId: selectedContract?.id || "",
-          readyShoppingItemCount,
-        });
-
-        toast.success("Estimate marked as accepted");
-        return;
+        if (!confirmed) return;
       }
-
-      if (selectedContract) {
-        const contractRef = doc(
-          db,
-          "contracts",
-          selectedContract.id
-        );
-        const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
-
-        await updateDoc(contractRef, {
-          status: "Accepted",
-          receiverAcceptance: true,
-          dateAccepted: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-
-        await updateDoc(jobRef, {
-          billingStatus: "Accepted",
-          operationStatus: job.operationStatus === "Estimate Pending" ? "Unscheduled" : job.operationStatus,
-        });
-        const readyShoppingItemCount = await promoteAcceptedPlanForEstimate(selectedContract);
-
-        setJob((prev) => ({
-          ...prev,
-          billingStatus: "Accepted",
-          operationStatus:
-            prev.operationStatus === "Estimate Pending" ? "Unscheduled" : prev.operationStatus,
-        }));
-        setSelectedBillingStatus({ value: "Accepted", label: "Accepted" });
-        if (job.operationStatus === "Estimate Pending") {
-          setSelectedOperationStatus({ value: "Unscheduled", label: "Unscheduled" });
-        }
-        await recordJobHistory({
-          eventType: "Billing",
-          title: "Estimate accepted",
-          changes: [
-            buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Accepted"),
-            buildHistoryChange(
-              "operationStatus",
-              "Operation Status",
-              job.operationStatus || "—",
-              job.operationStatus === "Estimate Pending" ? "Unscheduled" : job.operationStatus
-            ),
-          ],
-          metadata: { contractId: selectedContract.id, readyShoppingItemCount },
-        });
-        await addEstimateAcceptedJobComment({
-          contractId: selectedContract.id,
-          readyShoppingItemCount,
-        });
-
-        toast.success("Estimate marked as accepted");
-      } else {
-        const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
-        await updateDoc(jobRef, { billingStatus: "Accepted", operationStatus: "Unscheduled" });
-        const readyShoppingItemCount = await promoteAcceptedPlanForEstimate();
-        setJob((prev) => ({ ...prev, billingStatus: "Accepted", operationStatus: "Unscheduled" }));
-        setSelectedBillingStatus({ value: "Accepted", label: "Accepted" });
-        setSelectedOperationStatus({ value: "Unscheduled", label: "Unscheduled" });
-        await recordJobHistory({
-          eventType: "Billing",
-          title: "Estimate accepted",
-          changes: [
-            buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Accepted"),
-            buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", "Unscheduled"),
-          ],
-          metadata: { readyShoppingItemCount },
-        });
-        await addEstimateAcceptedJobComment({
-          readyShoppingItemCount,
-        });
+      const { readyShoppingItemCount } = await promotePlanToActiveWork(solution, {
+        agreementId: agreement?.id || "", contractId: selectedContract?.id || "",
+      });
+      if (agreement?.id) {
+        const agreementSnap = await getDoc(doc(db, salesCollectionNames.agreements, agreement.id));
+        if (agreementSnap.exists()) setLinkedSalesAgreement({ ...agreementSnap.data(), id: agreement.id });
+        setSelectedSalesAgreementId(agreement.id);
       }
+      setSelectedBillingPlanId(solution.id);
+      await addEstimateAcceptedJobComment({
+        title: "Estimate accepted", salesAgreementId: agreement?.id || "",
+        contractId: selectedContract?.id || "", readyShoppingItemCount,
+      });
+      toast.success("Estimate marked as accepted");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to mark estimate accepted");
+      toast.error(err.message || "Failed to mark estimate accepted");
     }
   };
 
@@ -17047,6 +16725,33 @@ const JobDetailView = () => {
         <p className="mt-4 text-sm text-gray-700 whitespace-pre-wrap">
           {order.description}
         </p>
+      )}
+
+      {(order.customerMessage || order.customerFacingNote || order.estimateNote) && (
+        <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="font-semibold">Customer note for revised estimate</p>
+              <p className="mt-1 whitespace-pre-wrap">
+                {order.customerMessage || order.customerFacingNote || order.estimateNote}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                updateBillingEstimateDraftField(
+                  "description",
+                  order.customerMessage || order.customerFacingNote || order.estimateNote || ""
+                );
+                handleJobTabChange("Billing");
+                toast.success("Change order note copied to the estimate message.");
+              }}
+              className="shrink-0 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50"
+            >
+              Use In Estimate
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
@@ -18937,11 +18642,20 @@ const JobDetailView = () => {
       tone: "violet",
       onClick: openCreateCustomerNoteModal,
     },
-    ...(canUpdateJobs
+    ...(!edit && canUpdateJobs
       ? [{
         label: "Edit",
         icon: PencilSquareIcon,
         onClick: editJob,
+      }]
+      : []),
+    ...(canUpdateCurrentJob || can("26")
+      ? [{
+        label: "Delete",
+        icon: TrashIcon,
+        tone: "red",
+        onClick: () => setShowDeleteOptions(true),
+        disabled: jobActionInProgress || isInitialShellLoading,
       }]
       : []),
   ];
@@ -20787,27 +20501,26 @@ const JobDetailView = () => {
                   webPath={`/company/jobs/detail/${jobId}`}
                 />
               )}
-              {!edit ? (
-                <Menu as="div" className="relative inline-block text-left">
-                  <MenuButton className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
-                    <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
-                    <span>Actions</span>
-                    <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
-                  </MenuButton>
-                  <MenuItems className="absolute right-0 z-30 mt-2 w-64 origin-top-right overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
-                    {headerActionItems.map((action) => (
-                      <JobHeaderActionMenuItem
-                        key={action.id || action.label}
-                        label={action.label}
-                        icon={action.icon}
-                        tone={action.tone}
-                        onClick={action.onClick}
-                        disabled={action.disabled}
-                      />
-                    ))}
-                  </MenuItems>
-                </Menu>
-              ) : (
+              <Menu as="div" className="relative inline-block text-left">
+                <MenuButton className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
+                  <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
+                  <span>Actions</span>
+                  <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+                </MenuButton>
+                <MenuItems className="absolute right-0 z-30 mt-2 w-64 origin-top-right overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
+                  {headerActionItems.map((action) => (
+                    <JobHeaderActionMenuItem
+                      key={action.id || action.label}
+                      label={action.label}
+                      icon={action.icon}
+                      tone={action.tone}
+                      onClick={action.onClick}
+                      disabled={action.disabled}
+                    />
+                  ))}
+                </MenuItems>
+              </Menu>
+              {edit && (
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={saveEditChanges}
@@ -20932,7 +20645,33 @@ const JobDetailView = () => {
                             </div>
                             <div className="flex items-start justify-between gap-3 py-2">
                               <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Site</dt>
-                              <dd className="min-w-0 text-right text-sm font-bold text-slate-950">{siteAddress || "Not set"}</dd>
+                              <dd className={edit ? "min-w-0 flex-1 text-sm" : "min-w-0 text-right text-sm font-bold text-slate-950"}>
+                                {edit ? (
+                                  <>
+                                    <Select
+                                      inputId="job-site"
+                                      aria-label="Customer site"
+                                      value={serviceLocationList.find((site) => site.id === selectedServiceLocationId) || (selectedServiceLocationId ? {
+                                        value: selectedServiceLocationId,
+                                        label: [serviceLocation.nickName, siteAddress].filter(Boolean).join(" — ") || "Current site",
+                                      } : null)}
+                                      options={serviceLocationList}
+                                      onChange={(site) => setSelectedServiceLocationId(site?.value || "")}
+                                      isLoading={loadingServiceLocations}
+                                      isDisabled={loadingServiceLocations || Boolean(serviceLocationsError)}
+                                      isSearchable
+                                      placeholder="Select customer site"
+                                      noOptionsMessage={() => "No sites found for this customer"}
+                                      theme={selectTheme}
+                                      styles={selectStyles}
+                                    />
+                                    {serviceLocationsError && <p role="alert" className="mt-1 text-xs text-red-700">{serviceLocationsError}</p>}
+                                    {selectedServiceLocationId && selectedServiceLocationId !== job.serviceLocationId && (
+                                      <p className="mt-1 text-xs text-slate-500">Saving a different site clears this job's equipment and body of water links.</p>
+                                    )}
+                                  </>
+                                ) : siteAddress || "Not set"}
+                              </dd>
                             </div>
                           </dl>
 
@@ -21138,6 +20877,7 @@ const JobDetailView = () => {
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       <select
+                        aria-label="Editing plan"
                         value={selectedPlanEditorId}
                         onChange={(event) => handlePlanEditorSelection(event.target.value)}
                         disabled={!canBuildJobEstimatePlan || !jobPlans.length || savingPlanEditor || Boolean(loadingPlanEditorId)}
@@ -21155,6 +20895,17 @@ const JobDetailView = () => {
                       </select>
 
                       <div className="flex flex-wrap gap-2">
+                        {canBuildJobEstimatePlan && (
+                          <button
+                            type="button"
+                            onClick={() => { setJobTemplateApplyError(""); setShowUseTemplateDialog(true); }}
+                            disabled={loading || plansLoading || savingPlanEditor || Boolean(loadingPlanEditorId) || applyingJobTemplate || newLaborLine || Boolean(editingLaborLineId) || Boolean(editingTaskId) || Boolean(editingShoppingItemId)}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <DocumentDuplicateIcon className="h-4 w-4" aria-hidden="true" />
+                            Use Template
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={saveSelectedEditorPlan}
@@ -23023,7 +22774,7 @@ const JobDetailView = () => {
 	                        </button>
 	                        <button
 	                          onClick={handleMarkEstimateAccepted}
-	                          disabled={!billingPlanEstimateRows.length || (!salesWorkflowEnabled && !selectedContract)}
+	                          disabled={(!canUpdateCurrentJob && !can("400")) || !billingPlanEstimateRows.length || (!salesWorkflowEnabled && !selectedContract)}
 	                          className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
 	                        >
                           Mark Accepted
@@ -23341,7 +23092,7 @@ const JobDetailView = () => {
                             <button
                               type="button"
                               onClick={downloadJobEstimate}
-                              disabled={!billingPlanEstimateRows.length}
+                              disabled={(!canUpdateCurrentJob && !can("400")) || !billingPlanEstimateRows.length}
                               className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition disabled:opacity-50"
                             >
                               <ArrowDownTrayIcon className="h-4 w-4" aria-hidden="true" />
@@ -23781,55 +23532,26 @@ const JobDetailView = () => {
           </button>
         </div>
       </div>
-      {edit && (canUpdateCurrentJob || can("26")) && (
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          {canUpdateCurrentJob && (
-            <button
-              type="button"
-              onClick={cancelJob}
-              disabled={jobActionInProgress}
-              className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Potential Work" : "Cancel to Potential Work"}
-            </button>
-          )}
-          {canUpdateCurrentJob && (
-            <button
-              type="button"
-              onClick={cancelJobWithoutPotentialWork}
-              disabled={jobActionInProgress}
-              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {cancelingJob ? "Canceling..." : isJobCanceled ? "Refresh Cancel Reason" : "Cancel Job Only"}
-            </button>
-          )}
-          {canUpdateCurrentJob && (
-            <button
-              type="button"
-              onClick={markCustomerTookCareOfJob}
-              disabled={jobActionInProgress}
-              className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {resolvingCustomerHandledJob
-                ? "Closing..."
-                : isJobCustomerResolved
-                  ? "Refresh Customer Resolution"
-                  : "Customer Took Care Of It"}
-            </button>
-          )}
-          {can("26") && (
-            <button
-              type="button"
-              onClick={deleteJob}
-              disabled={jobActionInProgress || isJobDeleteLocked}
-              title={isJobDeleteLocked ? "Finished jobs cannot be deleted." : "Delete job"}
-              className="w-full rounded-xl border border-red-300 bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {deletingJob ? "Deleting..." : "Delete Job"}
-            </button>
-          )}
-	        </div>
-	      )}
+      <JobUseTemplateDialog
+        open={showUseTemplateDialog}
+        companyId={recentlySelectedCompany}
+        busy={applyingJobTemplate}
+        error={jobTemplateApplyError}
+        onClose={() => setShowUseTemplateDialog(false)}
+        onApply={applyTemplateToExistingJob}
+      />
+      <JobDeleteOptionsDialog
+        open={showDeleteOptions}
+        onClose={() => setShowDeleteOptions(false)}
+        canUpdate={canUpdateCurrentJob}
+        canDelete={can("26")}
+        deleteLocked={isJobDeleteLocked}
+        busy={jobActionInProgress}
+        onCancelToPotential={cancelJob}
+        onCancelOnly={cancelJobWithoutPotentialWork}
+        onCustomerResolved={markCustomerTookCareOfJob}
+        onDelete={deleteJob}
+      />
 	      {renderPlanInvoiceLaborLineForm()}
 	      {renderLaborLineTaskSelectorModal()}
 	      {renderServiceCatalogCreatorModal()}
@@ -24919,6 +24641,18 @@ const JobDetailView = () => {
                   onChange={(e) => handleChangeOrderFormChange("description", e.target.value)}
                   className="w-full min-h-[120px] p-3 border border-gray-300 rounded-lg"
                   placeholder="What changed from the original job scope?"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-500 mb-2">
+                  Change Order / Estimate Note
+                </label>
+                <textarea
+                  value={changeOrderForm.customerMessage}
+                  onChange={(e) => handleChangeOrderFormChange("customerMessage", e.target.value)}
+                  className="w-full min-h-[90px] p-3 border border-gray-300 rounded-lg"
+                  placeholder="Short customer-facing note to include when this change order or revised estimate is sent."
                 />
               </div>
 

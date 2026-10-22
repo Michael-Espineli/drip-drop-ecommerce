@@ -1,5 +1,15 @@
 import { normalizeEquipmentStatus } from "./models/Equipment";
 
+export const DEFAULT_UPCOMING_MAINTENANCE_WEEKS = 2;
+export const UPCOMING_MAINTENANCE_WEEK_OPTIONS = [1, 2, 3, 4];
+
+export const normalizeUpcomingMaintenanceWeeks = (value) => {
+  const weeks = Number(value);
+  return UPCOMING_MAINTENANCE_WEEK_OPTIONS.includes(weeks)
+    ? weeks
+    : DEFAULT_UPCOMING_MAINTENANCE_WEEKS;
+};
+
 export const toEquipmentDateMillis = (value) => {
   if (!value) return null;
   if (value instanceof Date) return value.getTime();
@@ -21,6 +31,25 @@ export const equipmentDateIsDueThroughToday = (value, now = new Date()) => {
   dueThrough.setHours(23, 59, 59, 999);
 
   return millis <= dueThrough.getTime();
+};
+
+export const equipmentDateIsUpcomingWithinWeeks = (
+  value,
+  weekWindow = DEFAULT_UPCOMING_MAINTENANCE_WEEKS,
+  now = new Date()
+) => {
+  const millis = toEquipmentDateMillis(value);
+  if (millis === null) return false;
+
+  const normalizedWeeks = normalizeUpcomingMaintenanceWeeks(weekWindow);
+  const startsAfter = new Date(now);
+  startsAfter.setHours(23, 59, 59, 999);
+
+  const dueThrough = new Date(now);
+  dueThrough.setDate(dueThrough.getDate() + normalizedWeeks * 7);
+  dueThrough.setHours(23, 59, 59, 999);
+
+  return millis > startsAfter.getTime() && millis <= dueThrough.getTime();
 };
 
 export const equipmentIsActiveRecord = (equipment = {}) => {
@@ -68,6 +97,21 @@ export const equipmentNeedsMaintenance = (equipment = {}, now = new Date()) => {
     (equipment.needsService === true && equipmentDateIsDueThroughToday(equipment.nextServiceDate, now));
 };
 
+export const equipmentUpcomingMaintenance = (
+  equipment = {},
+  weekWindow = DEFAULT_UPCOMING_MAINTENANCE_WEEKS,
+  now = new Date()
+) => {
+  const status = normalizeEquipmentStatus(
+    equipment.status || equipment.operationStatus || equipment.equipmentStatus
+  );
+
+  if (status === "nonoperational") return false;
+
+  return equipment.needsService === true &&
+    equipmentDateIsUpcomingWithinWeeks(equipment.nextServiceDate, weekWindow, now);
+};
+
 export const equipmentNeedsMaintenanceForActiveBoard = (
   equipment = {},
   customerActiveById = {},
@@ -75,6 +119,16 @@ export const equipmentNeedsMaintenanceForActiveBoard = (
 ) => (
   equipmentIsActiveForBoard(equipment, customerActiveById) &&
   equipmentNeedsMaintenance(equipment, now)
+);
+
+export const equipmentUpcomingMaintenanceForActiveBoard = (
+  equipment = {},
+  customerActiveById = {},
+  weekWindow = DEFAULT_UPCOMING_MAINTENANCE_WEEKS,
+  now = new Date()
+) => (
+  equipmentIsActiveForBoard(equipment, customerActiveById) &&
+  equipmentUpcomingMaintenance(equipment, weekWindow, now)
 );
 
 export const buildCustomerActiveById = (customers = []) => (

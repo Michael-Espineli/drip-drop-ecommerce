@@ -2,12 +2,12 @@ import React, { useContext, useEffect, useMemo, useState } from 'react';
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  arrayUnion,
   collection,
   doc,
   getDocs,
   query,
   serverTimestamp,
-  setDoc,
   writeBatch,
   where,
 } from 'firebase/firestore';
@@ -16,6 +16,7 @@ import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
 import { itemPhotoFieldsFromSource } from '../../../utils/itemPhotos';
 import { buildPartApprovalShoppingItemPayload } from '../../../utils/partApprovalShopping';
+import { REPAIR_REQUEST_STATUS } from '../../../utils/models/RepairRequest';
 import {
   getProductDisplayName,
   getProductSellPriceCents,
@@ -592,9 +593,24 @@ const PartApprovalCreateModal = ({
           : {}),
       };
 
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'customerPartApprovals', approvalId), payload);
+
+      if (repairRequestId && workflowContext?.sourceRecordType === 'repairRequest') {
+        const repairRequestRef = workflowContext.repairRequestSourcePath === 'homeowner'
+          ? doc(db, 'homeownerRepairRequests', repairRequestId)
+          : doc(db, 'companies', companyId, 'repairRequests', repairRequestId);
+
+        batch.update(repairRequestRef, {
+          status: REPAIR_REQUEST_STATUS.RESOLVED,
+          partApprovalIds: arrayUnion(approvalId),
+          lastPartApprovalId: approvalId,
+          lastPartApprovalStatus: payload.status,
+          updatedAt: now,
+        });
+      }
+
       if (approvedInPerson) {
-        const batch = writeBatch(db);
-        batch.set(doc(db, 'customerPartApprovals', approvalId), payload);
         batch.set(
           doc(db, 'companies', companyId, 'shoppingList', shoppingListItemId),
           buildPartApprovalShoppingItemPayload({
@@ -605,10 +621,8 @@ const PartApprovalCreateModal = ({
           }),
           { merge: true }
         );
-        await batch.commit();
-      } else {
-        await setDoc(doc(db, 'customerPartApprovals', approvalId), payload);
       }
+      await batch.commit();
 
       toast.success(approvedInPerson
         ? 'Part approved and added to the shopping list.'

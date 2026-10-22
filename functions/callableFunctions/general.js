@@ -6945,7 +6945,7 @@ exports.updateServiceStopDayPermanently = functions.https.onCall(async (data, co
       });
     });
 
-    const routeUpdateInputs = [];
+    const recurringIdsToAssign = [];
     let futureServiceStopCount = 0;
 
     for (const recurringServiceStopId of recurringIds) {
@@ -6960,26 +6960,7 @@ exports.updateServiceStopDayPermanently = functions.https.onCall(async (data, co
         continue;
       }
 
-      const previousRSS = {
-        id: recurringSnap.id,
-        ...recurringSnap.data()
-      };
-
-      const updatedRSS = {
-        ...previousRSS,
-        day: newDay,
-        techId: newTech.userId,
-        tech: newTech.userName
-      };
-
-      routeUpdateInputs.push({ previousRSS, updatedRSS });
-
-      await recurringRef.update({
-        day: newDay,
-        techId: newTech.userId,
-        tech: newTech.userName,
-        updatedAt: serverTimestamp
-      });
+      recurringIdsToAssign.push(recurringServiceStopId);
 
       const futureStopsSnapshot = await serviceStopsRef
         .where("recurringServiceStopId", "==", recurringServiceStopId)
@@ -7006,6 +6987,27 @@ exports.updateServiceStopDayPermanently = functions.https.onCall(async (data, co
       });
     }
 
+    const recurringRouteAssignmentResult = recurringIdsToAssign.length
+      ? await assignRecurringServiceStopsToPlannedRoute({
+        db,
+        companyId,
+        recurringServiceStopIds: recurringIdsToAssign,
+        targetDay: newDay,
+        targetTechId: newTech.userId,
+        targetTechName: newTech.userName,
+      })
+      : null;
+    const routeLinkPatch = routeAssignmentLinkPatch(recurringRouteAssignmentResult?.destinationRouteId || "");
+    serviceStopUpdates.forEach((update, key) => {
+      serviceStopUpdates.set(key, {
+        ...update,
+        data: {
+          ...update.data,
+          ...routeLinkPatch,
+        },
+      });
+    });
+
     const serviceStopUpdateList = Array.from(serviceStopUpdates.values());
     for (let i = 0; i < serviceStopUpdateList.length; i += 450) {
       const batch = db.batch();
@@ -7018,22 +7020,14 @@ exports.updateServiceStopDayPermanently = functions.https.onCall(async (data, co
       await batch.commit();
     }
 
-    const recurringRouteResults = [];
-    for (const routeUpdateInput of routeUpdateInputs) {
-      recurringRouteResults.push(await updateRecurringRouteOrderForRSS({
-        db,
-        companyId,
-        previousRSS: routeUpdateInput.previousRSS,
-        updatedRSS: routeUpdateInput.updatedRSS
-      }));
-    }
+    const recurringRouteResults = recurringRouteAssignmentResult ? [recurringRouteAssignmentResult] : [];
 
     return {
       status: 200,
       companyId,
       selectedServiceStopCount: movableSelectedStops.length,
       futureServiceStopCount,
-      recurringServiceStopCount: routeUpdateInputs.length,
+      recurringServiceStopCount: recurringIdsToAssign.length,
       recurringRouteResults
     };
   } catch (error) {
@@ -7210,6 +7204,94 @@ exports.updateRecurringRouteOrderPermanently = functions.https.onCall(async (dat
   };
 });
 
+exports.updateRecurringServiceStopsRouteAssignment = functions.https.onCall(async (data, context) => {
+  const db = getFirestore();
+  const receivedData = data?.data ?? data ?? {};
+  const companyId = receivedData.companyId;
+  const recurringServiceStopIds = [
+    ...new Set([
+      ...(Array.isArray(receivedData.recurringServiceStopIds)
+        ? receivedData.recurringServiceStopIds
+        : []),
+      ...(Array.isArray(receivedData.recurringServiceStops)
+        ? receivedData.recurringServiceStops.map((stop) => stop?.id)
+        : []),
+    ].filter((id) => typeof id === "string" && id.trim().length > 0)),
+  ];
+  const targetDay = receivedData.targetDay || receivedData.day || receivedData.newDay;
+  const targetTech = receivedData.targetTech || receivedData.newTech || {};
+  const targetTechId = targetTech.userId || targetTech.id || receivedData.targetTechId || "";
+  const targetTechName = targetTech.userName || targetTech.name || receivedData.targetTechName || "";
+
+  if (!companyId) {
+    throw new functions.https.HttpsError("invalid-argument", "companyId is required.");
+  }
+
+  if (!recurringServiceStopIds.length) {
+    throw new functions.https.HttpsError("invalid-argument", "At least one recurring service stop id is required.");
+  }
+
+  if (!targetDay || !targetTechId || !targetTechName) {
+    throw new functions.https.HttpsError("invalid-argument", "targetDay and targetTech are required.");
+  }
+
+  try {
+    const routeAssignment = await assignRecurringServiceStopsToPlannedRoute({
+      db,
+      companyId,
+      recurringServiceStopIds,
+      targetDay,
+      targetTechId,
+      targetTechName,
+      destinationRouteId: receivedData.destinationRouteId || "",
+    });
+    const futureServiceStopSync = await syncFutureServiceStopsForRouteAssignment({
+      db,
+      companyId,
+      recurringServiceStopIds,
+      targetDay,
+      targetTechId,
+      targetTechName,
+      destinationRouteId: routeAssignment.destinationRouteId,
+      futureServiceStopsStartAt: receivedData.futureServiceStopsStartAt,
+    });
+
+    return {
+      success: true,
+      status: 200,
+      companyId,
+      recurringServiceStopIds,
+      ...routeAssignment,
+      ...futureServiceStopSync,
+    };
+  } catch (error) {
+    console.error("[updateRecurringServiceStopsRouteAssignment] Error:", error);
+    await reportCloudFunctionError(error, {
+      functionName: "updateRecurringServiceStopsRouteAssignment",
+      eventName: "update-recurring-service-stops-route-assignment",
+      companyId,
+      title: "Recurring route assignment failed",
+      description: "The callable that bulk-assigns recurring service stops to a planned route failed.",
+      severity: "critical",
+      data: {
+        recurringServiceStopIds,
+        targetDay,
+        targetTechId,
+        destinationRouteId: receivedData.destinationRouteId || "",
+      },
+    });
+
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+
+    throw new functions.https.HttpsError(
+      "internal",
+      error.message || "Unable to assign recurring service stops."
+    );
+  }
+});
+
 exports.createHomeOwnerCustomerBasedOnCompany = functions.https.onCall(async (data, context) => {
   try {
     const payload = data?.data ?? data ?? {};
@@ -7363,6 +7445,333 @@ function buildRecurringRouteOrderItemFromRSS(updatedRSS = {}, existingOrderItem 
     tech: updatedRSS.tech || existingOrderItem.tech || "",
     techId: updatedRSS.techId || existingOrderItem.techId || "",
     order: Number(existingOrderItem.order || 0),
+  };
+}
+
+function parseRouteAssignmentDate(value) {
+  if (!value) return null;
+  if (typeof value.toDate === "function") return value.toDate();
+  if (value instanceof Date) return value;
+  if (typeof value === "number") return new Date(value);
+
+  if (typeof value === "object") {
+    if (typeof value._seconds === "number") {
+      return new Date(value._seconds * 1000);
+    }
+
+    if (typeof value.seconds === "number") {
+      return new Date(value.seconds * 1000);
+    }
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function routeAssignmentStartDate(value) {
+  const requestedStart = parseRouteAssignmentDate(value);
+  const start = requestedStart || new Date();
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+function routeAssignmentDateForDayOnOrAfter(date, targetDayIndex) {
+  const workingDate = parseRouteAssignmentDate(date) || new Date();
+  workingDate.setHours(0, 0, 0, 0);
+  const daysUntilTarget = (targetDayIndex - workingDate.getDay() + 7) % 7;
+  workingDate.setDate(workingDate.getDate() + daysUntilTarget);
+  return workingDate;
+}
+
+function isFinishedRouteAssignmentServiceStop(serviceStop = {}) {
+  const terminalStatuses = new Set(["finished", "complete", "completed", "done"]);
+  return [
+    serviceStop.operationStatus,
+    serviceStop.status,
+    serviceStop.serviceStatus,
+    serviceStop.serviceStopStatus,
+  ].some((value) => terminalStatuses.has(String(value || "").trim().toLowerCase())) ||
+    Boolean(serviceStop.finishedAt || serviceStop.completedAt || serviceStop.endTime);
+}
+
+function routeAssignmentLinkPatch(routeId) {
+  if (!routeId) {
+    return {
+      recurringRouteId: admin.firestore.FieldValue.delete(),
+      recurringRouteDocId: admin.firestore.FieldValue.delete(),
+      plannedRouteId: admin.firestore.FieldValue.delete(),
+      recurringRouteLinkedAt: admin.firestore.FieldValue.delete(),
+      recurringRouteUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+  }
+
+  return {
+    recurringRouteId: routeId,
+    recurringRouteDocId: routeId,
+    plannedRouteId: routeId,
+    recurringRouteLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+    recurringRouteUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
+async function assignRecurringServiceStopsToPlannedRoute({
+  db,
+  companyId,
+  recurringServiceStopIds = [],
+  targetDay,
+  targetTechId,
+  targetTechName,
+  destinationRouteId = "",
+}) {
+  const rssIds = [
+    ...new Set(
+      recurringServiceStopIds
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter(Boolean)
+    ),
+  ];
+
+  if (!companyId || !rssIds.length || !targetDay || !targetTechId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "companyId, recurringServiceStopIds, targetDay, and targetTechId are required."
+    );
+  }
+
+  const companyRef = db.collection("companies").doc(companyId);
+  const recurringRoutesRef = companyRef.collection("recurringRoutes");
+  const recurringStopsRef = companyRef.collection("recurringServiceStop");
+  const preferredDestinationRouteId = isNonEmptyRouteId(destinationRouteId)
+    ? destinationRouteId.trim()
+    : "";
+
+  return db.runTransaction(async (transaction) => {
+    const [routesSnap, recurringStopSnaps] = await Promise.all([
+      transaction.get(recurringRoutesRef),
+      Promise.all(rssIds.map((rssId) => transaction.get(recurringStopsRef.doc(rssId)))),
+    ]);
+
+    const missingIds = recurringStopSnaps
+      .map((snap, index) => (snap.exists ? null : rssIds[index]))
+      .filter(Boolean);
+
+    if (missingIds.length) {
+      throw new functions.https.HttpsError(
+        "not-found",
+        `Recurring service stop(s) not found: ${missingIds.join(", ")}`
+      );
+    }
+
+    const selectedIdSet = new Set(rssIds);
+    const updatedRSSById = new Map(
+      recurringStopSnaps.map((snap) => [
+        snap.id,
+        {
+          id: snap.id,
+          ...snap.data(),
+          day: targetDay,
+          techId: targetTechId,
+          tech: targetTechName,
+        },
+      ])
+    );
+    const routeDocs = routesSnap.docs;
+    const preferredDestinationRouteDoc = preferredDestinationRouteId
+      ? routeDocs.find((routeDoc) => routeDoc.id === preferredDestinationRouteId) || null
+      : null;
+    const existingDestinationRouteDoc = preferredDestinationRouteDoc || routeDocs.find((routeDoc) => {
+      const route = routeDoc.data() || {};
+      return route.day === targetDay && route.techId === targetTechId;
+    }) || null;
+    const destinationRouteRef = existingDestinationRouteDoc?.ref || recurringRoutesRef.doc(`com_rr_${uuidv4()}`);
+    const destinationRouteIdToSave = existingDestinationRouteDoc?.id || destinationRouteRef.id;
+    const removedOrderItemsByRssId = new Map();
+    let destinationBaseOrder = null;
+    let destinationBaseRssIds = null;
+    let destinationDescription = existingDestinationRouteDoc?.data()?.description || "";
+    let updatedRouteCount = 0;
+    let deletedRouteCount = 0;
+
+    for (const routeDoc of routeDocs) {
+      const routeData = routeDoc.data() || {};
+      const currentOrder = getRecurringRouteOrder(routeData);
+      const currentRssIds = getRecurringRouteRssIds(routeData, currentOrder);
+      const removedItems = currentOrder.filter((item) => selectedIdSet.has(item?.recurringServiceStopId));
+
+      removedItems.forEach((item) => {
+        if (item?.recurringServiceStopId && !removedOrderItemsByRssId.has(item.recurringServiceStopId)) {
+          removedOrderItemsByRssId.set(item.recurringServiceStopId, item);
+        }
+      });
+
+      const nextOrder = reindexRecurringRouteOrder(
+        currentOrder.filter((item) => !selectedIdSet.has(item?.recurringServiceStopId))
+      );
+      const nextRssIds = currentRssIds.filter((rssId) => !selectedIdSet.has(rssId));
+      const changed = removedItems.length > 0 || nextRssIds.length !== currentRssIds.length;
+      const isDestinationRoute = routeDoc.id === destinationRouteIdToSave;
+
+      if (isDestinationRoute) {
+        destinationBaseOrder = nextOrder;
+        destinationBaseRssIds = nextRssIds;
+        destinationDescription = routeData.description || destinationDescription;
+      }
+
+      if (!changed) {
+        continue;
+      }
+
+      if (nextOrder.length === 0 && nextRssIds.length === 0 && !isDestinationRoute) {
+        transaction.delete(routeDoc.ref);
+        deletedRouteCount += 1;
+        continue;
+      }
+
+      if (!isDestinationRoute) {
+        transaction.set(routeDoc.ref, {
+          order: nextOrder,
+          recurringRouteOrder: nextOrder,
+          rssIds: nextRssIds,
+          isValid: true,
+          invalidReason: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        updatedRouteCount += 1;
+      }
+    }
+
+    if (destinationBaseOrder === null) {
+      const destinationRouteData = existingDestinationRouteDoc?.data() || {};
+      destinationBaseOrder = reindexRecurringRouteOrder(
+        getRecurringRouteOrder(destinationRouteData)
+          .filter((item) => !selectedIdSet.has(item?.recurringServiceStopId))
+      );
+      destinationBaseRssIds = getRecurringRouteRssIds(destinationRouteData, destinationBaseOrder)
+        .filter((rssId) => !selectedIdSet.has(rssId));
+    }
+
+    const incomingOrderItems = rssIds.map((rssId) => buildRecurringRouteOrderItemFromRSS(
+      updatedRSSById.get(rssId),
+      removedOrderItemsByRssId.get(rssId) || {}
+    ));
+    const nextDestinationOrder = reindexRecurringRouteOrder([
+      ...destinationBaseOrder,
+      ...incomingOrderItems,
+    ]);
+    const nextDestinationRssIds = [
+      ...new Set([
+        ...(destinationBaseRssIds || []),
+        ...rssIds,
+      ]),
+    ];
+
+    transaction.set(destinationRouteRef, {
+      id: destinationRouteIdToSave,
+      tech: targetTechName,
+      techId: targetTechId,
+      day: targetDay,
+      description: destinationDescription,
+      order: nextDestinationOrder,
+      recurringRouteOrder: nextDestinationOrder,
+      rssIds: nextDestinationRssIds,
+      companyId,
+      isValid: true,
+      invalidReason: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(existingDestinationRouteDoc ? {} : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+    }, { merge: true });
+    updatedRouteCount += 1;
+
+    const routeLinkPatch = routeAssignmentLinkPatch(destinationRouteIdToSave);
+    recurringStopSnaps.forEach((snap) => {
+      transaction.set(snap.ref, {
+        day: targetDay,
+        techId: targetTechId,
+        tech: targetTechName,
+        ...routeLinkPatch,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+
+    return {
+      destinationRouteId: destinationRouteIdToSave,
+      recurringServiceStopCount: rssIds.length,
+      updatedRouteCount,
+      deletedRouteCount,
+    };
+  });
+}
+
+async function syncFutureServiceStopsForRouteAssignment({
+  db,
+  companyId,
+  recurringServiceStopIds = [],
+  targetDay,
+  targetTechId,
+  targetTechName,
+  destinationRouteId,
+  futureServiceStopsStartAt,
+}) {
+  const dayIndexes = {
+    Sunday: 0,
+    Monday: 1,
+    Tuesday: 2,
+    Wednesday: 3,
+    Thursday: 4,
+    Friday: 5,
+    Saturday: 6,
+  };
+  const targetDayIndex = dayIndexes[targetDay];
+
+  if (targetDayIndex === undefined) {
+    throw new functions.https.HttpsError("invalid-argument", "targetDay must be a valid day of week.");
+  }
+
+  const serviceStopsRef = db.collection("companies").doc(companyId).collection("serviceStops");
+  const startAt = routeAssignmentStartDate(futureServiceStopsStartAt);
+  const startTimestamp = Timestamp.fromDate(startAt);
+  const routeLinkPatch = routeAssignmentLinkPatch(destinationRouteId);
+  const writeOperations = [];
+  let skippedFinishedServiceStopCount = 0;
+
+  for (const rssId of recurringServiceStopIds) {
+    const futureStopsSnapshot = await serviceStopsRef
+      .where("recurringServiceStopId", "==", rssId)
+      .where("serviceDate", ">=", startTimestamp)
+      .get();
+
+    futureStopsSnapshot.docs.forEach((serviceStopDoc) => {
+      const serviceStop = serviceStopDoc.data() || {};
+
+      if (isFinishedRouteAssignmentServiceStop(serviceStop)) {
+        skippedFinishedServiceStopCount += 1;
+        return;
+      }
+
+      writeOperations.push({
+        ref: serviceStopDoc.ref,
+        data: {
+          serviceDate: Timestamp.fromDate(routeAssignmentDateForDayOnOrAfter(serviceStop.serviceDate, targetDayIndex)),
+          techId: targetTechId,
+          tech: targetTechName,
+          ...routeLinkPatch,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      });
+    });
+  }
+
+  for (let index = 0; index < writeOperations.length; index += 450) {
+    const batch = db.batch();
+    writeOperations.slice(index, index + 450).forEach((operation) => {
+      batch.update(operation.ref, operation.data);
+    });
+    await batch.commit();
+  }
+
+  return {
+    updatedFutureServiceStopCount: writeOperations.length,
+    skippedFinishedServiceStopCount,
   };
 }
 
@@ -7610,6 +8019,8 @@ async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
         order: removal.order,
         recurringRouteOrder: removal.recurringRouteOrder,
         rssIds: removal.rssIds,
+        isValid: true,
+        invalidReason: admin.firestore.FieldValue.delete(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
 
@@ -8001,6 +8412,36 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     return patch;
   }
 
+  function routeIdFromRecurringRouteResult(result = {}) {
+    return result?.destinationRouteId || result?.updatedRouteId || result?.createdRouteId || "";
+  }
+
+  function routeLinkPatchFromRecurringRouteResult(result = {}) {
+    if (result?.skipped && result?.reason === "Route sync skipped by caller.") {
+      return {};
+    }
+
+    const routeId = routeIdFromRecurringRouteResult(result);
+
+    if (routeId) {
+      return {
+        recurringRouteId: routeId,
+        recurringRouteDocId: routeId,
+        plannedRouteId: routeId,
+        recurringRouteLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        recurringRouteUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+    }
+
+    return {
+      recurringRouteId: admin.firestore.FieldValue.delete(),
+      recurringRouteDocId: admin.firestore.FieldValue.delete(),
+      plannedRouteId: admin.firestore.FieldValue.delete(),
+      recurringRouteLinkedAt: admin.firestore.FieldValue.delete(),
+      recurringRouteUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+  }
+
   async function commitInBatches(writeOperations) {
     const batchSize = 450;
     let committedWrites = 0;
@@ -8065,6 +8506,25 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     let linkedAgreementId = recurringServiceStop.salesAgreementId || previousRSS.salesAgreementId || "";
     let linkedBillingSubscriptionId = recurringServiceStop.salesBillingSubscriptionId || previousRSS.salesBillingSubscriptionId || "";
 
+    const recurringRouteResult = syncRoute
+      ? await updateRecurringRouteOrderForRSS({
+        db,
+        companyId,
+        previousRSS,
+        updatedRSS: {
+          ...previousRSS,
+          ...normalizedRecurringServiceStop,
+          id: recurringServiceStop.id,
+        },
+        destinationRouteId: receivedData.destinationRouteId,
+      })
+      : {
+        skipped: true,
+        reason: "Route sync skipped by caller."
+      };
+    const routeLinkPatch = routeLinkPatchFromRecurringRouteResult(recurringRouteResult);
+    const recurringRouteId = routeIdFromRecurringRouteResult(recurringRouteResult);
+
     if (!linkedAgreementId) {
       const linkedAgreementsSnap = await db.collection("salesAgreements")
         .where("companyId", "==", companyId)
@@ -8079,7 +8539,10 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     writeOperations.push({
       type: "set",
       ref: recurringServiceStopRef,
-      data: normalizedRecurringServiceStop,
+      data: {
+        ...normalizedRecurringServiceStop,
+        ...routeLinkPatch,
+      },
       options: { merge: true }
     });
 
@@ -8099,11 +8562,14 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       writeOperations.push({
         type: "update",
         ref: serviceStopDoc.ref,
-        data: buildServiceStopPatch(
-          recurringServiceStop,
-          previousRSS,
-          serviceStopData
-        )
+        data: {
+          ...buildServiceStopPatch(
+            recurringServiceStop,
+            previousRSS,
+            serviceStopData
+          ),
+          ...routeLinkPatch,
+        }
       });
       updatedFutureServiceStopCount += 1;
     });
@@ -8114,7 +8580,12 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
         ref: db.collection("salesAgreements").doc(linkedAgreementId),
         data: {
           ...serviceScheduleUpdate,
-          recurringServiceStopId: recurringServiceStop.id
+          recurringServiceStopId: recurringServiceStop.id,
+          ...(recurringRouteId
+            ? { recurringRouteId }
+            : syncRoute
+              ? { recurringRouteId: admin.firestore.FieldValue.delete() }
+              : {}),
         },
         options: { merge: true }
       });
@@ -8126,7 +8597,12 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
         ref: db.collection("salesBillingSubscriptions").doc(linkedBillingSubscriptionId),
         data: {
           ...serviceScheduleUpdate,
-          recurringServiceStopId: recurringServiceStop.id
+          recurringServiceStopId: recurringServiceStop.id,
+          ...(recurringRouteId
+            ? { recurringRouteId }
+            : syncRoute
+              ? { recurringRouteId: admin.firestore.FieldValue.delete() }
+              : {}),
         },
         options: { merge: true }
       });
@@ -8143,19 +8619,6 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       }
       deletedFutureServiceStopCount += 1;
     }
-
-    const recurringRouteResult = syncRoute
-      ? await updateRecurringRouteOrderForRSS({
-        db,
-        companyId,
-        previousRSS,
-        updatedRSS: recurringServiceStop,
-        destinationRouteId: receivedData.destinationRouteId,
-      })
-      : {
-        skipped: true,
-        reason: "Route sync skipped by caller."
-      };
 
     return {
       success: true,
@@ -8294,6 +8757,8 @@ async function updateRecurringRouteOrderForRSS({
       order: removal.order,
       recurringRouteOrder: removal.recurringRouteOrder,
       rssIds: removal.rssIds,
+      isValid: true,
+      invalidReason: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
@@ -8343,6 +8808,8 @@ async function updateRecurringRouteOrderForRSS({
       order: nextOrder,
       recurringRouteOrder: nextOrder,
       rssIds: nextRssIds,
+      isValid: true,
+      invalidReason: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
@@ -8369,6 +8836,7 @@ async function updateRecurringRouteOrderForRSS({
       order: nextOrder,
       recurringRouteOrder: nextOrder,
       rssIds: [rssId],
+      isValid: true,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });

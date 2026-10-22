@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc, onSnapshot, arrayUnion } from 'firebase/firestore';
+import { getFirestore, doc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc, onSnapshot, arrayUnion } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -3905,11 +3905,17 @@ const RecurringTab = ({ customer }) => {
     };
 
     useEffect(() => {
-        const fetchRecurring = async () => {
-            setLoading(true);
-            try {
-                const stopQ = query(collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop'), where("customerId", "==", customer.id));
-                const stopSnap = await getDocs(stopQ);
+        if (!customer.id || !recentlySelectedCompany) {
+            setRecurringStops([]);
+            setLoading(false);
+            return undefined;
+        }
+
+        setLoading(true);
+        const stopQ = query(collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop'), where("customerId", "==", customer.id));
+        const unsubscribe = onSnapshot(
+            stopQ,
+            (stopSnap) => {
                 const stops = stopSnap.docs
                     .map(d => ({ id: d.id, ...d.data() }))
                     .sort((left, right) => (
@@ -3920,15 +3926,16 @@ const RecurringTab = ({ customer }) => {
                         )
                     ));
                 setRecurringStops(stops);
-            } catch (e) {
+                setLoading(false);
+            },
+            (error) => {
+                console.error('[CustomerDetails][RecurringTab] Could not fetch recurring items.', error);
                 toast.error("Could not fetch recurring items.");
-            } finally {
                 setLoading(false);
             }
-        };
-        if (customer.id && recentlySelectedCompany) {
-            fetchRecurring();
-        }
+        );
+
+        return unsubscribe;
     }, [customer.id, recentlySelectedCompany, db]);
 
     return (
@@ -5241,17 +5248,17 @@ export default function CustomerDetails() {
 
     useEffect(() => {
         if (!customerId || !recentlySelectedCompany || companyRoleLoading) return;
-        const fetchCustomer = async () => {
-            setLoading(true);
-            setAccessDenied(false);
-            try {
-                console.debug('[CustomerDetails] Fetching customer detail', {
-                    companyId: recentlySelectedCompany,
-                    customerId,
-                });
+        setLoading(true);
+        setAccessDenied(false);
+        console.debug('[CustomerDetails] Listening to customer detail', {
+            companyId: recentlySelectedCompany,
+            customerId,
+        });
 
-                const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
-                const docSnap = await getDoc(customerRef);
+        const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
+        const unsubscribe = onSnapshot(
+            customerRef,
+            (docSnap) => {
                 if (docSnap.exists()) {
                     const customerData = docSnap.data();
                     const nextCustomer = {
@@ -5278,11 +5285,14 @@ export default function CustomerDetails() {
                             selectedCustomerRegionTag,
                         });
                         setCustomer(null);
+                        setCustomerInviteLink('');
                         setAccessDenied(true);
+                        setLoading(false);
                         return;
                     }
 
                     // Top-level users are self-readable only in Firestore rules; use link fields stored on the customer instead.
+                    setAccessDenied(false);
                     setCustomer(nextCustomer);
                     setCustomerInviteLink(nextCustomer.customerAccountInviteUrl || '');
                 } else {
@@ -5290,9 +5300,13 @@ export default function CustomerDetails() {
                         companyId: recentlySelectedCompany,
                         customerId,
                     });
+                    setCustomer(null);
+                    setCustomerInviteLink('');
                     toast.error('Customer not found.');
                 }
-            } catch (error) {
+                setLoading(false);
+            },
+            (error) => {
                 console.error('[CustomerDetails] Failed to fetch customer data', {
                     companyId: recentlySelectedCompany,
                     customerId,
@@ -5300,11 +5314,11 @@ export default function CustomerDetails() {
                     message: error?.message,
                 }, error);
                 toast.error("Failed to fetch customer data.");
-            } finally {
                 setLoading(false);
             }
-        };
-        fetchCustomer();
+        );
+
+        return unsubscribe;
     }, [customerId, recentlySelectedCompany, db, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled, companyRoleLoading]);
 
     useEffect(() => {

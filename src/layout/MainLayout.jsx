@@ -48,8 +48,8 @@ const MainLayout = () => {
     location.pathname.startsWith('/client/chat/details/');
     const isAccountingWorkspace = accountType === 'Company' && location.pathname.startsWith('/company/accounting');
     const shellMarginClass = accountType === 'Company' && recentlySelectedCompany && isCompanySidebarCollapsed
-        ? "lg:ml-[76px]"
-        : "lg:ml-[260px]";
+        ? "lg:ml-[4.75rem]"
+        : "lg:ml-[16.25rem]";
 
     if (isAccountingWorkspace) {
         return (
@@ -72,14 +72,14 @@ const MainLayout = () => {
                     <div className={`${shellMarginClass} transition-all`}>
                         {isConversationPage ? (
                             <div className="h-screen flex flex-col">
-                                <div className="h-[95px] flex-shrink-0" />
+                                <div className="h-[5.9375rem] flex-shrink-0" />
                                 <main className="flex-1 min-h-0">
                                     <Outlet />
                                 </main>
                             </div>
                         ) : (
                             <div className="min-h-screen flex flex-col">
-                                <main className="app-main-content flex-grow pt-[95px]">
+                                <main className="app-main-content flex-grow pt-[5.9375rem]">
                                     <Outlet />
                                 </main>
                                 <Footer />
@@ -88,7 +88,7 @@ const MainLayout = () => {
                     </div>
 
                 ):(
-                    <div className="lg:ml-[260px] admin-theme">
+                    <div className="lg:ml-[16.25rem] admin-theme">
                         <div className="min-h-screen flex flex-col">
                             <main className="flex-grow">
                                 <Outlet />

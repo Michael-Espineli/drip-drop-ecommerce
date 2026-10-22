@@ -13,6 +13,7 @@ const { title } = require("process");
 const sgMail = require("@sendgrid/mail");
 
 const db = admin.firestore(); 
+const { prepareJobPlanWorkspace } = require('../jobPlanWorkspace');
 const {
   createStripeProxy,
 } = require("./stripeClient");
@@ -622,18 +623,15 @@ const agreementWithSelectedSolution = (agreement = {}, requestedSolutionId = '')
   if (!selectedOption) return { agreement, selectedOption: null, selectedSolutionId: '' };
 
   const selectedSolutionId = selectedOption.planId || selectedOption.solutionId || selectedOption.id || '';
-  const lineItems = Array.isArray(selectedOption.lineItems) && selectedOption.lineItems.length
+  const lineItems = Array.isArray(selectedOption.lineItems)
     ? selectedOption.lineItems
     : Array.isArray(agreement.lineItems)
       ? agreement.lineItems
       : [];
   const totalAmountCents = Number(
-    selectedOption.totalAmountCents ||
-    selectedOption.rateAmountCents ||
-    lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0) ||
-    agreement.totalAmountCents ||
-    agreement.rateAmountCents ||
-    0
+    selectedOption.totalAmountCents ??
+    selectedOption.rateAmountCents ??
+    lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0)
   );
 
   return {
@@ -659,180 +657,106 @@ const agreementWithSelectedSolution = (agreement = {}, requestedSolutionId = '')
   };
 };
 
-const commitAdminBatchOperations = async (operations = [], chunkSize = 400) => {
-  for (let index = 0; index < operations.length; index += chunkSize) {
-    const batch = db.batch();
-    operations.slice(index, index + chunkSize).forEach((operation) => operation(batch));
-    await batch.commit();
-  }
-};
-
-const promoteSelectedJobSolutionScope = async ({
-  companyId,
-  jobId,
-  selectedSolutionId,
-  selectedSolutionOption = null,
-  timestamp = admin.firestore.FieldValue.serverTimestamp(),
-  actorUserId = '',
-  actorUserName = '',
+const prepareLinkedJobAcceptance = async ({
+  transaction, agreement, selectedSolutionId, selectedSolutionOption,
+  timestamp, actorUserId, actorUserName,
 }) => {
-  if (!companyId || !jobId || !selectedSolutionId) return;
-
-  const companyRef = db.collection('companies').doc(companyId);
-  const jobRef = companyRef.collection('workOrders').doc(jobId);
-  const planRef = jobRef.collection('plans').doc(selectedSolutionId);
-  const legacySolutionRef = jobRef.collection('solutions').doc(selectedSolutionId);
-  const [planSnap, legacySolutionSnap] = await Promise.all([
-    planRef.get(),
-    legacySolutionRef.get(),
-  ]);
-  const selectedPlanRef = planSnap.exists || !legacySolutionSnap.exists ? planRef : legacySolutionRef;
-  const solutionSnap = planSnap.exists ? planSnap : legacySolutionSnap;
-  const solution = solutionSnap.exists
-    ? { id: solutionSnap.id, ...solutionSnap.data() }
-    : { ...(selectedSolutionOption || {}), id: selectedSolutionId, planId: selectedSolutionId };
-
-  const tasks = Array.isArray(solution.tasks) ? solution.tasks : [];
-  const plannedStops = Array.isArray(solution.plannedServiceStops) ? solution.plannedServiceStops : [];
-  const shoppingItems = Array.isArray(solution.shoppingItems) ? solution.shoppingItems : [];
-
-  if (!tasks.length && !plannedStops.length && !shoppingItems.length) {
-    await selectedPlanRef.set({
-      status: 'Accepted',
-      isAccepted: true,
-      isActivePlan: true,
-      acceptedAt: timestamp,
-      acceptedByUserId: actorUserId,
-      acceptedByUserName: actorUserName,
-      updatedAt: timestamp,
-    }, { merge: true });
-    return;
-  }
-
-  const [taskDocs, plannedStopDocs, shoppingDocs, planDocs, solutionDocs, companySnap] = await Promise.all([
-    jobRef.collection('tasks').get(),
-    jobRef.collection('plannedServiceStops').get(),
-    companyRef.collection('shoppingList').where('jobId', '==', jobId).get(),
-    jobRef.collection('plans').get(),
-    jobRef.collection('solutions').get(),
-    companyRef.get(),
-  ]);
-  const companyData = companySnap.exists ? companySnap.data() || {} : {};
-  const autoInvoiceOnInstallDefault = companyData.shoppingItemInstallInvoiceAutomationEnabled === true;
-
-  const operations = [];
-  taskDocs.docs.forEach((docSnap) => operations.push((batch) => batch.delete(docSnap.ref)));
-  plannedStopDocs.docs.forEach((docSnap) => operations.push((batch) => batch.delete(docSnap.ref)));
-  shoppingDocs.docs.forEach((docSnap) => operations.push((batch) => batch.delete(docSnap.ref)));
-
-  const taskIds = new Set();
-  tasks.forEach((task, index) => {
-    const taskId = task.id || `comp_job_task_${uuidv4()}`;
-    taskIds.add(taskId);
-    operations.push((batch) => batch.set(jobRef.collection('tasks').doc(taskId), {
-      ...task,
-      id: taskId,
-      companyId,
-      jobId,
-      status: task.status || 'Unassigned',
-      sortOrder: Number(task.sortOrder ?? index),
-      sourcePlanId: selectedSolutionId,
-      sourceSolutionId: selectedSolutionId,
-    }));
-  });
-
-  plannedStops.forEach((stop, index) => {
-    const stopId = stop.id || `comp_job_plan_stop_${uuidv4()}`;
-    operations.push((batch) => batch.set(jobRef.collection('plannedServiceStops').doc(stopId), {
-      ...stop,
-      id: stopId,
-      companyId,
-      jobId,
-      taskIds: Array.isArray(stop.taskIds) ? stop.taskIds.filter((taskId) => taskIds.has(taskId)) : [],
-      sortOrder: Number(stop.sortOrder ?? index),
-      sourcePlanId: selectedSolutionId,
-      sourceSolutionId: selectedSolutionId,
-    }));
-  });
-
-  shoppingItems.forEach((item, index) => {
-    const itemId = item.id || `comp_shop_${uuidv4()}`;
-    operations.push((batch) => batch.set(companyRef.collection('shoppingList').doc(itemId), {
-      ...item,
-      id: itemId,
-      companyId,
-      category: 'Job',
-      jobId,
-      status: 'Need to Purchase',
-      autoInvoiceOnInstall: item.autoInvoiceOnInstall === undefined
-        ? autoInvoiceOnInstallDefault
-        : item.autoInvoiceOnInstall === true,
-      estimateAccepted: true,
-      estimateAcceptedAt: timestamp,
-      jobBillingStatus: 'accepted',
-      planId: selectedSolutionId,
-      sourcePlanId: selectedSolutionId,
-      solutionId: selectedSolutionId,
-      sourceSolutionId: selectedSolutionId,
-      sortOrder: Number(item.sortOrder ?? index),
-    }));
-  });
-
-  [...planDocs.docs, ...solutionDocs.docs].forEach((docSnap) => {
-    const isSelected = docSnap.id === selectedSolutionId;
-    const currentStatus = normalizeStatus(docSnap.data()?.status || '');
-    operations.push((batch) => batch.set(docSnap.ref, {
-      isActivePlan: isSelected,
-      isAccepted: isSelected,
-      status: isSelected
-        ? 'Accepted'
-        : currentStatus === 'accepted'
-          ? 'Superseded'
-          : docSnap.data()?.status || 'Draft',
-      ...(isSelected
-        ? {
-          acceptedAt: timestamp,
-          acceptedByUserId: actorUserId,
-          acceptedByUserName: actorUserName,
-        }
-        : currentStatus === 'accepted'
-          ? { supersededAt: timestamp }
-          : {}),
-      updatedAt: timestamp,
-    }, { merge: true }));
-  });
-
-  const historyId = `comp_job_hist_${uuidv4()}`;
-  operations.push((batch) => batch.set(jobRef.collection('history').doc(historyId), {
-    id: historyId,
-    companyId,
-    jobId,
-    eventType: 'Plan',
-    title: `Customer accepted plan: ${solution.title || solution.name || selectedSolutionId}`,
-    description: solution.description || '',
-    changes: [
-      { field: 'acceptedPlanId', label: 'Accepted Plan', before: '—', after: selectedSolutionId },
-      { field: 'tasks', label: 'Tasks', before: '—', after: String(tasks.length) },
-      { field: 'plannedServiceStops', label: 'Planned Stops', before: '—', after: String(plannedStops.length) },
-      { field: 'shoppingItems', label: 'Planned Materials', before: '—', after: String(shoppingItems.length) },
-    ],
-    metadata: {
-      planId: selectedSolutionId,
-      planTier: solution.planTier || solution.solutionTier || selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null,
-      planTierLabel: solution.planTierLabel || solution.solutionTierLabel || selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
-      solutionId: selectedSolutionId,
-      solutionTier: solution.solutionTier || solution.planTier || selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
-      solutionTierLabel: solution.solutionTierLabel || solution.planTierLabel || selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
+  const companyId = agreement.companyId || '';
+  const jobId = linkedJobIdForAgreement(agreement);
+  if (!companyId || !jobId || !selectedSolutionId) return null;
+  return prepareJobPlanWorkspace({
+    db, transaction, companyId, jobId, planId: selectedSolutionId,
+    selectedOption: selectedSolutionOption, accepted: true, timestamp, actorUserId, actorUserName,
+    newId: (prefix) => `${prefix}_${uuidv4()}`,
+    historyTitle: `Customer accepted plan: ${selectedSolutionOption?.title || selectedSolutionOption?.name || selectedSolutionId}`,
+    jobUpdates: {
+      salesAgreementId: agreement.id || agreement.agreementId || '', salesAgreementStatus: 'accepted',
+      salesAgreementAcceptedAt: timestamp, salesAgreementStatusUpdatedAt: timestamp,
+      salesAgreementStatusUpdatedByUserId: actorUserId, salesAgreementStatusUpdatedByUserName: actorUserName,
     },
-    severity: 'success',
-    actorUserId,
-    actorUserName,
-    createdAt: timestamp,
-    createdAtMillis: Date.now(),
-  }));
-
-  await commitAdminBatchOperations(operations);
+  });
 };
+
+exports.applyJobPlanWorkspace = functions.https.onCall(async (data, context) => {
+  const auth = await getCallableAuth(data, context, 'Sign in to update a job plan.');
+  const request = getCallableData(data);
+  const { companyId, jobId, planId, mode } = request;
+  const validId = (value) => typeof value === 'string' && value.trim() && !value.includes('/');
+  if (![companyId, jobId, planId].every(validId) || !['load', 'accept'].includes(mode) ||
+      [request.agreementId, request.contractId].some((value) => value && !validId(value)) ||
+      (mode !== 'accept' && (request.agreementId || request.contractId))) {
+    throw new functions.https.HttpsError('invalid-argument', 'Choose a company, job, plan, and load or accept action.');
+  }
+  const companyRef = db.collection('companies').doc(companyId);
+  const [companySnap, jobSnap] = await Promise.all([companyRef.get(), companyRef.collection('workOrders').doc(jobId).get()]);
+  if (!companySnap.exists || !jobSnap.exists) throw new functions.https.HttpsError('not-found', 'This job is no longer available.');
+  const job = jobSnap.data();
+  const templateJob = Boolean(job.sourceTemplateId || job.jobTemplateId || (job.createdFromBasicWorkOrderForm && job.basicWorkOrderMode === 'template'));
+  const permissions = mode === 'accept' ? ['24', '400'] : ['24', '72', '400'];
+  if (templateJob) permissions.push('28');
+  const allowed = companySnap.data().ownerId === auth.uid || await userHasAnyCompanyPermission(auth.uid, companyId, permissions);
+  if (!allowed) throw new functions.https.HttpsError('permission-denied', 'You do not have permission to update this job plan.');
+  return db.runTransaction(async (transaction) => {
+    const timestamp = admin.firestore.FieldValue.serverTimestamp();
+    const actorUserName = auth.token?.name || auth.token?.email || auth.uid;
+    const agreementRef = request.agreementId ? db.collection(salesCollectionNames.agreements).doc(request.agreementId) : null;
+    const contractRef = request.contractId ? db.collection('contracts').doc(request.contractId) : null;
+    const [agreementSnap, contractSnap] = await Promise.all([
+      agreementRef ? transaction.get(agreementRef) : null,
+      contractRef ? transaction.get(contractRef) : null,
+    ]);
+    let selectedOption = null;
+    if (agreementRef) {
+      const agreement = agreementSnap?.data();
+      if (!agreementSnap.exists || agreement.companyId !== companyId || linkedJobIdForAgreement(agreement) !== jobId) {
+        throw new functions.https.HttpsError('permission-denied', 'This estimate does not belong to the selected job.');
+      }
+      const selection = agreementWithSelectedSolution(agreement, planId);
+      if (selection.selectedSolutionId && selection.selectedSolutionId !== planId) {
+        throw new functions.https.HttpsError('failed-precondition', 'This plan is not included in the selected estimate.');
+      }
+      selectedOption = selection.selectedOption;
+    }
+    if (contractRef) {
+      const contract = contractSnap?.data();
+      const contractJobId = typeof contract?.jobId === 'object' ? contract.jobId?.id : contract?.jobId;
+      if (!contractSnap.exists || (contract.companyId || contract.senderId) !== companyId || contractJobId !== jobId) {
+        throw new functions.https.HttpsError('permission-denied', 'This legacy estimate does not belong to the selected job.');
+      }
+    }
+    const prepared = await prepareJobPlanWorkspace({
+      db, transaction, companyId, jobId, planId, accepted: mode === 'accept',
+      timestamp, actorUserId: auth.uid, actorUserName, selectedOption,
+      recordHistory: mode === 'accept' || request.recordHistory !== false, newId: (prefix) => `${prefix}_${uuidv4()}`,
+      jobUpdates: agreementRef ? {
+        salesAgreementId: request.agreementId, salesEstimateAgreementId: request.agreementId,
+        salesAgreementStatus: 'accepted', salesAgreementAcceptedAt: timestamp,
+      } : {},
+    });
+    prepared.apply();
+    if (agreementRef) {
+      const updates = {
+        status: 'accepted', acceptedAt: timestamp, acceptedByUserId: auth.uid, acceptedByUserName: actorUserName,
+        acceptedSource: 'internalManual', updatedAt: timestamp,
+        selectedPlanId: planId, selectedSolutionId: planId, acceptedPlanId: planId, acceptedSolutionId: planId,
+        defaultPlanId: planId, defaultSolutionId: planId,
+        lineItems: prepared.jobUpdates.estimateLineItems, totalAmountCents: prepared.jobUpdates.rate,
+        rateAmountCents: prepared.jobUpdates.rate, subtotalAmountCents: prepared.jobUpdates.estimateSubtotalCents,
+      };
+      transaction.set(agreementRef, {
+        ...updates, acceptedSnapshot: {
+          agreementId: request.agreementId, title: agreementSnap.data().title || 'Job estimate', ...updates,
+          acceptedPlanTitle: prepared.plan.title || prepared.plan.name || '',
+        },
+      }, { merge: true });
+    }
+    if (contractRef) transaction.set(contractRef, {
+      status: 'Accepted', receiverAcceptance: true, dateAccepted: timestamp, updatedAt: timestamp,
+      ...(agreementRef ? { salesAgreementId: request.agreementId } : {}),
+    }, { merge: true });
+    return { planId, taskCount: prepared.scope.tasks.length, materialCount: prepared.scope.shoppingItems.length };
+  });
+});
 
 const syncLinkedJobForAgreementStatus = async ({
   agreement,
@@ -848,6 +772,13 @@ const syncLinkedJobForAgreementStatus = async ({
   const companyId = agreement.companyId || '';
   const jobId = linkedJobIdForAgreement(agreement);
   if (!companyId || !jobId) return;
+
+  if (normalizeStatus(status) === 'accepted' && selectedSolutionId) {
+    return db.runTransaction(async (transaction) => {
+      const prepared = await prepareLinkedJobAcceptance({ transaction, agreement, selectedSolutionId, selectedSolutionOption, timestamp, actorUserId, actorUserName });
+      prepared?.apply();
+    });
+  }
 
   const jobRef = db.collection('companies').doc(companyId).collection('workOrders').doc(jobId);
   const jobDoc = await jobRef.get();
@@ -923,18 +854,6 @@ const syncLinkedJobForAgreementStatus = async ({
   }
 
   await jobRef.set(update, { merge: true });
-
-  if (statusKey === 'accepted' && selectedSolutionId) {
-    await promoteSelectedJobSolutionScope({
-      companyId,
-      jobId,
-      selectedSolutionId,
-      selectedSolutionOption,
-      timestamp,
-      actorUserId,
-      actorUserName,
-    });
-  }
 
   if (statusKey === 'rejected') {
     const changeRequest = responseType === 'changesRequested';
@@ -1825,7 +1744,11 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
     }
 
-    const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
+    const freshSelection = agreementWithSelectedSolution({ id: freshAgreementSnap.id, ...freshAgreementSnap.data() }, selectedSolutionId);
+    if (freshSelection.selectedSolutionId !== selectedSolutionId) {
+      throw new functions.https.HttpsError('failed-precondition', 'The estimate plan options have changed. Reload the estimate before accepting.');
+    }
+    const freshAgreement = freshSelection.agreement;
     const freshStatusKey = normalizeStatus(freshAgreement.status);
 
     if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
@@ -2005,11 +1928,21 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         manualBillingAutoSendEnabled: false,
       };
 
+    const linkedJobAcceptance = await prepareLinkedJobAcceptance({
+      transaction, agreement: freshAgreement, selectedSolutionId, selectedSolutionOption: freshSelection.selectedOption,
+      timestamp: acceptedAt, actorUserId: callableAuth.uid, actorUserName: acceptedByName,
+    });
+    linkedJobAcceptance?.apply();
+
     if (salesBillingAutomationEnabled) {
       transaction.set(subscriptionRef, nextSubscription, { merge: true });
     }
 
     transaction.set(agreementRef, {
+      lineItems: Array.isArray(freshAgreement.lineItems) ? freshAgreement.lineItems : [],
+      totalAmountCents: Number(freshAgreement.totalAmountCents ?? freshAgreement.rateAmountCents ?? 0),
+      rateAmountCents: Number(freshAgreement.totalAmountCents ?? freshAgreement.rateAmountCents ?? 0),
+      subtotalAmountCents: Number(freshAgreement.subtotalAmountCents ?? freshAgreement.totalAmountCents ?? 0),
       status: 'accepted',
       acceptedAt,
       acceptedByUserId: callableAuth.uid,
@@ -2118,15 +2051,6 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
     }
   });
 
-  await syncLinkedJobForAgreementStatus({
-    agreement: acceptanceAgreement,
-    status: 'accepted',
-    actorUserId: callableAuth.uid,
-    actorUserName: acceptedByName,
-    timestamp: acceptedAt,
-    selectedSolutionId,
-    selectedSolutionOption,
-  });
   await syncLinkedLeadForAgreementStatus({
     agreement: acceptanceAgreement,
     status: 'accepted',
@@ -2437,7 +2361,11 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
     }
 
-    const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
+    const freshSelection = agreementWithSelectedSolution({ id: freshAgreementSnap.id, ...freshAgreementSnap.data() }, selectedSolutionId);
+    if (freshSelection.selectedSolutionId !== selectedSolutionId) {
+      throw new functions.https.HttpsError('failed-precondition', 'The estimate plan options have changed. Reload the estimate before accepting.');
+    }
+    const freshAgreement = freshSelection.agreement;
     if (!publicAgreementLinkCanAccess({ agreement: freshAgreement, accessToken, email })) {
       throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
     }
@@ -2620,11 +2548,21 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
         manualBillingAutoSendEnabled: false,
       };
 
+    const linkedJobAcceptance = await prepareLinkedJobAcceptance({
+      transaction, agreement: freshAgreement, selectedSolutionId, selectedSolutionOption: freshSelection.selectedOption,
+      timestamp: acceptedAt, actorUserId: acceptedByUserId || 'email-link', actorUserName: acceptedByName,
+    });
+    linkedJobAcceptance?.apply();
+
     if (salesBillingAutomationEnabled) {
       transaction.set(subscriptionRef, nextSubscription, { merge: true });
     }
 
     transaction.set(agreementRef, {
+      lineItems: Array.isArray(freshAgreement.lineItems) ? freshAgreement.lineItems : [],
+      totalAmountCents: Number(freshAgreement.totalAmountCents ?? freshAgreement.rateAmountCents ?? 0),
+      rateAmountCents: Number(freshAgreement.totalAmountCents ?? freshAgreement.rateAmountCents ?? 0),
+      subtotalAmountCents: Number(freshAgreement.subtotalAmountCents ?? freshAgreement.totalAmountCents ?? 0),
       status: 'accepted',
       acceptedAt,
       acceptedByUserId,
@@ -2732,15 +2670,6 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
     }
   });
 
-  await syncLinkedJobForAgreementStatus({
-    agreement: acceptanceAgreement,
-    status: 'accepted',
-    actorUserId: acceptedByUserId || 'email-link',
-    actorUserName: acceptedByName,
-    timestamp: acceptedAt,
-    selectedSolutionId,
-    selectedSolutionOption,
-  });
   await syncLinkedLeadForAgreementStatus({
     agreement: acceptanceAgreement,
     status: 'accepted',

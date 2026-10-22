@@ -131,13 +131,13 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
 
       {/* Sidebar */}
       <div
-        className={`app-mobile-sidebar-shell w-full lg:w-[260px] fixed z-50 top-0 h-screen shadow-2xl transition-all
+        className={`app-mobile-sidebar-shell w-full lg:w-[16.25rem] fixed z-50 top-0 h-screen shadow-2xl transition-all
           bg-slate-950 text-slate-100 border-r border-slate-800/60
           ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}
       >
         <div className="flex h-full flex-col overflow-hidden">
           {/* Header */}
-          <div className="h-[95px] flex items-center justify-between border-b border-slate-800/60 px-4 shrink-0 lg:justify-center">
+          <div className="h-[5.9375rem] flex items-center justify-between border-b border-slate-800/60 px-4 shrink-0 lg:justify-center">
             <Link
               to="/"
               className="text-2xl font-extrabold tracking-tight transition"
