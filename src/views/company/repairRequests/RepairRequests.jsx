@@ -344,7 +344,17 @@ const RepairRequests = () => {
                                 onClick={() => handleOpenRequest(request)}
                             >
                                 <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
-                                    {formatDate(getRequestDateValue(request))}
+                                    <div className="flex items-center gap-2">
+                                        <span>{formatDate(getRequestDateValue(request))}</span>
+                                        {(commentCounts[getRequestCommentKey(request, recentlySelectedCompany)] || 0) > 0 && (
+                                            <span
+                                                className="inline-flex shrink-0 items-center rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white"
+                                                aria-label={`${commentCounts[getRequestCommentKey(request, recentlySelectedCompany)]} unresolved comments`}
+                                            >
+                                                {commentCounts[getRequestCommentKey(request, recentlySelectedCompany)]}
+                                            </span>
+                                        )}
+                                    </div>
                                 </td>
 
                                 <td className="whitespace-nowrap px-5 py-3">
@@ -364,19 +374,9 @@ const RepairRequests = () => {
                                 </td>
 
                                 <td className="max-w-md px-5 py-3">
-                                    <div className="flex items-center gap-2">
-                                        <p className="min-w-0 line-clamp-2 text-sm text-slate-700">
-                                            {request.description || request.notes || "No description"}
-                                        </p>
-                                        {(commentCounts[getRequestCommentKey(request, recentlySelectedCompany)] || 0) > 0 && (
-                                            <span
-                                                className="inline-flex shrink-0 items-center rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white"
-                                                aria-label={`${commentCounts[getRequestCommentKey(request, recentlySelectedCompany)]} unresolved comments`}
-                                            >
-                                                {commentCounts[getRequestCommentKey(request, recentlySelectedCompany)]}
-                                            </span>
-                                        )}
-                                    </div>
+                                    <p className="line-clamp-2 text-sm text-slate-700">
+                                        {request.description || request.notes || "No description"}
+                                    </p>
                                 </td>
 
                                 <td className="whitespace-nowrap px-5 py-3">

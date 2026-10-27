@@ -1,3 +1,4 @@
+const { jobLaborTotals } = require("./jobScopePricing");
 const { HttpsError } = require('firebase-functions/v2/https');
 
 const key = (value) => String(value || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -11,7 +12,7 @@ const stopIds = (item) => ids(item.plannedServiceStopIds?.length ? item.plannedS
 const materialIds = (task) => [id(task.shoppingListItemId), ...ids(task.shoppingListItemIds)].filter(Boolean);
 
 const hasActualWork = (record) => Boolean(
-  ['scheduled', 'inprogress', 'finished', 'completed', 'complete', 'done', 'canceled', 'cancelled', 'skipped'].includes(key(record.status || record.operationStatus)) ||
+  ['scheduled', 'inprogress', 'finished', 'completed', 'complete', 'done', 'canceled', 'cancelled', 'skipped'].includes(key(record.status || record.operationStatus || record.completionStatus)) ||
   Number(record.actualTime || 0) > 0 || record.startedAt || record.finishedAt || record.completedAt ||
   id(record.serviceStopId) || record.serviceStopIdString || record.scheduledServiceStopId || record.convertedServiceStopId ||
   record.scheduledDate || record.workerId || record.assignedTechId || record.laborContractId
@@ -24,7 +25,7 @@ const hasPurchasedMaterial = (item) => Boolean(
 
 // Snapshot prices/descriptions may change. Execution and fulfillment belong to the live records.
 const runtimeFields = new Set([
-  'status', 'operationStatus', 'actualTime', 'laborContractId', 'serviceStopId', 'serviceStopIdString',
+  'status', 'operationStatus', 'completionStatus', 'actualTime', 'laborContractId', 'serviceStopId', 'serviceStopIdString',
   'convertedServiceStopId', 'shoppingListItemId', 'shoppingListItemIds', 'datePurchased', 'dateCompleted', 'dateFinished',
   'replacementEquipmentId', 'newEquipmentId', 'equipmentId', 'equipmentName', 'serviceLocationId', 'bodyOfWaterId',
   'dataBaseItemId', 'needsAction', 'actionDate', 'shoppingListActive', 'estimateAccepted', 'estimateAcceptedAt',
@@ -49,7 +50,7 @@ function reconcileJobPlanScope(current, incoming) {
     tasks: new Set(current.tasks.filter(hasActualWork).map((item) => item.id)),
     plannedServiceStops: new Set(current.plannedServiceStops.filter(hasActualWork).map((item) => item.id)),
     shoppingItems: new Set(current.shoppingItems.filter(hasPurchasedMaterial).map((item) => item.id)),
-    laborLineItems: new Set(),
+    laborLineItems: new Set(current.laborLineItems.filter(hasActualWork).map((item) => item.id)),
   };
   let previousSize;
   do {
@@ -224,14 +225,7 @@ async function prepareJobPlanWorkspace({
   };
   if (accepted) {
     const materialPrice = scope.shoppingItems.reduce((sum, item) => sum + amount(item.plannedTotalPriceCents ?? Number(item.plannedUnitPriceCents ?? item.price ?? 0) * Number(item.quantity ?? 1)), 0);
-    const laborPrice = scope.laborLineItems.length
-      ? scope.laborLineItems.reduce((sum, line) => sum + line.totalPriceCents, 0)
-      : scope.tasks.reduce((sum, task) => sum + amount(task.billingLaborPriceCents ?? task.customerLaborPriceCents ?? task.contractedRate), 0)
-        + scope.plannedServiceStops.reduce((sum, stop) => sum + amount(stop.plannedLaborCostCents), 0);
-    const laborCost = scope.laborLineItems.length
-      ? scope.laborLineItems.reduce((sum, line) => sum + line.internalCostCents, 0)
-      : scope.tasks.reduce((sum, task) => sum + amount(task.contractedRate), 0)
-        + scope.plannedServiceStops.reduce((sum, stop) => sum + amount(stop.plannedLaborCostCents), 0);
+    const { priceCents: laborPrice, costCents: laborCost } = jobLaborTotals(scope);
     const totalPrice = amount(plan.totalAmountCents ?? plan.rateAmountCents ?? selectedOption?.totalAmountCents ?? selectedOption?.rateAmountCents ?? (laborPrice + materialPrice));
     Object.assign(jobUpdates, {
       acceptedPlanId: planId, acceptedSolutionId: planId, acceptedPlanTier: tier, acceptedSolutionTier: tier,

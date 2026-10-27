@@ -1,3 +1,4 @@
+import TimeClockPanel, { ShiftLogHistory } from './TimeClockPanel';
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, query, getDocs, where } from 'firebase/firestore';
@@ -212,6 +213,8 @@ const WorkLogs = () => {
     return (
         <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
             <div className="w-full">
+                <TimeClockPanel companyId={recentlySelectedCompany} />
+                <ShiftLogHistory companyId={recentlySelectedCompany} />
                 <header className="mb-6 rounded-lg bg-white p-4 shadow">
                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>

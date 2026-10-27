@@ -607,6 +607,7 @@ const CompanyWideSettings = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+            <section className="rounded-xl border border-theme bg-surface p-5"><h2 className="text-lg font-bold">Route coverage approval</h2><p className="mt-1 text-sm text-theme-subtle">Choose how management handles a technician covering another route. Posting review settings still apply.</p><select aria-label="Route coverage approval" value={normalizedSettings.routeCoverageMode} onChange={e=>updateSetting("routeCoverageMode", e.target.value)} disabled={loading || saving} className="mt-3 w-full rounded-md border border-theme bg-surface p-3"><option value="review">Require management review before reassignment</option><option value="notify">Assign automatically and inform management</option><option value="automatic">Assign automatically</option></select></section>
             {settingSections.map((section) => {
               const Icon = section.icon;
 

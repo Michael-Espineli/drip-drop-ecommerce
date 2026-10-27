@@ -60,7 +60,10 @@ test('successful approval creation immediately closes the visible request and sh
 
   const comments = screen.getByRole('heading', { name: 'Comments' });
   const actions = screen.getByRole('button', { name: 'Create Job from Request' });
+  const details = screen.getByRole('heading', { name: 'Request Details' }).parentElement.parentElement;
+  expect(info.nextElementSibling).toBe(details);
+  expect(info.closest('aside')).toBeNull();
+  expect(comments.closest('aside')).not.toBeNull();
+  expect(actions.closest('aside')).toBe(comments.closest('aside'));
   expect(actions.compareDocumentPosition(comments) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(comments.compareDocumentPosition(info) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(comments.closest('aside')).toBe(info.closest('aside'));
 });

@@ -14,6 +14,7 @@ export const DEFAULT_COMPANY_WORK_SETTINGS = {
   technicianCanOfferOneOffJobs: true,
   technicianCanOfferRecurringWork: false,
   managementCanOfferAnyWork: true,
+  routeCoverageMode: "automatic",
   workOfferIncentivesCreatePayrollLines: true,
 };
 
@@ -47,6 +48,7 @@ export const normalizeCompanyWorkSettings = (settings = {}) => {
       boolWithDefault(data.salesBillingAutomationEnabled, DEFAULT_COMPANY_WORK_SETTINGS.salesCreateBillingSubscriptionOnAcceptanceDefault)
     ),
     payrollEnabled: isPayrollEnabled(data),
+    routeCoverageMode: ["review", "notify", "automatic"].includes(data.routeCoverageMode) ? data.routeCoverageMode : (data.workOffersRequireApprovalBeforeAssignment || data.workOffersAutoAssignOnAcceptance === false ? "review" : "automatic"),
     workOffersGoLiveByDefault: boolWithDefault(
       data.workOffersGoLiveByDefault,
       !boolWithDefault(data.workOffersRequireApprovalBeforePosting, false)

@@ -1,6 +1,7 @@
+import { getJobMaterialVendorItemId, loadJobProductCatalog, buildJobProductCatalog, buildProductFromVendorItem, buildVendorItemProductPatch, productCatalogDocRef } from "../../../utils/productCatalog";
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, writeBatch } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
@@ -22,6 +23,8 @@ import {
   UOM_OPTIONS,
 } from "../databaseItems/databaseItemOptions";
 import { JOB_TASK_TYPE_NAMES, canonicalJobTaskType } from "../../../utils/jobTaskTypes";
+import { jobPayFields } from "../../../utils/payroll/payCalculation";
+import JobPayrollFields from "../jobs/JobPayrollFields";
 import {
   DEFAULT_ISSUE_PRIORITY,
   ISSUE_PRIORITY_OPTIONS,
@@ -51,6 +54,7 @@ const emptyTemplateForm = () => ({
 });
 
 const emptyTaskForm = () => ({
+  ...jobPayFields(),
   name: "",
   type: "Basic",
   description: "",
@@ -374,6 +378,7 @@ const JobTemplates = () => {
   const [defaultAdminId, setDefaultAdminId] = useState("");
   const [savingDefaultAdmin, setSavingDefaultAdmin] = useState(false);
   const [serviceCatalogItems, setServiceCatalogItems] = useState([]);
+  const [payTypes, setPayTypes] = useState([]);
   const [loadingServiceCatalogItems, setLoadingServiceCatalogItems] = useState(false);
   const [serviceCatalogSearch, setServiceCatalogSearch] = useState("");
   const [serviceCatalogPickerOpen, setServiceCatalogPickerOpen] = useState(false);
@@ -482,12 +487,14 @@ const JobTemplates = () => {
       setLoadingDatabaseProducts(true);
 
       try {
-        const [catalogSnap, productsSnap] = await Promise.all([
+        const [catalogSnap, productsSnap, payTypesSnap] = await Promise.all([
           getDocs(salesCatalogCollection(db, recentlySelectedCompany)),
-          getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase")),
+          loadJobProductCatalog(db, recentlySelectedCompany),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "companyPayTypes")),
         ]);
 
         if (cancelled) return;
+        setPayTypes(payTypesSnap.docs.map((doc) => ({ ...doc.data(), id: doc.id })));
 
         setServiceCatalogItems(
           catalogSnap.docs
@@ -496,8 +503,7 @@ const JobTemplates = () => {
             .sort((left, right) => serviceCatalogItemLabel(left).localeCompare(serviceCatalogItemLabel(right)))
         );
         setDatabaseProducts(
-          productsSnap.docs
-            .map((docSnap) => ({ id: docSnap.data().id || docSnap.id, ...docSnap.data() }))
+          productsSnap.products
             .filter((item) => item.active !== false && item.archived !== true)
             .sort((left, right) => databaseProductLabel(left).localeCompare(databaseProductLabel(right)))
         );
@@ -720,6 +726,7 @@ const JobTemplates = () => {
   const openItemModal = (type, item = null) => {
     if (type === "tasks") {
       setItemForm(item ? {
+        ...jobPayFields(item),
         name: item.name || "",
         type: canonicalJobTaskType(item.type || "Basic"),
         description: item.description || "",
@@ -733,6 +740,8 @@ const JobTemplates = () => {
         name: item.name || "",
         description: item.description || "",
         serviceStopTypeId: item.serviceStopTypeId || "",
+        ...jobPayFields(item, { payTypeId: item.serviceStopTypeId }),
+        billingLaborPriceCents: item.billingLaborPriceCents ?? item.plannedLaborCostCents ?? 0,
         serviceStopTypeName: item.serviceStopTypeName || "",
         serviceStopTypeImage: item.serviceStopTypeImage || "",
         serviceStopTypeUseCaseRawValue: item.serviceStopTypeUseCaseRawValue || "",
@@ -761,7 +770,7 @@ const JobTemplates = () => {
 	        subCategory: item.subCategory || "Misc",
 	        description: item.description || "",
 	        quantity: item.quantity || "1",
-	        dbItemId: item.dbItemId || item.dataBaseItemId || item.itemId || "",
+          dbItemId: item.genericItemId || item.dbItemId || item.dataBaseItemId || item.itemId || "",
 	        dbItemName: item.dbItemName || item.dataBaseItemName || "",
 	        genericItemId: item.genericItemId || "",
 	        plannedUnitCost: dollarsFromCents(item.plannedUnitCostCents || 0),
@@ -853,14 +862,14 @@ const JobTemplates = () => {
 
     setItemForm((form) => {
       if (!product) {
-        return { ...form, dbItemId: productId };
+        return { ...form, dbItemId: productId, genericItemId: "" };
       }
 
       return {
         ...form,
         dbItemId: product.id,
         dbItemName: databaseProductLabel(product),
-        genericItemId: "",
+        genericItemId: product.genericItemId || "",
         name: databaseProductLabel(product),
         subCategory: product.subCategory || product.category || form.subCategory || "Misc",
         description: product.description || form.description || "",
@@ -950,7 +959,7 @@ const JobTemplates = () => {
 
     const name = databaseProductForm.name.trim();
     if (!name) {
-      setActionError("Add a database product name.");
+      setActionError("Add a product name.");
       return;
     }
 
@@ -985,19 +994,24 @@ const JobTemplates = () => {
         dateUpdated: new Date(),
       };
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", productId), product);
+      const sellable = buildProductFromVendorItem({ productId: `com_generic_${uuidv4()}`, vendorItem: product });
+      const batch = writeBatch(db);
+      batch.set(productCatalogDocRef(db, recentlySelectedCompany, sellable.id), sellable);
+      batch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", productId), { ...product, ...buildVendorItemProductPatch(sellable) });
+      await batch.commit();
+      const option = buildJobProductCatalog([sellable], [product]).products[0];
       setDatabaseProducts((items) => (
-        [...items.filter((item) => item.id !== product.id), product]
+        [...items.filter((item) => item.id !== option.id), option]
           .sort((left, right) => databaseProductLabel(left).localeCompare(databaseProductLabel(right)))
       ));
-      applyDatabaseProductToForm(product.id, product);
+      applyDatabaseProductToForm(option.id, option);
       setDatabaseProductPickerOpen(false);
       setShowDatabaseProductCreator(false);
       setDatabaseProductForm(emptyDatabaseProductForm());
       setActionMessage("Database product created and selected.");
     } catch (err) {
-      console.error("Error creating database product from job template:", err);
-      setActionError("Could not create database product.");
+      console.error("Error creating product from job template:", err);
+      setActionError("Could not create product.");
     } finally {
       setCreatingDatabaseProduct(false);
     }
@@ -1013,6 +1027,7 @@ const JobTemplates = () => {
         type: canonicalJobTaskType(itemForm.type.trim() || "Basic"),
         description: itemForm.description.trim(),
         contractedRate: centsFromMoney(itemForm.contractedRate),
+            ...jobPayFields(itemForm),
         estimatedTime: Number(itemForm.estimatedTime || 0),
         customerApproval: Boolean(itemForm.customerApproval),
         sortOrder: Number(itemForm.sortOrder || 0),
@@ -1027,6 +1042,8 @@ const JobTemplates = () => {
         name: itemForm.name.trim(),
         description: itemForm.description.trim(),
         serviceStopTypeId: itemForm.serviceStopTypeId.trim(),
+        ...jobPayFields(itemForm, { payTypeId: itemForm.serviceStopTypeId }),
+        billingLaborPriceCents: itemForm.billingLaborPriceCents ?? 0,
         serviceStopTypeName: itemForm.serviceStopTypeName.trim(),
 	        serviceStopTypeImage: itemForm.serviceStopTypeImage.trim(),
 	        serviceStopTypeUseCaseRawValue: itemForm.serviceStopTypeUseCaseRawValue.trim(),
@@ -1074,7 +1091,8 @@ const JobTemplates = () => {
 	        catalogItemId: selectedCatalogItemId || itemModal?.item?.catalogItemId || "",
 	        salesCatalogItemId: selectedCatalogItemId || itemModal?.item?.salesCatalogItemId || "",
 	        catalogItemName: selectedCatalogItem?.name || itemModal?.item?.catalogItemName || "",
-	        stripeProductId: selectedCatalogItem?.stripeProductId || itemModal?.item?.stripeProductId || "",
+          taxable: Boolean(selectedCatalogItem?.taxable ?? itemModal?.item?.taxable),
+        stripeProductId: selectedCatalogItem?.stripeProductId || itemModal?.item?.stripeProductId || "",
 	        stripePriceId: selectedCatalogItem?.stripePriceId || itemModal?.item?.stripePriceId || "",
 	        sortOrder: Number(itemForm.sortOrder || 0),
 	      };
@@ -1082,6 +1100,7 @@ const JobTemplates = () => {
 
 	    const databaseProductId = String(itemForm.dbItemId || "").trim();
 	    const selectedDatabaseProduct = databaseProductId ? databaseProductById.get(databaseProductId) : null;
+      const vendorItemId = selectedDatabaseProduct?.dbItemId ?? (itemForm.genericItemId ? getJobMaterialVendorItemId(itemModal?.item) : databaseProductId);
 	    const unitCostCents = centsFromMoney(itemForm.plannedUnitCost);
 	    const unitPriceCents = centsFromMoney(itemForm.plannedUnitPrice);
 	    const quantity = Number.parseFloat(itemForm.quantity) || 0;
@@ -1094,11 +1113,12 @@ const JobTemplates = () => {
 	      name: itemForm.name.trim(),
 	      description: itemForm.description.trim(),
 	      quantity: itemForm.quantity || "1",
-	      dbItemId: databaseProductId || null,
-	      dataBaseItemId: databaseProductId || null,
-	      itemId: databaseProductId || null,
+        dbItemId: vendorItemId || null,
+        dataBaseItemId: vendorItemId || null,
+        itemId: vendorItemId || null,
 	      dbItemName: selectedDatabaseProduct ? databaseProductLabel(selectedDatabaseProduct) : itemForm.dbItemName || "",
-	      genericItemId: itemForm.genericItemId?.trim() || null,
+        genericItemId: selectedDatabaseProduct?.genericItemId || itemForm.genericItemId?.trim() || null,
+      taxable: Boolean(selectedDatabaseProduct?.taxable ?? itemModal?.item?.taxable),
 	      plannedUnitCostCents: unitCostCents,
 	      plannedUnitPriceCents: unitPriceCents,
 	      plannedTotalCostCents: unitCostCents * quantity,
@@ -1110,7 +1130,7 @@ const JobTemplates = () => {
 	  };
 
   const buildTaskPayloadsFromCatalogItem = (catalogItem, laborLineId) => (
-    catalogServiceTaskTemplates(catalogItem)
+    (catalogServiceTaskTemplates(catalogItem).length ? catalogServiceTaskTemplates(catalogItem) : [{ name: serviceCatalogItemLabel(catalogItem), type: "Basic" }])
       .map((template, index) => {
         const name = String(
           template.name ||
@@ -1143,6 +1163,8 @@ const JobTemplates = () => {
           type: catalogTaskType(template),
           description: template.description || "",
           contractedRate: laborCostCents,
+          ...jobPayFields(template, catalogItem),
+          payQuantity: Number(template.payQuantity || 1) * Math.max(Number(catalogItem.defaultQuantity || 1), 1),
           billingLaborPriceCents,
           estimatedTime: catalogTaskMinutes(template),
           customerApproval: Boolean(template.customerApproval || template.customerApprovalRequired),
@@ -1169,7 +1191,7 @@ const JobTemplates = () => {
     }
 
     if (itemModal.type === "shoppingItems" && itemModal.mode === "create" && !itemForm.dbItemId) {
-      setActionError("Select or create a database product before adding a product line.");
+      setActionError("Select or create a product before adding a product line.");
       return;
     }
 
@@ -1711,7 +1733,7 @@ const JobTemplates = () => {
     <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-sm font-bold text-slate-900">New Database Product</p>
+          <p className="text-sm font-bold text-slate-900">New Product</p>
           <p className="mt-0.5 text-xs text-slate-600">Create it here, then use it for this product line.</p>
         </div>
         <button
@@ -1864,7 +1886,7 @@ const JobTemplates = () => {
 	            type="search"
 	            value={databaseProductSearch}
 	            onChange={(event) => setDatabaseProductSearch(event.target.value)}
-	            placeholder="Search database products"
+	            placeholder="Search products"
 	            autoFocus
 	            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 sm:flex-1"
 	          />
@@ -1873,17 +1895,17 @@ const JobTemplates = () => {
 	            onClick={startDatabaseProductCreator}
 	            className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
 	          >
-	            New Database Product
+	            New Product
 	          </button>
 	        </div>
 
 	        {showDatabaseProductCreator ? <div className="mt-3">{renderDatabaseProductCreator()}</div> : null}
 
 	        {loadingDatabaseProducts ? (
-	          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">Loading database products...</div>
+	          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">Loading products...</div>
 	        ) : !filteredDatabaseProducts.length ? (
 	          <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-500">
-	            No database products match that search.
+	            No products match that search.
 	          </div>
 	        ) : (
 	          <div className="mt-3 grid gap-2">
@@ -1930,7 +1952,7 @@ const JobTemplates = () => {
 	        <div className="rounded-lg border border-emerald-200 bg-white p-3">
 	          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 	            <div>
-	              <p className="text-sm font-bold text-slate-900">Database Product</p>
+	              <p className="text-sm font-bold text-slate-900">Product</p>
 	              <p className="mt-0.5 text-xs text-slate-500">Choose the reusable product this template line should use.</p>
 	            </div>
 	            <button
@@ -1961,9 +1983,9 @@ const JobTemplates = () => {
 	                </div>
 	              </>
 	            ) : selectedId ? (
-	              <p className="text-sm text-slate-500">Selected database product could not be loaded from the active catalog.</p>
+	              <p className="text-sm text-slate-500">Selected product could not be loaded from the active catalog.</p>
 	            ) : (
-	              <p className="text-sm text-slate-500">No database product selected.</p>
+	              <p className="text-sm text-slate-500">No product selected.</p>
 	            )}
 	          </div>
 	        </div>
@@ -1973,8 +1995,8 @@ const JobTemplates = () => {
 	            <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
 	              <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
 	                <div>
-	                  <h3 className="text-lg font-bold text-slate-900">Choose Database Product</h3>
-	                  <p className="mt-1 text-sm text-slate-500">Search existing database products or create a new one for this line.</p>
+	                  <h3 className="text-lg font-bold text-slate-900">Choose Product</h3>
+	                  <p className="mt-1 text-sm text-slate-500">Search existing products or create a new one for this line.</p>
 	                </div>
 	                <button
 	                  type="button"
@@ -2816,6 +2838,7 @@ const JobTemplates = () => {
 
 	              {itemModal.type === "tasks" ? (
 	                <>
+                      <JobPayrollFields value={itemForm} payTypes={payTypes} onChange={(field, value) => setItemForm((form) => ({ ...form, [field]: value }))} />
 	                  <div className="grid gap-4 sm:grid-cols-3">
                     <label className="text-sm font-semibold text-slate-700">
                       Type
@@ -2841,14 +2864,21 @@ const JobTemplates = () => {
                 </>
               ) : itemModal.type === "plannedServiceStops" ? (
                 <>
+                  <JobPayrollFields value={{ ...itemForm, payTypeId: itemForm.serviceStopTypeId }} payTypes={payTypes} showPayType={false} onChange={(field, value) => setItemForm((form) => ({ ...form, [field]: value }))} />
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="text-sm font-semibold text-slate-700">
                       Stop type name
                       <input value={itemForm.serviceStopTypeName || ""} onChange={(event) => setItemForm((form) => ({ ...form, serviceStopTypeName: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
-                      Stop type ID
-                      <input value={itemForm.serviceStopTypeId || ""} onChange={(event) => setItemForm((form) => ({ ...form, serviceStopTypeId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      Payroll pay item
+                      <select value={itemForm.serviceStopTypeId || ""} onChange={(event) => {
+                        const selected = payTypes.find((type) => type.id === event.target.value);
+                        setItemForm((form) => ({ ...form, serviceStopTypeId: event.target.value, payTypeId: event.target.value, serviceStopTypeName: selected?.name || "", payTypeName: selected?.name || "" }));
+                      }} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                        <option value="">Select a pay item</option>
+                        {payTypes.filter((type) => type.isActive !== false || type.id === itemForm.serviceStopTypeId).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+                      </select>
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
                       Minutes

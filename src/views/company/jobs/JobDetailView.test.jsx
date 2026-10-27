@@ -79,12 +79,13 @@ const chooseNewSite = async () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  setDoc.mockResolvedValue(undefined);
   mockPermissions = ["24", "26"];
   mockBatchWrites = [];
   mockBatchError = null;
   mockWorkspaceCall.mockReset();
-  httpsCallable.mockImplementation(() => mockWorkspaceCall);
-  onSnapshot.mockImplementation((_, callback) => { callback({ docs: [], empty: true, size: 0 }); return () => {}; });
+  httpsCallable.mockImplementation((functions,name) => name === "manageTechnicianWork" ? async () => ({data:{offers:[]}}) : mockWorkspaceCall);
+  onSnapshot.mockImplementation((ref, callback) => { callback(typeof ref === "string" && ref.split("/").length % 2 === 0 ? snapshot(ref.split("/").pop(), ref.endsWith("/workOrders/job-1") ? mockJob : null) : { docs: [], empty: true, size: 0 }); return () => {}; });
   mockJob = {
     id: "job-1", internalId: "JOB-1", customerId: "customer-1", customerName: "Test Customer",
     serviceLocationId: "site-1", bodyOfWaterId: "old-pool", equipmentId: "old-pump", equipmentIds: ["old-pump"],
@@ -262,7 +263,7 @@ test('applying a template to an accepted plan creates a draft and retains the ac
   const acceptedPlan = { id: 'accepted-plan', title: 'Accepted repair', status: 'Accepted', isAccepted: true, isActivePlan: true, tasks: [], plannedServiceStops: [], shoppingItems: [], laborLineItems: mockJob.laborLineItems };
   onSnapshot.mockImplementation((ref, callback) => {
     const docs = (ref.path || ref).endsWith('/plans') ? [snapshot('accepted-plan', acceptedPlan)] : [];
-    callback({ docs, empty: !docs.length, size: docs.length });
+    callback(typeof ref === "string" && ref.split("/").length % 2 === 0 ? snapshot(ref.split("/").pop(), ref.endsWith("/workOrders/job-1") ? mockJob : null) : { docs, empty: !docs.length, size: docs.length });
     return () => {};
   });
   await openJob();
@@ -290,7 +291,7 @@ const installSavedPlanFixtures = () => {
     tasks: [], plannedServiceStops: [], shoppingItems: [], laborLineItems: [], totalAmountCents: 0 }));
   onSnapshot.mockImplementation((ref, callback) => {
     const docs = (ref.path || ref).endsWith('/plans') ? plans.map((plan) => snapshot(plan.id, plan)) : [];
-    callback({ docs, empty: !docs.length, size: docs.length });
+    callback(typeof ref === "string" && ref.split("/").length % 2 === 0 ? snapshot(ref.split("/").pop(), ref.endsWith("/workOrders/job-1") ? mockJob : null) : { docs, empty: !docs.length, size: docs.length });
     return () => {};
   });
   appConfirm.mockResolvedValue(true);
@@ -350,4 +351,89 @@ test('staff plan acceptance sends the accept action through the same server work
   await waitFor(() => expect(mockJob.acceptedPlanId).toBe('plan-B'));
   expect(deleteDoc).not.toHaveBeenCalled();
   expect(updateDoc).not.toHaveBeenCalled();
+});
+
+const openManualProductLine = async () => {
+  await openJob();
+  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add first product', exact: true }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add Product Line' });
+  fireEvent.change(within(dialog).getByRole('combobox', { name: 'Type', exact: true }), { target: { value: 'Part' } });
+  fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name', exact: true }), { target: { value: 'Replacement seal' } });
+  return dialog;
+};
+
+test.each([
+  ['Add Part', 'Adding Part...', false],
+  ['Save & Add More Parts', 'Saving Part...', true],
+])('%s shows progress, blocks repeat submissions, and finishes its expected workflow', async (label, pendingLabel, keepOpen) => {
+  const dialog = await openManualProductLine();
+  let finishWrite;
+  const pendingWrite = new Promise((resolve) => { finishWrite = resolve; });
+  setDoc.mockImplementation((path) => path.includes('/shoppingList/') ? pendingWrite : Promise.resolve());
+  const originalGetDocs = getDocs.getMockImplementation();
+  let finishRefresh;
+  const pendingRefresh = new Promise((resolve) => { finishRefresh = resolve; });
+  getDocs.mockImplementation((ref) => (ref.path || ref).endsWith('/shoppingList') ? pendingRefresh : originalGetDocs(ref));
+
+  fireEvent.click(within(dialog).getByRole('button', { name: label, exact: true }));
+  const pendingButton = within(dialog).getByRole('button', { name: pendingLabel, exact: true });
+  expect(pendingButton).toBeDisabled();
+  expect(pendingButton).toHaveAttribute('aria-busy', 'true');
+  expect(within(dialog).getByRole('status')).toHaveTextContent('Adding part to the plan');
+  expect(within(dialog).getByRole('button', { name: keepOpen ? 'Add Part' : 'Save & Add More Parts', exact: true })).toBeDisabled();
+  expect(within(dialog).getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
+  expect(within(dialog).getByRole('button', { name: 'Close product line creator' })).toBeDisabled();
+  expect(within(dialog).getByRole('textbox', { name: 'Name', exact: true })).toBeDisabled();
+
+  // Enter or another submit event must not create a second part while the first is pending.
+  fireEvent.submit(pendingButton.closest('form'));
+  expect(setDoc.mock.calls.filter(([path]) => path.includes('/shoppingList/'))).toHaveLength(1);
+  await act(async () => { finishWrite(); });
+  expect(pendingButton).toBeDisabled();
+  expect(dialog).toBeInTheDocument();
+  await act(async () => { finishRefresh({ docs: [], empty: true, size: 0 }); });
+
+  if (keepOpen) {
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('');
+    expect(within(dialog).getByRole('textbox', { name: 'Name', exact: true })).toBeEnabled();
+    expect(within(dialog).getByRole('combobox', { name: 'Type', exact: true })).toHaveValue('Part');
+    expect(within(dialog).getByRole('spinbutton', { name: 'Quantity', exact: true })).toHaveValue(1);
+    expect(within(dialog).getByRole('button', { name: 'Save & Add More Parts', exact: true })).toHaveAttribute('aria-busy', 'false');
+    expect(within(dialog).getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
+  } else {
+    expect(screen.queryByRole('dialog', { name: 'Add Product Line' })).not.toBeInTheDocument();
+  }
+});
+
+test.each(['Add Part', 'Save & Add More Parts'])('%s restores the draft and controls after a failed save so it can be retried', async (label) => {
+  const dialog = await openManualProductLine();
+  setDoc.mockRejectedValueOnce(new Error('Connection interrupted'));
+  const errorToast = jest.spyOn(toast, 'error');
+  const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    fireEvent.click(within(dialog).getByRole('button', { name: label, exact: true }));
+    await waitFor(() => expect(errorToast).toHaveBeenCalledWith('Failed to add item'));
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Replacement seal');
+    expect(within(dialog).getByRole('textbox', { name: 'Name', exact: true })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Add Part', exact: true })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Save & Add More Parts', exact: true })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Close product line creator' })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Part', exact: true }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Product Line' })).not.toBeInTheDocument());
+    expect(setDoc.mock.calls.filter(([path]) => path.includes('/shoppingList/'))).toHaveLength(2);
+  } finally { errorToast.mockRestore(); consoleError.mockRestore(); }
+});
+
+test('overview includes the next-visit assignment snapshot inside the job summary', async () => {
+  const originalGetDocs = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async ref => (ref.path || ref).endsWith('/serviceStops') ? {
+    docs: [snapshot('next-visit', { id: 'next-visit', jobId: 'job-1', serviceDate: new Date('2030-04-12T09:00:00'), operationStatus: 'Not Finished', techId: 'tech-1', tech: 'Alex Rivera', type: 'Job Visit' })], empty: false,
+  } : originalGetDocs(ref));
+  await openJob();
+  const assignment = await screen.findByRole('region', { name: 'Next work assignment' });
+  await waitFor(() => expect(within(assignment).getByText('Alex Rivera')).toBeInTheDocument());
+  expect(within(assignment).getByRole('link', { name: 'View visit' })).toHaveAttribute('href', '/company/serviceStops/detail/next-visit');
 });

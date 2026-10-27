@@ -96,12 +96,12 @@ const InfoRow = ({ label, value }) => (
 const FormField = ({ label, name, type = 'text', value, onChange, placeholder }) => (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-4 sm:items-center">
         <label className="text-sm font-semibold text-gray-700 col-span-1">{label}</label>
-        <input 
+        <input
             name={name}
-            type={type} 
-            value={value} 
-            onChange={onChange} 
-            placeholder={placeholder} 
+            type={type}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
             className="col-span-2 bg-gray-50 border-2 border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 w-full p-2.5"
         />
     </div>
@@ -178,7 +178,7 @@ export default function ProfilePage() {
     const canViewPayrollInformation = typeof hasCompanyPermission === "function"
         ? hasCompanyPermission("420")
         : false;
-    
+
     const [editMode, setEditMode] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [formData, setFormData] = useState({});
@@ -455,6 +455,7 @@ export default function ProfilePage() {
             toast.error("No email address found for this account.");
             return;
         }
+
 
         const confirmed = await appConfirm({
             title: "Send Password Reset Email?",
@@ -778,7 +779,7 @@ export default function ProfilePage() {
 
                 <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
                     <div className="space-y-5">
-                        <ProfileCard 
+                        <ProfileCard
                             title="Account Info"
                             actions={
                                 <div className="flex gap-2">
@@ -855,7 +856,7 @@ export default function ProfilePage() {
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setShowDeleteModal(true)} 
+                                onClick={() => setShowDeleteModal(true)}
                                 className={`${dangerSubtleButtonClass} w-full justify-start`}
                             >
                                 Delete My Account

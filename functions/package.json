@@ -2,12 +2,15 @@
   "name": "functions",
   "description": "Cloud Functions for Firebase",
   "scripts": {
-    "test:job-plans": "node --test jobPlanWorkspace.test.js",
+    "test:job-plans": "node --test jobPlanWorkspace.test.js jobScopePricing.test.js",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test:payroll": "node --test payrollCalculation.test.js payrollWorkflow.test.js",
+    "test:technician-work": "node --test technicianWork.test.js",
+    "test:workflow-rules": "node --test firestoreWorkflow.rules.test.js"
   },
   "engines": {
     "node": "20"

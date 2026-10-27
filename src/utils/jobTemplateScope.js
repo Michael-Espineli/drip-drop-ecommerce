@@ -3,6 +3,7 @@ import { canonicalJobTaskType } from "./jobTaskTypes";
 import { jobScopeItemRequiresBodyOfWater, jobScopeItemRequiresEquipment } from "./jobEquipmentScope";
 import { itemPhotoFieldsFromSource } from "./itemPhotos";
 import { canonicalShoppingListStatus, SHOPPING_LIST_STATUS } from "./shoppingListStatus";
+import { jobPayFields } from "./payroll/payCalculation";
 
 const idValue = (value) => typeof value === "object" ? value?.id || value?.value || "" : String(value || "");
 const ids = (value) => (Array.isArray(value) ? value : value ? [value] : []).map(idValue).filter(Boolean);
@@ -47,6 +48,7 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     ])];
     return {
       ...fields(task, ["name", "description", "contractedRate", "billingLaborPriceCents", "estimatedTime", "customerApproval", "dataBaseItemId", "requiresEquipment", "requiresBodyOfWater"]),
+      ...jobPayFields(task),
       ...base, ...context(task), id, sourceTemplateTaskId: task.id,
       name: task.name || task.description || "Task", type: canonicalJobTaskType(task.type || ""),
       billingLaborPriceCents: taskPrice(task),
@@ -56,7 +58,8 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     };
   });
   const plannedServiceStops = ordered(scope.plannedServiceStops).map((stop, index) => ({
-    ...fields(stop, ["name", "description", "serviceStopTypeId", "serviceStopTypeName", "serviceStopTypeImage", "serviceStopTypeUseCaseRawValue", "estimatedMinutes", "plannedLaborCostCents", "plannedLaborNotes", "requiresEquipment", "requiresBodyOfWater"]),
+    ...fields(stop, ["name", "description", "serviceStopTypeId", "serviceStopTypeName", "serviceStopTypeImage", "serviceStopTypeUseCaseRawValue", "estimatedMinutes", "plannedLaborCostCents", "billingLaborPriceCents", "plannedLaborNotes", "requiresEquipment", "requiresBodyOfWater"]),
+    ...jobPayFields(stop, { payTypeId: stop.serviceStopTypeId, payTypeName: stop.serviceStopTypeName }),
     ...base, ...context(stop), id: stopIds.get(stop.id), sourceTemplatePlannedStopId: stop.id,
     taskIds: remap(stop.taskTemplateIds?.length ? stop.taskTemplateIds : stop.taskIds, taskIds), sortOrder: index,
   }));
@@ -67,10 +70,12 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     const mappedTaskIds = remap(line.taskTemplateIds?.length ? line.taskTemplateIds : (line.taskIds?.length ? line.taskIds : line.laborLineTaskIds), taskIds);
     const mappedStopIds = remap(line.plannedServiceStopTemplateIds?.length ? line.plannedServiceStopTemplateIds : (line.plannedServiceStopIds?.length ? line.plannedServiceStopIds : line.laborLinePlannedServiceStopIds), stopIds);
     return {
-      ...fields(line, ["name", "description", "salesItemType", "billingBehavior", "sourceType", "sourceId", "catalogItemId", "salesCatalogItemId", "sourceCatalogItemId", "catalogItemName", "stripeConnectedAccountId", "stripeProductId", "stripePriceId", "taxable", "requiresEquipment", "requiresBodyOfWater"]),
-      ...base, ...context(line), id, laborLineId: id, sourceTemplateLaborLineId: line.id,
+      ...fields(line, ["name", "description", "salesItemType", "billingBehavior", "sourceType", "sourceId", "catalogItemId", "salesCatalogItemId", "sourceCatalogItemId", "catalogItemName", "stripeConnectedAccountId", "stripeProductId", "stripePriceId", "taxable", "internalCostMode", "payTypeId", "payTypeName", "requiresEquipment", "requiresBodyOfWater"]),
+      ...base, ...context(line), id, laborLineId: id, completionStatus: null, completedAt: null, completedByUserId: null, sourceTemplateLaborLineId: line.id,
       quantity, totalPriceCents, unitPriceCents: number(line.unitPriceCents ?? Math.round(totalPriceCents / quantity)),
       internalCostCents: number(line.internalCostCents ?? line.unitCostCents ?? line.cost),
+      generatedFromTaskId: taskIds.get(line.generatedFromTaskId) || "",
+      generatedFromPlannedStopId: stopIds.get(line.generatedFromPlannedStopId) || "",
       taskIds: mappedTaskIds, laborLineTaskIds: mappedTaskIds,
       plannedServiceStopIds: mappedStopIds, laborLinePlannedServiceStopIds: mappedStopIds, sortOrder: index,
     };
@@ -79,7 +84,7 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     + tasks.reduce((sum, task) => sum + taskPrice(task), 0)
     + plannedServiceStops.reduce((sum, stop) => sum + number(stop.plannedLaborCostCents), 0)
     + shoppingItems.reduce((sum, item) => sum + number(item.plannedTotalPriceCents ?? number(item.plannedUnitPriceCents ?? item.price) * number(item.quantity)), 0);
-  if (!explicitPrice && number(template.defaultRateCents) > 0) {
+  if (!laborLineItems.length && !explicitPrice && number(template.defaultRateCents) > 0) {
     const id = newId("comp_job_labor_line");
     laborLineItems.push({
       ...base, id, laborLineId: id, name: template.name || "Template service", description: template.description || "",

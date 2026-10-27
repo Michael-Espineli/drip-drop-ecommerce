@@ -1,3 +1,6 @@
+import WorkOfferReview from './WorkOfferReview';
+import WorkOfferSchedule from './WorkOfferSchedule';
+import { manageTechnicianWork } from '../../../utils/technicianWorkflow';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -274,7 +277,8 @@ const routeStopIdsFor = (route = {}) => {
   return uniqueStrings([
     ...(Array.isArray(data.serviceStopsIds) ? data.serviceStopsIds : []),
     ...(Array.isArray(data.serviceStopIds) ? data.serviceStopIds : []),
-    ...(Array.isArray(data.order) ? data.order.map((item) => item.serviceStopId || item.id) : []),
+    ...(Array.isArray(data.rssIds) ? data.rssIds : []),
+    ...(Array.isArray(data.order) ? data.order.map((item) => item.serviceStopId || item.recurringServiceStopId) : []),
   ]);
 };
 
@@ -356,6 +360,9 @@ const emptyOfferForm = (currentUserId = "") => ({
   workOfferCategory: "fullRoute",
   routeDate: todayInputDate(),
   routeId: "",
+  routeSplitAllowed: false,
+  coverageReason: "",
+  workPurpose: "execution",
   routeTechId: currentUserId,
   selectedStopIds: [],
   boardIds: [],
@@ -449,6 +456,10 @@ const OfferedWork = () => {
   } = useContext(Context);
   const { can, requirePermission, permissionsReady } = useCompanyPermissions();
   const [offers, setOffers] = useState([]);
+  const [reviewOffer, setReviewOffer] = useState(null);
+  const [scheduleOffer, setScheduleOffer] = useState(null);
+  const [offerDetails, setOfferDetails] = useState(null);
+  const [offerActionId, setOfferActionId] = useState("");
   const [boards, setBoards] = useState([]);
   const [companyUsers, setCompanyUsers] = useState([]);
   const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_WORK_SETTINGS);
@@ -527,13 +538,13 @@ const OfferedWork = () => {
     try {
       setLoading(true);
       const [offersSnap, boardsSnap, usersSnap, settingsSnap] = await Promise.all([
-        getDocs(collection(db, "companies", recentlySelectedCompany, "workOffers")),
+        manageTechnicianWork(recentlySelectedCompany, "list"),
         getDocs(collection(db, "companies", recentlySelectedCompany, "workOfferBoards")),
         getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers")),
         getDoc(doc(db, "companies", recentlySelectedCompany, "settings", COMPANY_WIDE_SETTINGS_DOC_ID)),
       ]);
 
-      setOffers(offersSnap.docs.map((item) => ({ id: item.id, ...item.data() })).filter(isWorkOfferRecord));
+      setOffers(offersSnap.offers.filter(isWorkOfferRecord));
       setBoards(boardsSnap.docs.map(normalizeBoard).sort((a, b) => a.name.localeCompare(b.name)));
       setCompanyUsers(sortCompanyUsersByName(usersSnap.docs.map((item) => ({ id: item.id, ...item.data() }))));
       setCompanySettings(normalizeCompanyWorkSettings(settingsSnap.exists() ? settingsSnap.data() : {}));
@@ -728,7 +739,7 @@ const OfferedWork = () => {
   const selectedRouteOption = routeOptions.find((option) => `${option.source}:${option.id}` === offerForm.routeId) || null;
   const selectedRoute = selectedRouteOption?.route || null;
   const selectedRouteStopIds = routeStopIdsFor(selectedRoute);
-  const selectedRouteStops = routeStops.filter((stop) => selectedRouteStopIds.includes(stop.id));
+  const selectedRouteStops = routeStops.filter((stop) => selectedRouteStopIds.includes(selectedRouteOption?.source === "recurringRoutes" ? (typeof stop.recurringServiceStopId === "object" ? stop.recurringServiceStopId?.id : stop.recurringServiceStopId) : stop.id));
   const selectedJob = jobs.find((job) => job.id === offerForm.jobId) || null;
   const offerBasePayCents = centsFromDollars(offerForm.basePayAmount);
   const offerIncentive = normalizeWorkOfferIncentive({
@@ -1002,7 +1013,10 @@ const OfferedWork = () => {
       originalTechnicianId: isRouteOffer ? getCompanyUserId(routeTech) : "",
       originalTechnicianName: isRouteOffer ? getCompanyUserName(routeTech) : "",
       routeOfferMode: offerForm.workOfferCategory === "partialRoute" ? "partial" : "whole",
-      routeSplitAllowed: offerForm.workOfferCategory === "partialRoute",
+      routeSplitAllowed: offerForm.routeSplitAllowed,
+      coverageReason: offerForm.coverageReason,
+      workPurpose: offerForm.workPurpose,
+      requestedRecurringStopIds: selectedRouteOption?.source === "recurringRoutes" ? selectedStopIds.map(value=>routeStops.find(stop=>stop.id===value)?.recurringServiceStopId || value) : [],
       routeServiceStopIds: selectedStopIds,
       serviceStopIds: selectedStopIds,
       serviceStopsIds: selectedStopIds,
@@ -1074,7 +1088,9 @@ const OfferedWork = () => {
     setSavingOffer(true);
 
     try {
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOffers", id), payload, { merge: true });
+      const savedOffer = await manageTechnicianWork(recentlySelectedCompany, "save", { offer: payload });
+      payload.status = savedOffer.status;
+      payload.estimatedPayTotalCents = savedOffer.estimatedPayTotalCents;
       setOffers((current) => [{
         ...payload,
         createdAt: new Date(),
@@ -1098,99 +1114,27 @@ const OfferedWork = () => {
     }
   };
 
-  const acceptOffer = async (offer) => {
-    if (!requirePermission(ACCEPT_OFFERED_WORK_PERMISSION_ID, "accept offered work")) return;
-    if (!recentlySelectedCompany || !offer?.id) return;
-
-    const assignmentStatus = workOfferAssignmentStatusFor(companySettings);
-    const autoAssign = assignmentStatus === "Assigned";
-    const nextStatus = autoAssign ? "Accepted" : "Acceptance Pending Approval";
-    const acceptedByUserId = currentCompanyUserId || user?.uid || "";
-    const acceptedByUserName = currentCompanyUserName || name || user?.email || "Technician";
-    const updates = {
-      status: nextStatus,
-      assignmentStatus,
-      acceptedAt: serverTimestamp(),
-      acceptedByUserId,
-      acceptedByUserName,
-      acceptedByEmail: user?.email || dataBaseUser?.email || "",
-      updatedAt: serverTimestamp(),
-      ...(autoAssign ? {
-        assignedTechnicianId: acceptedByUserId,
-        assignedTechnicianName: acceptedByUserName,
-        assignedAt: serverTimestamp(),
-      } : {}),
-    };
-
-    try {
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOffers", offer.id), updates);
-      if (autoAssign) {
-        await updateRelatedServiceStopsForOffer({
-          offer,
-          assigneeId: acceptedByUserId,
-          assigneeName: acceptedByUserName,
-          incentive: normalizeWorkOfferIncentive(offer),
-        });
-      }
-      setOffers((current) => current.map((item) =>
-        item.id === offer.id
-          ? { ...item, ...updates, acceptedAt: new Date(), updatedAt: new Date() }
-          : item
-      ));
-      toast.success(autoAssign ? "Work offer accepted and assigned." : "Work offer acceptance sent for approval.");
-    } catch (error) {
-      console.error("Failed to accept work offer:", error);
-      toast.error("Could not accept that work offer.");
-    }
+  const acceptOffer = (offer) => setReviewOffer(offer);
+  const refreshOffer = async (offerId) => {
+    const result = await manageTechnicianWork(recentlySelectedCompany, "list");
+    setOffers(result.offers.filter(isWorkOfferRecord));
   };
-
   const approveOffer = async (offer) => {
     if (!requirePermission(APPROVE_OFFERED_WORK_PERMISSION_ID, "approve offered work")) return;
-    if (!recentlySelectedCompany || !offer?.id) return;
-
-    const statusKey = normalizedWorkOfferStatusKey(offer.status);
-    const approvingAcceptance = statusKey === "acceptance pending approval";
-    const nextStatus = approvingAcceptance ? "Accepted" : approvedStatusForOffer(offer);
-    const updates = {
-      status: nextStatus,
-      companyApprovalRequired: false,
-      updatedAt: serverTimestamp(),
-      approvedAt: serverTimestamp(),
-      approvedByUserId: user?.uid || "",
-      approvedByUserName: name || user?.displayName || user?.email || "Company user",
-      ...(approvingAcceptance ? {
-        assignmentStatus: "Assigned",
-        assignedTechnicianId: offer.acceptedByUserId || "",
-        assignedTechnicianName: offer.acceptedByUserName || "",
-        assignedAt: serverTimestamp(),
-      } : {
-        postedAt: getWorkOfferTypeText(offer) === "Internal Board" ? serverTimestamp() : offer.postedAt || null,
-        sentAt: getWorkOfferTypeText(offer) === "Direct User" ? serverTimestamp() : offer.sentAt || null,
-      }),
-    };
-
+    setOfferActionId(offer.id);
     try {
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOffers", offer.id), updates);
-      if (approvingAcceptance && offer.acceptedByUserId) {
-        await updateRelatedServiceStopsForOffer({
-          offer,
-          assigneeId: offer.acceptedByUserId,
-          assigneeName: offer.acceptedByUserName,
-          incentive: normalizeWorkOfferIncentive(offer),
-        });
-      }
-      setOffers((current) => current.map((item) =>
-        item.id === offer.id
-          ? { ...item, ...updates, updatedAt: new Date(), approvedAt: new Date() }
-          : item
-      ));
-      toast.success(approvingAcceptance ? "Work offer assignment approved." : "Work offer approved.");
-    } catch (error) {
-      console.error("Failed to approve work offer:", error);
-      toast.error("Could not approve that work offer.");
-    }
+      const claim = offer.claims?.find(v => v.status === "Acceptance Pending Approval");
+      await manageTechnicianWork(recentlySelectedCompany, "approve", { offerId: offer.id, ...(claim ? {claimId: claim.id} : {}) });
+      await refreshOffer(offer.id); toast.success("Work approval saved.");
+    } catch (error) { toast.error(error.message || "Could not approve work."); }
+    finally { setOfferActionId(""); }
   };
 
+  const rejectPendingClaim = async (offer, claim) => {
+    setOfferActionId(offer.id);
+    try { await manageTechnicianWork(recentlySelectedCompany, "rejectClaim", {offerId:offer.id,claimId:claim.id}); await refreshOffer(offer.id);toast.success("Coverage claim rejected."); }
+    catch(error){toast.error(error.message);}finally{setOfferActionId("");}
+  };
   const openIncentiveModal = (offer) => {
     if (!requirePermission(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, "add work offer incentives")) return;
     const incentive = normalizeWorkOfferIncentive(offer);
@@ -1243,13 +1187,7 @@ const OfferedWork = () => {
     setSavingIncentive(true);
 
     try {
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOffers", incentiveOffer.id), updates);
-      if (companySettings.workOfferIncentivesCreatePayrollLines) {
-        await updateRelatedServiceStopsForOffer({
-          offer: { ...incentiveOffer, ...updates },
-          incentive: effectiveIncentive,
-        });
-      }
+      await manageTechnicianWork(recentlySelectedCompany, "incentive", { offerId: incentiveOffer.id, incentive: effectiveIncentive });
       setOffers((current) => current.map((item) =>
         item.id === incentiveOffer.id ? { ...item, ...updates, updatedAt: new Date() } : item
       ));
@@ -1342,6 +1280,9 @@ const OfferedWork = () => {
 
   return (
     <div className="min-h-screen bg-page px-2 py-6 text-theme sm:px-3 lg:px-4">
+      {offerDetails && <WorkOfferReview companyId={recentlySelectedCompany} offer={offerDetails} readOnly onClose={()=>setOfferDetails(null)}/>}
+      {scheduleOffer && <WorkOfferSchedule companyId={recentlySelectedCompany} offer={scheduleOffer} onClose={()=>setScheduleOffer(null)} onScheduled={async()=>{await refreshOffer(scheduleOffer.id);toast.success("Work scheduled.");}}/>}
+      {reviewOffer && <WorkOfferReview companyId={recentlySelectedCompany} offer={reviewOffer} onClose={()=>setReviewOffer(null)} onAccepted={async result=>{ await refreshOffer(result.offerId); toast.success(result.status === "Accepted" ? "Work accepted." : "Acceptance sent for approval."); }} />}
       <div className="w-full space-y-6">
         <section className="rounded-lg border border-theme bg-surface p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1579,8 +1520,8 @@ const OfferedWork = () => {
                     const basePayCents = getWorkOfferBasePayCents(offer);
                     const incentiveCents = getWorkOfferIncentiveCents(offer);
                     const totalPayCents = getWorkOfferEstimatedPayCents(offer);
-                    const showAccept = canAcceptOffers && isOpenWorkOffer(offer) && statusKey !== "pending approval";
-                    const showApprove = canApproveOffers && ["pending approval", "acceptance pending approval"].includes(statusKey);
+                    const showAccept = canAcceptOffers && (!offer.offeredToUserId || currentUserIds.includes(offer.offeredToUserId)) && isOpenWorkOffer(offer) && statusKey !== "pending approval";
+                    const showApprove = canApproveOffers && (["pending approval", "acceptance pending approval"].includes(statusKey) || offer.claims?.some(v=>v.status==="Acceptance Pending Approval"));
                     const timelineStart = getWorkOfferTimelineStart(offer);
                     const deadline = getWorkOfferDeadline(offer);
                     const deadlineState = workOfferDeadlineState(offer);
@@ -1633,7 +1574,7 @@ const OfferedWork = () => {
                           <p className="mt-1 text-xs text-theme-subtle">{formatDurationMinutes(offer.estimatedMinutes)}</p>
                         </td>
                         <td className="px-5 py-3">
-                          <p className="text-sm font-semibold text-theme-muted">{moneyFromCents(totalPayCents)}</p>
+                          <p className="text-sm font-semibold text-theme-muted">{offer.paySource === "Technician Rate" && offer.estimatedPayTotalCents == null ? "Personal rate" : moneyFromCents(totalPayCents)}</p>
                           {incentiveCents > 0 ? (
                             <p className="mt-1 text-xs font-semibold text-emerald-700">
                               {getWorkOfferIncentiveText(offer)} on {moneyFromCents(basePayCents)}
@@ -1660,16 +1601,19 @@ const OfferedWork = () => {
                         <td className="px-5 py-3 text-sm text-theme-muted">{formatDate(offer.createdAt)}</td>
                         <td className="px-5 py-3 text-right">
                           <div className="flex flex-col items-end gap-2">
+                            {offer.claims?.some(claim=>currentUserIds.includes(claim.workerId)) && <button onClick={()=>setOfferDetails(offer)} className="rounded border px-3 py-2 text-sm">Scope and agreed pay</button>}
                             {showApprove && (
                               <button
                                 type="button"
-                                onClick={() => approveOffer(offer)}
+                                disabled={offerActionId === offer.id} onClick={() => approveOffer(offer)}
                                 className="inline-flex items-center justify-end gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
                               >
                                 Approve
                                 <FiCheckCircle className="h-4 w-4" />
                               </button>
                             )}
+                            {canApproveOffers && offer.claims?.filter(claim=>claim.status === "Acceptance Pending Approval").map(claim=><div key={claim.id} className="flex flex-wrap items-center justify-end gap-2 text-xs"><span>{claim.workerName} · pending review</span><button disabled={offerActionId === offer.id} onClick={()=>rejectPendingClaim(offer,claim)} className="rounded border border-red-200 px-2 py-1 text-red-700">Reject claim</button></div>)}
+                            {isAcceptedReadyToScheduleWorkOffer(offer) && !offer.routeId && (can('324') || currentUserIds.includes(offer.acceptedByUserId) && offer.allowsTechnicianSelfScheduling) && <button onClick={()=>setScheduleOffer(offer)} className="rounded bg-blue-700 px-3 py-2 text-sm font-semibold text-white">Schedule Work</button>}
                             {showAccept && (
                               <button
                                 type="button"
@@ -1768,6 +1712,11 @@ const OfferedWork = () => {
                 </label>
               </div>
 
+              {["fullRoute", "partialRoute"].includes(offerForm.workOfferCategory) && <div className="grid gap-3 rounded border p-3 sm:grid-cols-2">
+                <label className="text-sm font-semibold">Coverage policy<select className="mt-1 w-full rounded border p-2" value={offerForm.routeSplitAllowed ? "split" : "together"} onChange={e=>setOfferForm(v=>({...v,routeSplitAllowed:e.target.value==="split"}))}><option value="together">Keep offered stops together</option><option value="split">Allow technicians to split stops</option></select></label>
+                <label className="text-sm font-semibold">Coverage reason<select className="mt-1 w-full rounded border p-2" value={offerForm.coverageReason} onChange={e=>setOfferForm(v=>({...v,coverageReason:e.target.value}))}><option value="">Other / unspecified</option><option value="Vacation">Vacation</option><option value="Sick day">Sick day</option><option value="Scheduling conflict">Scheduling conflict</option></select></label>
+              </div>}
+              {offerForm.workOfferCategory === "oneOffJob" && <label className="block text-sm font-semibold">Work purpose<select className="mt-1 w-full rounded border p-2" value={offerForm.workPurpose} onChange={e=>setOfferForm(v=>({...v,workPurpose:e.target.value}))}><option value="execution">Perform planned work</option><option value="diagnostic">Diagnostic / estimate visit</option></select></label>}
               {["fullRoute", "partialRoute"].includes(offerForm.workOfferCategory) && (
                 <div className="rounded-lg border border-theme bg-surface-soft p-4">
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

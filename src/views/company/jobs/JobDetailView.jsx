@@ -1,4 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState, useContext } from "react";
+import { jobExecutionProgress } from "../../../utils/jobExecutionProgress";
+import { technicianWorkflow } from "../../../utils/technicianWorkflow";
+import { jobHistoryActorName, formatJobHistoryDate } from "../../../utils/jobHistory";
+import { getJobMaterialVendorItemId, loadJobProductCatalog, buildJobProductCatalog, buildProductFromVendorItem, buildVendorItemProductPatch, productCatalogDocRef } from "../../../utils/productCatalog";
+import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
+import { calculatePayLines, jobPayFields } from "../../../utils/payroll/payCalculation";
+import JobPayrollFields from "./JobPayrollFields";
+import JobNextVisitSnapshot from "./JobNextVisitSnapshot";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useContext } from "react";
 import { Link, useParams, useNavigate, useLocation, UNSAFE_NavigationContext } from "react-router-dom";
 import {
   doc,
@@ -31,6 +39,7 @@ import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import { GoHistory } from "react-icons/go";
 import {
   ArrowDownTrayIcon,
+  ArrowPathIcon,
   ChatBubbleLeftRightIcon,
   CheckCircleIcon,
   ChevronDownIcon,
@@ -62,6 +71,7 @@ import {
   EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID,
   UPDATE_JOBS_PERMISSION_ID,
 } from "../../../utils/companyPermissions";
+import { manageTechnicianWork } from "../../../utils/technicianWorkflow";
 import { normalizeWorkOfferIncentive } from "../../../utils/workOffers";
 import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import { createCustomerNote } from "../../../utils/customerNotes";
@@ -302,6 +312,7 @@ const salesDueDateForTerms = (paymentTerms = "dueOnReceipt") => {
 };
 
 const EMPTY_TASK_EDIT_FORM = {
+  ...jobPayFields(),
   name: "",
   type: "",
   status: "Unassigned",
@@ -344,6 +355,7 @@ const EMPTY_LABOR_LINE_FORM = {
   quantity: "1",
   unitPrice: "0",
   internalCost: "0",
+  internalCostMode: "payroll",
   taskIds: [],
   plannedServiceStopIds: [],
 };
@@ -729,7 +741,7 @@ const createEmptyShoppingDbItemForm = (vendor = null) => ({
 });
 
 const buildShoppingDbItemOption = (data = {}, docId = "") => {
-  const id = data.id || docId;
+  const id = docId || data.id;
   const name = data.name || "Unnamed Item";
   const sku = data.sku || "";
   const rate = Number(data.rate || 0);
@@ -744,7 +756,9 @@ const buildShoppingDbItemOption = (data = {}, docId = "") => {
     name,
     description: data.description || "",
     genericItemId: data.genericItemId || "",
-    dbItemId: id,
+    dbItemId: data.catalogSource === "product" ? data.dbItemId || "" : id,
+    catalogSource: data.catalogSource || "legacyVendor",
+    taxable: Boolean(data.taxable),
     rate,
     sellPrice,
     billingRate: Number(data.billingRate ?? sellPrice),
@@ -964,6 +978,7 @@ const emptyJobCatalogTaskTemplate = () => ({
 });
 
 const emptyJobCatalogServiceForm = () => ({
+  payTypeId: "",
   name: "",
   description: "",
   type: SalesCatalogItemType.service,
@@ -985,6 +1000,7 @@ const normalizeJobCatalogTaskTemplatesForSave = (templates = []) => (
 
       return {
         id: template.id || `service_task_template_${uuidv4()}`,
+        ...jobPayFields(template),
         name,
         title: name,
         type,
@@ -1032,6 +1048,7 @@ const buildPlanEditorSnapshot = ({
       type: cleanString(item.type),
       status: cleanString(item.status || "Unassigned"),
       contractedRate: planSnapshotCents(item.contractedRate),
+      ...jobPayFields(item),
       billingLaborPriceCents: getPlanSnapshotTaskBillingLaborCents(item),
       estimatedTime: planSnapshotNumber(item.estimatedTime || item.estimatedMinutes),
       bodyOfWaterId: cleanString(item.bodyOfWaterId),
@@ -1047,6 +1064,8 @@ const buildPlanEditorSnapshot = ({
       description: cleanString(item.description),
       type: cleanString(item.type || item.serviceStopTypeName),
       serviceStopTypeId: cleanString(item.serviceStopTypeId || item.typeId),
+      ...jobPayFields(item),
+      billingLaborPriceCents: item.billingLaborPriceCents ?? null,
       estimatedMinutes: planSnapshotNumber(item.estimatedMinutes || item.duration || item.estimatedDuration),
       plannedLaborCostCents: planSnapshotCents(item.plannedLaborCostCents ?? item.estimatedLaborCostCents ?? item.laborCostCents),
       plannedLaborNotes: cleanString(item.plannedLaborNotes),
@@ -1074,7 +1093,9 @@ const buildPlanEditorSnapshot = ({
         quantity,
         unitPriceCents,
         totalPriceCents,
-        internalCostCents: planSnapshotCents(item.internalCostCents ?? item.internalLaborCostCents ?? item.laborCostCents ?? item.cost),
+        internalCostMode: item.internalCostMode || "payroll",
+        internalCostCents: item.internalCostMode === "fixed" || !(item.taskIds?.length || item.laborLineTaskIds?.length || item.plannedServiceStopIds?.length || item.laborLinePlannedServiceStopIds?.length)
+          ? planSnapshotCents(item.internalCostCents ?? item.internalLaborCostCents ?? item.laborCostCents ?? item.cost) : 0,
         taskIds: [
           ...(Array.isArray(item.taskIds)
             ? item.taskIds
@@ -1460,6 +1481,7 @@ const JobDetailView = () => {
   const [taskBillingLaborPrice, setTaskBillingLaborPrice] = useState("0");
   const [estimatedTime, setEstimatedTime] = useState("0");
   const [selectedTaskPayType, setSelectedTaskPayType] = useState(null);
+  const [newTaskPayrollForm, setNewTaskPayrollForm] = useState({});
   const [taskBodyOfWaterList, setTaskBodyOfWaterList] = useState([]);
   const [taskEquipmentList, setTaskEquipmentList] = useState([]);
   const [selectedTaskBodyOfWater, setSelectedTaskBodyOfWater] = useState(null);
@@ -1525,6 +1547,9 @@ const JobDetailView = () => {
   const [shoppingList, setShoppingList] = useState([]);
   const [showAllPlannedMaterials, setShowAllPlannedMaterials] = useState(false);
   const [newShoppingList, setNewShoppingList] = useState(false);
+  const [savingShoppingItemAction, setSavingShoppingItemAction] = useState("");
+  const savingShoppingItemRef = useRef(false);
+  const savingShoppingItem = Boolean(savingShoppingItemAction);
   const [markingPurchasedShoppingItemId, setMarkingPurchasedShoppingItemId] = useState("");
 
   const shoppingSubCategoryOptions = [
@@ -1536,6 +1561,7 @@ const JobDetailView = () => {
 
   const [companyUserList, setCompanyUserList] = useState([]);
   const [shoppingDbItemList, setShoppingDbItemList] = useState([]);
+  const [jobProductList, setJobProductList] = useState([]);
   const [selectedPurchaser, setSelectedPurchaser] = useState(null);
   const [selectedShoppingDbItem, setSelectedShoppingDbItem] = useState(null);
   const [shoppingDbItemVendorList, setShoppingDbItemVendorList] = useState([]);
@@ -1663,6 +1689,9 @@ const JobDetailView = () => {
   const [showJobFinishConfirm, setShowJobFinishConfirm] = useState(false);
   const [jobFinishTaskIds, setJobFinishTaskIds] = useState([]);
   const [jobFinishShoppingItemActions, setJobFinishShoppingItemActions] = useState({});
+  const [jobFinishServiceIds, setJobFinishServiceIds] = useState([]);
+  const [closeoutWholeJob, setCloseoutWholeJob] = useState(true);
+  const [closeoutCancelVisits, setCloseoutCancelVisits] = useState(false);
   const [jobInvoiceActionInProgress, setJobInvoiceActionInProgress] = useState("");
   const [cancelingJob, setCancelingJob] = useState(false);
   const [linkedSalesAgreement, setLinkedSalesAgreement] = useState(null);
@@ -2243,22 +2272,10 @@ const JobDetailView = () => {
     });
   };
 
-  const getLinkedWorkOfferSnapshots = () => {
+  const getLinkedWorkOfferSnapshots = async () => {
     if (!recentlySelectedCompany || !jobId) return [];
-
-    const workOfferIds = uniqueIds(workOffers.map((offer) => offer.id));
-    const workOffersRef = workOffersPath(recentlySelectedCompany);
-
-    return collectUniqueSnapshots({
-      refs: workOfferIds.map((offerId) =>
-        doc(db, "companies", recentlySelectedCompany, "workOffers", offerId)
-      ),
-      queries: [
-        ...jobReferenceQueries(workOffersRef, ["jobId", "workOrderId", "assignedJobId", "sourceJobId"]),
-        query(workOffersRef, where("sourceId", "==", jobId)),
-      ],
-      label: "job work offers",
-    });
+    const result=await manageTechnicianWork(recentlySelectedCompany,"list",{jobId});
+    return (result.offers || []).map(offer=>({id:offer.id,data:()=>offer,ref:doc(db,"companies",recentlySelectedCompany,"workOffers",offer.id)}));
   };
 
   const getLinkedShoppingListSnapshots = () => {
@@ -3138,20 +3155,7 @@ const JobDetailView = () => {
       const statusKey = String(offer.status || "").trim().toLowerCase();
       if (finalStatuses.has(statusKey)) return;
 
-      await updateDoc(offerSnap.ref, {
-        status: targetStatus,
-        assignmentStatus: targetStatus,
-        statusChangedAt: serverTimestamp(),
-        statusChangedAtMillis: changedAtMillis,
-        statusChangedByUserId: actorId,
-        statusChangedByUserName: actorName,
-        statusChangeReason: reason,
-        canTechnicianSchedule: false,
-        allowsTechnicianSelfScheduling: false,
-        updatedAt: serverTimestamp(),
-        updatedAtMillis: changedAtMillis,
-        ...terminalFields,
-      });
+      await manageTechnicianWork(recentlySelectedCompany,"cancel",{offerId:offerSnap.id,reason});
 
       updatedOfferIds.add(offerSnap.id);
     }));
@@ -3243,10 +3247,10 @@ const JobDetailView = () => {
       getLinkedSalesInvoiceSnapshots(),
     ]);
 
+    const workOffersClosed=await updateWorkOffersForTerminalStatus({workOfferSnapshots,terminalAction,reason,changedAtMillis});
     const [
       jobTasks,
       serviceStopSummary,
-      workOffersClosed,
       salesAgreementsClosed,
       legacyEstimatesClosed,
       invoicesVoided,
@@ -3255,12 +3259,6 @@ const JobDetailView = () => {
       updateLinkedServiceStopsForTerminalStatus({
         serviceStopSnapshots,
         taskStatus,
-        reason,
-        changedAtMillis,
-      }),
-      updateWorkOffersForTerminalStatus({
-        workOfferSnapshots,
-        terminalAction,
         reason,
         changedAtMillis,
       }),
@@ -3413,6 +3411,7 @@ const JobDetailView = () => {
       };
     }
 
+    await updateWorkOffersForTerminalStatus({workOfferSnapshots,terminalAction:"canceled",reason:"Job deleted",changedAtMillis:Date.now()});
     const payLineSnapshots = await getLinkedPayLineItemSnapshots(serviceStopSnapshots);
 
     const serviceStopResults = await Promise.all(
@@ -3450,7 +3449,7 @@ const JobDetailView = () => {
     ] = await Promise.all([
       deleteSnapshots(payLineSnapshots),
       deleteSnapshots(purchasedSnapshots),
-      deleteSnapshots(workOfferSnapshots),
+      Promise.resolve(0), // Keep offer agreements and transfer history for audit.
       deleteSnapshots(agreementSnapshots),
       deleteSnapshots(contractSnapshots),
       deleteSnapshots(invoiceSnapshots),
@@ -3999,6 +3998,7 @@ const JobDetailView = () => {
       companyId: recentlySelectedCompany,
       settings: paySettings,
       serviceStopType: getPlannedStopType(stop),
+      serviceStop: stop,
       tasks: getPlannedStopTasks(stop),
       companyUsers: companyUserList,
       workTypes: companyWorkTypes,
@@ -4008,7 +4008,22 @@ const JobDetailView = () => {
 
   const getPlannedStopCostCents = (stop) => {
     const range = getPlannedStopPayRange(stop);
-    return Math.max(cents(stop.plannedLaborCostCents), cents(range.maxAmountCents));
+    return range.summaries.some((summary) => !summary.needsReview) ? cents(range.maxAmountCents) : Math.max(cents(stop.plannedLaborCostCents), getPlannedStopTasks(stop).reduce((sum, task) => sum + getTaskCostCents(task), 0));
+  };
+
+  const getTaskPayPreview = (task, workerId = task.workerId) => calculatePayLines({
+    companyId: recentlySelectedCompany, settings: paySettings || {}, mode: "preview", jobTaskSource: true,
+    serviceStop: { id: `job_${jobId}`, jobId, techId: "", serviceDate: new Date() },
+    tasks: [{ ...task, workerId: workerId || "" }], workTypes: companyWorkTypes, rates: technicianRates, workers: companyUserList,
+  });
+
+  const getTaskCostCents = (task) => {
+    if (["included", "unpaid"].includes(task.payrollMode) || paySettings?.payrollEnabled === false) return 0;
+    if (task.payrollMode !== "automatic" && task.manualPayOverrideCents !== null && task.manualPayOverrideCents !== undefined) return cents(task.manualPayOverrideCents);
+    const previews = task.workerId ? [getTaskPayPreview(task)] : companyUserList.filter((worker) => worker.active !== false && String(worker.status || "active").toLowerCase() === "active")
+      .map((worker) => getTaskPayPreview(task, worker.userId || worker.id));
+    const complete = previews.filter((lines) => !lines.some((line) => line.calculationStatus === "needsReview"));
+    return complete.length ? Math.max(...complete.map((lines) => lines.reduce((sum, line) => sum + cents(line.totalAmountCents), 0))) : cents(task.contractedRate);
   };
 
   const getLaborLineTaskIds = (line = {}) => laborLineArray(line.taskIds?.length ? line.taskIds : line.laborLineTaskIds);
@@ -4033,7 +4048,7 @@ const JobDetailView = () => {
   const laborLineScopeTotals = ({ taskIds = [] } = {}) => {
     const taskIdSet = new Set(taskIds);
     const selectedTasks = (taskList || []).filter((task) => taskIdSet.has(task.id));
-    const taskCostCents = selectedTasks.reduce((total, task) => total + cents(task.contractedRate), 0);
+    const taskCostCents = selectedTasks.reduce((total, task) => total + getTaskCostCents(task), 0);
     const taskPriceCents = selectedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0);
 
     return {
@@ -4059,8 +4074,10 @@ const JobDetailView = () => {
     quantity: String(line.quantity || 1),
     unitPrice: dollarsFromCents(line.unitPriceCents ?? line.unitAmountCents ?? line.totalPriceCents ?? line.totalAmountCents),
     internalCost: dollarsFromCents(line.internalCostCents ?? line.internalLaborCostCents ?? line.laborCostCents),
+    internalCostMode: line.internalCostMode || "payroll",
     taskIds: getLaborLineTaskIds(line),
-    plannedServiceStopIds: [],
+    plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+    taxable: Boolean(line.taxable),
   });
 
   const buildSuggestedLaborLineForm = () => {
@@ -4092,11 +4109,19 @@ const JobDetailView = () => {
       updatedByUserName: getAuditUserName(),
     }));
 
-    await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
-      laborLineItems: normalizedItems,
-      updatedAt: serverTimestamp(),
-      updatedAtMillis: Date.now(),
+    const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+    const savedLines = await getDocs(collection(jobRef, "laborLineItems"));
+    const nextIds = new Set(normalizedItems.map((line) => line.id));
+    const removed = savedLines.docs.filter((line) => !nextIds.has(line.id));
+    if (1 + removed.length + normalizedItems.length > 500) throw new Error("Too many service lines to save together.");
+    const batch = writeBatch(db);
+    batch.update(jobRef, {
+      laborLineItems: normalizedItems, estimateLaborLineItems: normalizedItems,
+      updatedAt: serverTimestamp(), updatedAtMillis: Date.now(),
     });
+    removed.forEach((line) => batch.delete(line.ref));
+    normalizedItems.forEach((line) => batch.set(doc(jobRef, "laborLineItems", line.id), line));
+    await batch.commit();
 
     setLaborLineItems(normalizedItems);
     setJob((prev) => ({
@@ -4209,40 +4234,7 @@ const JobDetailView = () => {
   };
 
   const getScheduledStopEstimatedLaborCents = (stop) => {
-    if (
-      stop &&
-      Object.prototype.hasOwnProperty.call(stop, "manualPayOverrideCents") &&
-      stop.manualPayOverrideCents !== null &&
-      stop.manualPayOverrideCents !== undefined
-    ) {
-      return Math.max(0, cents(stop.manualPayOverrideCents));
-    }
-
-    const explicitAmount = Math.max(
-      cents(stop?.manualPayOverrideCents),
-      cents(stop?.actualLaborCostCents),
-      cents(stop?.laborCostCents),
-      cents(stop?.estimatedLaborCostCents),
-      cents(stop?.estimatedPayCents),
-      cents(stop?.payrollCostCents),
-      cents(stop?.totalAmountCents),
-      cents(stop?.laborCost),
-      cents(stop?.payCents)
-    );
-
-    if (explicitAmount > 0) return explicitAmount;
-
     const tasks = getScheduledStopTasks(stop);
-    const estimateTasks = tasks.length
-      ? tasks
-      : [{
-        id: `${stop?.id || "stop"}_duration`,
-        name: stop?.type || "Service Stop",
-        type: stop?.type || stop?.serviceStopTypeName || "",
-        estimatedTime: Number(stop?.duration || stop?.estimatedDuration || 0),
-        contractedRate: 0,
-      }];
-
     const summary = estimateServiceStopPaySummary({
       companyId: recentlySelectedCompany,
       settings: paySettings,
@@ -4253,7 +4245,7 @@ const JobDetailView = () => {
         : stop?.recurringServiceStopId
           ? "system_recurring_service_stop"
           : "system_unknown_service_stop",
-      tasks: estimateTasks,
+      tasks,
       worker: getScheduledStopWorker(stop),
       workTypes: companyWorkTypes,
       mappings: workTypeMappings,
@@ -4277,7 +4269,7 @@ const JobDetailView = () => {
           companyWorkTypesCount: companyWorkTypes.length,
           workTypeMappingsCount: workTypeMappings.length,
           technicianRatesCount: technicianRates.length,
-          taskCount: estimateTasks.length,
+          taskCount: tasks.length,
         },
       });
     }
@@ -4510,7 +4502,7 @@ const JobDetailView = () => {
 
     const isSelected = meta.selectValue?.some((selected) => selected.value === option.value);
     const detailClass = isSelected ? "text-blue-100" : "text-slate-500";
-    const itemPriceCents = option.sellPrice || option.billingRate || option.rate || option.cost || 0;
+    const itemPriceCents = option.sellPrice ?? option.billingRate ?? option.rate ?? option.cost ?? 0;
 
     return (
       <div>
@@ -4615,8 +4607,8 @@ const JobDetailView = () => {
       return;
     }
 
-    if (!selectedTaskPayType || !taskPayTypeOptions.some((type) => type.id === selectedTaskPayType.id)) {
-      setSelectedTaskPayType(taskPayTypeOptions[0]);
+    if (selectedTaskPayType && !taskPayTypeOptions.some((type) => type.id === selectedTaskPayType.id)) {
+      setSelectedTaskPayType(null);
     }
   }, [selectedTaskPayType, taskPayTypeOptions]);
 
@@ -4720,6 +4712,8 @@ const JobDetailView = () => {
   const [showCreateContractModal, setShowCreateContractModal] = useState(false);
   const [showCreateWorkOfferModal, setShowCreateWorkOfferModal] = useState(false);
   const [savingWorkOffer, setSavingWorkOffer] = useState(false);
+  const [workOfferQuote, setWorkOfferQuote] = useState(null);
+  const [workOfferQuoteError, setWorkOfferQuoteError] = useState("");
   const [workOfferForm, setWorkOfferForm] = useState({
     offerType: "Internal Board",
     workerId: "",
@@ -4831,7 +4825,7 @@ const JobDetailView = () => {
     laborLines = laborLineItems,
     materials = shoppingList,
   } = {}) => {
-    const normalizedLaborLines = normalizeJobLaborLineItems(laborLines);
+    const normalizedLaborLines = normalizeJobLaborLineItems(completeJobLaborLines({ laborLineItems: laborLines, tasks, plannedServiceStops: plannedStops, plannedStopCost: getPlannedStopCostCents, taskCost: getTaskCostCents }));
     const taskIds = (tasks || []).map((task) => task.id).filter(Boolean);
     const fallbackLaborPriceCents =
       (tasks || []).reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0) +
@@ -4870,8 +4864,8 @@ const JobDetailView = () => {
           internalLaborCostCents: cents(line.internalCostCents),
           unitCostCents: cents(line.internalCostCents),
           taskIds: lineTaskIds,
-          plannedServiceStopIds: [],
-          taxable: false,
+          plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+          taxable: Boolean(line.taxable),
           stripeProductId: line.stripeProductId || "",
           stripePriceId: line.stripePriceId || "",
           displayAmount: moneyFromCents(totalAmountCents),
@@ -5007,6 +5001,14 @@ const JobDetailView = () => {
     technicianRates,
   ]);
 
+  const plannedPayrollNeedsReview = taskList.some((task) => {
+    if (["included", "unpaid"].includes(task.payrollMode) || task.manualPayOverrideCents !== null && task.manualPayOverrideCents !== undefined || paySettings?.payrollEnabled === false) return false;
+    if (!task.payTypeId) return true;
+    if (task.workerId) return getTaskPayPreview(task).some((line) => line.calculationStatus === "needsReview");
+    const eligible = companyUserList.filter((worker) => worker.active !== false && String(worker.status || "active").toLowerCase() === "active");
+    return !eligible.length || eligible.some((worker) => getTaskPayPreview(task, worker.userId || worker.id).some((line) => line.calculationStatus === "needsReview"));
+  });
+
   const plannedTaskLaborCents = useMemo(() => {
     return (taskList || []).reduce(
       (total, task) => total + cents(task.contractedRate),
@@ -5028,14 +5030,12 @@ const JobDetailView = () => {
   }, [laborLineItems]);
 
   const plannedLaborPriceCents = useMemo(() => {
-    if ((laborLineItems || []).length) return plannedLaborLinePriceCents;
-    return plannedStopLaborCents + plannedTaskBillingLaborCents;
-  }, [laborLineItems, plannedLaborLinePriceCents, plannedStopLaborCents, plannedTaskBillingLaborCents]);
+    return jobLaborTotals({ laborLineItems, tasks: taskList, plannedServiceStops, plannedStopCost: getPlannedStopCostCents, taskCost: getTaskCostCents }).priceCents;
+  }, [laborLineItems, taskList, plannedServiceStops, plannedStopLaborCents, companyUserList, companyWorkTypes, technicianRates, paySettings]);
 
   const plannedTotalLaborCents = useMemo(() => {
-    if ((laborLineItems || []).length) return plannedLaborLineCostCents;
-    return plannedStopLaborCents + plannedTaskLaborCents;
-  }, [laborLineItems, plannedLaborLineCostCents, plannedStopLaborCents, plannedTaskLaborCents]);
+    return jobLaborTotals({ laborLineItems, tasks: taskList, plannedServiceStops, plannedStopCost: getPlannedStopCostCents, taskCost: getTaskCostCents }).costCents;
+  }, [laborLineItems, taskList, plannedServiceStops, plannedStopLaborCents, companyUserList, companyWorkTypes, technicianRates, paySettings]);
 
   const plannedMaterialCostCents = useMemo(() => {
     return (shoppingList || []).reduce(
@@ -5054,6 +5054,8 @@ const JobDetailView = () => {
   const plannedEstimatePriceCents = useMemo(() => {
     return plannedLaborPriceCents + plannedMaterialPriceCents;
   }, [plannedLaborPriceCents, plannedMaterialPriceCents]);
+
+  const displayedEstimatePriceCents = laborLineItems.length || plannedEstimatePriceCents !== 0 ? plannedEstimatePriceCents : cents(job.rate);
 
   const activePlan = useMemo(() => (
     (jobPlans || []).find((solution) => solution.id === (job.activePlanId || job.activeSolutionId)) ||
@@ -5443,7 +5445,7 @@ const JobDetailView = () => {
       jobId,
       sourceSolutionId: solutionId,
     }));
-    const laborLineSnapshots = normalizeJobLaborLineItems(scope?.laborLineItems || laborLineItems).map((line, index) => ({
+    const laborLineSnapshots = normalizeJobLaborLineItems(completeJobLaborLines({ laborLineItems: scope?.laborLineItems || laborLineItems, tasks: taskSnapshots, plannedServiceStops: plannedStopSnapshots, plannedStopCost: getPlannedStopCostCents, taskCost: getTaskCostCents })).map((line, index) => ({
       ...line,
       sortOrder: Number(line.sortOrder ?? index),
       companyId: recentlySelectedCompany,
@@ -5478,8 +5480,8 @@ const JobDetailView = () => {
     const plannedLaborPriceCents = laborLineSnapshots.length ? plannedLaborLinePriceCents : plannedTaskBillingLaborCents + plannedStopLaborCents;
     const plannedMaterialCostCents = materialSnapshots.reduce((sum, item) => sum + getShoppingPlannedTotalCostCents(item), 0);
     const plannedMaterialPriceCents = materialSnapshots.reduce((sum, item) => sum + getShoppingPlannedTotalPriceCents(item), 0);
-    const calculatedTotalAmountCents = subtotalAmountCents || totalAmountCents || fallbackRateCents;
-    const calculatedLaborCostCents = plannedTotalLaborCents || laborCostCents || fallbackLaborCostCents;
+    const calculatedTotalAmountCents = lineItems.length ? subtotalAmountCents : (totalAmountCents || fallbackRateCents);
+    const calculatedLaborCostCents = laborLineSnapshots.length || taskSnapshots.length || plannedStopSnapshots.length ? plannedTotalLaborCents : laborCostCents ?? fallbackLaborCostCents;
     const internalCostCents = calculatedLaborCostCents + plannedMaterialCostCents;
     const projectedProfitCents = calculatedTotalAmountCents - internalCostCents;
     const profitMarginPercent = calculatedTotalAmountCents > 0
@@ -6261,22 +6263,18 @@ const JobDetailView = () => {
   };
 
   const actualPayrollTotalCents = useMemo(() => {
-    return (actualPayLineItems || []).reduce((total, line) => {
+    return (actualPayLineItems || []).filter((line) => line.calculationStatus !== "voided" && !line.voidedAt).reduce((total, line) => {
       return total + cents(line.totalAmountCents ?? line.amountCents ?? line.totalCents ?? line.payCents);
     }, 0);
   }, [actualPayLineItems]);
 
   const scheduledStopLaborEstimateCents = useMemo(() => {
-    const stopIdsWithPayroll = new Set(
-      (actualPayLineItems || [])
-        .map((line) => idValue(line.serviceStopId) || idValue(line.stopId))
-        .filter(Boolean)
-    );
-
-    return (serviceStops || []).reduce((total, stop) => {
-      if (stopIdsWithPayroll.has(stop.id)) return total;
-      return total + getScheduledStopEstimatedLaborCents(stop);
+    return (serviceStops || []).filter((stop) => !["finished", "completed", "canceled", "cancelled", "skipped"].includes(String(stop.operationStatus || "").toLowerCase())).reduce((total, stop) => {
+      const earned = (actualPayLineItems || []).filter((line) => line.calculationStatus !== "voided" && !line.voidedAt && idValue(line.serviceStopId) === stop.id)
+        .reduce((sum, line) => sum + cents(line.totalAmountCents), 0);
+      return total + Math.max(0, getScheduledStopEstimatedLaborCents(stop) - earned);
     }, 0);
+
   }, [
     actualPayLineItems,
     serviceStops,
@@ -6290,20 +6288,20 @@ const JobDetailView = () => {
   ]);
 
   const actualLaborTotalCents = useMemo(() => {
-    return actualPayrollTotalCents + scheduledStopLaborEstimateCents;
-  }, [actualPayrollTotalCents, scheduledStopLaborEstimateCents]);
+    return actualPayrollTotalCents;
+  }, [actualPayrollTotalCents]);
 
   const savedLaborCostCents = useMemo(() => {
     return cents(job.laborCost);
   }, [job.laborCost]);
 
   const projectedProfitCents = useMemo(() => {
-    return (plannedEstimatePriceCents || cents(job.rate)) - plannedTotalLaborCents - plannedMaterialCostCents;
-  }, [job.rate, plannedEstimatePriceCents, plannedTotalLaborCents, plannedMaterialCostCents]);
+    return displayedEstimatePriceCents - plannedTotalLaborCents - plannedMaterialCostCents;
+  }, [displayedEstimatePriceCents, plannedTotalLaborCents, plannedMaterialCostCents]);
 
   const estimateCustomerPriceCents = useMemo(() => {
-    return plannedEstimatePriceCents || cents(job.rate);
-  }, [job.rate, plannedEstimatePriceCents]);
+    return displayedEstimatePriceCents;
+  }, [displayedEstimatePriceCents]);
 
   const estimateInternalCostCents = useMemo(() => {
     return plannedTotalLaborCents + plannedMaterialCostCents;
@@ -7737,13 +7735,7 @@ const JobDetailView = () => {
     [selectedWorkOfferTasks]
   );
 
-  const workOfferFormBasePayCents = useMemo(() => {
-    if (workOfferForm.paySource === "Offered Amount") {
-      return Math.round(Number(workOfferForm.offeredAmount || 0) * 100);
-    }
-    if (workOfferForm.paySource === "Unpaid") return 0;
-    return selectedWorkOfferLaborCents;
-  }, [selectedWorkOfferLaborCents, workOfferForm.offeredAmount, workOfferForm.paySource]);
+  const workOfferFormBasePayCents = workOfferQuote?.baseCents ?? (workOfferForm.paySource === "Offered Amount" ? Math.round(Number(workOfferForm.offeredAmount || 0) * 100) : 0);
 
   const workOfferFormIncentive = useMemo(() => (
     can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID)
@@ -7773,6 +7765,17 @@ const JobDetailView = () => {
   }, [workOfferFormBasePayCents, workOfferFormIncentive]);
 
   const workOfferFormEstimatedTotalCents = workOfferFormBasePayCents + workOfferFormIncentiveCents;
+  useEffect(() => {
+    if (!showCreateWorkOfferModal || !recentlySelectedCompany || !jobId) return;
+    let cancelled = false;
+    setWorkOfferQuote(null); setWorkOfferQuoteError("");
+    const timer = setTimeout(() => manageTechnicianWork(recentlySelectedCompany,"quote",{
+      technicianId:workOfferForm.offerType === "Direct User" ? workOfferForm.workerId : "",
+      offer:{jobId,jobTaskIds:workOfferForm.workPurpose === "diagnostic" ? [] : workOfferForm.selectedTaskIds,workPurpose:workOfferForm.workPurpose || "execution",serviceStopTypeId:workOfferForm.serviceStopTypeId,estimatedMinutes:workOfferForm.workPurpose === "diagnostic" ? Number(workOfferForm.diagnosticMinutes || 60) : selectedWorkOfferMinutes,paySource:workOfferForm.paySource,offeredAmountCents:Math.round(Number(workOfferForm.offeredAmount || 0)*100),incentive:workOfferFormIncentive,proposedStartDate:workOfferForm.includeDate ? new Date(workOfferForm.proposedStartDate) : null}
+    }).then(quote=>{if(!cancelled)setWorkOfferQuote(quote);}).catch(error=>{if(!cancelled)setWorkOfferQuoteError(error.message);}),200);
+    return () => {cancelled=true;clearTimeout(timer);};
+  },[showCreateWorkOfferModal,recentlySelectedCompany,jobId,workOfferForm,selectedWorkOfferMinutes,workOfferFormIncentive]);
+
 
   const toInputDateValue = (value) => {
     if (!value) return "";
@@ -7951,6 +7954,9 @@ const JobDetailView = () => {
     const unfinishedTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
     setJobFinishTaskIds(unfinishedTasks.map((task) => task.id).filter(Boolean));
     setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(connectedShoppingItems));
+    setJobFinishServiceIds([]);
+    setCloseoutWholeJob(true);
+    setCloseoutCancelVisits(false);
     setShowJobFinishConfirm(true);
   };
 
@@ -8263,10 +8269,7 @@ const JobDetailView = () => {
         completedAt,
       });
 
-      await updateDoc(jobRef, {
-        operationStatus: "Finished",
-        billingStatus: nextBillingStatus,
-      });
+      await updateDoc(jobRef, { billingStatus: nextBillingStatus });
 
       const completionResults = await Promise.all(
         finishedTasks.map(async (task) => {
@@ -8337,9 +8340,15 @@ const JobDetailView = () => {
         }
       }
 
+      await technicianWorkflow("finalizeTechnicianJob", {
+        companyId: recentlySelectedCompany, jobId, requestId: crypto.randomUUID(), finishJob: closeoutWholeJob,
+        cancelRemainingVisits: closeoutCancelVisits, serviceIds: jobFinishServiceIds,
+        taskIds: finishedTasks.map(task=>task.id), productIds: []
+      });
+      setLaborLineItems(lines=>lines.map(line=>jobFinishServiceIds.includes(line.id)?{...line,completionStatus:"Finished"}:line));
       setJob((prev) => ({
         ...prev,
-        operationStatus: "Finished",
+        operationStatus: closeoutWholeJob ? "Finished" : prev.operationStatus,
         billingStatus:
           prev.billingStatus === "Draft" || !prev.billingStatus
             ? "In Progress"
@@ -8350,8 +8359,8 @@ const JobDetailView = () => {
       );
 
       setSelectedOperationStatus({
-        value: "Finished",
-        label: "Finished",
+        value: closeoutWholeJob ? "Finished" : job.operationStatus,
+        label: closeoutWholeJob ? "Finished" : job.operationStatus,
       });
       setSelectedBillingStatus({ value: nextBillingStatus, label: nextBillingStatus });
       await recordJobHistory({
@@ -8635,7 +8644,7 @@ const JobDetailView = () => {
     if (!requireBuildJobEstimatePlan("add job tasks")) return;
     setScheduleTaskForm({
       ...createEmptyScheduleTaskForm(),
-      payTypeId: taskPayTypeOptions[0]?.id || "",
+      payTypeId: "",
     });
     setShowScheduleTaskCreator(true);
   };
@@ -8745,7 +8754,7 @@ const JobDetailView = () => {
     const laborCostNumber = Number(scheduleTaskForm.laborCost || 0);
     const billingLaborPriceNumber = Number(scheduleTaskForm.billingLaborPrice || 0);
     const estimatedTimeNumber = Number(scheduleTaskForm.estimatedTime || 0);
-    const selectedPayType = taskPayTypeById.get(scheduleTaskForm.payTypeId) || taskPayTypeOptions[0] || null;
+    const selectedPayType = taskPayTypeById.get(scheduleTaskForm.payTypeId) || null;
     let selectedDbItem = scheduleTaskSelectedDbItem;
     const quantity = scheduleTaskNeedsInstallItem ? parseFloat(scheduleTaskForm.quantity) : 0;
 
@@ -8806,7 +8815,7 @@ const JobDetailView = () => {
         contractedRate: costCents,
         billingLaborPriceCents,
         estimatedTime: estimatedTimeNumber,
-        payTypeId: selectedPayType?.id || "",
+        ...jobPayFields({ ...scheduleTaskForm, payTypeId: selectedPayType?.id || "" }),
         payTypeName: selectedPayType?.name || selectedPayType?.label || "",
         status: "Unassigned",
         customerApproval: false,
@@ -8836,9 +8845,9 @@ const JobDetailView = () => {
       if (scheduleTaskNeedsInstallItem) {
         const plannedUnitCostCents = Number(selectedDbItem?.rate || selectedDbItem?.cost || 0);
         const plannedUnitPriceCents = Number(
-          selectedDbItem?.sellPrice ||
-          selectedDbItem?.rate ||
-          selectedDbItem?.cost ||
+          selectedDbItem?.sellPrice ??
+          selectedDbItem?.rate ??
+          selectedDbItem?.cost ??
           0
         );
         const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
@@ -8856,6 +8865,7 @@ const JobDetailView = () => {
           purchaserId: "",
           purchaserName: "",
           genericItemId: selectedDbItem?.genericItemId || "",
+          taxable: Boolean(selectedDbItem?.taxable),
           name: materialName,
           description: materialDescription,
           datePurchased: null,
@@ -8954,7 +8964,7 @@ const JobDetailView = () => {
       await refreshJobTaskAndShoppingState();
       setScheduleTaskForm({
         ...createEmptyScheduleTaskForm(),
-        payTypeId: taskPayTypeOptions[0]?.id || "",
+        payTypeId: "",
       });
       setShowScheduleTaskCreator(false);
       toast.success("Added and selected task");
@@ -9139,15 +9149,6 @@ const JobDetailView = () => {
         typeId: basePayload.typeId,
         type: basePayload.type,
       });
-      const estimateTasks = tasksToSchedule.length
-        ? tasksToSchedule
-        : [{
-          id: `${serviceStopId}_duration`,
-          name: basePayload.type || modeConfig.fallbackName,
-          type: basePayload.type || modeConfig.fallbackName,
-          estimatedTime: durationMinutes,
-          contractedRate: 0,
-        }];
       const paySummary = estimateServiceStopPaySummary({
         companyId: recentlySelectedCompany,
         settings: paySettings,
@@ -9161,7 +9162,7 @@ const JobDetailView = () => {
           name: basePayload.type,
         },
         serviceStopUseCaseSourceId: basePayload.typeId,
-        tasks: estimateTasks,
+        tasks: tasksToSchedule,
         worker: selectedWorker,
         workTypes: companyWorkTypes,
         mappings: workTypeMappings,
@@ -9238,8 +9239,8 @@ const JobDetailView = () => {
               internalId: "",
             },
             jobTaskId: task.id,
-            payTypeId: task.payTypeId || task.workTypeId || basePayload.payTypeId,
-            payTypeName: task.payTypeName || task.workTypeName || basePayload.payTypeName,
+            ...jobPayFields(task),
+
             workOrderTaskId: task.id,
           }
         );
@@ -9536,6 +9537,7 @@ const JobDetailView = () => {
       title: `${job.internalId || "Job"} - ${job.customerName || customer.firstName || "Work Offer"}`.trim(),
       notes: job.description || "",
       selectedTaskIds: availableWorkOfferTasks.map((task) => task.id),
+      workPurpose:"execution",diagnosticMinutes:60,
       serviceStopTypeId: companyServiceStopTypes?.[0]?.id || "",
       paySource: "Technician Rate",
       offeredAmount: "",
@@ -9579,288 +9581,20 @@ const JobDetailView = () => {
   };
 
   const saveWorkOffer = async () => {
+    if (!recentlySelectedCompany || !jobId) return;
+    if (workOfferForm.workPurpose !== "diagnostic" && !selectedWorkOfferTasks.length) return toast.error("Select at least one available task.");
+    const direct=workOfferForm.offerType === "Direct User",worker=findCompanyUserById(workOfferForm.workerId);
+    if(direct && !worker)return toast.error("Select a technician before creating a direct offer.");
+    setSavingWorkOffer(true);
     try {
-      if (!recentlySelectedCompany || !jobId) return;
-      if (!selectedWorkOfferTasks.length) {
-        toast.error("Select at least one available task.");
-        return;
-      }
-
-      const isBoardPost = workOfferForm.offerType === "Internal Board";
-      const selectedWorker = findCompanyUserById(workOfferForm.workerId);
-
-      if (!isBoardPost && !selectedWorker) {
-        toast.error("Select a technician before creating a direct offer.");
-        return;
-      }
-
-      setSavingWorkOffer(true);
-
-      const id = "comp_work_offer_" + uuidv4();
-      const boardPostId = isBoardPost ? "comp_work_board_" + uuidv4() : "";
-      const selectedType =
-        (companyServiceStopTypes || []).find((type) => type.id === workOfferForm.serviceStopTypeId) || null;
-      const offeredAmountCents =
-        workOfferForm.paySource === "Offered Amount"
-          ? Math.round(Number(workOfferForm.offeredAmount || 0) * 100)
-          : 0;
-      const payTotal =
-        workOfferForm.paySource === "Offered Amount"
-          ? offeredAmountCents
-          : workOfferForm.paySource === "Unpaid"
-            ? 0
-            : selectedWorkOfferLaborCents;
-      const requestedIncentive = can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID)
-        ? normalizeWorkOfferIncentive({
-          incentive: {
-            type: workOfferForm.incentiveType,
-            amountCents: Math.round(Number(workOfferForm.incentiveAmount || 0) * 100),
-            percentage: Number(workOfferForm.incentivePercentage || 0),
-            notes: workOfferForm.incentiveNotes || "",
-          },
-        })
-        : normalizeWorkOfferIncentive();
-      const incentiveEstimatedCents =
-        requestedIncentive.type === "flat"
-          ? requestedIncentive.amountCents
-          : requestedIncentive.type === "percentage"
-            ? Math.round(payTotal * (requestedIncentive.percentage / 100))
-            : 0;
-      const incentive = incentiveEstimatedCents > 0 ? requestedIncentive : normalizeWorkOfferIncentive();
-      const payTotalWithIncentive = payTotal + incentiveEstimatedCents;
-      const offerTitle =
-        workOfferForm.title?.trim() ||
-        `${job.internalId || "Job"} - ${job.customerName || "Work Offer"}`.trim();
-      const serviceAddress = {
-        streetAddress: serviceLocation.streetAddress || "",
-        city: serviceLocation.city || "",
-        state: serviceLocation.state || "",
-        zip: serviceLocation.zip || "",
-        latitude: Number(serviceLocation.latitude || 0),
-        longitude: Number(serviceLocation.longitude || 0),
-      };
-      const selectedTaskIds = selectedWorkOfferTasks.map((task) => task.id);
-      const taskEstimatedPayLines = selectedWorkOfferTasks
-        .filter((task) => cents(task.contractedRate) > 0)
-        .map((task) => ({
-          id: `offer_estimate_task_preview_${task.id}`,
-          sourceTaskId: task.id,
-          source: "Service Stop Task",
-          payTypeId: task.payTypeId || task.workTypeId || "",
-          payTypeName: task.payTypeName || task.workTypeName || task.type || "",
-          workTypeId: task.payTypeId || task.workTypeId || "",
-          workTypeName: task.payTypeName || task.workTypeName || task.type || "",
-          title: task.name || task.type || "Task",
-          rateAmountCents: cents(task.contractedRate),
-          rateType: "Flat Per Task",
-          quantity: 1,
-          quantityUnit: "Each",
-          totalAmountCents: cents(task.contractedRate),
-          calculationStatus: "Calculated",
-          notes: `${task.type || "Task"} • ${Number(task.estimatedTime || 0)} min • Task contracted rate`,
-        }));
-      const incentiveEstimatedPayLine = incentiveEstimatedCents > 0
-        ? {
-          id: "offer_estimate_work_offer_incentive",
-          sourceTaskId: null,
-          source: "Work Offer Incentive",
-          payTypeId: "",
-          payTypeName: "",
-          workTypeId: "",
-          workTypeName: "",
-          title: "Work Offer Incentive",
-          rateAmountCents: incentiveEstimatedCents,
-          rateType: "Manual",
-          quantity: 1,
-          quantityUnit: "Each",
-          totalAmountCents: incentiveEstimatedCents,
-          calculationStatus: "Calculated",
-          notes: incentive.notes || "Management incentive added to this work offer.",
-        }
-        : null;
-      const estimatedPayLines = [
-        ...taskEstimatedPayLines,
-        ...(incentiveEstimatedPayLine ? [incentiveEstimatedPayLine] : []),
-      ];
-
-      const firestoreOffer = {
-        id,
-        companyId: recentlySelectedCompany,
-        jobId,
-        jobInternalId: job.internalId || "",
-        jobName: job.type || job.description || job.internalId || "Job",
-        serviceStopId: "",
-        serviceStopInternalId: "",
-        offerType: workOfferForm.offerType,
-        status: isBoardPost ? "Posted" : "Sent",
-        title: offerTitle,
-        description: workOfferForm.notes || job.description || "",
-        offeredToUserId: isBoardPost ? "" : getCompanyUserId(selectedWorker),
-        offeredToUserName: isBoardPost ? "" : getCompanyUserName(selectedWorker),
-        offeredToWorkerType: isBoardPost ? "Not Assigned" : getCompanyUserWorkerType(selectedWorker),
-        postedToBoard: isBoardPost,
-        isBoardPost,
-        boardVisibility: isBoardPost ? workOfferForm.boardVisibility : "Contractors Only",
-        boardPostId,
-        jobTaskIds: selectedTaskIds,
-        taskIds: selectedTaskIds,
-        serviceStopTaskIds: [],
-        customerId: job.customerId || customer.id || "",
-        customerName: job.customerName || [customer.firstName, customer.lastName].filter(Boolean).join(" "),
-        serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
-        serviceLocationName: serviceLocation.nickName || "",
-        address: serviceAddress,
-        proposedStartDate:
-          workOfferForm.includeDate && workOfferForm.proposedStartDate
-            ? Timestamp.fromDate(new Date(workOfferForm.proposedStartDate))
-            : null,
-        proposedEndDate: null,
-        estimatedMinutes: selectedWorkOfferMinutes,
-        allowsTechnicianSelfScheduling: workOfferForm.allowsTechnicianSelfScheduling,
-        canTechnicianSchedule: workOfferForm.allowsTechnicianSelfScheduling,
-        paySource: workOfferForm.paySource,
-        offeredAmountCents,
-        incentive,
-        incentiveType: incentive.type,
-        incentiveAmountCents: incentive.amountCents,
-        incentivePercentage: incentive.percentage,
-        incentiveEstimatedCents,
-        estimatedLaborCents: selectedWorkOfferLaborCents,
-        estimatedBasePayCents: payTotal,
-        estimatedPayCents: payTotalWithIncentive,
-        estimatedPayTotalCents: payTotalWithIncentive,
-        estimatedPayWithIncentiveCents: payTotalWithIncentive,
-        manualPayOverrideCents:
-          workOfferForm.paySource === "Offered Amount"
-            ? offeredAmountCents
-            : workOfferForm.paySource === "Unpaid"
-              ? 0
-              : null,
-        manualPayOverrideNotes:
-          workOfferForm.paySource === "Offered Amount"
-            ? "Manual payroll amount from work offer."
-            : workOfferForm.paySource === "Unpaid"
-              ? "Work offer marked unpaid."
-              : "",
-        estimatedPayLines:
-          workOfferForm.paySource === "Offered Amount"
-            ? [
-              {
-                id: "offer_estimate_offered_amount",
-                sourceTaskId: null,
-                source: "Manual Adjustment",
-                payTypeId: "",
-                payTypeName: "",
-                workTypeId: "",
-                workTypeName: "",
-                title: "Offered Amount",
-                rateAmountCents: offeredAmountCents,
-                rateType: "Manual",
-                quantity: 1,
-                quantityUnit: "Each",
-                totalAmountCents: offeredAmountCents,
-                calculationStatus: offeredAmountCents > 0 ? "Calculated" : "Needs Review",
-                notes: "Fixed amount offered for this work.",
-              },
-              ...(incentiveEstimatedPayLine ? [incentiveEstimatedPayLine] : []),
-            ]
-            : workOfferForm.paySource === "Unpaid"
-              ? [
-                {
-                  id: "offer_estimate_unpaid",
-                  sourceTaskId: null,
-                  source: "Manual Adjustment",
-                  payTypeId: "",
-                  payTypeName: "",
-                  workTypeId: "",
-                  workTypeName: "",
-                  title: "Unpaid Work",
-                  rateAmountCents: 0,
-                  rateType: "Manual",
-                  quantity: 0,
-                  quantityUnit: "Each",
-                  totalAmountCents: 0,
-                  calculationStatus: "Calculated",
-                  notes: "This offer is marked unpaid.",
-                },
-                ...(incentiveEstimatedPayLine ? [incentiveEstimatedPayLine] : []),
-              ]
-              : estimatedPayLines,
-        estimatedPayNotes: "Estimate only. Final payroll is generated from completed service stop work.",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        createdByUserId: getUserId() || "",
-        createdByUserName: getUserName(),
-        sentAt: isBoardPost ? null : serverTimestamp(),
-        postedAt: isBoardPost ? serverTimestamp() : null,
-        acceptedAt: null,
-        acceptedByUserId: "",
-        acceptedByUserName: "",
-        rejectedAt: null,
-        completedAt: null,
-        adminNotes: workOfferForm.notes || "",
-        workerNotes: "",
-        sourceLaborContractId: "",
-        externalCompanyId: "",
-        externalCompanyName: "",
-        serviceStopTypeId: selectedType?.id || "",
-        serviceStopTypeName: selectedType?.name || "",
-        serviceStopTypeImage: selectedType?.image || selectedType?.typeImage || "",
-        serviceStopTypeUseCaseRawValue: "jobVisit",
-      };
-
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOffers", id), firestoreOffer, { merge: true });
-
-      await setDoc(
-        doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "workOfferRefs", id),
-        {
-          id,
-          jobId,
-          status: firestoreOffer.status,
-          offerType: firestoreOffer.offerType,
-          title: firestoreOffer.title,
-          createdAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      setWorkOffers((prev) => [
-        {
-          ...firestoreOffer,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          sentAt: isBoardPost ? null : new Date(),
-          postedAt: isBoardPost ? new Date() : null,
-        },
-        ...(prev || []),
-      ]);
-      await recordJobHistory({
-        eventType: "Work Offer",
-        title: `Work offer created: ${offerTitle}`,
-        description: firestoreOffer.description || "",
-        changes: [
-          buildHistoryChange("status", "Status", "—", firestoreOffer.status),
-          buildHistoryChange("offerType", "Offer Type", "—", firestoreOffer.offerType),
-          buildHistoryChange("estimatedPayCents", "Estimated Pay", "—", moneyFromCents(payTotalWithIncentive)),
-          incentiveEstimatedCents > 0
-            ? buildHistoryChange("incentiveEstimatedCents", "Incentive", "—", moneyFromCents(incentiveEstimatedCents))
-            : null,
-          buildHistoryChange("taskCount", "Tasks", "—", selectedTaskIds.length),
-        ].filter(Boolean),
-        metadata: {
-          workOfferId: id,
-          boardPostId,
-          target: isBoardPost ? "Internal Board" : getCompanyUserName(selectedWorker),
-        },
-      });
-      setShowCreateWorkOfferModal(false);
-      toast.success("Work offer created");
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to create work offer");
-    } finally {
-      setSavingWorkOffer(false);
-    }
+      const id="comp_work_offer_"+uuidv4(),type=(companyServiceStopTypes || []).find(v=>v.id===workOfferForm.serviceStopTypeId);
+      const title=workOfferForm.title?.trim() || job.internalId || "Job work";
+      const result=await manageTechnicianWork(recentlySelectedCompany,"save",{offer:{id,jobId,jobInternalId:job.internalId || "",jobName:job.type || "Job",title,description:workOfferForm.notes || job.description || "",workerNotes:workOfferForm.notes || "",offerType:workOfferForm.offerType,postedToBoard:!direct,boardVisibility:workOfferForm.boardVisibility,offeredToUserId:direct?getCompanyUserId(worker):"",offeredToUserName:direct?getCompanyUserName(worker):"",offeredToWorkerType:direct?getCompanyUserWorkerType(worker):"Not Assigned",jobTaskIds:workOfferForm.workPurpose === "diagnostic"?[]:selectedWorkOfferTasks.map(v=>v.id),workPurpose:workOfferForm.workPurpose || "execution",customerId:job.customerId || "",customerName:job.customerName || "",serviceLocationId:job.serviceLocationId || "",estimatedMinutes:workOfferForm.workPurpose === "diagnostic"?Number(workOfferForm.diagnosticMinutes || 60):selectedWorkOfferMinutes,serviceStopTypeId:workOfferForm.serviceStopTypeId,serviceStopTypeName:type?.name || (workOfferForm.workPurpose === "diagnostic"?"Job Estimate":"Job Visit"),serviceStopTypeUseCaseRawValue:workOfferForm.workPurpose === "diagnostic"?"jobEstimate":"jobVisit",paySource:workOfferForm.paySource,offeredAmountCents:Math.round(Number(workOfferForm.offeredAmount || 0)*100),incentive:workOfferFormIncentive,proposedStartDate:workOfferForm.includeDate?new Date(workOfferForm.proposedStartDate):null,allowsTechnicianSelfScheduling:workOfferForm.allowsTechnicianSelfScheduling}});
+      const loaded=await manageTechnicianWork(recentlySelectedCompany,"list",{jobId});setWorkOffers(loaded.offers || []);
+      await recordJobHistory({eventType:"Work Offer",title:"Work offer created: "+title,description:workOfferForm.notes || "",metadata:{workOfferId:id,status:result.status}});
+      setShowCreateWorkOfferModal(false);toast.success("Work offer created");
+    } catch(error){toast.error(error.message || "Failed to create work offer");}
+    finally{setSavingWorkOffer(false);}
   };
 
   const saveContractChanges = async () => {
@@ -10277,7 +10011,8 @@ const JobDetailView = () => {
           getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates")),
         ]);
 
-        setPaySettings(paySettingsSnap.exists() ? paySettingsSnap.data() : null);
+        const companyPayrollSettings = await getDoc(doc(db, "companies", recentlySelectedCompany, "settings", "companyWide"));
+        setPaySettings({ ...(paySettingsSnap.exists() ? paySettingsSnap.data() : {}), ...(companyPayrollSettings.exists() && (companyPayrollSettings.data().payrollEnabled === false || companyPayrollSettings.data().companyPayrollEnabled === false || companyPayrollSettings.data().payrollDisabled === true) ? { payrollEnabled: false } : {}) });
         const normalizePayType = (docSnap) => {
           const data = { id: docSnap.id, ...docSnap.data() };
           return {
@@ -10304,13 +10039,9 @@ const JobDetailView = () => {
           })
         );
 
-        const dbItemsQ = query(
-          collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"),
-          orderBy("name")
-        );
-        const dbItemsSnap = await getDocs(dbItemsQ);
-        const dbItems = dbItemsSnap.docs.map((docSnap) => buildShoppingDbItemOption(docSnap.data(), docSnap.id));
-        setShoppingDbItemList(dbItems);
+        const catalog = await loadJobProductCatalog(db, recentlySelectedCompany);
+        setShoppingDbItemList(catalog.vendorItems.map((item) => buildShoppingDbItemOption(item, item.id)));
+        setJobProductList(catalog.products.map((item) => buildShoppingDbItemOption(item, item.id)));
         setSectionLoading((prev) => ({
           ...prev,
           plannedMaterials: false,
@@ -10340,6 +10071,38 @@ const JobDetailView = () => {
       }
     })();
   }, [recentlySelectedCompany, jobId, loadJobSiteDetails]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !jobId) return;
+    const snapshots = new Map();
+    const publish = () => setActualPayLineItems([...new Map([...snapshots.values()].flat().map((line) => [line.id, line])).values()]);
+    const sources = [query(payLineItemsPath(recentlySelectedCompany), where("jobId", "==", jobId))];
+    const stopIds = serviceStops.map((stop) => stop.id).filter(Boolean);
+    for (let i = 0; i < stopIds.length; i += 10) sources.push(query(payLineItemsPath(recentlySelectedCompany), where("serviceStopId", "in", stopIds.slice(i, i + 10))));
+    const subscriptions = sources.map((source, index) => onSnapshot(source, (snapshot) => {
+      snapshots.set(index, snapshot.docs.map((row) => ({ ...row.data(), id: row.id }))); publish();
+    }, (error) => console.error("Unable to refresh job payroll", error)));
+    subscriptions.push(onSnapshot(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), (snapshot) => {
+      if (snapshot.exists()) setJob((current) => ({ ...current, payrollReconcileStatus: snapshot.data().payrollReconcileStatus, payrollReconcileConflictIds: snapshot.data().payrollReconcileConflictIds || [] }));
+    }, (error) => console.error("Unable to refresh job payroll status", error)));
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+  }, [recentlySelectedCompany, jobId, serviceStops.map((stop) => stop.id).sort().join("|")]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany) return;
+    let settings = null, wide = null;
+    const publish = () => {
+      if (settings === null || wide === null) return;
+      setPaySettings({ ...settings, ...(wide.payrollEnabled === false || wide.companyPayrollEnabled === false || wide.payrollDisabled === true ? { payrollEnabled: false } : {}) });
+    };
+    const subscriptions = [
+      onSnapshot(doc(db, "companies", recentlySelectedCompany, "paySettings", "main"), (snapshot) => { settings = snapshot.exists() ? snapshot.data() : {}; publish(); }),
+      onSnapshot(doc(db, "companies", recentlySelectedCompany, "settings", "companyWide"), (snapshot) => { wide = snapshot.exists() ? snapshot.data() : {}; publish(); }),
+      onSnapshot(collection(db, "companies", recentlySelectedCompany, "technicianRates"), (snapshot) => setTechnicianRates(snapshot.docs.map((row) => ({ ...row.data(), id: row.id })))),
+      onSnapshot(collection(db, "companies", recentlySelectedCompany, "companyPayTypes"), (snapshot) => setCompanyWorkTypes(snapshot.docs.map((row) => ({ ...row.data(), id: row.id })))),
+    ];
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+  }, [recentlySelectedCompany]);
 
   // comments subscription
   useEffect(() => {
@@ -11637,8 +11400,8 @@ const JobDetailView = () => {
       const plannedStopIdMap = Object.fromEntries(
         (plannedServiceStops || []).map((plannedStop) => [plannedStop.id, "comp_job_template_plan_stop_" + uuidv4()])
       );
-      const normalizedTemplateLaborLines = normalizeJobLaborLineItems(laborLineItems);
-      const defaultTemplatePriceCents = plannedEstimatePriceCents || cents(job.rate);
+      const normalizedTemplateLaborLines = normalizeJobLaborLineItems(completeJobLaborLines({ laborLineItems, tasks: taskList, plannedServiceStops, plannedStopCost: getPlannedStopCostCents, taskCost: getTaskCostCents }));
+      const defaultTemplatePriceCents = laborLineItems.length ? plannedEstimatePriceCents : displayedEstimatePriceCents;
       const templateIssuePriorityLevel = normalizeIssuePriority(
         job.issuePriorityLevel || job.priorityLevel || job.solutionTier || DEFAULT_ISSUE_PRIORITY
       );
@@ -11698,6 +11461,7 @@ const JobDetailView = () => {
             type: canonicalJobTaskType(task.type || ""),
             description: task.description || "",
             contractedRate: cents(task.contractedRate),
+            ...jobPayFields(task),
             billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
             estimatedTime: Number(task.estimatedTime || 0),
             customerApproval: Boolean(task.customerApproval),
@@ -11771,6 +11535,7 @@ const JobDetailView = () => {
             unitPriceCents: cents(line.unitPriceCents),
             totalPriceCents: cents(line.totalPriceCents),
             internalCostCents: cents(line.internalCostCents),
+            taxable: Boolean(line.taxable),
             taskTemplateIds,
             taskIds: taskTemplateIds,
             laborLineTaskIds: taskTemplateIds,
@@ -11790,6 +11555,8 @@ const JobDetailView = () => {
             stripePriceId: line.stripePriceId || "",
             sortOrder: Number(line.sortOrder ?? index),
             sourceLaborLineId: line.id || "",
+            generatedFromTaskId: taskIdMap[line.generatedFromTaskId] || "",
+            generatedFromPlannedStopId: plannedStopIdMap[line.generatedFromPlannedStopId] || "",
           }
         );
       });
@@ -11810,6 +11577,7 @@ const JobDetailView = () => {
             quantity: item.quantity !== undefined && item.quantity !== null ? String(item.quantity) : "1",
             dbItemId: item.dbItemId || item.itemId || "",
             genericItemId: item.genericItemId || "",
+            taxable: Boolean(item.taxable),
             plannedUnitCostCents: item.plannedUnitCostCents ?? item.cost ?? null,
             plannedUnitPriceCents: item.plannedUnitPriceCents ?? item.price ?? null,
             plannedTotalCostCents: getShoppingPlannedTotalCostCents(item),
@@ -12001,7 +11769,7 @@ const JobDetailView = () => {
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Source / Status</p>
             <p className="mt-0.5 truncate text-xs font-semibold text-slate-800">
-              {[line.sourceType || line.category || "—", line.status || ""].filter(Boolean).join(" • ")}
+              {[line.payrollSource || line.source || line.sourceType || line.category || "—", line.calculationStatus || line.status || ""].filter(Boolean).join(" • ")}
             </p>
           </div>
           <div className="justify-self-start md:justify-self-end">
@@ -12134,8 +11902,8 @@ const JobDetailView = () => {
 	        description: serviceCatalogCreatorForm.description.trim(),
 	        type: serviceCatalogCreatorForm.type || SalesCatalogItemType.service,
 	        billingBehavior: serviceCatalogCreatorForm.billingBehavior || SalesCatalogBillingBehavior.oneTime,
-	        sourceType: SalesCatalogSourceType.manual,
-	        sourceId: "",
+	        sourceType: serviceCatalogCreatorForm.payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual,
+	        sourceId: serviceCatalogCreatorForm.payTypeId || "",
 	        unitAmountCents: jobCatalogMoneyToCents(serviceCatalogCreatorForm.unitAmount),
 	        unitCostCents: jobCatalogMoneyToCents(serviceCatalogCreatorForm.unitCost),
 	        defaultQuantity: Math.max(Number(serviceCatalogCreatorForm.defaultQuantity || 1) || 1, 1),
@@ -12187,7 +11955,8 @@ const JobDetailView = () => {
       unitPrice: dollarsFromCents(line.unitPriceCents ?? line.totalPriceCents),
       internalCost: dollarsFromCents(line.internalCostCents),
       taskIds: laborLineArray(line.taskIds),
-      plannedServiceStopIds: [],
+      plannedServiceStopIds: laborLineArray(line.plannedServiceStopIds),
+      taxable: Boolean(line.taxable),
     });
     setNewLaborLine(true);
   };
@@ -12253,7 +12022,7 @@ const JobDetailView = () => {
     const nowMillis = Date.now();
     const lineId = existingLine?.id || `comp_job_labor_line_${uuidv4()}`;
     const selectedTaskIds = laborLineArray(laborLineForm.taskIds);
-    const selectedPlannedStopIds = [];
+    const selectedPlannedStopIds = laborLineArray(laborLineForm.plannedServiceStopIds);
     const payload = {
       ...(existingLine || {}),
       id: lineId,
@@ -12266,13 +12035,15 @@ const JobDetailView = () => {
       unitPriceCents,
       totalPriceCents: Math.round(unitPriceCents * quantity),
       internalCostCents,
+      internalCostMode: laborLineForm.internalCostMode || "payroll",
       taskIds: selectedTaskIds,
       laborLineTaskIds: selectedTaskIds,
       plannedServiceStopIds: selectedPlannedStopIds,
       laborLinePlannedServiceStopIds: selectedPlannedStopIds,
-      salesItemType: SalesCatalogItemType.labor,
+      taxable: Boolean(laborLineForm.taxable),
+      salesItemType: existingLine?.salesItemType || SalesCatalogItemType.labor,
       billingBehavior: SalesCatalogBillingBehavior.oneTime,
-      sourceType: SalesCatalogSourceType.manual,
+      sourceType: existingLine?.sourceType || SalesCatalogSourceType.manual,
       sortOrder: existingLine ? Number(existingLine.sortOrder || 0) : (laborLineItems || []).length,
       createdAtMillis: existingLine?.createdAtMillis || nowMillis,
       createdByUserId: existingLine?.createdByUserId || getUserId() || "",
@@ -12281,6 +12052,8 @@ const JobDetailView = () => {
       updatedByUserId: getUserId() || "",
       updatedByUserName: getAuditUserName(),
     };
+    delete payload.generatedFromTaskId;
+    delete payload.generatedFromPlannedStopId;
     const selectedTaskIdSet = new Set(payload.taskIds);
     const cleanedLaborLineItems = (laborLineItems || []).map((line) => {
       if (line.id === existingLine?.id) return line;
@@ -12291,8 +12064,8 @@ const JobDetailView = () => {
         ...line,
         taskIds,
         laborLineTaskIds: taskIds,
-        plannedServiceStopIds: [],
-        laborLinePlannedServiceStopIds: [],
+        plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+        laborLinePlannedServiceStopIds: getLaborLinePlannedStopIds(line),
       };
     });
     const nextItems = existingLine
@@ -12367,7 +12140,8 @@ const JobDetailView = () => {
     try {
       const lineId = `comp_job_labor_line_${uuidv4()}`;
       const nowMillis = Date.now();
-      const taskTemplates = getCatalogServiceTaskTemplates(catalogItem);
+      const savedTaskTemplates = getCatalogServiceTaskTemplates(catalogItem);
+      const taskTemplates = savedTaskTemplates.length ? savedTaskTemplates : [{ name: serviceName, description: catalogItem.description || "", type: "Basic" }];
       const createdTasks = taskTemplates
         .map((template, index) => {
           const taskName = String(
@@ -12398,6 +12172,8 @@ const JobDetailView = () => {
             description: template.description || "",
             type: catalogTemplateType(template),
             contractedRate: laborCostCents,
+            ...jobPayFields(template, catalogItem),
+            payQuantity: Number(template.payQuantity || 1) * Math.max(Number(catalogItem.defaultQuantity || 1), 1),
             billingLaborPriceCents,
             estimatedTime: catalogTemplateMinutes(template),
             status: "Unassigned",
@@ -12460,6 +12236,7 @@ const JobDetailView = () => {
         unitPriceCents,
         totalPriceCents: Math.round(unitPriceCents * quantity),
         internalCostCents,
+        internalCostMode: "payroll",
         taskIds,
         laborLineTaskIds: taskIds,
         plannedServiceStopIds: [],
@@ -12471,6 +12248,7 @@ const JobDetailView = () => {
         catalogItemId: catalogItem.id,
         salesCatalogItemId: catalogItem.id,
         catalogItemName: serviceName,
+        taxable: Boolean(catalogItem.taxable),
         stripeProductId: catalogItem.stripeProductId || "",
         stripePriceId: catalogItem.stripePriceId || "",
         sortOrder: (laborLineItems || []).length,
@@ -12674,7 +12452,8 @@ const JobDetailView = () => {
   const clearNewTask = (e) => {
     e?.preventDefault?.();
     setSelectedTaskType(null);
-    setSelectedTaskPayType(taskPayTypeOptions[0] || null);
+    setSelectedTaskPayType(null);
+    setNewTaskPayrollForm({});
     setTaskDescription("");
     setTaskLaborCost("0");
     setTaskBillingLaborPrice("0");
@@ -12739,7 +12518,7 @@ const JobDetailView = () => {
   const buildTaskFromGroupTask = (task) => {
     const id = "comp_wo_tas_" + uuidv4();
     const type = canonicalJobTaskType(task.type || task.taskType || task.taskTypeName || "");
-    const defaultPayType = selectedTaskPayType || taskPayTypeOptions[0] || null;
+    const defaultPayType = selectedTaskPayType || null;
 
     return {
       ...task,
@@ -12750,8 +12529,7 @@ const JobDetailView = () => {
       contractedRate: Number(task.contractedRate || task.laborCostCents || task.costCents || 0),
       billingLaborPriceCents: Number(task.billingLaborPriceCents || task.billingLaborCents || 0),
       estimatedTime: Number(task.estimatedTime || task.estimatedMinutes || task.minutes || 0),
-      payTypeId: task.payTypeId || defaultPayType?.id || "",
-      payTypeName: task.payTypeName || defaultPayType?.name || defaultPayType?.label || "",
+      ...jobPayFields(task, defaultPayType ? { payTypeId: defaultPayType.id, payTypeName: defaultPayType.name || defaultPayType.label } : (laborLineItems || []).find((line) => line.id === newTaskLaborLineId) || {}),
       status: "Unassigned",
       customerApproval: Boolean(task.customerApproval),
       actualTime: 0,
@@ -12847,6 +12625,7 @@ const JobDetailView = () => {
 
     return {
       ...EMPTY_TASK_EDIT_FORM,
+      ...jobPayFields(task),
       name: task?.name || task?.description || "",
       type: canonicalJobTaskType(task?.type || ""),
       status: task?.status || "Unassigned",
@@ -12941,9 +12720,9 @@ const JobDetailView = () => {
       const linkedShoppingListItemId = "comp_shop_" + uuidv4();
       const plannedUnitCostCents = Number(selectedDbItem.rate || selectedDbItem.cost || 0);
       const plannedUnitPriceCents = Number(
-        selectedDbItem.sellPrice ||
-        selectedDbItem.rate ||
-        selectedDbItem.cost ||
+        selectedDbItem.sellPrice ??
+        selectedDbItem.rate ??
+        selectedDbItem.cost ??
         0
       );
       const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
@@ -12961,6 +12740,7 @@ const JobDetailView = () => {
         purchaserId: "",
         purchaserName: "",
         genericItemId: selectedDbItem.genericItemId || "",
+        taxable: Boolean(selectedDbItem.taxable),
         name: materialName,
         description: materialDescription,
         datePurchased: null,
@@ -13031,9 +12811,9 @@ const JobDetailView = () => {
     if (editingTaskNeedsInstallItem && selectedDbItem) {
       const plannedUnitCostCents = Number(selectedDbItem.rate || selectedDbItem.cost || 0);
       const plannedUnitPriceCents = Number(
-        selectedDbItem.sellPrice ||
-        selectedDbItem.rate ||
-        selectedDbItem.cost ||
+        selectedDbItem.sellPrice ??
+        selectedDbItem.rate ??
+        selectedDbItem.cost ??
         0
       );
 
@@ -13159,8 +12939,7 @@ const JobDetailView = () => {
       contractedRate: nextLaborCents,
       billingLaborPriceCents: nextBillingLaborPriceCents,
       estimatedTime: nextEstimatedMinutes,
-      payTypeId: selectedPayType?.id || "",
-      payTypeName: selectedPayType?.name || selectedPayType?.label || "",
+      ...jobPayFields({ ...taskEditForm, payTypeId: taskEditForm.payTypeId || "", payTypeName: selectedPayType?.name || selectedPayType?.label || taskEditForm.payTypeName || "" }),
       customerApproval: Boolean(taskEditForm.customerApproval),
       bodyOfWaterId: editingTaskNeedsBodyOfWater ? resolvedEditBodyOfWaterId : "",
       equipmentId: editingTaskNeedsEquipment ? taskEditForm.equipmentId : "",
@@ -13438,7 +13217,7 @@ const JobDetailView = () => {
       const costCents = centsFromCurrencyInput(taskLaborCost || "0");
       const billingLaborPriceCents = centsFromCurrencyInput(taskBillingLaborPrice || "0");
       const estMin = estimatedTimeNumber;
-      const taskPayType = selectedTaskPayType || taskPayTypeOptions[0] || null;
+      const taskPayType = selectedTaskPayType || null;
       const linkedShoppingListItemId = taskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
       const quantity = taskNeedsInstallItem ? parseFloat(taskQuantity) : 0;
       const newTaskType = canonicalJobTaskType(selectedTaskType.value);
@@ -13458,8 +13237,7 @@ const JobDetailView = () => {
         contractedRate: costCents,
         billingLaborPriceCents,
         estimatedTime: estMin,
-        payTypeId: taskPayType?.id || "",
-        payTypeName: taskPayType?.name || taskPayType?.label || "",
+        ...jobPayFields({ ...newTaskPayrollForm, payTypeId: taskPayType?.id || "", payTypeName: taskPayType?.name || taskPayType?.label || "" }, (laborLineItems || []).find((line) => line.id === newTaskLaborLineId) || {}),
         status: "Unassigned",
 
         customerApproval: false,
@@ -13491,9 +13269,9 @@ const JobDetailView = () => {
       if (taskNeedsInstallItem) {
         const plannedUnitCostCents = Number(taskDbItem?.rate || taskDbItem?.cost || 0);
         const plannedUnitPriceCents = Number(
-          taskDbItem?.sellPrice ||
-          taskDbItem?.rate ||
-          taskDbItem?.cost ||
+          taskDbItem?.sellPrice ??
+          taskDbItem?.rate ??
+          taskDbItem?.cost ??
           0
         );
         const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
@@ -13512,6 +13290,7 @@ const JobDetailView = () => {
           purchaserId: "",
           purchaserName: "",
           genericItemId: taskDbItem?.genericItemId || "",
+          taxable: Boolean(taskDbItem?.taxable),
           name: materialName,
           description: materialDescription,
           datePurchased: null,
@@ -13625,7 +13404,7 @@ const JobDetailView = () => {
     setEditingPlannedStopId("");
     setPlannedStopForm({
       ...EMPTY_PLANNED_STOP_FORM,
-      serviceStopTypeId: operationsPlannedStopPayTypes?.[0]?.id || "",
+      serviceStopTypeId: "",
     });
     setNewPlannedStop(true);
   };
@@ -13724,6 +13503,7 @@ const JobDetailView = () => {
           "jobVisit",
         estimatedMinutes: estimatedMinutesNumber,
         plannedLaborCostCents,
+        billingLaborPriceCents: existingStop?.billingLaborPriceCents ?? existingStop?.plannedLaborCostCents ?? 0,
         estimatedLaborCostCents: plannedLaborCostCents,
         payrollEstimateMinAmountCents: cents(plannedStopFormPayRange.minAmountCents),
         payrollEstimateMaxAmountCents: plannedLaborCostCents,
@@ -13967,7 +13747,7 @@ const JobDetailView = () => {
     const photoFields = option ? itemPhotoFieldsFromSource(option, option.name || "Shopping item photo") : {};
     const plannedUnitCost = option ? dollarsFromCents(option.rate || option.cost || 0) : "";
     const plannedUnitPrice = option
-      ? dollarsFromCents(option.sellPrice || option.rate || option.cost || 0)
+      ? dollarsFromCents(option.sellPrice ?? option.rate ?? option.cost ?? 0)
       : "";
     setShoppingFormData((prev) => ({
       ...prev,
@@ -14037,11 +13817,17 @@ const JobDetailView = () => {
         ...(isEquipmentItem ? databaseEquipmentMappingPatch(shoppingDbItemForm.equipmentMapping) : {}),
       };
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), item);
+      const product = buildProductFromVendorItem({ productId: `com_generic_${uuidv4()}`, vendorItem: item });
+      const batch = writeBatch(db);
+      batch.set(productCatalogDocRef(db, recentlySelectedCompany, product.id), product);
+      batch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), { ...item, ...buildVendorItemProductPatch(product) });
+      await batch.commit();
 
-      const option = buildShoppingDbItemOption(item, id);
+      const vendorOption = buildShoppingDbItemOption({ ...item, genericItemId: product.id }, id);
+      const option = buildShoppingDbItemOption(buildJobProductCatalog([product], [item]).products[0], product.id);
+      setJobProductList((prev) => [...prev, option]);
       setShoppingDbItemList((prev) =>
-        [...(prev || []).filter((existing) => existing.id !== id), option].sort((left, right) =>
+        [...(prev || []).filter((existing) => existing.id !== id), vendorOption].sort((left, right) =>
           String(left.name || "").localeCompare(String(right.name || ""))
         )
       );
@@ -14049,8 +13835,8 @@ const JobDetailView = () => {
       setShoppingFormData((prev) => ({
         ...prev,
         subCategory: "Data Base",
-        dbItemId: id,
-        genericItemId: "",
+        dbItemId: option.id,
+        genericItemId: product.id,
         name: option.name,
         description: option.description,
       }));
@@ -14095,6 +13881,7 @@ const JobDetailView = () => {
 
   const clearNewShoppingListItem = (e) => {
     e?.preventDefault?.();
+    if (savingShoppingItemRef.current) return;
     resetNewShoppingListItemDraft();
   };
 
@@ -14151,7 +13938,7 @@ const JobDetailView = () => {
     const nextLinkedTask =
       (taskList || []).find((task) => task.id === shoppingEditForm.linkedTaskId) || null;
     const existingLinkedTaskId = linkedTaskIdForPlanMaterial(item);
-    const databaseItemId = item.dbItemId || item.itemId || item.dataBaseItemId || "";
+    const databaseItemId = getJobMaterialVendorItemId(item);
 
     if (!nextName) return toast.error("Enter product name.");
     if (!Number.isFinite(nextQuantity) || nextQuantity <= 0) {
@@ -14159,7 +13946,7 @@ const JobDetailView = () => {
     }
     if (nextUnitCostCents < 0) return toast.error("Unit cost cannot be negative.");
     if (nextUnitPriceCents < 0) return toast.error("Unit billing price cannot be negative.");
-    if (shoppingEditForm.updateDatabaseItem && !databaseItemId) {
+    if (shoppingEditForm.updateDatabaseItem && !databaseItemId && !item.genericItemId) {
       return toast.error("This planned product is not linked to a database item.");
     }
     if (shoppingEditForm.updateDatabaseItem && !requirePermission("852", "update database items")) return;
@@ -14236,35 +14023,20 @@ const JobDetailView = () => {
 
       if (taskLinkWrites.length) await Promise.all(taskLinkWrites);
 
-      if (shoppingEditForm.updateDatabaseItem && databaseItemId) {
-        const databaseUpdates = {
-          name: nextName,
-          description: shoppingEditForm.description,
-          rate: nextUnitCostCents,
-          sellPrice: nextUnitPriceCents,
-          billingRate: nextUnitPriceCents,
-          billable: nextUnitPriceCents > 0,
-          dateUpdated: new Date(),
-          updatedAt: serverTimestamp(),
-          updatedAtMillis: nowMillis,
-        };
-
-        await updateDoc(
-          doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", databaseItemId),
-          databaseUpdates
-        );
-
-        setShoppingDbItemList((prev) =>
-          (prev || []).map((dbItem) =>
-            dbItem.id === databaseItemId
-              ? buildShoppingDbItemOption({
-                ...dbItem,
-                ...databaseUpdates,
-                updatedAt: new Date(),
-              }, databaseItemId)
-              : dbItem
-          )
-        );
+      if (shoppingEditForm.updateDatabaseItem) {
+        const batch = writeBatch(db);
+        const shared = { name: nextName, description: shoppingEditForm.description, updatedAt: serverTimestamp() };
+        if (item.genericItemId) batch.update(productCatalogDocRef(db, recentlySelectedCompany, item.genericItemId), {
+          ...shared, sellPrice: nextUnitPriceCents, billingRate: nextUnitPriceCents,
+        });
+        if (databaseItemId) batch.update(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", databaseItemId), {
+          ...shared, rate: nextUnitCostCents,
+          ...(!item.genericItemId ? { sellPrice: nextUnitPriceCents, billingRate: nextUnitPriceCents } : {}),
+        });
+        await batch.commit();
+        const catalog = await loadJobProductCatalog(db, recentlySelectedCompany);
+        setShoppingDbItemList(catalog.vendorItems.map((row) => buildShoppingDbItemOption(row, row.id)));
+        setJobProductList(catalog.products.map((row) => buildShoppingDbItemOption(row, row.id)));
       }
 
       await recordJobHistory({
@@ -14287,6 +14059,8 @@ const JobDetailView = () => {
           linkedTaskId: nextLinkedTask?.id || "",
           databaseItemId,
           updatedDatabaseItem: Boolean(shoppingEditForm.updateDatabaseItem && databaseItemId),
+          genericItemId: item.genericItemId || "",
+          updatedProduct: Boolean(shoppingEditForm.updateDatabaseItem && item.genericItemId),
         },
       });
 
@@ -14319,6 +14093,7 @@ const JobDetailView = () => {
 
   const handleAddShoppingListItem = async (e, { keepOpen = false } = {}) => {
     e?.preventDefault?.();
+    if (savingShoppingItemRef.current) return;
     if (!requireBuildJobEstimatePlan("build job estimate plans")) return;
 
     try {
@@ -14359,9 +14134,9 @@ const JobDetailView = () => {
         plannedUnitPriceCents = shoppingFormData.plannedUnitPrice !== ""
           ? centsFromCurrencyInput(shoppingFormData.plannedUnitPrice)
           : Number(
-            selectedShoppingDbItem?.sellPrice ||
-            selectedShoppingDbItem?.rate ||
-            selectedShoppingDbItem?.cost ||
+            selectedShoppingDbItem?.sellPrice ??
+            selectedShoppingDbItem?.rate ??
+            selectedShoppingDbItem?.cost ??
             0
           );
       } else {
@@ -14399,6 +14174,9 @@ const JobDetailView = () => {
         )
       );
 
+      savingShoppingItemRef.current = true;
+      setSavingShoppingItemAction(keepOpen ? "addMore" : "add");
+
       await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", id), {
         id,
         category: "Job",
@@ -14407,6 +14185,7 @@ const JobDetailView = () => {
         purchaserId: shoppingFormData.purchaserId || "",
         purchaserName: shoppingFormData.purchaserName || "",
         genericItemId: shoppingFormData.genericItemId || "",
+        taxable: Boolean(selectedShoppingDbItem?.taxable),
         name: materialName,
         description: materialDescription,
         datePurchased: shoppingFormData.datePurchased
@@ -14445,7 +14224,7 @@ const JobDetailView = () => {
         assignedTechIds: [],
 
         // DataBaseItem
-        dbItemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
+        dbItemId: requiresShoppingDbItem ? selectedShoppingDbItem?.dbItemId || "" : "",
         dbItemName: requiresShoppingDbItem ? materialName : "",
         ...materialPhotoFields,
         purchasedItem: "",
@@ -14459,7 +14238,7 @@ const JobDetailView = () => {
         jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
 
         // Legacy web fields for backward compatibility
-        itemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
+        itemId: requiresShoppingDbItem ? selectedShoppingDbItem?.dbItemId || "" : "",
         itemType: shoppingFormData.subCategory,
         cost: plannedUnitCostCents,
         price: plannedUnitPriceCents,
@@ -14526,6 +14305,9 @@ const JobDetailView = () => {
     } catch (err) {
       console.error(err);
       toast.error("Failed to add item");
+    } finally {
+      savingShoppingItemRef.current = false;
+      setSavingShoppingItemAction("");
     }
   };
 
@@ -14708,7 +14490,7 @@ const JobDetailView = () => {
 
   const getShoppingDbItemById = (itemId) => {
     if (!itemId) return null;
-    return (shoppingDbItemList || []).find((dbItem) => {
+    return [...jobProductList, ...shoppingDbItemList].find((dbItem) => {
       return dbItem.id === itemId || dbItem.dbItemId === itemId || dbItem.value === itemId;
     }) || null;
   };
@@ -15077,7 +14859,7 @@ const JobDetailView = () => {
     const itemId = getFirestoreDocId(item);
     const totalCostCents = getShoppingPlannedTotalCostCents(item);
     const totalPriceCents = getShoppingPlannedTotalPriceCents(item);
-    const databaseItemId = item.dbItemId || item.itemId || item.dataBaseItemId || "";
+    const databaseItemId = getJobMaterialVendorItemId(item);
     const linkedTaskId =
       item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.sourceTaskId || "";
     const linkedTask = linkedTaskId
@@ -15302,7 +15084,7 @@ const JobDetailView = () => {
                     Require customer approval
                   </label>
 
-                  {databaseItemId && (
+                  {(databaseItemId || item.genericItemId) && (
                     <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
                       <input
                         type="checkbox"
@@ -15310,7 +15092,7 @@ const JobDetailView = () => {
                         onChange={(event) => updateShoppingEditForm("updateDatabaseItem", event.target.checked)}
                         className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
                       />
-                      Update database item
+                      Update product catalog
                     </label>
                   )}
                 </div>
@@ -16169,20 +15951,8 @@ const JobDetailView = () => {
 
     setPlannedServiceStops(plannedStops);
 
-    const workOffersQ = query(
-      workOffersPath(companyId),
-      where("jobId", "==", currentJobId)
-    );
-
-    const workOffersSnap = await getDocs(workOffersQ);
-    const offers = workOffersSnap.docs
-      .map(withFirestoreDocId)
-      .sort((a, b) => {
-        const aDate = a.createdAt?.toDate?.()?.getTime?.() || 0;
-        const bDate = b.createdAt?.toDate?.()?.getTime?.() || 0;
-        return bDate - aDate;
-      });
-
+    const result=await manageTechnicianWork(companyId,"list",{jobId:currentJobId});
+    const offers=result.offers || [];
     setWorkOffers(offers);
 
     const purchasedItemsQ = query(
@@ -16198,7 +15968,8 @@ const JobDetailView = () => {
     const serviceStopIdsForPayroll = Array.from(
       new Set((currentServiceStops || []).map((stop) => stop.id).filter(Boolean))
     );
-    const payrollLines = [];
+    const jobPayrollSnap = await getDocs(query(payLineItemsPath(companyId), where("jobId", "==", currentJobId)));
+    const payrollLines = jobPayrollSnap.docs.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id }));
 
     for (let i = 0; i < serviceStopIdsForPayroll.length; i += 10) {
       const idChunk = serviceStopIdsForPayroll.slice(i, i + 10);
@@ -16212,7 +15983,7 @@ const JobDetailView = () => {
       );
 
       payrollSnap.docs.forEach((d) => {
-        payrollLines.push({ ...d.data(), id: d.data().id || d.id });
+        if (!payrollLines.some((line) => line.id === d.id)) payrollLines.push({ ...d.data(), id: d.id });
       });
     }
 
@@ -16658,7 +16429,7 @@ const JobDetailView = () => {
             {event.title || "Job updated"}
           </p>
           <p className="mt-1 text-sm text-gray-600">
-            {event.actorUserName || "Unknown"} • {formatDateTimeValue(event.createdAt)}
+            {jobHistoryActorName(event)} • {formatJobHistoryDate(event)}
           </p>
         </div>
 
@@ -17575,6 +17346,7 @@ const JobDetailView = () => {
                       />
                     </div>
                   </div>
+                  <div className="col-span-full"><JobPayrollFields value={scheduleTaskForm} showPayType={false} onChange={updateScheduleTaskForm} /></div>
 
                   {scheduleTaskNeedsBodyOfWater && (
                     <div className={scheduleTaskFieldLabelClass}>
@@ -18299,9 +18071,9 @@ const JobDetailView = () => {
     ? shoppingFormData.plannedUnitPrice !== ""
       ? centsFromCurrencyInput(shoppingFormData.plannedUnitPrice)
       : Number(
-        selectedShoppingDbItem?.sellPrice ||
-        selectedShoppingDbItem?.rate ||
-        selectedShoppingDbItem?.cost ||
+        selectedShoppingDbItem?.sellPrice ??
+        selectedShoppingDbItem?.rate ??
+        selectedShoppingDbItem?.cost ??
         0
       )
     : centsFromCurrencyInput(shoppingFormData.plannedUnitPrice);
@@ -18327,13 +18099,13 @@ const JobDetailView = () => {
     0
   );
   const currentPlanInvoiceLineItems = (() => {
-    const explicitLaborLines = normalizeJobLaborLineItems(laborLineItems);
+    const explicitLaborLines = normalizeJobLaborLineItems(completeJobLaborLines({ laborLineItems, tasks: taskList, plannedServiceStops, plannedStopCost: getPlannedStopCostCents, taskCost: getTaskCostCents }));
     const laborLines = explicitLaborLines.length
       ? explicitLaborLines.map((line, index) => ({
         id: `labor-${line.id || index}`,
         sourceId: line.id || "",
         group: "Labor",
-        generated: false,
+        generated: Boolean(line.generatedFromTaskId || line.generatedFromPlannedStopId),
         name: line.name || `Labor ${index + 1}`,
         description: [line.description, laborLineScopeLabel(line)].filter(Boolean).join(" • "),
         quantity: Number(line.quantity || 1),
@@ -18342,7 +18114,8 @@ const JobDetailView = () => {
         internalCostCents: cents(line.internalCostCents),
         profitCents: cents(line.totalPriceCents) - cents(line.internalCostCents),
         taskIds: getLaborLineTaskIds(line),
-        plannedServiceStopIds: [],
+        plannedServiceStopIds: getLaborLinePlannedStopIds(line),
+        taxable: Boolean(line.taxable),
       }))
       : (() => {
         const taskIds = (taskList || []).map((task) => task.id).filter(Boolean);
@@ -18794,7 +18567,11 @@ const JobDetailView = () => {
             />
           </label>
           <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-            Internal Cost
+            Cost calculation
+            <select aria-label="Cost calculation" value={laborLineForm.internalCostMode || "payroll"} onChange={(event) => updateLaborLineForm("internalCostMode", event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm normal-case">
+              <option value="payroll">Assigned technician pay</option><option value="fixed">Fixed internal budget</option>
+            </select>
+            {laborLineForm.internalCostMode === "fixed" ? "Internal budget" : "Fallback budget while pay is unresolved"}
             <input
               type="number"
               min="0"
@@ -19205,6 +18982,13 @@ const JobDetailView = () => {
 	                  </label>
 	                </div>
 
+                    <label className="block text-sm font-semibold text-slate-700">
+                      Default payroll pay item
+                      <select value={serviceCatalogCreatorForm.payTypeId || ""} onChange={(event) => updateServiceCatalogCreatorField("payTypeId", event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
+                        <option value="">Select a payroll pay item</option>
+                        {companyWorkTypes.filter((type) => type.isActive !== false && type.active !== false).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+                      </select>
+                    </label>
 	                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
 	                  <label className="block text-sm font-semibold text-slate-700">
 	                    Type
@@ -19311,9 +19095,9 @@ const JobDetailView = () => {
 	              ) : (
 	                <div className="mt-3 space-y-3">
 	                  {taskTemplates.map((template, index) => (
-	                    <div key={template.id} className="rounded-md border border-slate-200 bg-white p-3">
-	                      <div className="grid gap-3 xl:grid-cols-[minmax(180px,1.1fr)_minmax(170px,0.9fr)_minmax(240px,1.4fr)_110px_120px_120px_minmax(140px,auto)_auto] xl:items-end">
-	                        <label className="block text-sm font-semibold text-slate-700">
+	                    <div key={template.id} className="min-w-0 rounded-md border border-slate-200 bg-white p-3">
+	                      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6 lg:items-end">
+	                        <label className="block min-w-0 text-sm font-semibold text-slate-700 lg:col-span-2">
 	                          <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</span>
 	                          <input
 	                            type="text"
@@ -19323,7 +19107,7 @@ const JobDetailView = () => {
 	                            placeholder="Clean filter"
 	                          />
 	                        </label>
-	                        <div className="block text-sm font-semibold text-slate-700">
+	                        <div className="block min-w-0 text-sm font-semibold text-slate-700 lg:col-span-2">
 	                          Task Type
 	                          <div className="mt-1 font-normal">
 	                            <Select
@@ -19338,7 +19122,7 @@ const JobDetailView = () => {
 	                            />
 	                          </div>
 	                        </div>
-	                        <label className="block text-sm font-semibold text-slate-700">
+	                        <label className="block min-w-0 text-sm font-semibold text-slate-700 sm:col-span-2">
 	                          Notes
 	                          <textarea
 	                            value={template.description}
@@ -19348,7 +19132,7 @@ const JobDetailView = () => {
 	                            placeholder="Spray grids, check grids, reassemble filter"
 	                          />
 	                        </label>
-	                        <label className="block text-sm font-semibold text-slate-700">
+	                        <label className="block min-w-0 text-sm font-semibold text-slate-700">
 	                          Minutes
 	                          <input
 	                            type="number"
@@ -19359,7 +19143,7 @@ const JobDetailView = () => {
 	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
 	                          />
 	                        </label>
-	                        <label className="block text-sm font-semibold text-slate-700">
+	                        <label className="block min-w-0 text-sm font-semibold text-slate-700">
 	                          Tech Cost
 	                          <input
 	                            type="number"
@@ -19370,7 +19154,7 @@ const JobDetailView = () => {
 	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
 	                          />
 	                        </label>
-	                        <label className="block text-sm font-semibold text-slate-700">
+	                        <label className="block min-w-0 text-sm font-semibold text-slate-700">
 	                          Billing
 	                          <input
 	                            type="number"
@@ -19381,7 +19165,7 @@ const JobDetailView = () => {
 	                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
 	                          />
 	                        </label>
-	                        <label className="flex min-h-[38px] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+	                        <label className="flex min-h-[38px] min-w-0 items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 lg:col-span-2">
 	                          <input
 	                            type="checkbox"
 	                            checked={Boolean(template.customerApprovalRequired)}
@@ -19393,10 +19177,13 @@ const JobDetailView = () => {
 	                        <button
 	                          type="button"
 	                          onClick={() => removeServiceCatalogCreatorTaskTemplate(template.id)}
-	                          className="min-h-[38px] rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+	                          className="min-h-[38px] rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 lg:justify-self-end"
 	                        >
 	                          Remove
 	                        </button>
+                            <div className="col-span-full">
+                              <JobPayrollFields value={template} payTypes={companyWorkTypes} inheritedPayTypeId={serviceCatalogCreatorForm.payTypeId || ""} onChange={(field, value) => updateServiceCatalogCreatorTaskTemplate(template.id, field, value)} />
+                            </div>
 	                      </div>
 	                    </div>
 	                  ))}
@@ -19478,6 +19265,7 @@ const JobDetailView = () => {
             ))}
           </select>
         </label>
+        <div className="col-span-full"><JobPayrollFields value={taskEditForm} onChange={updateTaskEditForm} showPayType={false} /></div>
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
           Tech Labor Cost
           <input
@@ -19729,6 +19517,7 @@ const JobDetailView = () => {
             />
           </div>
         </div>
+        <div className="col-span-full"><JobPayrollFields value={{ ...newTaskPayrollForm, payTypeId: selectedTaskPayType?.id || "" }} onChange={(field, value) => setNewTaskPayrollForm((form) => ({ ...form, [field]: value }))} showPayType={false} /></div>
         {taskNeedsBodyOfWater && (
           <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
             Body of Water
@@ -19901,7 +19690,7 @@ const JobDetailView = () => {
     return (
       <form onSubmit={handleAddShoppingListItem} className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+          <fieldset disabled={savingShoppingItem} className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
             <div className="space-y-4">
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -19930,12 +19719,13 @@ const JobDetailView = () => {
                     <div className="min-w-0">
                       <Select
                         value={selectedShoppingDbItem}
-                        options={shoppingDbItemList}
+                        options={jobProductList}
                         onChange={handleShoppingDbItemChange}
+                        isDisabled={savingShoppingItem}
                         isSearchable
                         isClearable
-                        placeholder={(shoppingDbItemList || []).length ? "Search product or part" : "No database items yet"}
-                        noOptionsMessage={() => "No matching database items"}
+                        placeholder={(jobProductList || []).length ? "Search product or part" : "No products yet"}
+                        noOptionsMessage={() => "No matching products"}
                         formatOptionLabel={formatShoppingDbItemOption}
                         filterOption={(option, inputValue) =>
                           (option.data.searchText || option.data.label || "")
@@ -19961,7 +19751,7 @@ const JobDetailView = () => {
                     <button
                       type="button"
                       onClick={() => setShowShoppingDbItemCreator(true)}
-                      disabled={showShoppingDbItemCreator}
+                      disabled={showShoppingDbItemCreator || savingShoppingItem}
                       className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <PlusIcon className="h-4 w-4" aria-hidden="true" />
@@ -20097,14 +19887,18 @@ const JobDetailView = () => {
                 ))}
               </div>
             </div>
-          </div>
+          </fieldset>
         </div>
 
         <div className="flex flex-col gap-2 border-t border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <p role="status" className="sr-only">
+            {savingShoppingItem ? "Adding part to the plan. Please wait." : ""}
+          </p>
           <button
             type="button"
             onClick={clearNewShoppingListItem}
-            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            disabled={savingShoppingItem}
+            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Cancel
           </button>
@@ -20112,17 +19906,21 @@ const JobDetailView = () => {
             <button
               type="button"
               onClick={(event) => handleAddShoppingListItem(event, { keepOpen: true })}
-              disabled={!canSaveShoppingItem}
-              className="rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canSaveShoppingItem || savingShoppingItem}
+              aria-busy={savingShoppingItemAction === "addMore"}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Save & Add More Parts
+              {savingShoppingItemAction === "addMore" && <ArrowPathIcon className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {savingShoppingItemAction === "addMore" ? "Saving Part..." : "Save & Add More Parts"}
             </button>
             <button
               type="submit"
-              disabled={!canSaveShoppingItem}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canSaveShoppingItem || savingShoppingItem}
+              aria-busy={savingShoppingItemAction === "add"}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Add Part
+              {savingShoppingItemAction === "add" && <ArrowPathIcon className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {savingShoppingItemAction === "add" ? "Adding Part..." : "Add Part"}
             </button>
           </div>
         </div>
@@ -20154,7 +19952,8 @@ const JobDetailView = () => {
             <button
               type="button"
               onClick={clearNewShoppingListItem}
-              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50"
+              disabled={savingShoppingItem}
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Close product line creator"
             >
               <XMarkIcon className="h-5 w-5" aria-hidden="true" />
@@ -20178,7 +19977,7 @@ const JobDetailView = () => {
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Unassigned Work</p>
                 <p className="mt-0.5 text-xs text-amber-700">
-                  Attach these tasks to a service line so they are included in the customer-facing billing scope.
+                  These tasks are billed separately at their task prices. Attach them to a service line to include their work in that service price.
                 </p>
               </div>
               {canBuildJobEstimatePlan && (
@@ -20291,14 +20090,14 @@ const JobDetailView = () => {
                     disabled: savingLaborLine || newLaborLine,
                     tone: "blue",
                   },
-                  laborLine && {
+                  laborLine && !line.generated && {
                     label: "Edit",
                     icon: PencilSquareIcon,
                     onClick: () => startLaborLineEdit(laborLine),
                     disabled: savingLaborLine,
                     tone: "blue",
                   },
-                  laborLine && {
+                  laborLine && !line.generated && {
                     label: "Delete",
                     icon: XMarkIcon,
                     onClick: () => deleteLaborLineItem(laborLine),
@@ -20385,6 +20184,8 @@ const JobDetailView = () => {
 
   return (
     <div className="job-detail-view min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      {(() => { const progress=jobExecutionProgress({tasks:taskList,services:laborLineItems,products:shoppingList,offers:workOffers}); return <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4"><h2 className="font-bold">Remaining Work</h2><p className="mt-1 text-sm">{progress.remainingTasks} tasks · {progress.remainingServices} services · {progress.remainingProductUnits} product units</p><p className="mt-1 text-sm text-slate-600">{progress.stages.unassigned} unassigned · {progress.stages.offered} offered · {progress.stages.acceptedUnscheduled} assigned, unscheduled · {progress.stages.scheduled} scheduled · {progress.stages.blocked} waiting for parts</p></section>; })()}
+
       <div className="w-full space-y-6">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -20720,7 +20521,7 @@ const JobDetailView = () => {
                               <dd className="min-w-0 text-right">
                                 {!edit ? (
                                   <span className="text-sm font-bold text-slate-950">
-                                    {moneyFromCents(plannedEstimatePriceCents || job.rate)}
+                                    {moneyFromCents(displayedEstimatePriceCents)}
                                   </span>
                                 ) : (
                                   <div className="ml-auto flex max-w-[150px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2 py-1.5">
@@ -20752,6 +20553,15 @@ const JobDetailView = () => {
                           </dl>
                         </div>
                       )}
+
+                      <JobNextVisitSnapshot
+                        jobId={jobId}
+                        serviceStops={serviceStops}
+                        tasks={taskList}
+                        offers={workOffers}
+                        companyUsers={companyUserList}
+                        loading={sectionLoading.actual || sectionLoading.workOffers || sectionLoading.plannedWork}
+                      />
 
                       <div className="mt-4">
                         <div className="flex items-center justify-between gap-3">
@@ -20854,7 +20664,8 @@ const JobDetailView = () => {
 	                        {selectedEditorPlan ? (
 	                          <>
 	                            <StatusBadge status={selectedEditorPlan.status || JOB_PLAN_STATUS.DRAFT} />
-	                            {hasUnsavedPlanEditorChanges && (
+	                            {plannedPayrollNeedsReview && <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-800">Pay setup needs review</span>}
+                            {hasUnsavedPlanEditorChanges && (
 	                              <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
                                 Unsaved Changes
                               </span>
@@ -21920,7 +21731,8 @@ const JobDetailView = () => {
                             <button
                               type="button"
                               onClick={clearNewShoppingListItem}
-                              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50"
+                              disabled={savingShoppingItem}
+                              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                               aria-label="Close add planned product"
                             >
                               <XMarkIcon className="h-5 w-5" aria-hidden="true" />
@@ -21965,7 +21777,7 @@ const JobDetailView = () => {
                                   </div>
                                   <Select
                                     value={selectedShoppingDbItem}
-                                    options={shoppingDbItemList}
+                                    options={jobProductList}
                                     onChange={handleShoppingDbItemChange}
                                     isSearchable
                                     isClearable
@@ -22179,10 +21991,12 @@ const JobDetailView = () => {
 
                               <button
                                 onClick={handleAddShoppingListItem}
-                                disabled={!canSaveShoppingItem}
-                                className="mt-3 block w-full rounded-md bg-blue-600 px-4 py-2 text-center text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                                disabled={!canSaveShoppingItem || savingShoppingItem}
+                                aria-busy={savingShoppingItem}
+                                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-center text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                Add Product
+                                {savingShoppingItem && <ArrowPathIcon className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                                {savingShoppingItem ? "Adding Product..." : "Add Product"}
                               </button>
                             </div>
                           </div>
@@ -22356,7 +22170,7 @@ const JobDetailView = () => {
                             <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Recorded Actuals</p>
                             <h4 className="mt-1 text-base font-bold text-slate-900">Payroll</h4>
                             <p className="text-gray-600 mt-1 text-sm">
-                              Payroll line items created from service stops, tasks, or adjustments. Stops without payroll lines are estimated in the labor total.
+                              Payroll line items created from service stops, tasks, or adjustments. Missing rates remain visible for review. Unfinished work is estimated separately.
                             </p>
 
                           </div>
@@ -22366,6 +22180,8 @@ const JobDetailView = () => {
                           </span>
                         </div>
 
+                        {actualPayLineItems.some((line) => line.calculationStatus === "needsReview") && <p role="status" className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-900">Some completed work needs payroll setup or a technician assignment. Review the lines below before approving pay.</p>}
+                        {(job.payrollReconcileStatus === "adjustmentRequired" || serviceStops.some((stop) => stop.payrollReconcileStatus === "adjustmentRequired")) && <p role="status" className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-900">Work changed after pay was approved or linked to a statement. The original pay is protected; review it in Payroll and make an adjustment.</p>}
                         <div className="mt-3 space-y-2">
                           {!actualPayLineItems.length ? (
                             <div className="rounded-md border border-dashed border-gray-300 p-4 text-center">
@@ -22838,9 +22654,9 @@ const JobDetailView = () => {
                       />
 
                       <StatCard
-                        title="Labor Cost"
+                        title="Earned Labor"
                         value={moneyFromCents(actualLaborTotalCents)}
-                        subtitle={`${moneyFromCents(actualPayrollTotalCents)} payroll • ${moneyFromCents(scheduledStopLaborEstimateCents)} stop labor`}
+                        subtitle={`${moneyFromCents(scheduledStopLaborEstimateCents)} remaining visit estimate, separate from earned pay`}
                         tone="red"
                       />
 
@@ -23601,7 +23417,7 @@ const JobDetailView = () => {
                   <StatCard title="Products" value={String(shoppingList.length)} subtitle="Planned items" />
                   <StatCard
                     title="Price"
-                    value={moneyFromCents(plannedEstimatePriceCents || job.rate)}
+                    value={moneyFromCents(displayedEstimatePriceCents)}
                     subtitle={plannedEstimatePriceCents ? "Services + products billing" : "Default rate"}
                     tone="blue"
                   />
@@ -24283,7 +24099,14 @@ const JobDetailView = () => {
 	              Choose which unfinished tasks should also be marked finished, and clear any open planned products by marking them installed or deleting the unused ones.
 	            </p>
 
-	            {unfinishedJobFinishTasks.length > 0 ? (
+	            <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-4">
+                <label className="flex gap-2 font-semibold"><input type="checkbox" checked={closeoutWholeJob} onChange={e=>setCloseoutWholeJob(e.target.checked)} />Finish the entire job</label>
+                {closeoutWholeJob && <label className="flex gap-2"><input type="checkbox" checked={closeoutCancelVisits} onChange={e=>setCloseoutCancelVisits(e.target.checked)} />Cancel unused visits and unaccepted offers</label>}
+                <button type="button" className="rounded border px-3 py-2 font-semibold" onClick={()=>{setAllJobFinishTasks(true);setJobFinishServiceIds(laborLineItems.map(v=>v.id));setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(shoppingList));}}>Quick Finish All Remaining Work</button>
+                <h3 className="font-bold">Service items</h3>
+                {laborLineItems.map(line=><label key={line.id} className="flex gap-2"><input type="checkbox" checked={line.completionStatus === "Finished" || jobFinishServiceIds.includes(line.id)} disabled={markingJobFinished || line.completionStatus === "Finished"} onChange={e=>{setJobFinishServiceIds(ids=>e.target.checked?[...ids,line.id]:ids.filter(v=>v!==line.id));if(e.target.checked)setJobFinishTaskIds(ids=>[...new Set([...ids,...getLaborLineTaskIds(line)])]);}} />{line.name || "Service"}</label>)}
+              </div>
+              {unfinishedJobFinishTasks.length > 0 ? (
 	              <div className="mt-4 rounded-lg border border-slate-200">
 	                <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
 	                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
@@ -24463,7 +24286,7 @@ const JobDetailView = () => {
 	                disabled={markingJobFinished}
 	                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
 	              >
-	                {markingJobFinished ? "Finishing..." : "Finish Job"}
+	                {markingJobFinished ? "Finishing..." : closeoutWholeJob ? "Finish Work and Job" : "Finish Selected Work"}
 	              </button>
 	            </div>
 	          </div>
@@ -24777,6 +24600,9 @@ const JobDetailView = () => {
             </div>
 
             <div className="p-6 space-y-6">
+              <label className="block text-sm font-semibold">Requested work<select value={workOfferForm.workPurpose || "execution"} onChange={e=>setWorkOfferForm(v=>({...v,workPurpose:e.target.value,serviceStopTypeId:e.target.value === "diagnostic"?"system_job_estimate_service_stop":"system_job_service_stop"}))} className="ml-2 rounded border p-2"><option value="execution">Perform planned work</option><option value="diagnostic">Diagnostic / estimate visit</option></select></label>
+              {workOfferForm.workPurpose === "diagnostic" && <label className="block text-sm">Estimated minutes<input type="number" min="1" value={workOfferForm.diagnosticMinutes || 60} onChange={e=>handleWorkOfferFormChange("diagnosticMinutes",e.target.value)} className="ml-2 rounded border p-2" /></label>}
+              <p className="text-sm" role="status">{workOfferQuoteError || (workOfferQuote?.totalCents == null ? "Each technician reviews their personal pay before accepting." : `Estimated pay: ${moneyFromCents(workOfferQuote.totalCents)} (base ${moneyFromCents(workOfferQuote.baseCents)} + incentive ${moneyFromCents(workOfferQuote.incentiveCents)})`)}{workOfferQuote?.needsReview && " Pay setup needs review."}</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-500 mb-2">
@@ -24945,7 +24771,7 @@ const JobDetailView = () => {
                 )}
               </div>
 
-              {can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID) && workOfferForm.incentiveType !== "none" && (
+              {can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID) && workOfferForm.incentiveType !== "none" && workOfferQuote?.totalCents != null && (
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                   <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
                     <div>
@@ -24988,9 +24814,7 @@ const JobDetailView = () => {
                   <div>
                     <h4 className="font-bold text-gray-800">Work Scope</h4>
                     <p className="text-sm text-gray-600 mt-1">
-                      {selectedWorkOfferTasks.length} selected • {formatDurationMinutes(selectedWorkOfferMinutes)} • {moneyFromCents(
-                        workOfferFormEstimatedTotalCents
-                      )}
+                      {selectedWorkOfferTasks.length} selected • {formatDurationMinutes(selectedWorkOfferMinutes)} • {workOfferQuote?.totalCents == null ? "Personal pay shown before acceptance" : moneyFromCents(workOfferQuote.totalCents)}
                     </p>
                   </div>
                   <button
@@ -25090,7 +24914,7 @@ const JobDetailView = () => {
               <button
                 type="button"
                 onClick={saveWorkOffer}
-                disabled={savingWorkOffer || !selectedWorkOfferTasks.length}
+                disabled={savingWorkOffer || (workOfferForm.workPurpose !== "diagnostic" && !selectedWorkOfferTasks.length) || workOfferQuote?.needsReview || !!workOfferQuoteError}
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition disabled:opacity-60"
               >
                 {savingWorkOffer ? "Creating..." : "Create Offer"}

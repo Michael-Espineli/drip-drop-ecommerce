@@ -1677,10 +1677,10 @@ const Jobs = () => {
                         <table className="min-w-full bg-white">
                             <thead>
                                 <tr>
-                                    <th className="border-b border-r border-slate-200 bg-slate-100 px-5 py-3 text-left">
-                                        <div className="flex items-center gap-3">
+                                    <th className="w-px whitespace-nowrap border-b border-r border-slate-200 bg-slate-100 px-1 py-3 text-center">
+                                        <div className="flex items-center justify-center">
                                             {canUpdateJobs && (
-                                            <label className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-md p-3 transition hover:bg-slate-200 focus-within:ring-2 focus-within:ring-blue-500">
+                                            <label className="inline-flex min-h-[36px] min-w-[44px] cursor-pointer items-center justify-center rounded-md px-3 py-2 transition hover:bg-slate-200 focus-within:ring-2 focus-within:ring-blue-500">
                                                 <input
                                                     type="checkbox"
                                                     aria-label="Select all visible jobs"
@@ -1691,9 +1691,7 @@ const Jobs = () => {
                                                 />
                                             </label>
                                             )}
-                                            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                                Select
-                                            </span>
+                                            <span className="sr-only">Select jobs</span>
                                         </div>
                                     </th>
                                     <th className="border-b border-r border-slate-200 bg-white px-5 py-3 text-left">
@@ -1769,12 +1767,12 @@ const Jobs = () => {
                                             ].join(" ")}
                                             onClick={() => navigate(currentJobListView === "billing" ? `/company/jobs/detail/${job.id}/billing` : `/company/jobs/detail/${job.id}`)}
                                         >
-                                            <td className="border-r border-slate-200 bg-slate-100/70 px-3 py-1 text-sm font-bold text-slate-700">
+                                            <td className="border-r border-slate-200 bg-slate-100/70 px-1 py-1 text-sm font-bold text-slate-700">
                                                 <div className="flex items-center justify-center">
                                                     {canUpdateJobs && (
                                                     <label
                                                         onClick={(event) => event.stopPropagation()}
-                                                        className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-md p-3 transition hover:bg-slate-200 focus-within:ring-2 focus-within:ring-blue-500"
+                                                        className="inline-flex min-h-[36px] min-w-[44px] cursor-pointer items-center justify-center rounded-md px-3 py-2 transition hover:bg-slate-200 focus-within:ring-2 focus-within:ring-blue-500"
                                                     >
                                                         <input
                                                             type="checkbox"

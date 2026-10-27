@@ -1,80 +1,68 @@
-import React, { useState, useEffect, useContext } from "react";
-import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, deleteDoc, doc, getDoc, updateDoc , setDoc } from "firebase/firestore";
+import React, { useContext, useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import { collection, doc, onSnapshot } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import Select from 'react-select';
-import {v4 as uuidv4} from 'uuid';
-import { format } from 'date-fns'; // Or any other date formatting library
-import { useNavigate } from 'react-router-dom';
-import toast from 'react-hot-toast';
+import { formatJobHistoryDate, jobHistoryActorName, jobHistoryDate } from "../../../utils/jobHistory";
 
 const JobHistoryView = () => {
-    const {jobId} = useParams();
+  const { jobId } = useParams();
+  const { recentlySelectedCompany } = useContext(Context);
+  const [job, setJob] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-    useEffect(() => {
-        (async () => {
-            try{
-    
-            } catch(error){
-                console.log('Error Location useEffect Job Detail View')
-            }
-        })();
-    },[])
-    return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 919191 = gray
-        <div className='px-2 md:px-7 py-5'>
-            <div>
-                <Link 
-                className=' font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#1D2E76] cursor-pointer rounded mt-3'
-                to={`/company/jobs/detail/${jobId}`}>Back</Link>
-                <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <p className="font-bold py-2">Job History</p>
-                    <div className='left-0 w-full justify-between'>
-                        <div className="py-2">
-                            <div className="flex justify-between">
-                                <p className="font-bold">3/8/2025 13:51 PST : John Draney : (Updated)</p>
-                                <p>Current</p>
-                            </div>
-                            <p>Admin: Brett Murdock -> Admin: Sydney Espineli </p>
-                            <hr/>                    
-                        </div>
-                        <div className="py-2">
-                            <div className="flex justify-between">
-                                <p className="font-bold">3/5/2025 11:17 PST : Sydney Espineli : (Updated)</p>
-                                <p>Revert Changes</p>
-                            </div>
-                            <p>Admin: Michael Espineli -> Admin: Brett Murdock </p>
-                            <hr/>                    
-                        </div>
-                        <div className="py-2">
-                            <div className="flex justify-between">
-                                <p className="font-bold">3/1/2025  12:05 PST : Michael Espineli : (Initially Created)</p>
-                                <p>Revert Changes</p>
-                            </div>
+  useEffect(() => {
+    setJob(null);
+    setEvents([]);
+    setError("");
+    if (!recentlySelectedCompany || !jobId) {
+      setLoading(false);
+      return undefined;
+    }
+    setLoading(true);
+    const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+    const unsubscribeJob = onSnapshot(jobRef, (snapshot) => setJob(snapshot.exists() ? snapshot.data() : null), () => {
+      setError("Could not load the job. Please try again.");
+      setLoading(false);
+    });
+    const unsubscribeHistory = onSnapshot(collection(jobRef, "history"), (snapshot) => {
+      setEvents(snapshot.docs.map((entry) => ({ ...entry.data(), id: entry.id }))
+        .sort((a, b) => (jobHistoryDate(b)?.getTime() || 0) - (jobHistoryDate(a)?.getTime() || 0)));
+      setLoading(false);
+    }, () => {
+      setError("Could not load job history. Please try again.");
+      setLoading(false);
+    });
+    return () => { unsubscribeJob(); unsubscribeHistory(); };
+  }, [recentlySelectedCompany, jobId]);
 
-                            <p>-> Admin: Michael Espineli </p>
-                            <p>-> Customer: Ron Palace </p>
-                            <p>-> Tasks: Maintenance </p>
-                            <p>-> Add De </p>
-                            <p>-> Brush Pool</p>
-
-                            <hr/>                    
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
+  return (
+    <main className="mx-auto max-w-5xl px-4 py-6 md:px-7">
+      <Link to={`/company/jobs/detail/${jobId}`} className="text-sm font-semibold text-blue-700 hover:underline">Back to Job</Link>
+      <h1 className="mt-4 text-2xl font-bold text-slate-900">Job History{job?.internalId ? ` · ${job.internalId}` : ""}</h1>
+      <p className="mt-1 text-sm text-slate-600">Who created this job and what changed afterward.</p>
+      {error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-800">{error}</p>}
+      {loading ? <p role="status" className="mt-6 text-slate-500">Loading job history…</p>
+        : !recentlySelectedCompany ? <p className="mt-6 text-slate-500">Select a company to view job history.</p>
+          : !events.length && !error ? <p className="mt-6 rounded-lg border border-slate-200 bg-white p-4 text-slate-600">No history has been recorded for this job.</p>
+            : <ol className="mt-6 space-y-4" aria-label="Job history">
+              {events.map((event) => (
+                <li key={event.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{event.eventType || "Job Updated"}</p>
+                  <h2 className="mt-1 font-bold text-slate-900">{event.title || event.eventType || "Job updated"}</h2>
+                  <p className="mt-1 text-sm text-slate-600">{jobHistoryActorName(event)} · {formatJobHistoryDate(event)}</p>
+                  {event.description && <p className="mt-3 text-sm text-slate-700">{event.description}</p>}
+                  {Array.isArray(event.changes) && event.changes.length > 0 && (
+                    <ul className="mt-3 space-y-1 text-sm text-slate-600">
+                      {event.changes.map((change, index) => <li key={`${event.id}-${index}`}>{typeof change === "string" ? change : `${change.label || change.field || "Change"}: ${change.before ?? "—"} → ${change.after ?? "—"}`}</li>)}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ol>}
+    </main>
+  );
+};
 export default JobHistoryView;

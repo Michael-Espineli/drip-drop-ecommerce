@@ -57,3 +57,27 @@ test("overwrite replaces drafts and retains actual work, purchased products, and
   expect(combined.shoppingItems.map((item) => item.id)).toEqual(["bought"]);
   expect(existing.tasks).toHaveLength(3);
 });
+
+
+test("explicit zero services do not restore an older template headline price", () => {
+  const copied = copyJobTemplateScope({ template: { ...template, defaultRateCents: 10000 }, scope: { ...empty(), laborLineItems: [{ id: "free", totalPriceCents: 0, taxable: false }] }, job, companyId: "company-1", planId: "plan-1" });
+  expect(copied.laborLineItems).toHaveLength(1);
+  expect(copied.laborLineItems[0].totalPriceCents).toBe(0);
+});
+
+test("generated task billing links are remapped so later task edits stay billable", () => {
+  const scope = { ...empty(), tasks: [{ id: "task", billingLaborPriceCents: 5000 }], laborLineItems: [{ id: "derived", totalPriceCents: 5000, taskIds: ["task"], generatedFromTaskId: "task", taxable: true }] };
+  const copied = copyJobTemplateScope({ template, scope, job, companyId: "company-1", planId: "plan-1" });
+  expect(copied.laborLineItems[0].generatedFromTaskId).toBe(copied.tasks[0].id);
+  expect(copied.laborLineItems[0].taxable).toBe(true);
+});
+
+
+test("template copies keep payroll choices and custom zero amounts while clearing assignments", () => {
+  const scope = source();
+  Object.assign(scope.tasks[0], { payTypeId: "filter", payTypeName: "Filter clean", payrollMode: "custom", manualPayOverrideCents: 0, manualPayOverrideNotes: "Included contract", payrollStackBehavior: "exclusive", payQuantity: 2, workerId: "old-tech" });
+  Object.assign(scope.plannedServiceStops[0], { serviceStopTypeId: "visit-pay", payrollMode: "included", billingLaborPriceCents: 7000 });
+  const copy = copyJobTemplateScope({ template, scope, job, companyId: "company", planId: "plan" });
+  expect(copy.tasks[0]).toEqual(expect.objectContaining({ payTypeId: "filter", payrollMode: "custom", manualPayOverrideCents: 0, payrollStackBehavior: "exclusive", payQuantity: 2, workerId: "" }));
+  expect(copy.plannedServiceStops[0]).toEqual(expect.objectContaining({ payTypeId: "visit-pay", payrollMode: "included", billingLaborPriceCents: 7000 }));
+});

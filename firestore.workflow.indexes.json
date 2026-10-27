@@ -1,0 +1,135 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "technicianPayLineItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "technicianId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "completedDate",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "technicianPayLineItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "technicianId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "paidAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "technicianPayLineItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "technicianId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "jobId",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "technicianPayLineItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "technicianId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "serviceStopId",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "technicianPayStatements",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "technicianId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "endDate",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "technicianPayStatements",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "startDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "endDate",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "shifts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "techId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isCurrent",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "workLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "current",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "activeRoutes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "techId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

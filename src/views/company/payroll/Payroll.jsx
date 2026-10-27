@@ -1,3 +1,5 @@
+import { technicianWorkflow } from "../../../utils/technicianWorkflow";
+import PayRequestsPanel from './PayRequestsPanel';
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
@@ -17,8 +19,8 @@ import {
 } from "firebase/firestore";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
-import { db } from "../../../utils/config";
-import { estimateServiceStopPay } from "../../../utils/payroll/payEstimate";
+import { db, functions } from "../../../utils/config";
+import { httpsCallable } from "firebase/functions";
 import {
   COMPANY_WIDE_SETTINGS_DOC_ID,
   PAYROLL_ENABLED_FIELD,
@@ -287,7 +289,7 @@ const payBasisOptions = ["serviceStop", "serviceStopTask", "technicianHourly", "
 const payModeOptions = ["productionOnly", "hourlyOnly", "hybrid"];
 const routePaySourceOptions = ["serviceStop", "completedTasks", "serviceStopAndCompletedTasks", "hourlyServiceStopDuration", "hourlyTaskActualTime", "none"];
 const taskPaySourceOptions = ["technicianRate", "taskContractedRate", "technicianRateThenTaskContractedRate", "taskContractedRateThenTechnicianRate", "hourlyActualTime", "hourlyEstimatedTime", "none"];
-const hourlyPaySourceOptions = ["activeRouteDuration", "activeRouteLogs", "serviceStopDuration", "taskActualTime", "none"];
+const hourlyPaySourceOptions = ["workLogs", "activeRouteDuration", "activeRouteLogs", "serviceStopDuration", "taskActualTime", "none"];
 const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifier"];
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
 const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
@@ -897,17 +899,7 @@ const serviceStopStreetAddress = (stop = {}) =>
   (typeof stop?.address === "string" ? stop.address : "") ||
   "";
 
-const makePayLineItemId = ({ source, serviceStopId, serviceStopTaskId, technicianId, workTypeId }) =>
-  [
-    "comp_pay_line",
-    source || "serviceStop",
-    serviceStopId || "no_stop",
-    serviceStopTaskId || "no_task",
-    "no_route",
-    "no_route_log",
-    technicianId || "no_technician",
-    workTypeId || "no_work_type",
-  ].join("_");
+
 
 const payStatementReference = (statementNumber) => `PS-${String(statementNumber).padStart(6, "0")}`;
 
@@ -943,7 +935,7 @@ const Payroll = ({ mode = "payroll" }) => {
   const [editingRateId, setEditingRateId] = useState("");
   const [activeTab, setActiveTab] = useState(() => {
     const requestedTab = new URLSearchParams(location.search).get("tab");
-    const payrollTabs = ["statements", "lineItems"];
+    const payrollTabs = ["statements", "lineItems", "requests"];
     const setupTabs = ["overview", "stopPay", "rates", "settings"];
     return isSetupMode
       ? setupTabs.includes(requestedTab) ? requestedTab : "overview"
@@ -973,7 +965,7 @@ const Payroll = ({ mode = "payroll" }) => {
   useEffect(() => {
     setActiveTab(() => {
       const setupTabs = ["overview", "stopPay", "rates", "settings"];
-      const payrollTabs = ["statements", "lineItems"];
+      const payrollTabs = ["statements", "lineItems", "requests"];
       const allowedTabs = isSetupMode ? setupTabs : payrollTabs;
       const requestedTab = new URLSearchParams(location.search).get("tab");
       if (allowedTabs.includes(requestedTab)) return requestedTab;
@@ -1232,7 +1224,7 @@ const Payroll = ({ mode = "payroll" }) => {
   }, [summary.statementCandidateItems]);
 
   const approvableLineItems = useMemo(
-    () => summary.activeItems.filter((item) => !isLineItemApproved(item)),
+    () => summary.activeItems.filter((item) => !isLineItemApproved(item) && item.calculationStatus !== "needsReview"),
     [summary.activeItems]
   );
 
@@ -2281,16 +2273,12 @@ const Payroll = ({ mode = "payroll" }) => {
           updatedByUserId: currentUserId,
         };
 
-        batch.set(doc(db, "companies", recentlySelectedCompany, "technicianRates", rateId), payload, { merge: true });
         return payload;
       });
 
-      await batch.commit();
-      setTechnicianRates((rates) => {
-        const byId = new Map(rates.map((rate) => [rate.id, rate]));
-        savedRates.forEach((rate) => byId.set(rate.id, { ...(byId.get(rate.id) || {}), ...rate }));
-        return sortedTechnicianRates([...byId.values()]);
-      });
+      await technicianWorkflow("manageTechnicianRates", { companyId: recentlySelectedCompany, requestId: crypto.randomUUID(), rates: savedRates });
+      const rateSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates"));
+      setTechnicianRates(sortedTechnicianRates(rateSnapshot.docs.map(doc=>({...doc.data(), id:doc.id}))));
       setRateMatrixEditMode(false);
       setRateMatrixDrafts({});
       setActionNotice(`Saved ${savedRates.length} technician rate cell${savedRates.length === 1 ? "" : "s"}.`);
@@ -2343,12 +2331,9 @@ const Payroll = ({ mode = "payroll" }) => {
         updatedAt: new Date(),
         updatedByUserId: currentUserId,
       };
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "technicianRates", rateId), payload, { merge: true });
-      setTechnicianRates((rates) =>
-        [payload, ...rates.filter((rate) => rate.id !== rateId)].sort(
-          (a, b) => (dateFromValue(b.effectiveStartDate)?.getTime() || 0) - (dateFromValue(a.effectiveStartDate)?.getTime() || 0)
-        )
-      );
+      await technicianWorkflow("manageTechnicianRates", { companyId: recentlySelectedCompany, requestId: crypto.randomUUID(), rates: [payload] });
+      const rateSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates"));
+      setTechnicianRates(sortedTechnicianRates(rateSnapshot.docs.map(doc=>({...doc.data(), id:doc.id}))));
       resetRateForm();
       setActionNotice("Technician rate saved.");
     } catch (err) {
@@ -2411,101 +2396,6 @@ const Payroll = ({ mode = "payroll" }) => {
       userId: workerId,
       userName: stop.tech || stop.techName || stop.userName || "Technician",
       workerType: stop.workerType || "",
-    };
-  };
-
-  const shouldKeepExistingPayLine = (existingLineItem) => {
-    if (!existingLineItem) return false;
-    if (existingLineItem.calculationStatus === "paid" || existingLineItem.paidAt) return true;
-    if (existingLineItem.calculationStatus === "voided") {
-      return ["adminVoided", "duplicate"].includes(existingLineItem.voidReason);
-    }
-    if (settingsForm.lockPayAfterApproval && (existingLineItem.calculationStatus === "approved" || existingLineItem.approvedAt)) {
-      return true;
-    }
-    if (!settingsForm.recalculateUnapprovedPayWhenRatesChange) {
-      return ["pending", "calculated", "adjusted"].includes(existingLineItem.calculationStatus);
-    }
-    return false;
-  };
-
-  const buildPayLineItemPayload = ({ line, serviceStop, serviceStopType, tasks, worker, completedDate, calculatedAt }) => {
-    const technicianId = worker?.userId || worker?.id || serviceStop.techId || "";
-    const task = tasks.find((taskItem) => taskItem.id === line.sourceTaskId);
-    const source = line.source || "serviceStop";
-    const serviceStopTaskId = source === "serviceStopTask" ? line.sourceTaskId || task?.id || "" : "";
-    const lineId = makePayLineItemId({
-      source,
-      serviceStopId: serviceStop.id,
-      serviceStopTaskId,
-      technicianId,
-      workTypeId: line.payTypeId || line.workTypeId || "",
-    });
-    const category =
-      stopPayCategoryForServiceStopType(serviceStopType, stopPayCategories) ||
-      stopPayCategoryForServiceStopType(serviceStop, stopPayCategories);
-    const payTypeId = line.payTypeId || line.workTypeId || "";
-    const payTypeName = line.payTypeName || line.workTypeName || "";
-    const title = line.title || payTypeName || task?.name || serviceStop.type || "Payroll Line";
-    const subtitleParts = [
-      serviceStop.customerName,
-      serviceStopStreetAddress(serviceStop),
-      serviceStop.jobName || serviceStop.jobInternalId,
-    ].filter(Boolean);
-
-    return {
-      id: lineId,
-      companyId: recentlySelectedCompany,
-      technicianId,
-      technicianName: worker?.userName || worker?.name || worker?.displayName || serviceStop.tech || "Technician",
-      workerType: worker?.workerType || serviceStop.workerType || "",
-      source,
-      serviceStopId: serviceStop.id,
-      serviceStopTaskId: serviceStopTaskId || null,
-      workOfferId: serviceStop.workOfferId || line.workOfferId || null,
-      workOfferIncentive: serviceStop.workOfferIncentive || line.workOfferIncentive || null,
-      activeRouteId: null,
-      activeRouteLogId: null,
-      payTypeId: payTypeId || null,
-      payTypeName: payTypeName || null,
-      rateId: line.rateId || null,
-      rateAmountCents: Number(line.rateAmountCents || 0),
-      rateType: line.rateType || "manual",
-      payBasis: line.payBasis || null,
-      quantity: Number(line.quantity || 0),
-      quantityUnit: line.quantityUnit || "each",
-      totalAmountCents: Number(line.totalAmountCents || 0),
-      completedDate,
-      calculatedAt,
-      calculationStatus: line.calculationStatus || "calculated",
-      approvedAt: null,
-      approvedByUserId: null,
-      paidAt: null,
-      paidByUserId: null,
-      voidedAt: null,
-      voidedByUserId: null,
-      voidReason: null,
-      payStatementId: null,
-      exportBatchId: null,
-      notes: line.notes || null,
-      adminReviewNotes: "Generated by payroll setup bulk finish.",
-      lineNumber: null,
-      lineReference: null,
-      paymentReference: null,
-      displayTitle: title,
-      displaySubtitle: subtitleParts.join(" - "),
-      customerId: serviceStop.customerId || null,
-      customerName: serviceStop.customerName || null,
-      serviceLocationId: serviceStop.serviceLocationId || null,
-      serviceLocationAddress: serviceStopStreetAddress(serviceStop) || null,
-      jobId: serviceStop.jobId || null,
-      jobInternalId: serviceStop.jobInternalId || null,
-      taskName: task?.name || task?.description || (source === "serviceStopTask" ? title : null),
-      serviceStopTypeName: serviceStopType?.name || serviceStop.type || serviceStop.serviceStopTypeName || null,
-      serviceStopCategory: category?.category || serviceStop.category || serviceStop.serviceStopCategory || null,
-      generatedBySource: "payroll_setup_bulk_finish",
-      generatedByUserId: currentUserId,
-      updatedAt: calculatedAt,
     };
   };
 
@@ -2595,44 +2485,6 @@ const Payroll = ({ mode = "payroll" }) => {
           return original && !isFinishedStatus(original.status);
         });
 
-        const finishedStop = {
-          ...stop,
-          companyId: recentlySelectedCompany,
-          operationStatus: "Finished",
-          startTime: startAt,
-          endTime: completedAt,
-          finishedAt: completedAt,
-          completedAt,
-          completedDate: completedAt,
-          duration,
-          manuallyFinished: true,
-          manualFinishSource: "payroll_setup_bulk_finish",
-          completedWithoutCustomerEmail: true,
-          updatedAt: completedAt,
-        };
-        const serviceStopType = serviceStopTypeForStop(finishedStop);
-        const payLines = estimateServiceStopPay({
-          companyId: recentlySelectedCompany,
-          settings: settingsForm,
-          serviceStop: finishedStop,
-          serviceStopType,
-          tasks: finishedTasksForStop,
-          worker,
-          workTypes: companyWorkTypes,
-          mappings: workTypeMappings,
-          rates: technicianRates,
-          date: serviceDate,
-        });
-
-        const existingPaySnap = await getDocs(
-          query(
-            collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"),
-            where("serviceStopId", "==", stop.id)
-          )
-        );
-        const existingPayById = new Map(
-          existingPaySnap.docs.map((docSnap) => [docSnap.id, { id: docSnap.id, ...docSnap.data() }])
-        );
         const batch = writeBatch(db);
 
         batch.update(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id), {
@@ -2659,32 +2511,12 @@ const Payroll = ({ mode = "payroll" }) => {
           });
         });
 
-        for (const line of payLines) {
-          const payload = buildPayLineItemPayload({
-            line,
-            serviceStop: finishedStop,
-            serviceStopType,
-            tasks: finishedTasksForStop,
-            worker,
-            completedDate: serviceDate,
-            calculatedAt: new Date(),
-          });
-          const existingLine = existingPayById.get(payload.id);
-          if (shouldKeepExistingPayLine(existingLine)) {
-            preservedLines += 1;
-            return;
-          }
-
-          batch.set(
-            doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", payload.id),
-            payload,
-            { merge: true }
-          );
-          generatedLineItems.push(payload);
-          generatedLines += 1;
-        }
-
         await batch.commit();
+        const result = await httpsCallable(functions, "refreshServiceStopPayroll")({ companyId: recentlySelectedCompany, serviceStopId: stop.id });
+        generatedLines += Number(result.data.generatedLineItemCount || 0);
+        preservedLines += Number(result.data.conflictLineItemIds?.length || 0);
+        const payrollSnap = await getDocs(query(collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"), where("serviceStopId", "==", stop.id)));
+        generatedLineItems.push(...payrollSnap.docs.map((row) => ({ ...row.data(), id: row.id })));
         finishedTasks += newlyFinishedTasks.length;
       }
 
@@ -2856,6 +2688,7 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const approveLineItem = async (item) => {
+    if (item?.calculationStatus === "needsReview") return setActionFailure("Resolve the missing payroll setup before approving this line.");
     if (!recentlySelectedCompany || !item?.id) return;
     const actionKey = `approve-line-${item.id}`;
     setSavingAction(actionKey);
@@ -2935,6 +2768,7 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const markLineItemPaid = async (item) => {
+    if (item?.calculationStatus === "needsReview") return setActionFailure("Resolve the missing payroll setup before marking this line paid.");
     if (!recentlySelectedCompany || !item?.id) return;
     const actionKey = `pay-line-${item.id}`;
     setSavingAction(actionKey);
@@ -4625,6 +4459,7 @@ const Payroll = ({ mode = "payroll" }) => {
     : [
       ["statements", "Statements", "Pay statements and paid status"],
       ["lineItems", "Line Items", "Payroll line review"],
+      ["requests", "Pay Requests", "Rate changes, counteroffers, and pay questions"],
     ];
 
   const backfillProgressPercent = backfillProgress?.total
@@ -4778,6 +4613,7 @@ const Payroll = ({ mode = "payroll" }) => {
         {actionError ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{actionError}</div> : null}
         {loading ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">Loading payroll...</div> : null}
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div> : null}
+        {!loading && !error && !isSetupMode && activeTab === "requests" && <PayRequestsPanel companyId={recentlySelectedCompany} companyUsers={companyUsers} workTypes={companyWorkTypes} />}
         {!loading && !error && !isSetupMode && activeTab === "lineItems" ? renderLineItems() : null}
         {!loading && !error && !isSetupMode && activeTab === "statements" ? renderStatements() : null}
         {!loading && !error && isSetupMode && activeTab === "overview" ? renderSetupOverview() : null}

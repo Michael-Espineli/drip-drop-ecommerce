@@ -1,4 +1,4 @@
-import { collection, doc } from "firebase/firestore";
+import { collection, doc, getDocs } from "firebase/firestore";
 
 export const PRODUCT_CATALOG_SETTINGS_DOC = "genericItems";
 export const PRODUCT_CATALOG_COLLECTION = "genericItems";
@@ -33,6 +33,13 @@ export const getProductSellPriceCents = (product = {}) =>
   Number(product.sellPrice ?? product.billingRate ?? product.defaultSellPrice ?? 0);
 
 export const getVendorItemCostCents = (vendorItem = {}) => Number(vendorItem.rate || vendorItem.cost || 0);
+
+// Some older iOS product rows put the product ID in itemId. It must never
+// become a supplier document ID when editing a quote or updating catalog cost.
+export const getJobMaterialVendorItemId = (item = {}) =>
+  [item?.dbItemId, item?.dataBaseItemId, item?.itemId].find((id) =>
+    id && id !== item?.genericItemId && id !== item?.productId
+  ) || "";
 
 export const isProductAvailableForPartPurchase = (product = {}) =>
   product.availableForPartPurchase ??
@@ -173,4 +180,38 @@ export const findSuggestedProductForVendorItem = (vendorItem = {}, products = []
     products.find((product) => normalizeProductKey(product.specificName) === vendorNameKey) ||
     null
   );
+};
+
+export const buildJobProductCatalog = (products = [], vendorItems = []) => {
+  const productForVendor = (vendor) => products.find((product) =>
+    product.id === (vendor.genericItemId || vendor.productId) ||
+    [...(product.vendorItemIds || []), ...(product.storeItemsIds || []), product.preferredVendorItemId].includes(vendor.id)
+  );
+  const linkedVendors = vendorItems.map((vendor) => {
+    const product = productForVendor(vendor);
+    return product ? { ...vendor, genericItemId: product.id, sellPrice: getProductSellPriceCents(product), billingRate: getProductSellPriceCents(product), taxable: Boolean(product.taxable), billable: product.billable ?? true } : vendor;
+  });
+  const options = products.filter((product) => product.active !== false && !product.archived && isProductAvailableForJobs(product)).map((product) => {
+    const vendor = linkedVendors.find((item) => item.id === product.preferredVendorItemId) || linkedVendors.find((item) => item.genericItemId === product.id);
+    return {
+      ...product, name: getProductDisplayName(product), genericItemId: product.id,
+      dbItemId: vendor?.id || "", dataBaseItemId: vendor?.id || "",
+      rate: getVendorItemCostCents(vendor), cost: getVendorItemCostCents(vendor),
+      sellPrice: getProductSellPriceCents(product), billingRate: getProductSellPriceCents(product),
+      billable: product.billable ?? true, catalogSource: "product",
+    };
+  });
+  const legacy = linkedVendors.filter((vendor) => !productForVendor(vendor) && vendor.active !== false && !vendor.archived).map((vendor) => ({ ...vendor, dbItemId: vendor.id, catalogSource: "legacyVendor" }));
+  return { products: [...options, ...legacy], vendorItems: linkedVendors.filter((vendor) => {
+    const product = productForVendor(vendor);
+    return vendor.active !== false && !vendor.archived && (!product || (product.active !== false && !product.archived && isProductAvailableForJobs(product)));
+  }) };
+};
+
+export const loadJobProductCatalog = async (db, companyId) => {
+  const [products, vendors] = await Promise.all([
+    getDocs(productCatalogCollectionRef(db, companyId)), getDocs(vendorItemsCollectionRef(db, companyId)),
+  ]);
+  const records = (snapshot) => snapshot.docs.map((entry) => ({ ...entry.data(), id: entry.id }));
+  return buildJobProductCatalog(records(products), records(vendors));
 };

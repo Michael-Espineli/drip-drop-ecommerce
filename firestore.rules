@@ -62,7 +62,7 @@ service cloud.firestore {
           isCompanyOwner(companyId)
           || (
             exists(userAccessPath(companyId))
-            && get(userAccessPath(companyId)).data.roleName in ["Owner", "Admin", "Manager"]
+            && get(userAccessPath(companyId)).data.get("roleName", "") in ["Owner", "Admin", "Manager"]
           )
         );
     }
@@ -73,11 +73,13 @@ service cloud.firestore {
 
     function hasCompanyRolePermission(companyId, permissionId) {
       return hasCompanyAccess(companyId)
+        && exists(userAccessPath(companyId))
+        && get(userAccessPath(companyId)).data.get("roleId", "") != ""
         && get(userAccessPath(companyId)).data.roleId is string
         && exists(companyRolePath(companyId))
         && (
-          !(get(companyRolePath(companyId)).data.permissionIdList is list)
-          || permissionId in get(companyRolePath(companyId)).data.permissionIdList
+          get(companyRolePath(companyId)).data.get("permissionIdList", []) is list
+          && permissionId in get(companyRolePath(companyId)).data.get("permissionIdList", [])
         );
     }
 
@@ -468,8 +470,91 @@ service cloud.firestore {
         allow read, update, delete: if hasCompanyAccess(companyId);
       }
 
-      match /{document=**} {
-        allow read, write: if hasCompanyAccess(companyId);
+      function canManagePay() { return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "424"); }
+      function canReadPay() { return canManagePay() || hasCompanyRolePermission(companyId, "420"); }
+      function validTaskPayCreate() {
+        return canManagePay() || (
+          request.resource.data.get("manualPayOverrideCents", null) == null
+          && request.resource.data.get("contractedRate", 0) in [0, "0", "", null]
+          && !request.resource.data.keys().hasAny(["payrollAgreement", "workOfferId", "workOfferClaimId", "claimedWorkOfferId"])
+          && (request.resource.data.get("workerId", "") == "" || isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId,"24") || hasCompanyRolePermission(companyId,"244"))
+        );
+      }
+      function preservesPayTerms() {
+        return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          "payrollAgreement", "manualPayOverrideCents", "manualPayOverrideNotes", "payrollMode", "payrollStackBehavior", "payQuantity", "contractedRate", "payTypeId", "payWorkTypeId", "workTypeId", "workOfferId", "workOfferClaimId", "claimedWorkOfferId", "workerId", "workerName", "workerType", "techId", "typeId", "serviceDate", "pendingWorkOfferId"
+        ]);
+      }
+      match /workOffers/{offerId} {
+        // Technician lists are redacted and eligibility-filtered by manageTechnicianWork.
+        allow read: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "324") || hasCompanyRolePermission(companyId, "332");
+        allow write: if false;
+      }
+      match /payChangeRequests/{requestId} {
+        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow write: if false;
+      }
+      match /technicianRates/{rateId} {
+        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow write: if canManagePay();
+      }
+      match /technicianPayLineItems/{lineId} {
+        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow create, delete: if canManagePay();
+        allow update: if canManagePay();
+      }
+      match /technicianPayStatements/{statementId} {
+        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow write: if canManagePay();
+      }
+      match /paySettings/{settingsId} {
+        allow read: if hasCompanyAccess(companyId);
+        allow write: if canManagePay();
+      }
+      match /settings/{settingsId} {
+        allow read: if hasCompanyAccess(companyId);
+        allow write: if hasCompanyAccess(companyId) && (settingsId != "companyWide" || isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "900"));
+        match /{nested=**} { allow read, write: if hasCompanyAccess(companyId) && settingsId != "companyWide"; }
+      }
+      match /roles/{roleId} {
+        allow read: if hasCompanyAccess(companyId);
+        allow write: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "864");
+      }
+      match /workLogs/{logId} {
+        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.userId == request.auth.uid);
+        allow write: if false;
+      }
+      match /shifts/{shiftId} {
+        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.techId == request.auth.uid);
+        allow write: if false;
+      }
+      match /serviceStops/{stopId} {
+        allow read: if hasCompanyAccess(companyId);
+        allow create: if hasCompanyAccess(companyId) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
+        allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
+        allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "246");
+        match /{subcollection}/{nested=**} { allow read, write: if hasCompanyAccess(companyId) && subcollection != "tasks"; }
+        match /tasks/{taskId} {
+          allow read: if hasCompanyAccess(companyId);
+          allow create: if hasCompanyAccess(companyId) && validTaskPayCreate();
+          allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
+          allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "244");
+        }
+      }
+      match /workOrders/{jobId} {
+        allow read: if hasCompanyAccess(companyId);
+        allow write: if hasCompanyAccess(companyId);
+        match /tasks/{taskId} {
+          allow read: if hasCompanyAccess(companyId);
+          allow create: if hasCompanyAccess(companyId) && validTaskPayCreate();
+          allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
+          allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "24");
+        }
+        match /{subcollection}/{nested=**} { allow read, write: if hasCompanyAccess(companyId) && subcollection != "tasks"; }
+      }
+      match /{companyCollection}/{document=**} {
+        allow read: if hasCompanyAccess(companyId) && !(companyCollection in ["workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders"]);
+        allow write: if hasCompanyAccess(companyId) && !(companyCollection in ["payrollReconcileWork", "workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders"]);
       }
     }
 

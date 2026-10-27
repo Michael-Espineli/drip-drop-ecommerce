@@ -1,0 +1,28 @@
+const { onCall } = require('firebase-functions/v2/https');
+const admin = require('firebase-admin');
+if (!admin.apps.length) admin.initializeApp();
+const db=admin.firestore();
+const work=require('./technicianWorkWorkflow').createTechnicianWorkWorkflow(db);
+const execution=require('./technicianExecution').createTechnicianExecution(db);
+exports.manageTechnicianWork=onCall({timeoutSeconds:120},request=>work.command(request));
+exports.scheduleTechnicianWork=onCall({timeoutSeconds:120},request=>execution.schedule(request));
+const {onDocumentWritten}=require('firebase-functions/v2/firestore');
+const requests=require('./technicianPayRequests').createTechnicianPayRequests(db);
+const time=require('./technicianTime').createTechnicianTime(db);
+exports.manageTechnicianPayRequest=onCall({timeoutSeconds:120},r=>requests.command(r));
+exports.manageTechnicianClock=onCall({timeoutSeconds:120},async r=>{const result=await time.command(r);if(result.closedShiftId)try{await time.reconcile(r.data.companyId,'workLogs',result.closedShiftId);}catch(error){console.error('Clock payroll reconciliation queued for retry',error.message);result.payrollPending=true;}return result;});
+exports.reconcileShiftTime=onDocumentWritten({document:'companies/{companyId}/shifts/{shiftId}',retry:true},time.onShift);
+exports.reconcileWorkLogTime=onDocumentWritten({document:'companies/{companyId}/workLogs/{logId}',retry:true},time.onLog);
+exports.reconcileRouteTime=onDocumentWritten({document:'companies/{companyId}/activeRoutes/{routeId}',retry:true},time.onRoute);
+exports.reconcileRouteLogTime=onDocumentWritten({document:'companies/{companyId}/activeRouteLogs/{logId}',retry:true},time.onRouteLog);
+exports.finalizeTechnicianJob=onCall({timeoutSeconds:120},require('./jobCloseout').createJobCloseout(db));
+exports.manageTechnicianRates=onCall({timeoutSeconds:120},require('./technicianRates').createTechnicianRates(db));
+const progress=require('./workOfferProgress').createWorkOfferProgress(db);
+exports.syncWorkOfferStopProgress=onDocumentWritten({document:'companies/{companyId}/serviceStops/{stopId}',retry:true},progress.onStop);
+exports.syncWorkOfferTaskProgress=onDocumentWritten({document:'companies/{companyId}/workOrders/{jobId}/tasks/{taskId}',retry:true},progress.onTask);
+exports.syncWorkOfferProductProgress=onDocumentWritten({document:'companies/{companyId}/shoppingList/{productId}',retry:true},progress.onProduct);
+
+exports.syncWorkOfferStopTaskProgress=onDocumentWritten({document:'companies/{companyId}/serviceStops/{stopId}/tasks/{taskId}',retry:true},progress.onStopTask);
+const agreedPayroll=require('./payrollWorkflow').createPayrollWorkflow(db);
+exports.reconcileWorkOfferPayroll=onDocumentWritten({document:'companies/{companyId}/workOffers/{offerId}',retry:true},agreedPayroll.onOfferWrite);
+exports.reconcileWorkOfferIncentive=onDocumentWritten({document:'companies/{companyId}/technicianPayLineItems/{lineId}',retry:true},agreedPayroll.onPayLineWrite);

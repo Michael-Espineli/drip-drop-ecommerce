@@ -913,6 +913,106 @@ const RepairRequestDetailView = () => {
               </section>
             )}
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-xl font-bold text-gray-800 mb-4">Information</h3>
+              <div className="space-y-3 text-gray-700">
+                <div>
+                  <strong>Status:</strong>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <select
+                      name="status"
+                      value={formData.status}
+                      onChange={handleStatusChange}
+                      disabled={!can("34") || savingStatus}
+                      className="rounded-md border border-slate-300 bg-white p-2 disabled:bg-gray-100 disabled:text-gray-400"
+                    >
+                      {REPAIR_REQUEST_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </select>
+                    <span
+                      className={`px-3 py-1 text-sm font-bold rounded-full ${normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)
+                        ? 'bg-green-100 text-green-800'
+                        : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CANCELLED)
+                          ? 'bg-red-100 text-red-800'
+                          : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)
+                            ? 'bg-gray-100 text-gray-700'
+                            : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.SUGGESTED_WORK) ||
+                              normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                        }`}
+                    >
+                      {displayRepairRequestStatus(repairRequest.status)}
+                    </span>
+                    {savingStatus && (
+                      <span className="text-xs font-semibold text-gray-500">Saving...</span>
+                    )}
+                  </div>
+                </div>
+
+                <p>
+                  <strong>Date:</strong>{' '}
+                  {repairRequest.date
+                    ? format(repairRequest.date, 'PP')
+                    : repairRequest.dateCreated
+                      ? format(repairRequest.dateCreated, 'PP')
+                      : 'N/A'}
+                </p>
+
+                {repairRequest.customerId ? (
+                  <Link to={`/company/customers/details/${repairRequest.customerId}`}>
+                    <p><strong>Customer:</strong> {repairRequest.customerName}</p>
+                  </Link>
+                ) : (
+                  <p><strong>Customer:</strong> {repairRequest.customerName || 'Not linked'}</p>
+                )}
+
+                <p><strong>Requester:</strong> {repairRequest.requesterName || 'N/A'}</p>
+
+                {repairRequest.locationId && (
+                  <Link to={`/company/customers/details/${repairRequest.customerId}/locations`}>
+                    <p><strong>Location:</strong> {linkedReferenceText("Service Location", repairRequest.locationId, repairRequest.locationName || repairRequest.serviceLocationName)}</p>
+                  </Link>
+                )}
+
+                {repairRequest.equipmentId && (
+                  <Link to={`/company/equipment/detail/${repairRequest.equipmentId}`}>
+                    <p><strong>Equipment:</strong> {linkedReferenceText("Equipment", repairRequest.equipmentId, repairRequest.equipmentName || repairRequest.equipmentModel)}</p>
+                  </Link>
+                )}
+
+                {repairRequest.equipmentId && (
+                  <div>
+                    <strong>Equipment Status:</strong>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <select
+                        value={connectedEquipmentStatus}
+                        onChange={handleConnectedEquipmentStatusChange}
+                        disabled={!can("34") || savingEquipmentStatus}
+                        className="rounded-md border border-slate-300 bg-white p-2 disabled:bg-gray-100 disabled:text-gray-400"
+                      >
+                        {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
+                          <option key={statusOption} value={statusOption}>
+                            {statusOption}
+                          </option>
+                        ))}
+                      </select>
+                      {savingEquipmentStatus && (
+                        <span className="text-xs font-semibold text-gray-500">Saving...</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {repairRequest.bodyOfWaterId && (
+                  <Link to={`/company/bodiesOfWater/detail/${repairRequest.bodyOfWaterId}`}>
+                    <p><strong>Body Of Water:</strong> {linkedReferenceText("Body Of Water", repairRequest.bodyOfWaterId, repairRequest.bodyOfWaterName)}</p>
+                  </Link>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-bold text-gray-800">Request Details</h3>
               </div>
@@ -1298,105 +1398,6 @@ const RepairRequestDetailView = () => {
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-xl font-bold text-gray-800 mb-4">Information</h3>
-              <div className="space-y-3 text-gray-700">
-                <div>
-                  <strong>Status:</strong>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <select
-                      name="status"
-                      value={formData.status}
-                      onChange={handleStatusChange}
-                      disabled={!can("34") || savingStatus}
-                      className="rounded-md border border-slate-300 bg-white p-2 disabled:bg-gray-100 disabled:text-gray-400"
-                    >
-                      {REPAIR_REQUEST_STATUS_OPTIONS.map((status) => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                    <span
-                      className={`px-3 py-1 text-sm font-bold rounded-full ${normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)
-                        ? 'bg-green-100 text-green-800'
-                        : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CANCELLED)
-                          ? 'bg-red-100 text-red-800'
-                          : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)
-                            ? 'bg-gray-100 text-gray-700'
-                            : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.SUGGESTED_WORK) ||
-                              normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-yellow-100 text-yellow-800'
-                        }`}
-                    >
-                      {displayRepairRequestStatus(repairRequest.status)}
-                    </span>
-                    {savingStatus && (
-                      <span className="text-xs font-semibold text-gray-500">Saving...</span>
-                    )}
-                  </div>
-                </div>
-
-                <p>
-                  <strong>Date:</strong>{' '}
-                  {repairRequest.date
-                    ? format(repairRequest.date, 'PP')
-                    : repairRequest.dateCreated
-                      ? format(repairRequest.dateCreated, 'PP')
-                      : 'N/A'}
-                </p>
-
-                {repairRequest.customerId ? (
-                  <Link to={`/company/customers/details/${repairRequest.customerId}`}>
-                    <p><strong>Customer:</strong> {repairRequest.customerName}</p>
-                  </Link>
-                ) : (
-                  <p><strong>Customer:</strong> {repairRequest.customerName || 'Not linked'}</p>
-                )}
-
-                <p><strong>Requester:</strong> {repairRequest.requesterName || 'N/A'}</p>
-
-                {repairRequest.locationId && (
-                  <Link to={`/company/customers/details/${repairRequest.customerId}/locations`}>
-                    <p><strong>Location:</strong> {linkedReferenceText("Service Location", repairRequest.locationId, repairRequest.locationName || repairRequest.serviceLocationName)}</p>
-                  </Link>
-                )}
-
-                {repairRequest.equipmentId && (
-                  <Link to={`/company/equipment/detail/${repairRequest.equipmentId}`}>
-                    <p><strong>Equipment:</strong> {linkedReferenceText("Equipment", repairRequest.equipmentId, repairRequest.equipmentName || repairRequest.equipmentModel)}</p>
-                  </Link>
-                )}
-
-                {repairRequest.equipmentId && (
-                  <div>
-                    <strong>Equipment Status:</strong>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <select
-                        value={connectedEquipmentStatus}
-                        onChange={handleConnectedEquipmentStatusChange}
-                        disabled={!can("34") || savingEquipmentStatus}
-                        className="rounded-md border border-slate-300 bg-white p-2 disabled:bg-gray-100 disabled:text-gray-400"
-                      >
-                        {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
-                          <option key={statusOption} value={statusOption}>
-                            {statusOption}
-                          </option>
-                        ))}
-                      </select>
-                      {savingEquipmentStatus && (
-                        <span className="text-xs font-semibold text-gray-500">Saving...</span>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {repairRequest.bodyOfWaterId && (
-                  <Link to={`/company/bodiesOfWater/detail/${repairRequest.bodyOfWaterId}`}>
-                    <p><strong>Body Of Water:</strong> {linkedReferenceText("Body Of Water", repairRequest.bodyOfWaterId, repairRequest.bodyOfWaterName)}</p>
-                  </Link>
-                )}
-              </div>
-            </div>
           </aside>
         </div>
       </div>

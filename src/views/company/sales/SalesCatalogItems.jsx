@@ -32,6 +32,8 @@ import {
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { appConfirm } from '../../../utils/appDialog';
 import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs } from '../../../utils/jobTaskTypes';
+import { jobPayFields } from '../../../utils/payroll/payCalculation';
+import JobPayrollFields from '../jobs/JobPayrollFields';
 import {
   fetchRecurringTaskGroupOptions,
   fetchTaskGroupTasks,
@@ -115,6 +117,7 @@ const templateCentsToInput = (template = {}, ...fields) => {
 };
 
 const templateToForm = (template = {}) => ({
+  ...jobPayFields(template),
   id: template.id || template.templateId || `service_task_template_${uuidv4()}`,
   name: template.name || template.title || template.description || '',
   type: template.type || template.taskType || template.taskTypeName || 'General',
@@ -157,6 +160,7 @@ const normalizeTaskTemplatesForSave = (templates = []) => (
 
       return {
         id: template.id || `service_task_template_${uuidv4()}`,
+        ...jobPayFields(template),
         name,
         title: name,
         type: template.type || 'General',
@@ -966,6 +970,9 @@ const SalesCatalogItems = () => {
         <div className="mt-3 space-y-3">
           {form.taskTemplates.map((template, index) => (
             <div key={template.id} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
+              <JobPayrollFields value={template} payTypes={sourceOptions[SalesCatalogSourceType.serviceStopType] || []}
+                inheritedPayTypeId={form.sourceType === SalesCatalogSourceType.serviceStopType ? form.sourceId : ""}
+                onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</span>

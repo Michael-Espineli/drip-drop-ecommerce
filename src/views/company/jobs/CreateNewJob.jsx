@@ -1,3 +1,8 @@
+import { resolveJobCreator } from "../../../utils/jobHistory";
+import { jobPayFields } from "../../../utils/payroll/payCalculation";
+import { loadJobProductCatalog } from "../../../utils/productCatalog";
+import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
+import { createJobAtomically } from "../../../utils/createJobAtomically";
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -6,7 +11,6 @@ import {
     getDocs,
     doc,
     getDoc,
-    setDoc,
     updateDoc,
     where,
     arrayUnion,
@@ -258,12 +262,7 @@ const CreateNewJob = () => {
     const startingTemplateIdFromState = location.state?.templateId || "";
 
     const loggedInUser = currentUser || user || {};
-    const createdByUserId = dataBaseUser?.id || loggedInUser?.uid || loggedInUser?.id || "";
-    const createdByUserName =
-        `${dataBaseUser?.firstName || ""} ${dataBaseUser?.lastName || ""}`.trim() ||
-        loggedInUser?.displayName ||
-        loggedInUser?.userName ||
-        "Unknown";
+    const { userId: createdByUserId, userName: createdByUserName } = resolveJobCreator({ user: loggedInUser, profile: dataBaseUser || {} });
 
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -410,16 +409,9 @@ const CreateNewJob = () => {
         );
     }, [laborLineItems]);
 
-    const plannedLaborLineCostCents = useMemo(() => {
-        return laborLineItems.reduce(
-            (total, line) => total + laborLineInternalCostCents(line),
-            0
-        );
-    }, [laborLineItems]);
-
     const plannedTotalLaborCents = useMemo(() => {
-        return laborLineItems.length ? plannedLaborLineCostCents : plannedStopLaborCents + plannedTaskLaborCents;
-    }, [laborLineItems.length, plannedLaborLineCostCents, plannedStopLaborCents, plannedTaskLaborCents]);
+        return jobLaborTotals({ laborLineItems, tasks: taskList, plannedServiceStops }).costCents;
+    }, [laborLineItems, taskList, plannedServiceStops]);
 
     const plannedMaterialCostCents = useMemo(() => {
         return shoppingList.reduce(
@@ -436,13 +428,13 @@ const CreateNewJob = () => {
     }, [shoppingList]);
 
     const calculatedPlanPriceCents = useMemo(() => {
-        const laborPrice = laborLineItems.length
-            ? plannedLaborLinePriceCents
-            : plannedStopLaborCents + plannedTaskBillingLaborCents;
+        const laborPrice = jobLaborTotals({ laborLineItems, tasks: taskList, plannedServiceStops }).priceCents;
         const calculated = laborPrice + plannedMaterialPriceCents;
-        return calculated || rateCents;
+        return laborLineItems.length || calculated !== 0 ? calculated : rateCents;
     }, [
-        laborLineItems.length,
+        laborLineItems,
+        taskList,
+        plannedServiceStops,
         plannedLaborLinePriceCents,
         plannedStopLaborCents,
         plannedTaskBillingLaborCents,
@@ -714,6 +706,7 @@ const CreateNewJob = () => {
             name: task.name || task.description || "",
             type: canonicalJobTaskType(task.type || ""),
             contractedRate: Number(task.contractedRate || 0),
+            ...jobPayFields(task),
             billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
             estimatedTime: Number(task.estimatedTime || 0),
             status: task.status || "Draft",
@@ -755,6 +748,7 @@ const CreateNewJob = () => {
             purchaserName: item.purchaserName || createdByUserName || "",
 
             genericItemId: item.genericItemId || "",
+            taxable: Boolean(item.taxable),
             name: item.name || "",
             description: item.description || "",
             datePurchased: null,
@@ -805,6 +799,7 @@ const CreateNewJob = () => {
             description: stop.description || "",
 
             serviceStopTypeId: stop.serviceStopTypeId || "",
+            ...jobPayFields(stop, { payTypeId: stop.serviceStopTypeId, payTypeName: stop.serviceStopTypeName }),
             serviceStopTypeName: stop.serviceStopTypeName || "",
             serviceStopTypeImage: stop.serviceStopTypeImage || "",
 
@@ -998,7 +993,7 @@ const CreateNewJob = () => {
             normalizedLaborLineItems,
         });
         const subtotalAmountCents = lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
-        const totalAmountCents = subtotalAmountCents || rateCents;
+        const totalAmountCents = lineItems.length ? subtotalAmountCents : rateCents;
         const planLaborCostCents = normalizedLaborLineItems.length
             ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.internalCostCents || 0), 0)
             : normalizedTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0)
@@ -1351,17 +1346,12 @@ const CreateNewJob = () => {
 
         const loadEquipmentDatabaseItems = async () => {
             try {
-                const itemSnap = await getDocs(
-                    query(
-                        collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"),
-                        orderBy("name")
-                    )
-                );
+                const catalog = await loadJobProductCatalog(db, recentlySelectedCompany);
 
                 if (cancelled) return;
                 setEquipmentDatabaseItems(
-                    itemSnap.docs
-                        .map((itemDoc) => buildEquipmentDatabaseItemOption(itemDoc.data(), itemDoc.id))
+                    catalog.vendorItems
+                        .map((item) => buildEquipmentDatabaseItemOption(item, item.id))
                         .filter(isEquipmentDatabaseItem)
                 );
             } catch (error) {
@@ -1740,11 +1730,14 @@ const CreateNewJob = () => {
                         jobId,
                         sourceTemplateId: templateId,
                         sourceTemplateLaborLineId: line.id || "",
+                        generatedFromTaskId: taskIdMap[line.generatedFromTaskId] || "",
+                        generatedFromPlannedStopId: plannedStopIdMap[line.generatedFromPlannedStopId] || "",
                         name: line.name || line.title || `Service ${index + 1}`,
                         description: line.description || "",
                         quantity,
                         unitPriceCents: laborLineUnitPriceCents(line),
                         totalPriceCents: laborLineTotalPriceCents(line),
+                        taxable: Boolean(line.taxable),
                         internalCostCents: laborLineInternalCostCents(line),
                         unitCostCents: laborLineInternalCostCents(line),
                         taskIds,
@@ -2042,456 +2035,461 @@ const CreateNewJob = () => {
         try {
             setCreating(true);
 
-            const settingsRef = doc(db, "companies", recentlySelectedCompany, "settings", "workOrders");
-            const settingsSnap = await getDoc(settingsRef);
+            await createJobAtomically(db, { companyId: recentlySelectedCompany, jobId, creator: { userId: createdByUserId, userName: createdByUserName } }, async (writer) => {
+                const settingsRef = doc(db, "companies", recentlySelectedCompany, "settings", "workOrders");
+                const settingsSnap = await writer.get(settingsRef);
 
-            let nextCount = 1;
-            let nextInternalId = internalId || "J1";
+                let nextCount = 1;
+                let nextInternalId = internalId || "J1";
 
-            if (settingsSnap.exists()) {
-                nextCount = Number(settingsSnap.data().increment || 0) + 1;
-                nextInternalId = `J${nextCount}`;
-            }
+                if (settingsSnap.exists()) {
+                    nextCount = Number(settingsSnap.data().increment || 0) + 1;
+                    nextInternalId = `J${nextCount}`;
+                }
 
-            await setDoc(settingsRef, { increment: nextCount }, { merge: true });
+                await writer.set(settingsRef, { increment: nextCount }, { merge: true });
 
-            const customerName = getCustomerDisplayName(selectedCustomer);
-            const adminId = getAdminIdForJob(selectedAdmin);
-            const adminName = getAdminNameForJob(selectedAdmin);
-            const now = new Date();
-            const nowTimestamp = Timestamp.fromDate(now);
-            const nowMillis = now.getTime();
-            const normalizedIssuePriority = normalizeIssuePriority(issuePriorityLevel);
-            const issuePriorityLabel = getIssuePriorityLabel(normalizedIssuePriority);
-            const normalizedStarterPlanTier = normalizeJobPlanTier(starterPlanTier);
-            const starterPlanTierLabel = getJobPlanRecommendationLabel(normalizedStarterPlanTier);
-            const starterPlanId = `comp_job_plan_${uuidv4()}`;
-            const normalizedTasks = taskList.map((task) =>
-                normalizeJobTask(task, {
-                    companyId: recentlySelectedCompany,
-                    jobId,
-                    serviceLocationId: task.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: task.bodyOfWaterId || resolvedJobBodyOfWaterId,
-                    equipmentId: task.equipmentId || selectedEquipmentId,
-                    sourcePlanId: starterPlanId,
-                    sourceSolutionId: starterPlanId,
-                })
-            );
-            const normalizedTaskById = new Map(normalizedTasks.map((task) => [task.id, task]));
-            const getLinkedTaskScope = (taskIds = []) => {
-                const linkedTasks = taskIds.map((taskId) => normalizedTaskById.get(taskId)).filter(Boolean);
-                const equipmentIds = uniqueStringList(linkedTasks.map((task) => task.equipmentId));
-                const bodyOfWaterIds = uniqueStringList(linkedTasks.map((task) => task.bodyOfWaterId));
-                return {
-                    equipmentId: equipmentIds[0] || "",
-                    bodyOfWaterId: bodyOfWaterIds[0] || "",
+                const customerName = getCustomerDisplayName(selectedCustomer);
+                const adminId = getAdminIdForJob(selectedAdmin);
+                const adminName = getAdminNameForJob(selectedAdmin);
+                const now = new Date();
+                const nowTimestamp = Timestamp.fromDate(now);
+                const nowMillis = now.getTime();
+                const normalizedIssuePriority = normalizeIssuePriority(issuePriorityLevel);
+                const issuePriorityLabel = getIssuePriorityLabel(normalizedIssuePriority);
+                const normalizedStarterPlanTier = normalizeJobPlanTier(starterPlanTier);
+                const starterPlanTierLabel = getJobPlanRecommendationLabel(normalizedStarterPlanTier);
+                const starterPlanId = `comp_job_plan_${uuidv4()}`;
+                const normalizedTasks = taskList.map((task) =>
+                    normalizeJobTask(task, {
+                        companyId: recentlySelectedCompany,
+                        jobId,
+                        serviceLocationId: task.serviceLocationId || selectedServiceLocation.id || "",
+                        bodyOfWaterId: task.bodyOfWaterId || resolvedJobBodyOfWaterId,
+                        equipmentId: task.equipmentId || selectedEquipmentId,
+                        sourcePlanId: starterPlanId,
+                        sourceSolutionId: starterPlanId,
+                    })
+                );
+                const normalizedTaskById = new Map(normalizedTasks.map((task) => [task.id, task]));
+                const getLinkedTaskScope = (taskIds = []) => {
+                    const linkedTasks = taskIds.map((taskId) => normalizedTaskById.get(taskId)).filter(Boolean);
+                    const equipmentIds = uniqueStringList(linkedTasks.map((task) => task.equipmentId));
+                    const bodyOfWaterIds = uniqueStringList(linkedTasks.map((task) => task.bodyOfWaterId));
+                    return {
+                        equipmentId: equipmentIds[0] || "",
+                        bodyOfWaterId: bodyOfWaterIds[0] || "",
+                    };
                 };
-            };
-            const normalizedPlannedStops = plannedServiceStops.map((plannedStop) => {
-                const linkedScope = getLinkedTaskScope(Array.isArray(plannedStop.taskIds) ? plannedStop.taskIds : []);
-                return {
-                    ...plannedStop,
-                    companyId: recentlySelectedCompany,
-                    jobId,
-                    createdAt: plannedStop.createdAt || nowTimestamp,
-                    createdByUserId: plannedStop.createdByUserId || createdByUserId || "",
-                    sourcePlanId: starterPlanId,
-                    sourceSolutionId: starterPlanId,
-                    serviceLocationId: plannedStop.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: plannedStop.bodyOfWaterId || linkedScope.bodyOfWaterId || resolvedJobBodyOfWaterId,
-                    equipmentId: plannedStop.equipmentId || linkedScope.equipmentId || selectedEquipmentId,
-                };
-            });
-            const normalizedShoppingItems = shoppingList.map((item) =>
-                normalizeShoppingItemForJob(item, {
-                    companyId: recentlySelectedCompany,
-                    jobId,
-                    customerId: selectedCustomer.id,
-                    customerName,
-                    purchaserId: item.purchaserId || createdByUserId || "",
-                    purchaserName: item.purchaserName || createdByUserName || "",
-                    status: "Need to Purchase",
+                const normalizedPlannedStops = plannedServiceStops.map((plannedStop) => {
+                    const linkedScope = getLinkedTaskScope(Array.isArray(plannedStop.taskIds) ? plannedStop.taskIds : []);
+                    return {
+                        ...plannedStop,
+                        companyId: recentlySelectedCompany,
+                        jobId,
+                        createdAt: plannedStop.createdAt || nowTimestamp,
+                        createdByUserId: plannedStop.createdByUserId || createdByUserId || "",
+                        sourcePlanId: starterPlanId,
+                        sourceSolutionId: starterPlanId,
+                        serviceLocationId: plannedStop.serviceLocationId || selectedServiceLocation.id || "",
+                        bodyOfWaterId: plannedStop.bodyOfWaterId || linkedScope.bodyOfWaterId || resolvedJobBodyOfWaterId,
+                        equipmentId: plannedStop.equipmentId || linkedScope.equipmentId || selectedEquipmentId,
+                    };
+                });
+                const normalizedShoppingItems = shoppingList.map((item) =>
+                    normalizeShoppingItemForJob(item, {
+                        companyId: recentlySelectedCompany,
+                        jobId,
+                        customerId: selectedCustomer.id,
+                        customerName,
+                        purchaserId: item.purchaserId || createdByUserId || "",
+                        purchaserName: item.purchaserName || createdByUserName || "",
+                        status: "Need to Purchase",
+                        planId: starterPlanId,
+                        sourcePlanId: starterPlanId,
+                        solutionId: starterPlanId,
+                        sourceSolutionId: starterPlanId,
+                        equipmentId: item.equipmentId || selectedEquipmentId,
+                        serviceLocationId: item.serviceLocationId || selectedServiceLocation.id || "",
+                        bodyOfWaterId: item.bodyOfWaterId || resolvedJobBodyOfWaterId,
+                    })
+                );
+                let normalizedLaborLineItems = laborLineItems.map((line, index) => {
+                    const catalogItemId = laborLineCatalogItemId(line);
+                    const laborLineId = line.id || line.laborLineId || `comp_job_labor_line_${uuidv4()}`;
+                    const taskIds = getLaborLineTaskIds(line);
+                    const plannedServiceStopIds = getLaborLinePlannedStopIds(line);
+                    const linkedScope = getLinkedTaskScope(taskIds);
+                    return {
+                        ...line,
+                        id: laborLineId,
+                        laborLineId,
+                        companyId: recentlySelectedCompany,
+                        jobId,
+                        sourcePlanId: starterPlanId,
+                        sourceSolutionId: starterPlanId,
+                        sourceTemplateId: line.sourceTemplateId || selectedTemplate?.id || "",
+                        quantity: laborLineQuantityNumber(line.quantity || line.defaultQuantity || 1),
+                        unitPriceCents: laborLineUnitPriceCents(line),
+                        totalPriceCents: laborLineTotalPriceCents(line),
+                        taxable: Boolean(line.taxable),
+                        internalCostCents: laborLineInternalCostCents(line),
+                        unitCostCents: laborLineInternalCostCents(line),
+                        taskIds,
+                        laborLineTaskIds: taskIds,
+                        plannedServiceStopIds,
+                        laborLinePlannedServiceStopIds: plannedServiceStopIds,
+                        equipmentId: line.equipmentId || linkedScope.equipmentId || selectedEquipmentId,
+                        serviceLocationId: line.serviceLocationId || selectedServiceLocation.id || "",
+                        bodyOfWaterId: line.bodyOfWaterId || linkedScope.bodyOfWaterId || resolvedJobBodyOfWaterId,
+                        salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
+                        billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+                        sourceType: line.sourceType || SalesCatalogSourceType.manual,
+                        sourceId: line.sourceId || catalogItemId || "",
+                        catalogItemId,
+                        salesCatalogItemId: catalogItemId,
+                        sourceCatalogItemId: line.sourceCatalogItemId || catalogItemId,
+                        catalogItemName: line.catalogItemName || line.sourceCatalogItemName || line.name || "",
+                        stripeConnectedAccountId: line.stripeConnectedAccountId || "",
+                        stripeProductId: line.stripeProductId || "",
+                        stripePriceId: line.stripePriceId || "",
+                        taxable: Boolean(line.taxable),
+                        sortOrder: Number(line.sortOrder ?? index),
+                        createdAt: line.createdAt || nowTimestamp,
+                        createdAtMillis: line.createdAtMillis || nowMillis,
+                        createdByUserId: line.createdByUserId || createdByUserId || "",
+                        createdByUserName: line.createdByUserName || createdByUserName || "",
+                        updatedAt: nowTimestamp,
+                        updatedAtMillis: nowMillis,
+                    };
+                });
+                normalizedLaborLineItems = completeJobLaborLines({ laborLineItems: normalizedLaborLineItems, tasks: normalizedTasks, plannedServiceStops: normalizedPlannedStops });
+                const createdEquipmentIds = getJobScopeEquipmentIds({
+                    primaryEquipmentId: selectedEquipmentId,
+                    tasks: normalizedTasks,
+                    plannedServiceStops: normalizedPlannedStops,
+                    laborLineItems: normalizedLaborLineItems,
+                    shoppingItems: normalizedShoppingItems,
+                });
+                const createdEquipmentSummary = equipmentSummaryForIds({
+                    equipmentIds: createdEquipmentIds,
+                    equipmentById,
+                    primaryEquipmentId: selectedEquipmentId || createdEquipmentIds[0] || "",
+                    primaryEquipmentName: selectedEquipmentName,
+                });
+                const createdBodyOfWaterIds = getJobScopeBodyOfWaterIds({
+                    primaryBodyOfWaterId: resolvedJobBodyOfWaterId,
+                    tasks: normalizedTasks,
+                    plannedServiceStops: normalizedPlannedStops,
+                    laborLineItems: normalizedLaborLineItems,
+                    shoppingItems: normalizedShoppingItems,
+                });
+                const primaryBodyOfWaterId = resolvedJobBodyOfWaterId || createdBodyOfWaterIds[0] || "";
+                const primaryBodyOfWaterRecord = bodyOfWaterById.get(primaryBodyOfWaterId);
+                const primaryBodyOfWaterName =
+                    resolvedJobBodyOfWaterName ||
+                    primaryBodyOfWaterRecord?.label ||
+                    primaryBodyOfWaterRecord?.name ||
+                    "";
+                const starterPlanRecord = buildStarterPlanRecord({
                     planId: starterPlanId,
-                    sourcePlanId: starterPlanId,
-                    solutionId: starterPlanId,
-                    sourceSolutionId: starterPlanId,
-                    equipmentId: item.equipmentId || selectedEquipmentId,
-                    serviceLocationId: item.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: item.bodyOfWaterId || resolvedJobBodyOfWaterId,
-                })
-            );
-            const normalizedLaborLineItems = laborLineItems.map((line, index) => {
-                const catalogItemId = laborLineCatalogItemId(line);
-                const laborLineId = line.id || line.laborLineId || `comp_job_labor_line_${uuidv4()}`;
-                const taskIds = getLaborLineTaskIds(line);
-                const plannedServiceStopIds = getLaborLinePlannedStopIds(line);
-                const linkedScope = getLinkedTaskScope(taskIds);
-                return {
-                    ...line,
-                    id: laborLineId,
-                    laborLineId,
-                    companyId: recentlySelectedCompany,
-                    jobId,
-                    sourcePlanId: starterPlanId,
-                    sourceSolutionId: starterPlanId,
-                    sourceTemplateId: line.sourceTemplateId || selectedTemplate?.id || "",
-                    quantity: laborLineQuantityNumber(line.quantity || line.defaultQuantity || 1),
-                    unitPriceCents: laborLineUnitPriceCents(line),
-                    totalPriceCents: laborLineTotalPriceCents(line),
-                    internalCostCents: laborLineInternalCostCents(line),
-                    unitCostCents: laborLineInternalCostCents(line),
-                    taskIds,
-                    laborLineTaskIds: taskIds,
-                    plannedServiceStopIds,
-                    laborLinePlannedServiceStopIds: plannedServiceStopIds,
-                    equipmentId: line.equipmentId || linkedScope.equipmentId || selectedEquipmentId,
-                    serviceLocationId: line.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: line.bodyOfWaterId || linkedScope.bodyOfWaterId || resolvedJobBodyOfWaterId,
-                    salesItemType: line.salesItemType || (catalogItemId ? SalesCatalogItemType.service : SalesCatalogItemType.labor),
-                    billingBehavior: line.billingBehavior || SalesCatalogBillingBehavior.oneTime,
-                    sourceType: line.sourceType || SalesCatalogSourceType.manual,
-                    sourceId: line.sourceId || catalogItemId || "",
-                    catalogItemId,
-                    salesCatalogItemId: catalogItemId,
-                    sourceCatalogItemId: line.sourceCatalogItemId || catalogItemId,
-                    catalogItemName: line.catalogItemName || line.sourceCatalogItemName || line.name || "",
-                    stripeConnectedAccountId: line.stripeConnectedAccountId || "",
-                    stripeProductId: line.stripeProductId || "",
-                    stripePriceId: line.stripePriceId || "",
-                    taxable: Boolean(line.taxable),
-                    sortOrder: Number(line.sortOrder ?? index),
-                    createdAt: line.createdAt || nowTimestamp,
-                    createdAtMillis: line.createdAtMillis || nowMillis,
-                    createdByUserId: line.createdByUserId || createdByUserId || "",
-                    createdByUserName: line.createdByUserName || createdByUserName || "",
+                    nextInternalId,
+                    customerName,
+                    issuePriority: normalizedIssuePriority,
+                    issuePriorityLabel,
+                    planTierValue: normalizedStarterPlanTier,
+                    planTierLabel: starterPlanTierLabel,
+                    normalizedTasks,
+                    normalizedPlannedStops,
+                    normalizedShoppingItems,
+                    normalizedLaborLineItems,
+                    equipmentSummary: createdEquipmentSummary,
+                    bodyOfWaterId: primaryBodyOfWaterId,
+                    bodyOfWaterName: primaryBodyOfWaterName,
+                    bodyOfWaterIds: createdBodyOfWaterIds,
+                    nowTimestamp,
+                    nowMillis,
+                });
+
+                const jobData = {
+                    id: jobId,
+                    internalId: nextInternalId,
+                    type: "",
+                    dateCreated: nowTimestamp,
                     updatedAt: nowTimestamp,
                     updatedAtMillis: nowMillis,
+                    lastHistoryEventTitle: "Job initially created",
+                    lastHistoryEventType: "Created",
+                    description: description || "",
+
+                    operationStatus: "Estimate Pending",
+                    billingStatus: "Draft",
+                    issuePriorityLevel: normalizedIssuePriority,
+                    issuePriorityLabel,
+                    priorityLevel: normalizedIssuePriority,
+                    priorityLabel: issuePriorityLabel,
+                    solutionTier: normalizedIssuePriority,
+                    solutionTierLabel: issuePriorityLabel,
+                    activePlanId: starterPlanId,
+                    activePlanTier: normalizedStarterPlanTier,
+                    activePlanTierLabel: starterPlanTierLabel,
+                    acceptedPlanId: "",
+                    activeSolutionId: starterPlanId,
+                    activeSolutionTier: normalizedStarterPlanTier,
+                    activeSolutionTierLabel: starterPlanTierLabel,
+                    acceptedSolutionId: "",
+                    planSelectionStatus: "Draft",
+                    solutionSelectionStatus: "Draft",
+
+                    customerId: selectedCustomer.id,
+                    customerName,
+                    serviceLocationId: selectedServiceLocation.id,
+                    serviceLocationName: selectedServiceLocation.label || "",
+
+                    serviceStopIds: [],
+                    laborContractIds: [],
+
+                    adminId,
+                    adminName,
+
+                    purchasedItemsIds: [],
+
+                    rate: starterPlanRecord.totalAmountCents || rateCents,
+                    laborCost: starterPlanRecord.plannedLaborCostCents || laborCostCents,
+                    plannedLaborPriceCents: starterPlanRecord.plannedLaborPriceCents || 0,
+                    plannedMaterialCostCents: starterPlanRecord.materialCostCents || 0,
+                    plannedMaterialPriceCents: starterPlanRecord.materialPriceCents || 0,
+                    estimateSubtotalCents: starterPlanRecord.subtotalAmountCents || 0,
+                    estimateTotalCents: starterPlanRecord.totalAmountCents || rateCents,
+                    estimateLineItems: starterPlanRecord.estimateLineItems || [],
+                    laborLineItems: normalizedLaborLineItems,
+                    estimateLaborLineItems: normalizedLaborLineItems,
+                    laborLineCount: normalizedLaborLineItems.length,
+                    taskCount: normalizedTasks.length,
+                    plannedStopCount: normalizedPlannedStops.length,
+                    materialCount: normalizedShoppingItems.length,
+
+                    otherCompany: false,
+                    receivedLaborContractId: "",
+                    receiverId: "",
+                    senderId: recentlySelectedCompany,
+
+                    dateEstimateAccepted: null,
+                    estimateAcceptedById: null,
+                    estimateAcceptType: null,
+                    estimateAcceptedNotes: "",
+
+                    invoiceDate: null,
+                    invoiceRef: "",
+                    invoiceType: null,
+                    invoiceNotes: "",
+
+                    // Legacy / web convenience fields
+                    bodyOfWaterId: primaryBodyOfWaterId,
+                    bodyOfWaterName: primaryBodyOfWaterName,
+                    bodyOfWaterIds: createdBodyOfWaterIds,
+                    equipmentId: createdEquipmentSummary.equipmentId || "",
+                    equipmentIds: createdEquipmentSummary.equipmentIds || [],
+                    companyEquipmentIds: createdEquipmentSummary.companyEquipmentIds || [],
+                    equipmentName: createdEquipmentSummary.equipmentName || "",
+                    equipmentNames: createdEquipmentSummary.equipmentNames || [],
+                    equipmentContext: equipmentContext || null,
+                    customerContext: customerContext || null,
+                    jobIntent,
+                    createdFromCustomerDetail,
+                    createdFromEquipmentCard,
+                    createdFromEquipmentDetail,
+                    repairRequestId: repairRequest?.id || "",
+                    repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
+                    suggestedWorkId: suggestedWork?.id || "",
+                    sourceSuggestedWorkId: suggestedWork?.id || "",
+                    leadId: leadContext?.id || "",
+                    sourceLeadId: leadContext?.id || "",
+                    leadSourcePath: leadContext?.id ? leadSourcePath : "",
+                    sourceLeadName: leadContext?.serviceName || "",
+                    sourceLeadStatus: leadContext?.status || "",
+                    createdFromLead: Boolean(leadContext?.id),
+                    sourceTemplateId: selectedTemplate?.id || "",
+                    sourceTemplateName: selectedTemplate?.name || "",
                 };
-            });
-            const createdEquipmentIds = getJobScopeEquipmentIds({
-                primaryEquipmentId: selectedEquipmentId,
-                tasks: normalizedTasks,
-                plannedServiceStops: normalizedPlannedStops,
-                laborLineItems: normalizedLaborLineItems,
-                shoppingItems: normalizedShoppingItems,
-            });
-            const createdEquipmentSummary = equipmentSummaryForIds({
-                equipmentIds: createdEquipmentIds,
-                equipmentById,
-                primaryEquipmentId: selectedEquipmentId || createdEquipmentIds[0] || "",
-                primaryEquipmentName: selectedEquipmentName,
-            });
-            const createdBodyOfWaterIds = getJobScopeBodyOfWaterIds({
-                primaryBodyOfWaterId: resolvedJobBodyOfWaterId,
-                tasks: normalizedTasks,
-                plannedServiceStops: normalizedPlannedStops,
-                laborLineItems: normalizedLaborLineItems,
-                shoppingItems: normalizedShoppingItems,
-            });
-            const primaryBodyOfWaterId = resolvedJobBodyOfWaterId || createdBodyOfWaterIds[0] || "";
-            const primaryBodyOfWaterRecord = bodyOfWaterById.get(primaryBodyOfWaterId);
-            const primaryBodyOfWaterName =
-                resolvedJobBodyOfWaterName ||
-                primaryBodyOfWaterRecord?.label ||
-                primaryBodyOfWaterRecord?.name ||
-                "";
-            const starterPlanRecord = buildStarterPlanRecord({
-                planId: starterPlanId,
-                nextInternalId,
-                customerName,
-                issuePriority: normalizedIssuePriority,
-                issuePriorityLabel,
-                planTierValue: normalizedStarterPlanTier,
-                planTierLabel: starterPlanTierLabel,
-                normalizedTasks,
-                normalizedPlannedStops,
-                normalizedShoppingItems,
-                normalizedLaborLineItems,
-                equipmentSummary: createdEquipmentSummary,
-                bodyOfWaterId: primaryBodyOfWaterId,
-                bodyOfWaterName: primaryBodyOfWaterName,
-                bodyOfWaterIds: createdBodyOfWaterIds,
-                nowTimestamp,
-                nowMillis,
-            });
 
-            const jobData = {
-                id: jobId,
-                internalId: nextInternalId,
-                type: "",
-                dateCreated: nowTimestamp,
-                updatedAt: nowTimestamp,
-                updatedAtMillis: nowMillis,
-                lastHistoryEventTitle: "Job initially created",
-                lastHistoryEventType: "Created",
-                description: description || "",
-
-                operationStatus: "Estimate Pending",
-                billingStatus: "Draft",
-                issuePriorityLevel: normalizedIssuePriority,
-                issuePriorityLabel,
-                priorityLevel: normalizedIssuePriority,
-                priorityLabel: issuePriorityLabel,
-                solutionTier: normalizedIssuePriority,
-                solutionTierLabel: issuePriorityLabel,
-                activePlanId: starterPlanId,
-                activePlanTier: normalizedStarterPlanTier,
-                activePlanTierLabel: starterPlanTierLabel,
-                acceptedPlanId: "",
-                activeSolutionId: starterPlanId,
-                activeSolutionTier: normalizedStarterPlanTier,
-                activeSolutionTierLabel: starterPlanTierLabel,
-                acceptedSolutionId: "",
-                planSelectionStatus: "Draft",
-                solutionSelectionStatus: "Draft",
-
-                customerId: selectedCustomer.id,
-                customerName,
-                serviceLocationId: selectedServiceLocation.id,
-                serviceLocationName: selectedServiceLocation.label || "",
-
-                serviceStopIds: [],
-                laborContractIds: [],
-
-                adminId,
-                adminName,
-
-                purchasedItemsIds: [],
-
-                rate: starterPlanRecord.totalAmountCents || rateCents,
-                laborCost: starterPlanRecord.plannedLaborCostCents || laborCostCents,
-                plannedLaborPriceCents: starterPlanRecord.plannedLaborPriceCents || 0,
-                plannedMaterialCostCents: starterPlanRecord.materialCostCents || 0,
-                plannedMaterialPriceCents: starterPlanRecord.materialPriceCents || 0,
-                estimateSubtotalCents: starterPlanRecord.subtotalAmountCents || 0,
-                estimateTotalCents: starterPlanRecord.totalAmountCents || rateCents,
-                estimateLineItems: starterPlanRecord.estimateLineItems || [],
-                laborLineItems: normalizedLaborLineItems,
-                estimateLaborLineItems: normalizedLaborLineItems,
-                laborLineCount: normalizedLaborLineItems.length,
-                taskCount: normalizedTasks.length,
-                plannedStopCount: normalizedPlannedStops.length,
-                materialCount: normalizedShoppingItems.length,
-
-                otherCompany: false,
-                receivedLaborContractId: "",
-                receiverId: "",
-                senderId: recentlySelectedCompany,
-
-                dateEstimateAccepted: null,
-                estimateAcceptedById: null,
-                estimateAcceptType: null,
-                estimateAcceptedNotes: "",
-
-                invoiceDate: null,
-                invoiceRef: "",
-                invoiceType: null,
-                invoiceNotes: "",
-
-                // Legacy / web convenience fields
-                bodyOfWaterId: primaryBodyOfWaterId,
-                bodyOfWaterName: primaryBodyOfWaterName,
-                bodyOfWaterIds: createdBodyOfWaterIds,
-                equipmentId: createdEquipmentSummary.equipmentId || "",
-                equipmentIds: createdEquipmentSummary.equipmentIds || [],
-                companyEquipmentIds: createdEquipmentSummary.companyEquipmentIds || [],
-                equipmentName: createdEquipmentSummary.equipmentName || "",
-                equipmentNames: createdEquipmentSummary.equipmentNames || [],
-                equipmentContext: equipmentContext || null,
-                customerContext: customerContext || null,
-                jobIntent,
-                createdFromCustomerDetail,
-                createdFromEquipmentCard,
-                createdFromEquipmentDetail,
-                repairRequestId: repairRequest?.id || "",
-                repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
-                suggestedWorkId: suggestedWork?.id || "",
-                sourceSuggestedWorkId: suggestedWork?.id || "",
-                leadId: leadContext?.id || "",
-                sourceLeadId: leadContext?.id || "",
-                leadSourcePath: leadContext?.id ? leadSourcePath : "",
-                sourceLeadName: leadContext?.serviceName || "",
-                sourceLeadStatus: leadContext?.status || "",
-                createdFromLead: Boolean(leadContext?.id),
-                sourceTemplateId: selectedTemplate?.id || "",
-                sourceTemplateName: selectedTemplate?.name || "",
-            };
-
-            await setDoc(
-                doc(db, "companies", recentlySelectedCompany, "workOrders", jobId),
-                jobData
-            );
-
-            await setDoc(
-                doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plans", starterPlanId),
-                starterPlanRecord
-            );
-
-            for (const stopData of normalizedPlannedStops) {
-                await setDoc(
-                    doc(
-                        db,
-                        "companies",
-                        recentlySelectedCompany,
-                        "workOrders",
-                        jobId,
-                        "plannedServiceStops",
-                        stopData.id
-                    ),
-                    stopData
+                await writer.set(
+                    doc(db, "companies", recentlySelectedCompany, "workOrders", jobId),
+                    jobData
                 );
-            }
 
-            for (const taskData of normalizedTasks) {
-                await setDoc(
-                    doc(
-                        db,
-                        "companies",
-                        recentlySelectedCompany,
-                        "workOrders",
-                        jobId,
-                        "tasks",
-                        taskData.id
-                    ),
-                    taskData
+                await writer.set(
+                    doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plans", starterPlanId),
+                    starterPlanRecord
                 );
-            }
 
-            for (const lineData of normalizedLaborLineItems) {
-                await setDoc(
-                    doc(
-                        db,
-                        "companies",
-                        recentlySelectedCompany,
-                        "workOrders",
-                        jobId,
-                        "laborLineItems",
-                        lineData.id
-                    ),
-                    lineData
-                );
-            }
+                for (const stopData of normalizedPlannedStops) {
+                    await writer.set(
+                        doc(
+                            db,
+                            "companies",
+                            recentlySelectedCompany,
+                            "workOrders",
+                            jobId,
+                            "plannedServiceStops",
+                            stopData.id
+                        ),
+                        stopData
+                    );
+                }
 
-            for (const itemData of normalizedShoppingItems) {
-                await setDoc(
-                    doc(db, "companies", recentlySelectedCompany, "shoppingList", itemData.id),
-                    itemData
-                );
-            }
+                for (const taskData of normalizedTasks) {
+                    await writer.set(
+                        doc(
+                            db,
+                            "companies",
+                            recentlySelectedCompany,
+                            "workOrders",
+                            jobId,
+                            "tasks",
+                            taskData.id
+                        ),
+                        taskData
+                    );
+                }
 
-            if (repairRequest?.id) {
-                const repairRequestRef = repairRequestSourcePath === "homeowner"
-                    ? doc(db, "homeownerRepairRequests", repairRequest.id)
-                    : doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequest.id);
+                for (const lineData of normalizedLaborLineItems) {
+                    await writer.set(
+                        doc(
+                            db,
+                            "companies",
+                            recentlySelectedCompany,
+                            "workOrders",
+                            jobId,
+                            "laborLineItems",
+                            lineData.id
+                        ),
+                        lineData
+                    );
+                }
 
-                await updateDoc(
-                    repairRequestRef,
+                for (const itemData of normalizedShoppingItems) {
+                    await writer.set(
+                        doc(db, "companies", recentlySelectedCompany, "shoppingList", itemData.id),
+                        itemData
+                    );
+                }
+
+                if (repairRequest?.id) {
+                    const repairRequestRef = repairRequestSourcePath === "homeowner"
+                        ? doc(db, "homeownerRepairRequests", repairRequest.id)
+                        : doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequest.id);
+
+                    await writer.update(
+                        repairRequestRef,
+                        {
+                            jobIds: arrayUnion(jobId),
+                            status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
+                        }
+                    );
+                }
+
+                if (suggestedWork?.id) {
+                    try {
+                        await writer.update(
+                            doc(db, "companies", recentlySelectedCompany, "suggestedWork", suggestedWork.id),
+                            {
+                                status: SUGGESTED_WORK_STATUS.CONVERTED_TO_JOB,
+                                convertedToJobId: jobId,
+                                convertedToJobInternalId: nextInternalId,
+                                jobIds: arrayUnion(jobId),
+                                updatedAt: serverTimestamp(),
+                                updatedAtMillis: nowMillis,
+                            }
+                        );
+                    } catch (suggestionUpdateError) {
+                        console.warn("Job created, but the source suggested work could not be updated.", suggestionUpdateError);
+                    }
+                }
+
+                if (leadContext?.id) {
+                    try {
+                        await writer.update(
+                            doc(db, "homeownerServiceRequests", leadContext.id),
+                            {
+                                jobIds: arrayUnion(jobId),
+                                latestJobId: jobId,
+                                latestJobInternalId: nextInternalId,
+                                updatedAt: serverTimestamp(),
+                            }
+                        );
+                    } catch (leadUpdateError) {
+                        console.warn("Job created, but the source lead could not be updated.", leadUpdateError);
+                    }
+                }
+
+                const historyDescription = selectedTemplate?.name
+                    ? `Started from template: ${selectedTemplate.name}`
+                    : leadContext?.id
+                        ? `Created from lead: ${leadContext.serviceName || leadContext.id}`
+                        : "Created from the web job flow.";
+
+                const historyId = "comp_job_hist_" + uuidv4();
+                await writer.set(
+                    doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId),
                     {
-                        jobIds: arrayUnion(jobId),
-                        status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
+                        id: historyId,
+                        companyId: recentlySelectedCompany,
+                        jobId,
+                        jobInternalId: nextInternalId,
+                        eventType: "Created",
+                        title: "Job initially created",
+                        description: historyDescription,
+                        changes: [
+                            { field: "adminName", label: "Admin", before: "—", after: adminName || "—" },
+                            { field: "customerName", label: "Customer", before: "—", after: customerName || "—" },
+                            { field: "serviceLocationName", label: "Service Location", before: "—", after: selectedServiceLocation.label || "—" },
+                            { field: "issuePriority", label: "Issue Priority", before: "—", after: `${normalizedIssuePriority} - ${issuePriorityLabel}` },
+                            { field: "starterPlan", label: "Starter Plan Recommendation Rank", before: "—", after: getJobPlanRecommendationDisplay(normalizedStarterPlanTier) },
+                            { field: "rate", label: "Calculated Customer Price", before: "—", after: `$${(Number(starterPlanRecord.totalAmountCents || 0) / 100).toFixed(2)}` },
+                            { field: "tasks", label: "Tasks", before: "—", after: String(normalizedTasks.length) },
+                            { field: "laborLineItems", label: "Service Lines", before: "—", after: String(normalizedLaborLineItems.length) },
+                            { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(normalizedPlannedStops.length) },
+                            { field: "shoppingItems", label: "Planned Materials", before: "—", after: String(normalizedShoppingItems.length) },
+                            ...(createdEquipmentSummary.equipmentNames?.length
+                                ? [{ field: "equipmentNames", label: "Equipment", before: "—", after: createdEquipmentSummary.equipmentNames.join(", ") }]
+                                : []),
+                        ],
+                        metadata: {
+                            sourceTemplateId: selectedTemplate?.id || "",
+                            sourceTemplateName: selectedTemplate?.name || "",
+                            starterPlanId,
+                            activePlanId: starterPlanId,
+                            activeSolutionId: starterPlanId,
+                            repairRequestId: repairRequest?.id || "",
+                            suggestedWorkId: suggestedWork?.id || "",
+                            leadId: leadContext?.id || "",
+                            leadSourcePath: leadContext?.id ? leadSourcePath : "",
+                            equipmentId: createdEquipmentSummary.equipmentId || "",
+                            equipmentIds: createdEquipmentSummary.equipmentIds || [],
+                            equipmentNames: createdEquipmentSummary.equipmentNames || [],
+                            bodyOfWaterId: primaryBodyOfWaterId,
+                            bodyOfWaterIds: createdBodyOfWaterIds,
+                            jobIntent,
+                            createdFromCustomerDetail,
+                            createdFromEquipmentCard,
+                            createdFromEquipmentDetail,
+                        },
+                        severity: "success",
+                        actorUserId: createdByUserId || "",
+                        actorUserName: createdByUserName,
+                        actorCompanyUserId: dataBaseUser?.id || "",
+                        createdAt: serverTimestamp(),
+                        createdAtMillis: nowMillis,
                     }
                 );
-            }
 
-            if (suggestedWork?.id) {
-                try {
-                    await updateDoc(
-                        doc(db, "companies", recentlySelectedCompany, "suggestedWork", suggestedWork.id),
-                        {
-                            status: SUGGESTED_WORK_STATUS.CONVERTED_TO_JOB,
-                            convertedToJobId: jobId,
-                            convertedToJobInternalId: nextInternalId,
-                            jobIds: arrayUnion(jobId),
-                            updatedAt: serverTimestamp(),
-                            updatedAtMillis: nowMillis,
-                        }
-                    );
-                } catch (suggestionUpdateError) {
-                    console.warn("Job created, but the source suggested work could not be updated.", suggestionUpdateError);
-                }
-            }
-
-            if (leadContext?.id) {
-                try {
-                    await updateDoc(
-                        doc(db, "homeownerServiceRequests", leadContext.id),
-                        {
-                            jobIds: arrayUnion(jobId),
-                            latestJobId: jobId,
-                            latestJobInternalId: nextInternalId,
-                            updatedAt: serverTimestamp(),
-                        }
-                    );
-                } catch (leadUpdateError) {
-                    console.warn("Job created, but the source lead could not be updated.", leadUpdateError);
-                }
-            }
-
-            const historyDescription = selectedTemplate?.name
-                ? `Started from template: ${selectedTemplate.name}`
-                : leadContext?.id
-                    ? `Created from lead: ${leadContext.serviceName || leadContext.id}`
-                    : "Created from the web job flow.";
-
-            const historyId = "comp_job_hist_" + uuidv4();
-            await setDoc(
-                doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId),
-                {
-                    id: historyId,
-                    companyId: recentlySelectedCompany,
-                    jobId,
-                    jobInternalId: nextInternalId,
-                    eventType: "Created",
-                    title: "Job initially created",
-                    description: historyDescription,
-                    changes: [
-                        { field: "adminName", label: "Admin", before: "—", after: adminName || "—" },
-                        { field: "customerName", label: "Customer", before: "—", after: customerName || "—" },
-                        { field: "serviceLocationName", label: "Service Location", before: "—", after: selectedServiceLocation.label || "—" },
-                        { field: "issuePriority", label: "Issue Priority", before: "—", after: `${normalizedIssuePriority} - ${issuePriorityLabel}` },
-                        { field: "starterPlan", label: "Starter Plan Recommendation Rank", before: "—", after: getJobPlanRecommendationDisplay(normalizedStarterPlanTier) },
-                        { field: "rate", label: "Calculated Customer Price", before: "—", after: `$${(Number(starterPlanRecord.totalAmountCents || 0) / 100).toFixed(2)}` },
-                        { field: "tasks", label: "Tasks", before: "—", after: String(normalizedTasks.length) },
-                        { field: "laborLineItems", label: "Service Lines", before: "—", after: String(normalizedLaborLineItems.length) },
-                        { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(normalizedPlannedStops.length) },
-                        { field: "shoppingItems", label: "Planned Materials", before: "—", after: String(normalizedShoppingItems.length) },
-                        ...(createdEquipmentSummary.equipmentNames?.length
-                            ? [{ field: "equipmentNames", label: "Equipment", before: "—", after: createdEquipmentSummary.equipmentNames.join(", ") }]
-                            : []),
-                    ],
-                    metadata: {
-                        sourceTemplateId: selectedTemplate?.id || "",
-                        sourceTemplateName: selectedTemplate?.name || "",
-                        starterPlanId,
-                        activePlanId: starterPlanId,
-                        activeSolutionId: starterPlanId,
-                        repairRequestId: repairRequest?.id || "",
-                        suggestedWorkId: suggestedWork?.id || "",
-                        leadId: leadContext?.id || "",
-                        leadSourcePath: leadContext?.id ? leadSourcePath : "",
-                        equipmentId: createdEquipmentSummary.equipmentId || "",
-                        equipmentIds: createdEquipmentSummary.equipmentIds || [],
-                        equipmentNames: createdEquipmentSummary.equipmentNames || [],
-                        bodyOfWaterId: primaryBodyOfWaterId,
-                        bodyOfWaterIds: createdBodyOfWaterIds,
-                        jobIntent,
-                        createdFromCustomerDetail,
-                        createdFromEquipmentCard,
-                        createdFromEquipmentDetail,
-                    },
-                    severity: "success",
-                    actorUserId: createdByUserId || "",
-                    actorUserName: createdByUserName,
-                    actorCompanyUserId: dataBaseUser?.id || "",
-                    createdAt: serverTimestamp(),
-                    createdAtMillis: nowMillis,
-                }
-            );
+            });
 
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating new job:", error);
-            appAlert("Failed to create job. Please try again.");
+            appAlert(error.code === "job-scope-too-large" ? error.message : "Failed to create job. Please try again.");
         } finally {
             setCreating(false);
         }

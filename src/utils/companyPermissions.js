@@ -35,7 +35,7 @@ export const BASIC_WORK_ORDER_PERMISSION_IDS = [
 const webImplementedPermissionIds = new Set([
   "0", "10", "12", "14", "16", JOBS_PERMISSION_ID, CREATE_JOBS_PERMISSION_ID, SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID, UPDATE_JOBS_PERMISSION_ID, "26", CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID, EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID, CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "30", CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "32", "34", "36",
   "40", "42", "44", "50", "52", "54", "60", "62", "64", "66", FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID, FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID,
-  "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID, OFFERED_WORK_PERMISSION_ID, CREATE_OFFERED_WORK_PERMISSION_ID, UPDATE_OFFERED_WORK_PERMISSION_ID, SPLIT_OFFERED_WORK_PERMISSION_ID, INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, APPROVE_OFFERED_WORK_PERMISSION_ID, VIEW_ALL_OFFERED_WORK_PERMISSION_ID, ACCEPT_OFFERED_WORK_PERMISSION_ID, "400", "420",
+  "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID, OFFERED_WORK_PERMISSION_ID, CREATE_OFFERED_WORK_PERMISSION_ID, UPDATE_OFFERED_WORK_PERMISSION_ID, SPLIT_OFFERED_WORK_PERMISSION_ID, INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, APPROVE_OFFERED_WORK_PERMISSION_ID, VIEW_ALL_OFFERED_WORK_PERMISSION_ID, ACCEPT_OFFERED_WORK_PERMISSION_ID, "400", "420", "424",
   SERVICE_AGREEMENTS_PERMISSION_ID, CREATE_SERVICE_AGREEMENTS_PERMISSION_ID, UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID, DELETE_SERVICE_AGREEMENTS_PERMISSION_ID, SEND_SERVICE_AGREEMENTS_PERMISSION_ID,
   "600", "610", "612", "614", "620", "622", FIELD_INITIAL_SURVEY_PRICE_PERMISSION_ID, FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID, "630", "632", "634", "800", "810", "820", "822", "824", "826", "830",
   "840", "850", "852", "854", "856", "860", "864", "870", "880", "882", "884", "886", "890", "900", "910"
@@ -117,6 +117,7 @@ const permissionCatalog = [
   { id: "414", name: "Update Finished Jobs", description: "", category: "Finance", ios: false, web: false },
   { id: "416", name: "Delete Finished Jobs", description: "", category: "Finance", ios: false, web: false },
   { id: "420", name: "Payroll Information", description: "Can view payroll setup, pay statements, and technician pay line items.", category: "Finance", ios: true, web: false },
+  { id: "424", name: "Manage Payroll", description: "Can approve payroll, manage rates, and decide technician pay requests.", category: "Finance", ios: true, web: true },
   { id: SERVICE_AGREEMENTS_PERMISSION_ID, name: "Service Agreements", description: "Can view service agreements.", category: "Finance", ios: true, web: false },
   { id: CREATE_SERVICE_AGREEMENTS_PERMISSION_ID, name: "Create Service Agreements", description: "Can create service agreements.", category: "Finance", ios: false, web: false },
   { id: UPDATE_SERVICE_AGREEMENTS_PERMISSION_ID, name: "Update Service Agreements", description: "Can edit service agreements.", category: "Finance", ios: false, web: false },

@@ -3,6 +3,7 @@ import React, { useState, useEffect, useContext, useMemo, useCallback } from "re
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion, where, serverTimestamp } from "firebase/firestore";
 import { db } from "../../../utils/config";
+import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
@@ -790,6 +791,7 @@ const CreateNewServiceStop = () => {
         typeId: task.typeId || task.taskTypeId || "",
         type: canonicalJobTaskType(task.type || task.taskType || selectedTaskType?.value || selectedTaskType?.name || "Task"),
         contractedRate: Number(task.contractedRate || task.rate || task.laborCostCents || 0),
+        ...jobPayFields(task),
         estimatedTime: Number(task.estimatedTime || task.estimatedMinutes || 0),
         status: task.status || "Unassigned",
         customerApproval: task.customerApproval ?? false,
@@ -1218,8 +1220,7 @@ const CreateNewServiceStop = () => {
                     internalId: "",
                 },
                 jobTaskId: task.id,
-                payTypeId: task.payTypeId || task.workTypeId || payTypeId,
-                payTypeName: task.payTypeName || task.workTypeName || payTypeName,
+                ...jobPayFields(task),
                 workOrderTaskId: jobId ? task.id : "",
             });
             rate += Number(task.rate || task.contractedRate || 0)

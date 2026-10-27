@@ -639,6 +639,15 @@ exports.setRecurringServiceStopEstimatedDuration = serviceStopDurationAverages.s
 
 const serviceStopCompletion = require('./serviceStopCompletion');
 exports.processServiceStopCompletionWork = serviceStopCompletion.processServiceStopCompletionWork;
+exports.reconcileServiceStopPayroll = serviceStopCompletion.reconcileServiceStopPayroll;
+exports.reconcileServiceStopTaskPayroll = serviceStopCompletion.reconcileServiceStopTaskPayroll;
+exports.reconcileJobTaskPayroll = serviceStopCompletion.reconcileJobTaskPayroll;
+exports.reconcileTechnicianRatePayroll = serviceStopCompletion.reconcileTechnicianRatePayroll;
+exports.reconcileCompanyPaySettings = serviceStopCompletion.reconcileCompanyPaySettings;
+exports.reconcileCompanyPayrollSwitch = serviceStopCompletion.reconcileCompanyPayrollSwitch;
+exports.reconcileCompanyPayType = serviceStopCompletion.reconcileCompanyPayType;
+exports.processPayrollReconcileWork = serviceStopCompletion.processPayrollReconcileWork;
+exports.refreshServiceStopPayroll = serviceStopCompletion.refreshServiceStopPayroll;
 
 
 
@@ -823,3 +832,21 @@ exports.onCompanyRepairRequestCreatedNotification = functions1.firestore
 
     return null;
   });
+const technicianWork = require('./technicianWork');
+exports.manageTechnicianWork = technicianWork.manageTechnicianWork;
+exports.scheduleTechnicianWork = technicianWork.scheduleTechnicianWork;
+exports.manageTechnicianPayRequest = technicianWork.manageTechnicianPayRequest;
+exports.manageTechnicianClock = technicianWork.manageTechnicianClock;
+exports.reconcileShiftTime = technicianWork.reconcileShiftTime;
+exports.reconcileWorkLogTime = technicianWork.reconcileWorkLogTime;
+exports.reconcileRouteTime = technicianWork.reconcileRouteTime;
+exports.reconcileRouteLogTime = technicianWork.reconcileRouteLogTime;
+exports.finalizeTechnicianJob = technicianWork.finalizeTechnicianJob;
+exports.manageTechnicianRates = technicianWork.manageTechnicianRates;
+exports.syncWorkOfferStopProgress = technicianWork.syncWorkOfferStopProgress;
+exports.syncWorkOfferTaskProgress = technicianWork.syncWorkOfferTaskProgress;
+exports.syncWorkOfferProductProgress = technicianWork.syncWorkOfferProductProgress;
+
+exports.syncWorkOfferStopTaskProgress = technicianWork.syncWorkOfferStopTaskProgress;
+exports.reconcileWorkOfferPayroll = technicianWork.reconcileWorkOfferPayroll;
+exports.reconcileWorkOfferIncentive = technicianWork.reconcileWorkOfferIncentive;

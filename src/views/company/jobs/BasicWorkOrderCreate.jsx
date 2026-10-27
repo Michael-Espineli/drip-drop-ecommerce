@@ -1,4 +1,8 @@
-import React, { useContext, useEffect, useMemo, useState } from "react";
+import { resolveJobCreator } from "../../../utils/jobHistory";
+import { jobPayFields } from "../../../utils/payroll/payCalculation";
+import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
+import { createJobAtomically } from "../../../utils/createJobAtomically";
+import React, { useContext, useEffect, useMemo, useState, useRef } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
     arrayUnion,
@@ -8,9 +12,7 @@ import {
     getDocs,
     query,
     serverTimestamp,
-    setDoc,
     Timestamp,
-    updateDoc,
     where,
 } from "firebase/firestore";
 import Select from "react-select";
@@ -303,6 +305,7 @@ const buildCompanyUserOption = (docSnap) => {
 };
 
 const BasicWorkOrderCreate = () => {
+  const pendingCreationId = useRef(null);
     const navigate = useNavigate();
     const location = useLocation();
     const [searchParams] = useSearchParams();
@@ -359,12 +362,7 @@ const BasicWorkOrderCreate = () => {
     const [customEstimatedMinutes, setCustomEstimatedMinutes] = useState("60");
 
     const loggedInUser = currentUser || user || {};
-    const createdByUserId = dataBaseUser?.id || loggedInUser?.uid || loggedInUser?.id || "";
-    const createdByUserName =
-        `${dataBaseUser?.firstName || ""} ${dataBaseUser?.lastName || ""}`.trim() ||
-        loggedInUser?.displayName ||
-        loggedInUser?.userName ||
-        "Unknown";
+    const { userId: createdByUserId, userName: createdByUserName } = resolveJobCreator({ user: loggedInUser, profile: dataBaseUser || {} });
 
     const canUseFullCreate = can(CREATE_JOBS_PERMISSION_ID);
     const canTemplateSelf = canUseFullCreate || can(SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID);
@@ -652,25 +650,13 @@ const BasicWorkOrderCreate = () => {
     const templateGeneratedPriceCents = useMemo(() => {
         if (!selectedTemplate) return 0;
 
-        const laborLineTotal = templateDetails.laborLineItems.reduce(
-            (total, line) => total + laborLineTotalPriceCents(line),
-            0
-        );
-        const stopTotal = templateDetails.plannedServiceStops.reduce(
-            (total, stop) => total + Number(stop.plannedLaborCostCents || 0),
-            0
-        );
-        const taskTotal = templateDetails.tasks.reduce(
-            (total, task) => total + getTaskBillingLaborPriceCents(task),
-            0
-        );
         const materialTotal = templateDetails.shoppingItems.reduce(
             (total, item) => total + plannedMaterialTotalPriceCents(item),
             0
         );
-        const generatedTotal = (templateDetails.laborLineItems.length ? laborLineTotal : stopTotal + taskTotal) + materialTotal;
+        const generatedTotal = jobLaborTotals(templateDetails).priceCents + materialTotal;
 
-        return generatedTotal || Number(selectedTemplate.defaultRateCents || selectedTemplate.rate || 0);
+        return templateDetails.laborLineItems.length || generatedTotal !== 0 ? generatedTotal : Number(selectedTemplate.defaultRateCents ?? selectedTemplate.rate ?? 0);
     }, [selectedTemplate, templateDetails]);
 
     const customPriceCents = useMemo(() => centsFromMoney(customPrice), [customPrice]);
@@ -1091,6 +1077,7 @@ const BasicWorkOrderCreate = () => {
         type: canonicalJobTaskType(task.type || "General"),
         description: task.description || "",
         contractedRate: Number(task.contractedRate || 0),
+        ...jobPayFields(task),
         billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
         estimatedTime: Number(task.estimatedTime || 0),
         status: "Draft",
@@ -1241,11 +1228,14 @@ const BasicWorkOrderCreate = () => {
             sourceSolutionId: planId,
             sourceTemplateId: selectedTemplate?.id || "",
             sourceTemplateLaborLineId: line.id || "",
+            generatedFromTaskId: taskIdMap[line.generatedFromTaskId] || "",
+            generatedFromPlannedStopId: plannedStopIdMap[line.generatedFromPlannedStopId] || "",
             name: line.name || line.title || `Service ${index + 1}`,
             description: line.description || "",
             quantity,
             unitPriceCents,
             totalPriceCents,
+            taxable: Boolean(line.taxable),
             internalCostCents: laborLineInternalCostCents(line),
             taskIds,
             laborLineTaskIds: taskIds,
@@ -1294,6 +1284,7 @@ const BasicWorkOrderCreate = () => {
             purchaserId: createdByUserId || "",
             purchaserName: createdByUserName || "",
             genericItemId: item.genericItemId || "",
+            taxable: Boolean(item.taxable),
             name: item.name || "",
             description: item.description || "",
             datePurchased: null,
@@ -1348,7 +1339,7 @@ const BasicWorkOrderCreate = () => {
                     equipmentId: line.equipmentId || "",
                     serviceLocationId: line.serviceLocationId || "",
                     bodyOfWaterId: line.bodyOfWaterId || "",
-                    taxable: false,
+                    taxable: Boolean(line.taxable),
                     stripeConnectedAccountId: line.stripeConnectedAccountId || "",
                     stripeProductId: line.stripeProductId || "",
                     stripePriceId: line.stripePriceId || "",
@@ -1622,6 +1613,7 @@ const BasicWorkOrderCreate = () => {
     };
 
     const createScheduledServiceStop = async ({
+        writer,
         jobId,
         jobInternalId,
         normalizedTasks,
@@ -1631,7 +1623,7 @@ const BasicWorkOrderCreate = () => {
         const stopId = `comp_ss_${uuidv4()}`;
         const stopRef = doc(db, "companies", recentlySelectedCompany, "serviceStops", stopId);
         const counterRef = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
-        const counterSnap = await getDoc(counterRef);
+        const counterSnap = await writer.get(counterRef);
         const currentCount = counterSnap.exists() ? Number(counterSnap.data().increment || 0) : 0;
         const nextCount = currentCount + 1;
         const serviceStopInternalId = `SS${currentCount}`;
@@ -1668,7 +1660,7 @@ const BasicWorkOrderCreate = () => {
         const payTypeId = selectedPlannedStop?.payTypeId || selectedPlannedStop?.serviceStopTypeId || "system_job_service_stop";
         const payTypeName = selectedPlannedStop?.payTypeName || selectedPlannedStop?.serviceStopTypeName || "Job Visit";
 
-        await setDoc(counterRef, { increment: nextCount }, { merge: true });
+        await writer.set(counterRef, { increment: nextCount }, { merge: true });
 
         const stopRecord = {
             id: stopId,
@@ -1726,11 +1718,11 @@ const BasicWorkOrderCreate = () => {
             duration,
         };
 
-        await setDoc(stopRef, stopRecord);
+        await writer.set(stopRef, stopRecord);
 
         for (const task of scheduledTasks) {
             const serviceStopTaskId = `comp_ss_tas_${uuidv4()}`;
-            await setDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", stopId, "tasks", serviceStopTaskId), {
+            await writer.set(doc(db, "companies", recentlySelectedCompany, "serviceStops", stopId, "tasks", serviceStopTaskId), {
                 ...task,
                 id: serviceStopTaskId,
                 workerId: selectedAssignee.userId,
@@ -1749,12 +1741,11 @@ const BasicWorkOrderCreate = () => {
                     internalId: "",
                 },
                 jobTaskId: task.id,
-                payTypeId: task.payTypeId || task.workTypeId || "",
-                payTypeName: task.payTypeName || task.workTypeName || "",
+                ...jobPayFields(task),
                 workOrderTaskId: task.id,
             });
 
-            await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), {
+            await writer.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), {
                 status: "Scheduled",
                 workerId: selectedAssignee.userId,
                 workerName: selectedAssignee.userName,
@@ -1768,7 +1759,7 @@ const BasicWorkOrderCreate = () => {
         }
 
         if (selectedPlannedStop?.id) {
-            await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops", selectedPlannedStop.id), {
+            await writer.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops", selectedPlannedStop.id), {
                 serviceStopId: stopId,
                 scheduledServiceStopId: stopId,
                 convertedServiceStopId: stopId,
@@ -1779,7 +1770,7 @@ const BasicWorkOrderCreate = () => {
             });
         }
 
-        await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
+        await writer.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
             serviceStopIds: arrayUnion(stopId),
             scheduledServiceStopId: stopId,
             scheduledServiceStopInternalId: serviceStopInternalId,
@@ -1847,274 +1838,170 @@ const BasicWorkOrderCreate = () => {
         setCreating(true);
 
         try {
-            const workOrderCounterRef = doc(db, "companies", recentlySelectedCompany, "settings", "workOrders");
-            const workOrderCounterSnap = await getDoc(workOrderCounterRef);
-            const nextCount = workOrderCounterSnap.exists()
-                ? Number(workOrderCounterSnap.data().increment || 0) + 1
-                : 1;
-            const nextInternalId = `J${nextCount}`;
-            const jobId = `comp_wo_${uuidv4()}`;
-            const planId = `comp_job_plan_${uuidv4()}`;
-            const now = new Date();
-            const nowTimestamp = Timestamp.fromDate(now);
-            const nowMillis = now.getTime();
-            const customerName = selectedCustomer.label || getCustomerDisplayName(selectedCustomer);
+            const jobId = pendingCreationId.current || (pendingCreationId.current = `comp_wo_${uuidv4()}`);
+            await createJobAtomically(db, { companyId: recentlySelectedCompany, jobId, creator: { userId: createdByUserId, userName: createdByUserName } }, async (writer) => {
+                const workOrderCounterRef = doc(db, "companies", recentlySelectedCompany, "settings", "workOrders");
+                const workOrderCounterSnap = await writer.get(workOrderCounterRef);
+                const nextCount = workOrderCounterSnap.exists()
+                    ? Number(workOrderCounterSnap.data().increment || 0) + 1
+                    : 1;
+                const nextInternalId = `J${nextCount}`;
+                const planId = `comp_job_plan_${uuidv4()}`;
+                const now = new Date();
+                const nowTimestamp = Timestamp.fromDate(now);
+                const nowMillis = now.getTime();
+                const customerName = selectedCustomer.label || getCustomerDisplayName(selectedCustomer);
 
-            await setDoc(workOrderCounterRef, { increment: nextCount }, { merge: true });
+                await writer.set(workOrderCounterRef, { increment: nextCount }, { merge: true });
 
-            const normalizedTasks = mode === "template"
-                ? templateDetails.tasks.map((task) => normalizeTemplateTaskForJob(task, jobId, planId))
-                : [normalizeCustomTaskForJob(jobId, planId)];
-            const normalizedTaskById = new Map(normalizedTasks.map((task) => [task.id, task]));
-            const taskIdMap = templateDetails.tasks.reduce((map, task, index) => ({
-                ...map,
-                [task.id]: normalizedTasks[index]?.id,
-            }), {});
-            const normalizedPlannedStops = buildPlannedStopsForJob(jobId, planId, taskIdMap, normalizedTasks);
-            const plannedStopIdMap = normalizedPlannedStops.reduce((map, stop) => ({
-                ...map,
-                [stop.sourceTemplatePlannedStopId || stop.id]: stop.id,
-            }), {});
-            const normalizedLaborLineItems = mode === "template"
-                ? templateDetails.laborLineItems.map((line, index) => (
-                    normalizeTemplateLaborLineForJob(line, jobId, planId, taskIdMap, plannedStopIdMap, index, normalizedTaskById)
-                ))
-                : [];
-            const normalizedShoppingItems = mode === "template"
-                ? templateDetails.shoppingItems.map((item) => ({
-                    ...normalizeShoppingItemForJob(item, jobId, planId, customerName),
-                    equipmentId: item.equipmentId || selectedEquipmentId,
-                    serviceLocationId: item.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: item.bodyOfWaterId || resolvedJobBodyOfWaterId,
-                }))
-                : [];
-            const createdEquipmentIds = getJobScopeEquipmentIds({
-                primaryEquipmentId: selectedEquipmentId,
-                tasks: normalizedTasks,
-                plannedServiceStops: normalizedPlannedStops,
-                laborLineItems: normalizedLaborLineItems,
-                shoppingItems: normalizedShoppingItems,
-            });
-            const createdEquipmentSummary = equipmentSummaryForIds({
-                equipmentIds: createdEquipmentIds,
-                equipmentById,
-                primaryEquipmentId: selectedEquipmentId || createdEquipmentIds[0] || "",
-                primaryEquipmentName: selectedEquipmentName,
-            });
-            const createdBodyOfWaterIds = getJobScopeBodyOfWaterIds({
-                primaryBodyOfWaterId: resolvedJobBodyOfWaterId,
-                tasks: normalizedTasks,
-                plannedServiceStops: normalizedPlannedStops,
-                laborLineItems: normalizedLaborLineItems,
-                shoppingItems: normalizedShoppingItems,
-            });
-            const primaryBodyOfWaterId = resolvedJobBodyOfWaterId || createdBodyOfWaterIds[0] || "";
-            const primaryBodyOfWaterName =
-                resolvedJobBodyOfWaterName ||
-                bodyOfWaterById.get(primaryBodyOfWaterId)?.label ||
-                bodyOfWaterById.get(primaryBodyOfWaterId)?.name ||
-                "";
-            const starterPlanRecord = buildPlanRecord({
-                planId,
-                jobId,
-                nextInternalId,
-                customerName,
-                normalizedTasks,
-                normalizedPlannedStops,
-                normalizedShoppingItems,
-                normalizedLaborLineItems,
-                equipmentSummary: createdEquipmentSummary,
-                bodyOfWaterId: primaryBodyOfWaterId,
-                bodyOfWaterName: primaryBodyOfWaterName,
-                bodyOfWaterIds: createdBodyOfWaterIds,
-                nowTimestamp,
-                nowMillis,
-            });
-            const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedTemplate);
-            const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
-            const starterPlanTierLabel = getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER);
-            const jobData = {
-                id: jobId,
-                internalId: nextInternalId,
-                type: selectedTemplate?.jobType || selectedTemplate?.type || (mode === "template" ? "Template Job" : "Custom Job"),
-                dateCreated: nowTimestamp,
-                updatedAt: nowTimestamp,
-                updatedAtMillis: nowMillis,
-                lastHistoryEventTitle: "Basic job created",
-                lastHistoryEventType: "Created",
-                description: description.trim() || selectedTemplate?.description || "",
-                operationStatus: "Scheduled",
-                billingStatus: "Draft",
-                issuePriorityLevel,
-                issuePriorityLabel,
-                priorityLevel: issuePriorityLevel,
-                priorityLabel: issuePriorityLabel,
-                solutionTier: issuePriorityLevel,
-                solutionTierLabel: issuePriorityLabel,
-                activePlanId: planId,
-                activePlanTier: DEFAULT_JOB_PLAN_TIER,
-                activePlanTierLabel: starterPlanTierLabel,
-                acceptedPlanId: "",
-                activeSolutionId: planId,
-                activeSolutionTier: DEFAULT_JOB_PLAN_TIER,
-                activeSolutionTierLabel: starterPlanTierLabel,
-                acceptedSolutionId: "",
-                planSelectionStatus: "Draft",
-                solutionSelectionStatus: "Draft",
-                customerId: selectedCustomer.id,
-                customerName,
-                serviceLocationId: selectedServiceLocation.id,
-                serviceLocationName: selectedServiceLocation.label || "",
-                bodyOfWaterId: primaryBodyOfWaterId,
-                bodyOfWaterName: primaryBodyOfWaterName,
-                bodyOfWaterIds: createdBodyOfWaterIds,
-                equipmentId: createdEquipmentSummary.equipmentId || "",
-                equipmentName: createdEquipmentSummary.equipmentName || "",
-                equipmentIds: createdEquipmentSummary.equipmentIds || [],
-                companyEquipmentIds: createdEquipmentSummary.companyEquipmentIds || [],
-                equipmentNames: createdEquipmentSummary.equipmentNames || [],
-                serviceStopIds: [],
-                laborContractIds: [],
-                adminId: resolvedAdmin.id,
-                adminName: resolvedAdmin.name,
-                adminAssignmentSource: resolvedAdmin.source,
-                purchasedItemsIds: [],
-                rate: starterPlanRecord.totalAmountCents || generatedPriceCents,
-                laborCost: starterPlanRecord.plannedLaborCostCents || generatedInternalCostCents,
-                plannedLaborPriceCents: starterPlanRecord.plannedLaborPriceCents || 0,
-                plannedMaterialCostCents: starterPlanRecord.materialCostCents || 0,
-                plannedMaterialPriceCents: starterPlanRecord.materialPriceCents || 0,
-                estimateSubtotalCents: starterPlanRecord.subtotalAmountCents || 0,
-                estimateTotalCents: starterPlanRecord.totalAmountCents || generatedPriceCents,
-                estimateLineItems: starterPlanRecord.estimateLineItems || [],
-                laborLineItems: normalizedLaborLineItems,
-                estimateLaborLineItems: normalizedLaborLineItems,
-                laborLineCount: normalizedLaborLineItems.length,
-                taskCount: normalizedTasks.length,
-                plannedStopCount: normalizedPlannedStops.length,
-                materialCount: normalizedShoppingItems.length,
-                otherCompany: false,
-                receivedLaborContractId: "",
-                receiverId: "",
-                senderId: recentlySelectedCompany,
-                dateEstimateAccepted: null,
-                estimateAcceptedById: null,
-                estimateAcceptType: null,
-                estimateAcceptedNotes: "",
-                invoiceDate: null,
-                invoiceRef: "",
-                invoiceType: null,
-                invoiceNotes: "",
-                repairRequestId: repairRequest?.id || "",
-                repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
-                sourceTemplateId: selectedTemplate?.id || "",
-                sourceTemplateName: selectedTemplate?.name || "",
-                createdFromBasicWorkOrderForm: true,
-                createdFromBasicJobForm: true,
-                createdFromCustomerDetail,
-                createdFromEquipmentCard,
-                createdFromEquipmentDetail,
-                basicWorkOrderMode: mode,
-                basicJobMode: mode,
-                equipmentContext: equipmentContext || null,
-                customerContext: customerContext || null,
-                jobIntent,
-                assignedTechId: selectedAssignee.userId,
-                assignedTechName: selectedAssignee.userName,
-                assignedCompanyUserId: selectedAssignee.id,
-                scheduledAt: Timestamp.fromDate(scheduledDate),
-                scheduledDate: Timestamp.fromDate(scheduledDate),
-                customerRegionTags: normalizeCustomerTags(selectedCustomer.tags || []),
-                assignedTechRegionTags: selectedAssigneeRegionalTags,
-                createdByUserId,
-                createdByUserName,
-            };
-
-            await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobData);
-            await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plans", planId), starterPlanRecord);
-
-            for (const stop of normalizedPlannedStops) {
-                await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops", stop.id), stop);
-            }
-
-            for (const task of normalizedTasks) {
-                await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task);
-            }
-
-            for (const line of normalizedLaborLineItems) {
-                await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "laborLineItems", line.id), line);
-            }
-
-            for (const item of normalizedShoppingItems) {
-                await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item);
-            }
-
-            if (repairRequest?.id) {
-                const repairRequestRef = repairRequestSourcePath === "homeowner"
-                    ? doc(db, "homeownerRepairRequests", repairRequest.id)
-                    : doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequest.id);
-
-                await updateDoc(repairRequestRef, {
-                    jobIds: arrayUnion(jobId),
-                    status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
-                    updatedAt: serverTimestamp(),
+                const normalizedTasks = mode === "template"
+                    ? templateDetails.tasks.map((task) => normalizeTemplateTaskForJob(task, jobId, planId))
+                    : [normalizeCustomTaskForJob(jobId, planId)];
+                const normalizedTaskById = new Map(normalizedTasks.map((task) => [task.id, task]));
+                const taskIdMap = templateDetails.tasks.reduce((map, task, index) => ({
+                    ...map,
+                    [task.id]: normalizedTasks[index]?.id,
+                }), {});
+                const normalizedPlannedStops = buildPlannedStopsForJob(jobId, planId, taskIdMap, normalizedTasks);
+                const plannedStopIdMap = normalizedPlannedStops.reduce((map, stop) => ({
+                    ...map,
+                    [stop.sourceTemplatePlannedStopId || stop.id]: stop.id,
+                }), {});
+                let normalizedLaborLineItems = mode === "template"
+                    ? templateDetails.laborLineItems.map((line, index) => (
+                        normalizeTemplateLaborLineForJob(line, jobId, planId, taskIdMap, plannedStopIdMap, index, normalizedTaskById)
+                    ))
+                    : [];
+                normalizedLaborLineItems = completeJobLaborLines({ laborLineItems: normalizedLaborLineItems, tasks: normalizedTasks, plannedServiceStops: normalizedPlannedStops });
+                const normalizedShoppingItems = mode === "template"
+                    ? templateDetails.shoppingItems.map((item) => ({
+                        ...normalizeShoppingItemForJob(item, jobId, planId, customerName),
+                        equipmentId: item.equipmentId || selectedEquipmentId,
+                        serviceLocationId: item.serviceLocationId || selectedServiceLocation.id || "",
+                        bodyOfWaterId: item.bodyOfWaterId || resolvedJobBodyOfWaterId,
+                    }))
+                    : [];
+                const createdEquipmentIds = getJobScopeEquipmentIds({
+                    primaryEquipmentId: selectedEquipmentId,
+                    tasks: normalizedTasks,
+                    plannedServiceStops: normalizedPlannedStops,
+                    laborLineItems: normalizedLaborLineItems,
+                    shoppingItems: normalizedShoppingItems,
                 });
-            }
-
-            const preferredPlannedStop = normalizedPlannedStops[0] || null;
-            const scheduledStop = await createScheduledServiceStop({
-                jobId,
-                jobInternalId: nextInternalId,
-                normalizedTasks,
-                selectedPlannedStop: preferredPlannedStop,
-                scheduledDate,
-            });
-
-            const historyId = `comp_job_hist_${uuidv4()}`;
-            await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId), {
-                id: historyId,
-                companyId: recentlySelectedCompany,
-                jobId,
-                jobInternalId: nextInternalId,
-                eventType: "Created",
-                title: "Basic job created",
-                description: repairRequest?.id
-                    ? `Created from repair request: ${repairRequest.description || repairRequest.id}`
-                    : selectedTemplate?.name
-                        ? `Created from technician template: ${selectedTemplate.name}`
-                        : "Created from the basic custom job form.",
-                changes: [
-                    { field: "adminName", label: "Admin", before: "-", after: resolvedAdmin.name || "-" },
-                    { field: "assignedTechName", label: "Technician", before: "-", after: selectedAssignee.userName || "-" },
-                    { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
-                    { field: "serviceLocationName", label: "Service Location", before: "-", after: selectedServiceLocation.label || "-" },
-                    ...(primaryBodyOfWaterName
-                        ? [{ field: "bodyOfWaterName", label: "Body Of Water", before: "-", after: primaryBodyOfWaterName }]
-                        : []),
-                    ...(createdEquipmentSummary.equipmentNames?.length
-                        ? [{ field: "equipmentNames", label: "Equipment", before: "-", after: createdEquipmentSummary.equipmentNames.join(", ") }]
-                        : []),
-                    { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
-                    { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
-                    { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(starterPlanRecord.totalAmountCents || generatedPriceCents) },
-                ],
-                metadata: {
-                    sourceTemplateId: selectedTemplate?.id || "",
-                    sourceTemplateName: selectedTemplate?.name || "",
-                    repairRequestId: repairRequest?.id || "",
-                    repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
-                    starterPlanId: planId,
+                const createdEquipmentSummary = equipmentSummaryForIds({
+                    equipmentIds: createdEquipmentIds,
+                    equipmentById,
+                    primaryEquipmentId: selectedEquipmentId || createdEquipmentIds[0] || "",
+                    primaryEquipmentName: selectedEquipmentName,
+                });
+                const createdBodyOfWaterIds = getJobScopeBodyOfWaterIds({
+                    primaryBodyOfWaterId: resolvedJobBodyOfWaterId,
+                    tasks: normalizedTasks,
+                    plannedServiceStops: normalizedPlannedStops,
+                    laborLineItems: normalizedLaborLineItems,
+                    shoppingItems: normalizedShoppingItems,
+                });
+                const primaryBodyOfWaterId = resolvedJobBodyOfWaterId || createdBodyOfWaterIds[0] || "";
+                const primaryBodyOfWaterName =
+                    resolvedJobBodyOfWaterName ||
+                    bodyOfWaterById.get(primaryBodyOfWaterId)?.label ||
+                    bodyOfWaterById.get(primaryBodyOfWaterId)?.name ||
+                    "";
+                const starterPlanRecord = buildPlanRecord({
+                    planId,
+                    jobId,
+                    nextInternalId,
+                    customerName,
+                    normalizedTasks,
+                    normalizedPlannedStops,
+                    normalizedShoppingItems,
+                    normalizedLaborLineItems,
+                    equipmentSummary: createdEquipmentSummary,
+                    bodyOfWaterId: primaryBodyOfWaterId,
+                    bodyOfWaterName: primaryBodyOfWaterName,
+                    bodyOfWaterIds: createdBodyOfWaterIds,
+                    nowTimestamp,
+                    nowMillis,
+                });
+                const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedTemplate);
+                const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
+                const starterPlanTierLabel = getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER);
+                const jobData = {
+                    id: jobId,
+                    internalId: nextInternalId,
+                    type: selectedTemplate?.jobType || selectedTemplate?.type || (mode === "template" ? "Template Job" : "Custom Job"),
+                    dateCreated: nowTimestamp,
+                    updatedAt: nowTimestamp,
+                    updatedAtMillis: nowMillis,
+                    lastHistoryEventTitle: "Basic job created",
+                    lastHistoryEventType: "Created",
+                    description: description.trim() || selectedTemplate?.description || "",
+                    operationStatus: "Scheduled",
+                    billingStatus: "Draft",
+                    issuePriorityLevel,
+                    issuePriorityLabel,
+                    priorityLevel: issuePriorityLevel,
+                    priorityLabel: issuePriorityLabel,
+                    solutionTier: issuePriorityLevel,
+                    solutionTierLabel: issuePriorityLabel,
                     activePlanId: planId,
+                    activePlanTier: DEFAULT_JOB_PLAN_TIER,
+                    activePlanTierLabel: starterPlanTierLabel,
+                    acceptedPlanId: "",
                     activeSolutionId: planId,
-                    scheduledServiceStopId: scheduledStop.stopId,
-                    scheduledServiceStopInternalId: scheduledStop.serviceStopInternalId,
+                    activeSolutionTier: DEFAULT_JOB_PLAN_TIER,
+                    activeSolutionTierLabel: starterPlanTierLabel,
+                    acceptedSolutionId: "",
+                    planSelectionStatus: "Draft",
+                    solutionSelectionStatus: "Draft",
+                    customerId: selectedCustomer.id,
+                    customerName,
+                    serviceLocationId: selectedServiceLocation.id,
+                    serviceLocationName: selectedServiceLocation.label || "",
                     bodyOfWaterId: primaryBodyOfWaterId,
                     bodyOfWaterName: primaryBodyOfWaterName,
                     bodyOfWaterIds: createdBodyOfWaterIds,
                     equipmentId: createdEquipmentSummary.equipmentId || "",
+                    equipmentName: createdEquipmentSummary.equipmentName || "",
                     equipmentIds: createdEquipmentSummary.equipmentIds || [],
+                    companyEquipmentIds: createdEquipmentSummary.companyEquipmentIds || [],
                     equipmentNames: createdEquipmentSummary.equipmentNames || [],
+                    serviceStopIds: [],
+                    laborContractIds: [],
+                    adminId: resolvedAdmin.id,
+                    adminName: resolvedAdmin.name,
+                    adminAssignmentSource: resolvedAdmin.source,
+                    purchasedItemsIds: [],
+                    rate: starterPlanRecord.totalAmountCents || generatedPriceCents,
+                    laborCost: starterPlanRecord.plannedLaborCostCents || generatedInternalCostCents,
+                    plannedLaborPriceCents: starterPlanRecord.plannedLaborPriceCents || 0,
+                    plannedMaterialCostCents: starterPlanRecord.materialCostCents || 0,
+                    plannedMaterialPriceCents: starterPlanRecord.materialPriceCents || 0,
+                    estimateSubtotalCents: starterPlanRecord.subtotalAmountCents || 0,
+                    estimateTotalCents: starterPlanRecord.totalAmountCents || generatedPriceCents,
+                    estimateLineItems: starterPlanRecord.estimateLineItems || [],
+                    laborLineItems: normalizedLaborLineItems,
+                    estimateLaborLineItems: normalizedLaborLineItems,
                     laborLineCount: normalizedLaborLineItems.length,
+                    taskCount: normalizedTasks.length,
+                    plannedStopCount: normalizedPlannedStops.length,
+                    materialCount: normalizedShoppingItems.length,
+                    otherCompany: false,
+                    receivedLaborContractId: "",
+                    receiverId: "",
+                    senderId: recentlySelectedCompany,
+                    dateEstimateAccepted: null,
+                    estimateAcceptedById: null,
+                    estimateAcceptType: null,
+                    estimateAcceptedNotes: "",
+                    invoiceDate: null,
+                    invoiceRef: "",
+                    invoiceType: null,
+                    invoiceNotes: "",
+                    repairRequestId: repairRequest?.id || "",
+                    repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
+                    sourceTemplateId: selectedTemplate?.id || "",
+                    sourceTemplateName: selectedTemplate?.name || "",
                     createdFromBasicWorkOrderForm: true,
                     createdFromBasicJobForm: true,
                     createdFromCustomerDetail,
@@ -2122,22 +2009,131 @@ const BasicWorkOrderCreate = () => {
                     createdFromEquipmentDetail,
                     basicWorkOrderMode: mode,
                     basicJobMode: mode,
+                    equipmentContext: equipmentContext || null,
+                    customerContext: customerContext || null,
                     jobIntent,
-                    adminAssignmentSource: resolvedAdmin.source,
-                },
-                severity: "success",
-                actorUserId: createdByUserId || "",
-                actorUserName: createdByUserName,
-                actorCompanyUserId: currentCompanyUser?.id || "",
-                createdAt: serverTimestamp(),
-                createdAtMillis: nowMillis,
-            });
+                    assignedTechId: selectedAssignee.userId,
+                    assignedTechName: selectedAssignee.userName,
+                    assignedCompanyUserId: selectedAssignee.id,
+                    scheduledAt: Timestamp.fromDate(scheduledDate),
+                    scheduledDate: Timestamp.fromDate(scheduledDate),
+                    customerRegionTags: normalizeCustomerTags(selectedCustomer.tags || []),
+                    assignedTechRegionTags: selectedAssigneeRegionalTags,
+                    createdByUserId,
+                    createdByUserName,
+                };
 
+                await writer.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobData);
+                await writer.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plans", planId), starterPlanRecord);
+
+                for (const stop of normalizedPlannedStops) {
+                    await writer.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops", stop.id), stop);
+                }
+
+                for (const task of normalizedTasks) {
+                    await writer.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task);
+                }
+
+                for (const line of normalizedLaborLineItems) {
+                    await writer.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "laborLineItems", line.id), line);
+                }
+
+                for (const item of normalizedShoppingItems) {
+                    await writer.set(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), item);
+                }
+
+                if (repairRequest?.id) {
+                    const repairRequestRef = repairRequestSourcePath === "homeowner"
+                        ? doc(db, "homeownerRepairRequests", repairRequest.id)
+                        : doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequest.id);
+
+                    await writer.update(repairRequestRef, {
+                        jobIds: arrayUnion(jobId),
+                        status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
+                        updatedAt: serverTimestamp(),
+                    });
+                }
+
+                const preferredPlannedStop = normalizedPlannedStops[0] || null;
+                const scheduledStop = await createScheduledServiceStop({
+                    writer,
+                    jobId,
+                    jobInternalId: nextInternalId,
+                    normalizedTasks,
+                    selectedPlannedStop: preferredPlannedStop,
+                    scheduledDate,
+                });
+
+                const historyId = `comp_job_hist_${uuidv4()}`;
+                await writer.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId), {
+                    id: historyId,
+                    companyId: recentlySelectedCompany,
+                    jobId,
+                    jobInternalId: nextInternalId,
+                    eventType: "Created",
+                    title: "Basic job created",
+                    description: repairRequest?.id
+                        ? `Created from repair request: ${repairRequest.description || repairRequest.id}`
+                        : selectedTemplate?.name
+                            ? `Created from technician template: ${selectedTemplate.name}`
+                            : "Created from the basic custom job form.",
+                    changes: [
+                        { field: "adminName", label: "Admin", before: "-", after: resolvedAdmin.name || "-" },
+                        { field: "assignedTechName", label: "Technician", before: "-", after: selectedAssignee.userName || "-" },
+                        { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
+                        { field: "serviceLocationName", label: "Service Location", before: "-", after: selectedServiceLocation.label || "-" },
+                        ...(primaryBodyOfWaterName
+                            ? [{ field: "bodyOfWaterName", label: "Body Of Water", before: "-", after: primaryBodyOfWaterName }]
+                            : []),
+                        ...(createdEquipmentSummary.equipmentNames?.length
+                            ? [{ field: "equipmentNames", label: "Equipment", before: "-", after: createdEquipmentSummary.equipmentNames.join(", ") }]
+                            : []),
+                        { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
+                        { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
+                        { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(starterPlanRecord.totalAmountCents || generatedPriceCents) },
+                    ],
+                    metadata: {
+                        sourceTemplateId: selectedTemplate?.id || "",
+                        sourceTemplateName: selectedTemplate?.name || "",
+                        repairRequestId: repairRequest?.id || "",
+                        repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
+                        starterPlanId: planId,
+                        activePlanId: planId,
+                        activeSolutionId: planId,
+                        scheduledServiceStopId: scheduledStop.stopId,
+                        scheduledServiceStopInternalId: scheduledStop.serviceStopInternalId,
+                        bodyOfWaterId: primaryBodyOfWaterId,
+                        bodyOfWaterName: primaryBodyOfWaterName,
+                        bodyOfWaterIds: createdBodyOfWaterIds,
+                        equipmentId: createdEquipmentSummary.equipmentId || "",
+                        equipmentIds: createdEquipmentSummary.equipmentIds || [],
+                        equipmentNames: createdEquipmentSummary.equipmentNames || [],
+                        laborLineCount: normalizedLaborLineItems.length,
+                        createdFromBasicWorkOrderForm: true,
+                        createdFromBasicJobForm: true,
+                        createdFromCustomerDetail,
+                        createdFromEquipmentCard,
+                        createdFromEquipmentDetail,
+                        basicWorkOrderMode: mode,
+                        basicJobMode: mode,
+                        jobIntent,
+                        adminAssignmentSource: resolvedAdmin.source,
+                    },
+                    severity: "success",
+                    actorUserId: createdByUserId || "",
+                    actorUserName: createdByUserName,
+                    actorCompanyUserId: currentCompanyUser?.id || "",
+                    createdAt: serverTimestamp(),
+                    createdAtMillis: nowMillis,
+                });
+
+            });
+            pendingCreationId.current = null;
             toast.success("Basic job scheduled.");
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating basic job:", error);
-            toast.error("Failed to create basic job.");
+            toast.error(error.code === "job-scope-too-large" ? error.message : "Failed to create basic job.");
         } finally {
             setCreating(false);
         }
