@@ -9,6 +9,8 @@ const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
 const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
+const { jobPayFields } = require("../payrollCalculation");
+const { weeklyServiceDates } = require("../recurringSchedule");
 const { sendSalesInvoiceEmailForAutomation } = require("../sendGrid/general");
 
 // Initialize admin SDK if not already done
@@ -1102,6 +1104,7 @@ function buildServiceStopTask({ task, serviceStop, rssData, serviceStopTaskId })
     type: task.type,
     status: task.status || "Not Finished",
     contractedRate: Number(task.contractedRate || 0),
+    ...jobPayFields(task),
     estimatedTime: Number(task.estimatedTime || 0),
 
     customerApproval: false,
@@ -1327,53 +1330,16 @@ async function createWeekdayStops(companyId, rssData, lastCreated, horizon) {
 
 // ---------- Weekly / Biweekly ----------
 async function createWeeklyStops(companyId, rssData, lastCreated, horizon, intervalDays) {
-  // Base cursor: lastCreated + interval, or align from startDate if lastCreated missing
-  let serviceDate;
-
-  if (lastCreated) {
-    const nextAlignedDate = alignDateToDayOnOrAfter(addDays(lastCreated, 1), rssData.day);
-    serviceDate = addDays(nextAlignedDate, -intervalDays);
-  } else {
-    const startDate = normalizeToNoon(parseDate(rssData.startDate) || new Date());
-    const alignedStartDate = alignDateToDayOnOrAfter(startDate, rssData.day);
-    const targetDow = dayNameToIndex(rssData.day);
-
-    if (alignedStartDate.getTime() !== startDate.getTime()) {
-      logRecurringServiceStopEvent("warn", "rss-warning", {
-        companyId,
-        recurringServiceStopId: rssData.id || "",
-        reason: "weekly_start_date_day_mismatch",
-        rssDay: rssData.day,
-        targetDow,
-        startDow: startDate.getDay(),
-        alignedDow: alignedStartDate.getDay(),
-        startDate: startDate.toISOString(),
-        alignedStartDate: alignedStartDate.toISOString(),
-      });
-    }
-
-    serviceDate = addDays(alignedStartDate, -intervalDays);
-  }
-
-  // Collect dates to create up to horizon
-  const dates = [];
-
-  while (true) {
-    serviceDate = addDays(serviceDate, intervalDays);
-    const normalizedServiceDate = normalizeToNoon(serviceDate);
-    if (normalizedServiceDate > horizon) break;
-    dates.push(normalizedServiceDate);
-  }
-  return createServiceStopsForDates({
-    companyId,
-    rssData,
-    dates,
+  const dates = weeklyServiceDates({
+    startDate: parseDate(rssData.startDate) || new Date(),
     lastCreated,
     horizon,
-    outcomeDetails: {
-      intervalDays,
-      day: rssData.day || "",
-    },
+    day: rssData.day,
+    intervalDays,
+  });
+  return createServiceStopsForDates({
+    companyId, rssData, dates, lastCreated, horizon,
+    outcomeDetails: { intervalDays, day: rssData.day || "" },
   });
 }
 

@@ -8,6 +8,8 @@ import { REPAIR_REQUEST_STATUS, RepairRequest } from '../../../utils/models/Repa
 import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from '../../../utils/models/Equipment';
 import { ArrowUpOnSquareIcon, PhotoIcon } from '@heroicons/react/24/solid';
 import { v4 as uuidv4 } from 'uuid';
+import RepairRequestPriority from '../../../components/RepairRequestPriority';
+import { DEFAULT_ISSUE_PRIORITY } from '../../../utils/models/JobPlan';
 
 const NewRepairRequest = () => {
     const { user } = useContext(Context);
@@ -22,6 +24,7 @@ const NewRepairRequest = () => {
     const [selectedEquipment, setSelectedEquipment] = useState('');
     const [equipmentStatusUpdate, setEquipmentStatusUpdate] = useState('');
     const [description, setDescription] = useState('');
+    const [issuePriorityLevel, setIssuePriorityLevel] = useState(DEFAULT_ISSUE_PRIORITY);
     const [files, setFiles] = useState([]);
     const [filePreviews, setFilePreviews] = useState([]);
 
@@ -117,6 +120,7 @@ const NewRepairRequest = () => {
                 date: new Date(),
                 status: REPAIR_REQUEST_STATUS.UNRESOLVED,
                 description,
+                issuePriorityLevel,
                 photoUrls,
                 locationId: selectedLocation,
                 bodyOfWaterId: selectedBodyOfWater,
@@ -188,7 +192,8 @@ const NewRepairRequest = () => {
                     )}
 
                     <div>
-                        <label htmlFor="description" className="block text-sm font-medium text-gray-700">Description of Issue</label>
+                        <RepairRequestPriority value={issuePriorityLevel} onChange={setIssuePriorityLevel} disabled={isLoading} />
+                        <label htmlFor="description" className="block text-sm font-medium text-gray-700 mt-4">Description of Issue</label>
                         <textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} className="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md" required />
                     </div>
 

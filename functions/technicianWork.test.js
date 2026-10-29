@@ -6,6 +6,7 @@ const {createTechnicianExecution}=require('./technicianExecution');
 const {createTechnicianPayRequests}=require('./technicianPayRequests');
 const {createTechnicianTime}=require('./technicianTime');
 const {calculatePayLines}=require('./payrollCalculation');
+const {createRouteWork}=require('./routeWork');
 const company='companies/company',day=new Date('2026-10-26T08:00:00Z');
 function fixture(extra={}) {
  const db=new MemoryFirestore({[company]:{ownerId:'admin',name:'Pool'},'users/tech/userAccess/company':{roleId:'tech'},'users/other/userAccess/company':{roleId:'tech'},[company+'/roles/tech']:{permissionIdList:['322','326','334']},[company+'/companyUsers/tech']:{userId:'tech',userName:'Alex',workerType:'Employee'},[company+'/companyUsers/other']:{userId:'other',userName:'Blair',workerType:'Employee'},[company+'/companyPayTypes/repair']:{id:'repair',name:'Repair',category:'repair',defaultRateType:'flatPerTask'},[company+'/technicianRates/rate']:{id:'rate',companyId:'company',technicianId:'tech',payTypeId:'repair',payBasis:'serviceStopTask',rateType:'flatPerTask',amountCents:5000,status:'active',effectiveStartDate:new Date('2026-01-01')},[company+'/workOrders/job']:{id:'job',internalId:'J1',customerId:'customer',serviceLocationId:'site'},[company+'/workOrders/job/tasks/task']:{id:'task',name:'Fix',status:'Draft',payTypeId:'repair',estimatedTime:60},[company+'/settings/companyWide']:{workOffersAutoAssignOnAcceptance:true},...extra});
@@ -14,6 +15,45 @@ function fixture(extra={}) {
  const save=(offer={})=>call('save',{offer:{id:'offer',offerType:'Internal Board',postedToBoard:true,boardVisibility:'Employees & Contractors',jobId:'job',jobTaskIds:['task'],title:'Repair',paySource:'Technician Rate',...offer}});
  return {db,work,call,save};
 }
+test('an old coverage offer cannot reclaim a stop after a shared one-time move',async()=>{
+ const f=fixture({[company+'/serviceStops/one']:{id:'one',techId:'admin',serviceDate:day,operationStatus:'Not Finished'},[company+'/activeRoutes/source']:{id:'source',techId:'admin',date:day,serviceStopsIds:['one'],status:'Did Not Start'}});
+ await f.save({jobId:'',jobTaskIds:[],routeId:'source',routeSource:'activeRoutes',routeTechId:'admin',paySource:'Offered Amount',offeredAmountCents:10000});
+ await createRouteWork(f.db,()=>day).command({auth:{uid:'admin'},data:{action:'oneTime',companyId:'company',requestId:'move',techId:'other',serviceDateKey:'2026-10-28',timeZone:'UTC',stops:[{id:'one',techId:'admin',serviceDateMillis:day.getTime()}]}});
+ await assert.rejects(f.call('accept',{offerId:'offer'},'tech'),/assignment or date changed/);
+ assert.equal(f.db.records.get(company+'/serviceStops/one').techId,'other');assert.equal(f.db.records.get(company+'/workOffers/offer').claims.length,0);
+});
+test('acceptance and review approval revalidate date, worker, revision and started work',async()=>{
+ for(const phase of ['accept','approve'])for(const patch of [{techId:'other'},{serviceDate:new Date(day.getTime()+86400000)},{assignmentRevision:1},{operationStatus:'In Progress'},{startTime:day}]) {
+  const f=fixture({[company+'/settings/companyWide']:{routeCoverageMode:phase==='approve'?'review':'automatic'},[company+'/serviceStops/one']:{id:'one',techId:'admin',serviceDate:day,operationStatus:'Not Finished'},[company+'/activeRoutes/source']:{id:'source',techId:'admin',date:day,serviceStopsIds:['one']}});
+  await f.save({jobId:'',jobTaskIds:[],routeId:'source',routeSource:'activeRoutes',routeTechId:'admin',paySource:'Offered Amount',offeredAmountCents:10000});
+  if(phase==='approve')await f.call('accept',{offerId:'offer',claimId:'claim'},'tech');
+  f.db.set(company+'/serviceStops/one',{...patch},{merge:true});
+  const before=new Map(f.db.records);
+  await assert.rejects(f.call(phase,{offerId:'offer',claimId:'claim'},phase==='approve'?'admin':'tech'),error=>error.code==='failed-precondition');
+  assert.deepEqual(f.db.records,before);
+ }
+});
+test('first coverage claims reject started stop tasks and linked job tasks',async()=>{
+ for(const linked of [false,true]) {
+  const f=fixture({[company+'/serviceStops/one']:{id:'one',techId:'admin',serviceDate:day,operationStatus:'Not Finished',jobId:'job'},[company+'/serviceStops/one/tasks/task']:{id:'task',workerId:'admin',workerAssignmentMode:'stop',jobTaskId:'task',status:linked?'Scheduled':'In Progress'},[company+'/workOrders/job/tasks/task']:{id:'task',status:linked?'In Progress':'Scheduled'},[company+'/activeRoutes/source']:{id:'source',techId:'admin',date:day,serviceStopsIds:['one']}});
+  await f.save({jobId:'',jobTaskIds:[],routeId:'source',routeSource:'activeRoutes',routeTechId:'admin',paySource:'Offered Amount',offeredAmountCents:10000});
+  await assert.rejects(f.call('accept',{offerId:'offer'},'tech'),/started/);assert.equal(f.db.records.get(company+'/serviceStops/one').techId,'admin');
+ }
+});
+test('review approval rejects task scope edited after acceptance',async()=>{
+ const f=fixture({[company+'/settings/companyWide']:{workOffersRequireApprovalBeforeAssignment:true}});
+ await f.save({paySource:'Offered Amount',offeredAmountCents:10000});await f.call('accept',{offerId:'offer',claimId:'claim'},'tech');
+ f.db.set(company+'/workOrders/job/tasks/task',{name:'Different work'},{merge:true});
+ await assert.rejects(f.call('approve',{offerId:'offer',claimId:'claim'}),/scope changed/);
+ assert.equal(f.db.records.get(company+'/workOffers/offer').claims[0].status,'Acceptance Pending Approval');
+});
+test('new covering routes initialize independent operational state and retain only source provenance',async()=>{
+ const f=fixture({[company+'/serviceStops/one']:{id:'one',techId:'admin',serviceDate:day,operationStatus:'Not Finished'},[company+'/activeRoutes/source']:{id:'source',techId:'admin',date:day,serviceStopsIds:['one'],order:[],vehicleSource:'Personal',vehicalId:'private',personalVehicleOwnerId:'admin',vehiclePlate:'SOURCE',durationSeconds:7200,distanceMiles:40,recurringRouteId:'permanent',plannedRouteId:'permanent',startTime:day,endTime:day,startMilage:10,endMilage:50,status:'Finished'}});
+ await f.save({jobId:'',jobTaskIds:[],routeId:'source',routeSource:'activeRoutes',routeTechId:'admin',paySource:'Offered Amount',offeredAmountCents:10000});await f.call('accept',{offerId:'offer'},'tech');
+ const target=[...f.db.records].find(([path])=>path.startsWith(company+'/activeRoutes/coverage_'))[1];
+ assert.equal(target.vehicalId,'');assert.equal(target.personalVehicleOwnerId,'');assert.equal(target.vehiclePlate,'');assert.equal(target.durationSeconds,0);assert.equal(target.distanceMiles,0);assert.equal(target.startTime,null);assert.equal(target.endTime,null);assert.equal(target.startMilage,null);assert.equal(target.endMilage,null);assert.equal(target.recurringRouteId,undefined);assert.equal(target.plannedRouteId,undefined);assert.deepEqual(target.coverageSourceRouteIds,['source']);
+ const source=f.db.records.get(company+'/activeRoutes/source');assert.equal(source.vehicalId,'private');assert.equal(source.endMilage,50);assert.equal(source.durationSeconds,7200);assert.equal(source.status,'Finished');
+});
 test('one authoritative claim wins under concurrent acceptance and retries are idempotent',async()=>{
  const f=fixture();await f.save({paySource:'Offered Amount',offeredAmountCents:10000});
  const result=await Promise.allSettled([f.call('accept',{offerId:'offer',claimId:'A'},'tech'),f.call('accept',{offerId:'offer',claimId:'B'},'other')]);

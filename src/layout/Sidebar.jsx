@@ -7,9 +7,9 @@ import { getAuth, signOut } from "firebase/auth";
 import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { db } from '../utils/config';
 import { COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID } from '../utils/companyPermissions';
-import { REPAIR_REQUEST_STATUS } from '../utils/models/RepairRequest';
+import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
-import { getFilteredDocsCount, getServerCount, listenForForegroundRefresh, sumServerCounts } from '../utils/firestoreCounts';
+import { getFilteredDocsCount, getServerCount, listenForForegroundRefresh } from '../utils/firestoreCounts';
 import {
     buildCustomerActiveById,
     equipmentNeedsMaintenanceForActiveBoard,
@@ -281,16 +281,23 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
         const equipmentRef = collection(db, "companies", recentlySelectedCompany, "equipment");
 
-        const internalRepairRequestsOpenQuery = query(
-            collection(db, "companies", recentlySelectedCompany, "repairRequests"),
-            where("status", "==", REPAIR_REQUEST_STATUS.UNRESOLVED)
-        );
-
-        const externalRepairRequestsOpenQuery = query(
-            collection(db, "homeownerRepairRequests"),
-            where("companyId", "==", recentlySelectedCompany),
-            where("status", "==", REPAIR_REQUEST_STATUS.UNRESOLVED)
-        );
+        const repairRequestCounts = { company: 0, homeowner: 0 };
+        const repairRequestQueries = {
+            company: collection(db, "companies", recentlySelectedCompany, "repairRequests"),
+            homeowner: query(collection(db, "homeownerRepairRequests"), where("companyId", "==", recentlySelectedCompany)),
+        };
+        const unsubscribeRepairRequests = Object.entries(repairRequestQueries).map(([source, requestQuery]) => (
+            onSnapshot(requestQuery, snapshot => {
+                if (cancelled) return;
+                repairRequestCounts[source] = snapshot.docs.filter((request) => isOpenRepairRequestStatus(request.data().status)).length;
+                setCounts(prev => ({ ...prev, repairRequests: repairRequestCounts.company + repairRequestCounts.homeowner }));
+            }, error => {
+                if (cancelled) return;
+                console.error("Error loading repair request count:", error);
+                repairRequestCounts[source] = 0;
+                setCounts(prev => ({ ...prev, repairRequests: repairRequestCounts.company + repairRequestCounts.homeowner }));
+            })
+        ));
 
         const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
         const workOffersRef = collection(db, "companies", recentlySelectedCompany, "workOffers");
@@ -396,7 +403,6 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 leads,
                 shopping,
                 legacyShopping,
-                repairRequests,
                 finishedJobs,
                 actionableJobs,
                 offeredWork,
@@ -405,10 +411,6 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 loadCount("lead", () => getServerCount(leadsQuery)),
                 loadCount("shopping", () => getPurchaseReadyShoppingCount("shoppingList")),
                 loadCount("legacy shopping", () => getPurchaseReadyShoppingCount("shoppingListItems")),
-                loadCount("repair request", () => sumServerCounts([
-                    internalRepairRequestsOpenQuery,
-                    externalRepairRequestsOpenQuery,
-                ])),
                 loadCount("finished job", () => getFilteredDocsCount(
                     finishedJobsQuery,
                     (jobDoc) => isFinishedOutstandingJob({ id: jobDoc.id, ...jobDoc.data() })
@@ -425,7 +427,6 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 leads,
                 shopping,
                 legacyShopping,
-                repairRequests,
                 repairRequestSources: {},
                 finishedJobs,
                 actionableJobs,
@@ -565,6 +566,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             cancelled = true;
             removeForegroundRefresh();
             unsubscribePartApprovals();
+            unsubscribeRepairRequests.forEach((unsubscribe) => unsubscribe());
             unsubscribeMessages();
             unsubscribeNotifications();
             unsubscribePersonalNotifications();

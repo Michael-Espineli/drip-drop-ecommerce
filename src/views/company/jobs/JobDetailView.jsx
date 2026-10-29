@@ -5,6 +5,10 @@ import { getJobMaterialVendorItemId, loadJobProductCatalog, buildJobProductCatal
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
 import { calculatePayLines, jobPayFields } from "../../../utils/payroll/payCalculation";
 import JobPayrollFields from "./JobPayrollFields";
+import useServicePayrollData from "../../../hooks/useServicePayrollData";
+import ServicePayrollCostPreview from "../sales/ServicePayrollCostPreview";
+import { taskDefaultsFromPayItem, updateServiceTaskPayrollField } from "../../../utils/payroll/servicePayrollPreview";
+
 import JobNextVisitSnapshot from "./JobNextVisitSnapshot";
 import React, { useCallback, useEffect, useMemo, useRef, useState, useContext } from "react";
 import { Link, useParams, useNavigate, useLocation, UNSAFE_NavigationContext } from "react-router-dom";
@@ -163,6 +167,10 @@ import {
   serviceStopTypeMatchesUseCase,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import JobTaskProductPicker from "./JobTaskProductPicker";
+import ServiceTaskProductFields from "./ServiceTaskProductFields";
+import { buildTaskProductOptions, findTaskProduct, planProductId, productTaskIds, taskProductIds, unlinkTaskFromPlanProduct } from "../../../utils/jobPlanProducts";
+import { stageJobTaskProduct } from "../../../utils/jobTaskProductWrites";
 import {
   EQUIPMENT_DATABASE_CATEGORY,
   databaseEquipmentMappingFromItem,
@@ -205,7 +213,7 @@ const clearSectionLoadingState = () =>
   }, {});
 
 const TASK_STATUS_OPTIONS = ["Unassigned", "Scheduled", "In Progress", "Finished", "Canceled", "Rejected"];
-const isFinishedTaskStatus = (status = "") => String(status || "").trim().toLowerCase() === "finished";
+const isFinishedTaskStatus = (status = "") => ["finished", "completed", "complete", "done"].includes(String(status || "").trim().toLowerCase());
 const isCanceledOrRejectedTaskStatus = (status = "") =>
   ["canceled", "cancelled", "rejected"].includes(String(status || "").trim().toLowerCase());
 const isOpenTaskStatus = (status = "") =>
@@ -216,6 +224,8 @@ const isFinishedJobRecord = (record = {}) => (
   isFinishedRecordStatus(record.operationStatus || record.status) ||
   Boolean(record.finishedAt || record.completedAt)
 );
+const isOpenJobFinishStop = (stop = {}) => !isFinishedJobRecord(stop) &&
+  !["canceled", "cancelled", "skipped"].includes(String(stop.operationStatus || stop.status || "").trim().toLowerCase());
 const equipmentCompletionTypeFromJob = (job = {}) => {
   const intentText = [
     job.jobIntent,
@@ -312,7 +322,7 @@ const salesDueDateForTerms = (paymentTerms = "dueOnReceipt") => {
 };
 
 const EMPTY_TASK_EDIT_FORM = {
-  ...jobPayFields(),
+  ...jobPayFields({ payrollMode: "included" }),
   name: "",
   type: "",
   status: "Unassigned",
@@ -323,11 +333,13 @@ const EMPTY_TASK_EDIT_FORM = {
   bodyOfWaterId: "",
   equipmentId: "",
   dataBaseItemId: "",
+  productSelection: "",
   quantity: "1",
   customerApproval: false,
 };
 
 const createEmptyScheduleTaskForm = () => ({
+  ...jobPayFields({ payrollMode: "included" }),
   description: "",
   type: null,
   laborCost: "0",
@@ -337,6 +349,7 @@ const createEmptyScheduleTaskForm = () => ({
   bodyOfWaterId: "",
   equipmentId: "",
   dataBaseItemId: "",
+  productSelection: "",
   quantity: "1",
   equipmentMapping: emptyDatabaseEquipmentMapping(),
 });
@@ -967,6 +980,7 @@ const jobCatalogMoneyToCents = (value) => {
 };
 
 const emptyJobCatalogTaskTemplate = () => ({
+  ...jobPayFields({ payrollMode: "included" }),
   id: `service_task_template_${uuidv4()}`,
   name: "",
   type: "General",
@@ -1001,6 +1015,8 @@ const normalizeJobCatalogTaskTemplatesForSave = (templates = []) => (
       return {
         id: template.id || `service_task_template_${uuidv4()}`,
         ...jobPayFields(template),
+        genericItemId: template.genericItemId || "", dataBaseItemId: template.dataBaseItemId || "",
+        productQuantity: Math.max(Number(template.productQuantity || 1), 0.01),
         name,
         title: name,
         type,
@@ -1054,6 +1070,9 @@ const buildPlanEditorSnapshot = ({
       bodyOfWaterId: cleanString(item.bodyOfWaterId),
       equipmentId: cleanString(item.equipmentId),
       dataBaseItemId: cleanString(item.dataBaseItemId || item.dbItemId),
+      genericItemId: cleanString(item.genericItemId),
+      shoppingListItemId: cleanString(item.shoppingListItemId),
+      shoppingListItemIds: taskProductIds(item).sort(),
       quantity: planSnapshotNumber(item.quantity || 1),
       customerApproval: Boolean(item.customerApproval || item.customerApprovalRequired),
     })),
@@ -1115,6 +1134,7 @@ const buildPlanEditorSnapshot = ({
       genericItemId: cleanString(item.genericItemId),
       dbItemId: cleanString(item.dbItemId),
       linkedTaskId: cleanString(item.linkedTaskId),
+      linkedTaskIds: productTaskIds(item).sort(),
       quantity: planSnapshotNumber(item.quantity || item.quantityString || 1),
       plannedUnitCostCents: planSnapshotCents(item.plannedUnitCostCents ?? item.cost),
       plannedUnitPriceCents: planSnapshotCents(item.plannedUnitPriceCents ?? item.price),
@@ -1400,9 +1420,14 @@ const JobDetailView = () => {
   useEffect(() => {
     if (!jobId) return;
     if (!section || !JOB_DETAIL_SECTION_IDS.includes(section)) {
-      navigate(`/company/jobs/detail/${jobId}/${DEFAULT_JOB_DETAIL_SECTION_ID}`, { replace: true });
+      const normalizedSection = JOB_DETAIL_SECTION_ID_BY_TAB[section] || String(section || "").toLowerCase();
+      const nextSection = JOB_DETAIL_SECTION_IDS.includes(normalizedSection) ? normalizedSection : DEFAULT_JOB_DETAIL_SECTION_ID;
+      navigate({ pathname: `/company/jobs/detail/${jobId}/${nextSection}`, search: location.search }, {
+        replace: true,
+        state: location.state,
+      });
     }
-  }, [jobId, navigate, section]);
+  }, [jobId, navigate, section, location.search, location.state]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -1481,7 +1506,7 @@ const JobDetailView = () => {
   const [taskBillingLaborPrice, setTaskBillingLaborPrice] = useState("0");
   const [estimatedTime, setEstimatedTime] = useState("0");
   const [selectedTaskPayType, setSelectedTaskPayType] = useState(null);
-  const [newTaskPayrollForm, setNewTaskPayrollForm] = useState({});
+  const [newTaskPayrollForm, setNewTaskPayrollForm] = useState({ payrollMode: "included" });
   const [taskBodyOfWaterList, setTaskBodyOfWaterList] = useState([]);
   const [taskEquipmentList, setTaskEquipmentList] = useState([]);
   const [selectedTaskBodyOfWater, setSelectedTaskBodyOfWater] = useState(null);
@@ -1690,6 +1715,11 @@ const JobDetailView = () => {
   const [jobFinishTaskIds, setJobFinishTaskIds] = useState([]);
   const [jobFinishShoppingItemActions, setJobFinishShoppingItemActions] = useState({});
   const [jobFinishServiceIds, setJobFinishServiceIds] = useState([]);
+  const [jobFinishServiceStopIds, setJobFinishServiceStopIds] = useState([]);
+  const [jobFinishStopTasks, setJobFinishStopTasks] = useState({});
+  const [loadingJobFinish, setLoadingJobFinish] = useState(false);
+  const [jobFinishError, setJobFinishError] = useState("");
+  const [jobFinishRequestId, setJobFinishRequestId] = useState("");
   const [closeoutWholeJob, setCloseoutWholeJob] = useState(true);
   const [closeoutCancelVisits, setCloseoutCancelVisits] = useState(false);
   const [jobInvoiceActionInProgress, setJobInvoiceActionInProgress] = useState("");
@@ -4638,12 +4668,16 @@ const JobDetailView = () => {
     () => new Map((shoppingDbItemList || []).map((item) => [item.id, item])),
     [shoppingDbItemList]
   );
-  const equipmentDbItemList = useMemo(
-    () => (shoppingDbItemList || []).filter(isEquipmentDatabaseItem),
-    [shoppingDbItemList]
+  const taskProductOptions = useMemo(() => buildTaskProductOptions({
+    materials: shoppingList, products: jobProductList, databaseItems: shoppingDbItemList, equipmentOnly: true,
+  }), [shoppingList, jobProductList, shoppingDbItemList]);
+  const resolveTaskProductSelection = (selection, task = {}, allowSoleProduct = false) => (
+    [...taskProductOptions.planned, ...taskProductOptions.catalog].find((item) => item.value === selection)
+      || findTaskProduct(task, taskProductOptions, { allowSoleProduct })
   );
-  const selectedTaskDbItemOptions = taskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
-  const editingTaskDbItemOptions = editingTaskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
+  const editingTaskProduct = resolveTaskProductSelection(taskEditForm.productSelection, {
+    ...(taskList.find((task) => task.id === editingTaskId) || {}), dataBaseItemId: taskEditForm.dataBaseItemId,
+  });
   const scheduleTaskTypeValue = canonicalJobTaskType(scheduleTaskForm.type?.value || scheduleTaskForm.type || "");
   const scheduleTaskNeedsBodyOfWater = taskTypeRequiresBodyOfWater(scheduleTaskTypeValue);
   const scheduleTaskNeedsEquipment = taskTypeRequiresEquipment(scheduleTaskTypeValue);
@@ -4655,8 +4689,7 @@ const JobDetailView = () => {
     scheduleTaskSelectedEquipment?.bodyOfWaterId ||
     job.bodyOfWaterId ||
     "";
-  const scheduleTaskSelectedDbItem = shoppingDbItemById.get(scheduleTaskForm.dataBaseItemId) || null;
-  const scheduleTaskDbItemOptions = scheduleTaskNeedsEquipmentDatabaseItem ? equipmentDbItemList : shoppingDbItemList;
+  const scheduleTaskSelectedDbItem = resolveTaskProductSelection(scheduleTaskForm.productSelection, scheduleTaskForm) || null;
 
   const getLinkedShoppingItemsForTask = (task) => {
     const linkedIds = new Set(
@@ -4667,7 +4700,7 @@ const JobDetailView = () => {
     );
 
     return (shoppingList || []).filter((item) => {
-      const itemId = item.id || item.docId || "";
+      const itemId = planProductId(item);
       const linkedTaskId =
         item.linkedTaskId ||
         item.linkedJobTaskId ||
@@ -4675,7 +4708,7 @@ const JobDetailView = () => {
         item.sourceTaskId ||
         "";
 
-      return linkedIds.has(itemId) || linkedTaskId === task?.id;
+      return linkedIds.has(itemId) || linkedTaskId === task?.id || productTaskIds(item).includes(task?.id);
     });
   };
 
@@ -4683,8 +4716,8 @@ const JobDetailView = () => {
     const linkedMaterial = getLinkedShoppingItemsForTask(task)[0] || null;
 
     return (
-      shoppingDbItemById.get(task?.dataBaseItemId || "") ||
       shoppingDbItemById.get(linkedMaterial?.dbItemId || "") ||
+      shoppingDbItemById.get(task?.dataBaseItemId || "") ||
       shoppingDbItemById.get(linkedMaterial?.itemId || "") ||
       null
     );
@@ -7911,15 +7944,17 @@ const JobDetailView = () => {
     };
 
     const itemsById = new Map((shoppingList || []).map((item) => [getFirestoreDocId(item), item]));
-    const [jobIdSnap, workOrderIdSnap, assignedJobIdSnap] = await Promise.all([
+    const [jobIdSnap, workOrderIdSnap, assignedJobIdSnap, nestedJobIdSnap] = await Promise.all([
       getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
       getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("workOrderId", "==", jobId))),
       getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("assignedJobId", "==", jobId))),
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId.id", "==", jobId))),
     ]);
 
     addSnapDocs(jobIdSnap, itemsById);
     addSnapDocs(workOrderIdSnap, itemsById);
     addSnapDocs(assignedJobIdSnap, itemsById);
+    addSnapDocs(nestedJobIdSnap, itemsById);
 
     const items = Array.from(itemsById.values()).filter((item) => getFirestoreDocId(item));
     if (updateState) setShoppingList(items);
@@ -7942,22 +7977,37 @@ const JobDetailView = () => {
   );
 
   const openJobFinishConfirm = async () => {
-    if (markingJobFinished) return;
-
-    let connectedShoppingItems = shoppingList || [];
-    try {
-      connectedShoppingItems = await loadConnectedJobShoppingItems({ updateState: true });
-    } catch (error) {
-      console.warn("Could not refresh connected shopping list items before finishing job", error);
+    if (markingJobFinished || loadingJobFinish) return;
+    if (Object.values(sectionLoading).some(Boolean)) {
+      toast.error("Wait for the job details to finish loading, then try again.");
+      return;
     }
-
-    const unfinishedTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
-    setJobFinishTaskIds(unfinishedTasks.map((task) => task.id).filter(Boolean));
-    setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(connectedShoppingItems));
-    setJobFinishServiceIds([]);
-    setCloseoutWholeJob(true);
-    setCloseoutCancelVisits(false);
-    setShowJobFinishConfirm(true);
+    setLoadingJobFinish(true);
+    setJobFinishError("");
+    try {
+      const [connectedShoppingItems, stopTaskEntries] = await Promise.all([
+        loadConnectedJobShoppingItems({ updateState: true }),
+        Promise.all(serviceStops.filter(isOpenJobFinishStop).map(async (stop) => {
+          const snapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks"));
+          return [stop.id, snapshot.docs.map((row) => ({ ...row.data(), id: row.id }))];
+        })),
+      ]);
+      const unfinishedTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
+      setJobFinishTaskIds(unfinishedTasks.map((task) => task.id).filter(Boolean));
+      setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(connectedShoppingItems));
+      setJobFinishServiceIds(laborLineItems.filter((line) => line.completionStatus !== "Finished").map((line) => line.id));
+      setJobFinishServiceStopIds([]);
+      setJobFinishStopTasks(Object.fromEntries(stopTaskEntries));
+      setJobFinishRequestId(crypto.randomUUID());
+      setCloseoutWholeJob(true);
+      setCloseoutCancelVisits(false);
+      setShowJobFinishConfirm(true);
+    } catch (error) {
+      console.error("Could not load the work to finish", error);
+      toast.error("Could not load all tasks and products. Try opening Finish Job again.");
+    } finally {
+      setLoadingJobFinish(false);
+    }
   };
 
   const closeJobFinishConfirm = () => {
@@ -7965,9 +8015,24 @@ const JobDetailView = () => {
     setShowJobFinishConfirm(false);
     setJobFinishTaskIds([]);
     setJobFinishShoppingItemActions({});
+    setJobFinishServiceStopIds([]);
+    setJobFinishError("");
+  };
+
+  const selectJobFinishStops = (stopIds) => {
+    setJobFinishServiceStopIds(stopIds);
+    const linkedTaskIds = stopIds.flatMap((stopId) => (jobFinishStopTasks[stopId] || []).map((task) => idValue(task.jobTaskId || task.workOrderTaskId || task.sourceTaskId)));
+    const assignedTaskIds = taskList.filter((task) => stopIds.includes(idValue(task.serviceStopId))).map((task) => task.id);
+    setJobFinishTaskIds((ids) => [...new Set([...ids, ...linkedTaskIds, ...assignedTaskIds].filter(Boolean))]);
   };
 
   const toggleJobFinishTask = (taskId) => {
+    const linkedSelectedStopIds = jobFinishServiceStopIds.filter((stopId) =>
+      (jobFinishStopTasks[stopId] || []).some((task) => idValue(task.jobTaskId || task.workOrderTaskId || task.sourceTaskId) === taskId)
+    );
+    if (jobFinishTaskIds.includes(taskId) && linkedSelectedStopIds.length) {
+      setJobFinishServiceStopIds((ids) => ids.filter((id) => !linkedSelectedStopIds.includes(id)));
+    }
     setJobFinishTaskIds((prev) =>
       prev.includes(taskId)
         ? prev.filter((id) => id !== taskId)
@@ -7976,6 +8041,7 @@ const JobDetailView = () => {
   };
 
   const setAllJobFinishTasks = (checked) => {
+    if (!checked) setJobFinishServiceStopIds([]);
     setJobFinishTaskIds(
       checked
         ? (taskList || [])
@@ -8229,11 +8295,32 @@ const JobDetailView = () => {
           ? selectedTaskIds
           : unfinishedTasks.map((task) => task.id)
       );
+      const stopsToFinish = serviceStops.filter((stop) => jobFinishServiceStopIds.includes(stop.id) && isOpenJobFinishStop(stop));
+      const stopTasksToFinish = stopsToFinish.flatMap((stop) => (jobFinishStopTasks[stop.id] || [])
+        .filter((task) => isOpenTaskStatus(task.status))
+        .map((task) => ({ task, stop })));
+      stopTasksToFinish.forEach(({ task }) => {
+        const linkedId = idValue(task.jobTaskId || task.workOrderTaskId || task.sourceTaskId);
+        if (linkedId) selectedTaskIdSet.add(linkedId);
+      });
       const tasksToFinish = unfinishedTasks.filter((task) => selectedTaskIdSet.has(task.id));
+      if (closeoutWholeJob && tasksToFinish.length !== unfinishedTasks.length) {
+        setJobFinishError("Select all unfinished job tasks, or uncheck Finish the entire job.");
+        return;
+      }
+      if (closeoutWholeJob && serviceStops.some((stop) => isOpenJobFinishStop(stop) && !jobFinishServiceStopIds.includes(stop.id)) && !closeoutCancelVisits) {
+        setJobFinishError("Finish the remaining service stops below, or choose to cancel unused visits.");
+        return;
+      }
+      setJobFinishError("");
       const finishedTasks = [];
+      const finishedStopTasks = [];
       const completedAt = new Date();
-
-      for (const task of tasksToFinish) {
+      const completionCandidates = [
+        ...tasksToFinish.map((task) => ({ task, stop: null })),
+        ...stopTasksToFinish.filter(({ task }) => !taskList.some((jobTask) => jobTask.id === idValue(task.jobTaskId || task.workOrderTaskId || task.sourceTaskId))),
+      ];
+      for (const { task, stop } of completionCandidates) {
         if (!task?.id) continue;
         if (isInstallOrReplaceTaskType(task.type)) {
           const taskDatabaseItem = getDatabaseItemForTask(task);
@@ -8253,15 +8340,18 @@ const JobDetailView = () => {
           return;
         }
 
-        finishedTasks.push({
+        const finishedTask = {
           ...task,
+          ...(stop ? { workerId: task.workerId || stop.techId || "", workerName: task.workerName || stop.tech || "" } : {}),
           ...installDetails,
           equipmentStatusOnCompletion: task.equipmentId
             ? taskEquipmentStatusDrafts[task.id] || EQUIPMENT_STATUS.OPERATIONAL
             : "",
           completedAt,
           status: "Finished",
-        });
+        };
+        if (stop) finishedStopTasks.push({ task: finishedTask, stop });
+        else finishedTasks.push(finishedTask);
       }
 
       const shoppingCleanupResult = await handleJobFinishShoppingItems({
@@ -8284,9 +8374,7 @@ const JobDetailView = () => {
             currentJobOperationStatus: "Finished",
           });
 
-          await updateDoc(
-            doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id),
-            {
+          const taskUpdates = {
               status: "Finished",
               completedAt: Timestamp.fromDate(completedAt),
               ...(task.equipmentStatusOnCompletion ? { equipmentStatusOnCompletion: task.equipmentStatusOnCompletion } : {}),
@@ -8313,12 +8401,33 @@ const JobDetailView = () => {
                   installedPurchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
                 }
                 : {}),
-            }
-          );
+          };
+          await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), taskUpdates);
+          Object.assign(task, taskUpdates);
 
           return effects;
         })
       );
+
+      for (const { task, stop } of stopTasksToFinish) {
+        const linkedId = idValue(task.jobTaskId || task.workOrderTaskId || task.sourceTaskId);
+        const jobTask = finishedTasks.find((item) => item.id === linkedId) || taskList.find((item) => item.id === linkedId && isFinishedTaskStatus(item.status));
+        const preparedTask = finishedStopTasks.find((item) => item.stop.id === stop.id && item.task.id === task.id)?.task;
+        const effects = preparedTask ? await runWorkCompletionEffects({
+          db, companyId: recentlySelectedCompany, task: preparedTask, serviceStop: stop, jobId, completedAt,
+        }) : {};
+        const source = preparedTask || jobTask || task;
+        const metadata = Object.fromEntries([
+          "equipmentStatusOnCompletion", "installedEquipmentName", "installedEquipmentType", "installedEquipmentMake",
+          "installedEquipmentModel", "installedEquipmentNotes", "replacementEquipmentId", "installedEquipmentId",
+          "purchasedItemId", "installedPurchasedItemId",
+        ].filter((field) => source[field]).map((field) => [field, source[field]]));
+        const equipment = effects.equipmentHistory;
+        if (equipment?.replacementEquipmentId) metadata.replacementEquipmentId = equipment.replacementEquipmentId;
+        if (equipment?.installedEquipmentId || equipment?.replacementEquipmentId) metadata.installedEquipmentId = equipment.installedEquipmentId || equipment.replacementEquipmentId;
+        if (equipment?.installedPurchasedItemId) metadata.purchasedItemId = metadata.installedPurchasedItemId = equipment.installedPurchasedItemId;
+        if (Object.keys(metadata).length) await updateDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks", task.id), metadata);
+      }
 
       const equipmentHistoryIds = new Set(
         completionResults
@@ -8340,11 +8449,17 @@ const JobDetailView = () => {
         }
       }
 
-      await technicianWorkflow("finalizeTechnicianJob", {
-        companyId: recentlySelectedCompany, jobId, requestId: crypto.randomUUID(), finishJob: closeoutWholeJob,
+      const closeoutResult = await technicianWorkflow("finalizeTechnicianJob", {
+        companyId: recentlySelectedCompany, jobId, requestId: jobFinishRequestId, finishJob: closeoutWholeJob,
         cancelRemainingVisits: closeoutCancelVisits, serviceIds: jobFinishServiceIds,
-        taskIds: finishedTasks.map(task=>task.id), productIds: []
+        taskIds: finishedTasks.map(task=>task.id), productIds: [],
+        serviceStopIds: jobFinishServiceStopIds,
+        serviceStopTaskIds: Object.fromEntries(stopsToFinish.map((stop) => [stop.id, (jobFinishStopTasks[stop.id] || []).map((task) => task.id)])),
       });
+      const completedStopIds = new Set(closeoutResult.completedServiceStopIds || []);
+      setServiceStops((stops) => stops.map((stop) => completedStopIds.has(stop.id)
+        ? { ...stop, operationStatus: "Finished", completedAt }
+        : closeoutWholeJob && closeoutCancelVisits && isOpenJobFinishStop(stop) ? { ...stop, operationStatus: "Skipped" } : stop));
       setLaborLineItems(lines=>lines.map(line=>jobFinishServiceIds.includes(line.id)?{...line,completionStatus:"Finished"}:line));
       setJob((prev) => ({
         ...prev,
@@ -8365,18 +8480,18 @@ const JobDetailView = () => {
       setSelectedBillingStatus({ value: nextBillingStatus, label: nextBillingStatus });
       await recordJobHistory({
         eventType: "Status Change",
-        title: "Job marked as finished",
+        title: closeoutWholeJob ? "Job marked as finished" : "Selected work finished",
         description: `${finishedTasks.length} of ${unfinishedTasks.length} unfinished task(s) were marked finished. ${shoppingCleanupResult.installedCount} planned product(s) marked installed and ${shoppingCleanupResult.deletedCount} removed.`,
         changes: [
-          buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", "Finished"),
+          ...(closeoutWholeJob ? [buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", "Finished")] : []),
           buildHistoryChange("billingStatus", "Billing Status", previousBillingStatus, nextBillingStatus),
           buildHistoryChange("shoppingInstalled", "Shopping Installed", "—", String(shoppingCleanupResult.installedCount)),
           buildHistoryChange("shoppingDeleted", "Shopping Removed", "—", String(shoppingCleanupResult.deletedCount)),
         ],
       });
-      await addJobCommentDocument(`Job finished by ${getAuditUserName()}.`, {
+      await addJobCommentDocument(`${closeoutWholeJob ? "Job" : "Selected work"} finished by ${getAuditUserName()}.`, {
         resolved: true,
-        sourceType: "jobFinished",
+        sourceType: closeoutWholeJob ? "jobFinished" : "workCompleted",
         metadata: {
           finishedByUserId: getUserId() || "",
           finishedByUserName: getAuditUserName(),
@@ -8392,10 +8507,12 @@ const JobDetailView = () => {
       setShowJobFinishConfirm(false);
       setJobFinishTaskIds([]);
       setJobFinishShoppingItemActions({});
-      toast.success("Job marked as finished");
+      toast.success(closeoutWholeJob ? "Job marked as finished" : "Selected work finished. Job kept open.");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to mark job as finished");
+      const message = err.message || "Could not finish the selected work. Review the selections and try again.";
+      setJobFinishError(message);
+      toast.error(message);
     } finally {
       setMarkingJobFinished(false);
     }
@@ -8673,7 +8790,7 @@ const JobDetailView = () => {
   };
 
   useEffect(() => {
-    if (!recentlySelectedCompany || !jobId || loading || sectionLoading.shell) return;
+    if (!recentlySelectedCompany || !jobId || loading || Object.values(sectionLoading).some(Boolean)) return;
 
     const routeState = location.state || {};
     const searchParams = new URLSearchParams(location.search || "");
@@ -8694,12 +8811,12 @@ const JobDetailView = () => {
       openScheduleServiceStopChooser();
     }
 
-    navigate(`/company/jobs/detail/${jobId}/Actual`, { replace: true, state: {} });
+    navigate(`/company/jobs/detail/${jobId}/actual`, { replace: true, state: {} });
   }, [
     recentlySelectedCompany,
     jobId,
     loading,
-    sectionLoading.shell,
+    sectionLoading,
     location.key,
   ]);
 
@@ -8723,6 +8840,7 @@ const JobDetailView = () => {
         next.bodyOfWaterId = taskTypeRequiresBodyOfWater(canonicalType) ? prev.bodyOfWaterId : "";
         next.equipmentId = taskTypeRequiresEquipment(canonicalType) ? prev.equipmentId : "";
         next.dataBaseItemId = taskTypeRequiresInstallItem(canonicalType) ? prev.dataBaseItemId : "";
+        next.productSelection = taskTypeRequiresInstallItem(canonicalType) ? prev.productSelection : "";
         next.quantity = taskTypeRequiresInstallItem(canonicalType) ? prev.quantity || "1" : "1";
         next.equipmentMapping = taskTypeRequiresInstallItem(canonicalType)
           ? prev.equipmentMapping
@@ -8736,6 +8854,12 @@ const JobDetailView = () => {
         }
       }
 
+      if (field === "productSelection") {
+        const product = resolveTaskProductSelection(value);
+        next.dataBaseItemId = product?.dbItemId || "";
+        next.quantity = String(product?.material?.quantity || prev.quantity || "1");
+        next.equipmentMapping = databaseEquipmentMappingFromItem(product || {});
+      }
       if (field === "dataBaseItemId") {
         const selectedDbItem = shoppingDbItemById.get(value);
         next.equipmentMapping = databaseEquipmentMappingFromItem(selectedDbItem || {});
@@ -8806,7 +8930,7 @@ const JobDetailView = () => {
       const id = "comp_wo_tas_" + uuidv4();
       const costCents = centsFromCurrencyInput(scheduleTaskForm.laborCost || "0");
       const billingLaborPriceCents = centsFromCurrencyInput(scheduleTaskForm.billingLaborPrice || "0");
-      const linkedShoppingListItemId = scheduleTaskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
+
       const taskPayload = {
         id,
         name: nextName,
@@ -8832,105 +8956,18 @@ const JobDetailView = () => {
         serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
         bodyOfWaterId: scheduleTaskNeedsBodyOfWater ? scheduleTaskResolvedBodyOfWaterId : "",
         dataBaseItemId: scheduleTaskNeedsInstallItem ? selectedDbItem?.id || "" : "",
-        shoppingListItemId: linkedShoppingListItemId,
-        shoppingListItemIds: linkedShoppingListItemId ? [linkedShoppingListItemId] : [],
+
         customerApprovalRequired: false,
         customerApprovalStatus: "notRequired",
         customerApprovalRequestId: "",
       };
-      let materialPayload = null;
-
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), taskPayload);
-
-      if (scheduleTaskNeedsInstallItem) {
-        const plannedUnitCostCents = Number(selectedDbItem?.rate || selectedDbItem?.cost || 0);
-        const plannedUnitPriceCents = Number(
-          selectedDbItem?.sellPrice ??
-          selectedDbItem?.rate ??
-          selectedDbItem?.cost ??
-          0
-        );
-        const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
-        const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
-        const materialName = selectedDbItem?.name || "";
-        const materialDescription = selectedDbItem?.description || "";
-        const materialPhotoFields = itemPhotoFieldsFromSource(selectedDbItem, materialName || "Shopping item photo");
-        const materialStatus = initialJobMaterialStatus();
-
-        materialPayload = {
-          id: linkedShoppingListItemId,
-          category: "Job",
-          subCategory: "Data Base",
-          status: materialStatus,
-          purchaserId: "",
-          purchaserName: "",
-          genericItemId: selectedDbItem?.genericItemId || "",
-          taxable: Boolean(selectedDbItem?.taxable),
-          name: materialName,
-          description: materialDescription,
-          datePurchased: null,
-          quantity: String(quantity),
-          jobId: jobId || "",
-          jobName: job.internalId || "Job",
-          linkedTaskId: id,
-          linkedTaskName: nextName,
-          linkedTaskType: scheduleTaskTypeValue,
-          customerId: job.customerId || customer.id || "",
-          customerName:
-            job.customerName ||
-            [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
-            "",
-          userId: "",
-          userName: "",
-          serviceStopId: "",
-          serviceStopInternalId: "",
-          serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
-          serviceLocationName: serviceLocation.nickName || "",
-          scheduledDate: null,
-          prepKeys: [
-            jobId ? `job:${jobId}` : "",
-            job.customerId || customer.id ? `customer:${job.customerId || customer.id}` : "",
-            job.serviceLocationId || serviceLocation.id ? `serviceLocation:${job.serviceLocationId || serviceLocation.id}` : "",
-            `jobTask:${id}`,
-          ].filter(Boolean),
-          needsAction: true,
-          actionDate: Timestamp.fromDate(new Date()),
-          assignedTechIds: [],
-          dbItemId: selectedDbItem?.id || "",
-          dbItemName: selectedDbItem?.name || "",
-          ...materialPhotoFields,
-          purchasedItem: "",
-          invoiced: false,
-          customerApprovalRequired: false,
-          customerApprovalStatus: "notRequired",
-          customerApprovalRequestedAt: null,
-          approvalRequestId: "",
-          partApprovalRequestId: "",
-          estimateAccepted: isJobAcceptedForMaterials(),
-          jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
-          itemId: selectedDbItem?.id || "",
-          itemType: "Data Base",
-          cost: plannedUnitCostCents,
-          price: plannedUnitPriceCents,
-          plannedUnitCostCents,
-          plannedUnitPriceCents,
-          plannedTotalCostCents,
-          plannedTotalPriceCents,
-        };
-
-        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), materialPayload);
-      }
-
-      setTaskList((prev) => [
-        ...(prev || []).filter((task) => task.id !== id),
-        taskPayload,
-      ]);
-      if (materialPayload) {
-        setShoppingList((prev) => [
-          { ...materialPayload, docId: linkedShoppingListItemId },
-          ...(prev || []).filter((item) => (item.id || item.docId) !== linkedShoppingListItemId),
-        ]);
-      }
+      const batch = writeBatch(db);
+      const linked = stageTaskWithProduct(batch, taskPayload, scheduleTaskNeedsInstallItem ? selectedDbItem : null,
+        { createTask: true, quantity });
+      await batch.commit();
+      Object.assign(taskPayload, linked.task);
+      setTaskList((prev) => [...(prev || []).filter((task) => task.id !== id), taskPayload]);
+      setShoppingList(linked.materials);
       setScheduleServiceStopForm((prev) => ({
         ...prev,
         taskIds: Array.from(new Set([...(prev.taskIds || []), id])),
@@ -11469,6 +11506,7 @@ const JobDetailView = () => {
             serviceLocationId: "",
             bodyOfWaterId: "",
             dataBaseItemId: task.dataBaseItemId || "",
+            genericItemId: task.genericItemId || "",
             sortOrder: Number(task.sortOrder ?? index),
             sourceTaskId: task.id || "",
           }
@@ -11585,6 +11623,7 @@ const JobDetailView = () => {
             billable: plannedTotalPriceCents > 0,
             sortOrder: Number(item.sortOrder ?? index),
             linkedTaskId: taskIdMap[linkedTaskIdForPlanMaterial(item)] || "",
+            linkedTaskIds: productTaskIds(item).map((id) => taskIdMap[id]).filter(Boolean),
             sourceShoppingListItemId: item.id || "",
           }
         );
@@ -11840,16 +11879,18 @@ const JobDetailView = () => {
 	  };
 
 	  const updateServiceCatalogCreatorField = (field, value) => {
-	    setServiceCatalogCreatorForm((current) => ({
-	      ...current,
-	      [field]: value,
-	    }));
+	    setServiceCatalogCreatorForm((current) => {
+          if (field !== "payTypeId") return { ...current, [field]: value };
+          const item = servicePayrollData.payTypes.find((type) => type.id === value);
+          const previous = servicePayrollData.payTypes.find((type) => type.id === current.payTypeId);
+          return { ...current, payTypeId: value, name: current.name || item?.name || "", taskTemplates: (current.taskTemplates || []).map((task) => task.payTypeId ? task : taskDefaultsFromPayItem(task, item, previous)) };
+        });
 	  };
 
 	  const addServiceCatalogCreatorTaskTemplate = () => {
 	    setServiceCatalogCreatorForm((current) => ({
 	      ...current,
-	      taskTemplates: [...(current.taskTemplates || []), emptyJobCatalogTaskTemplate()],
+	      taskTemplates: [...(current.taskTemplates || []), taskDefaultsFromPayItem(emptyJobCatalogTaskTemplate(), servicePayrollData.payTypes.find((type) => type.id === current.payTypeId))],
 	    }));
 	  };
 
@@ -11857,7 +11898,7 @@ const JobDetailView = () => {
 	    setServiceCatalogCreatorForm((current) => ({
 	      ...current,
 	      taskTemplates: (current.taskTemplates || []).map((template) => (
-	        template.id === templateId ? { ...template, [field]: value } : template
+	        template.id === templateId ? updateServiceTaskPayrollField(template, field, value, servicePayrollData.payTypes, current.payTypeId) : template
 	      )),
 	    }));
 	  };
@@ -12142,7 +12183,7 @@ const JobDetailView = () => {
       const nowMillis = Date.now();
       const savedTaskTemplates = getCatalogServiceTaskTemplates(catalogItem);
       const taskTemplates = savedTaskTemplates.length ? savedTaskTemplates : [{ name: serviceName, description: catalogItem.description || "", type: "Basic" }];
-      const createdTasks = taskTemplates
+      let createdTasks = taskTemplates
         .map((template, index) => {
           const taskName = String(
             template.name ||
@@ -12190,7 +12231,9 @@ const JobDetailView = () => {
             equipmentId: "",
             serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
             bodyOfWaterId: "",
-            dataBaseItemId: "",
+            genericItemId: template.genericItemId || template.productId || "",
+            dataBaseItemId: template.dataBaseItemId || template.dbItemId || "",
+            quantity: template.productQuantity || template.quantity || 1,
             shoppingListItemId: "",
             shoppingListItemIds: [],
             customerApprovalRequired: Boolean(template.customerApproval || template.customerApprovalRequired),
@@ -12213,11 +12256,22 @@ const JobDetailView = () => {
         })
         .filter(Boolean);
 
-      await Promise.all(
-        createdTasks.map((task) => (
-          setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task)
-        ))
-      );
+      const taskBatch = writeBatch(db);
+      let serviceMaterials = shoppingList;
+      createdTasks = createdTasks.map((task) => {
+        const product = taskTypeRequiresInstallItem(task.type)
+          ? findTaskProduct(task, buildTaskProductOptions({ materials: serviceMaterials, products: jobProductList, databaseItems: shoppingDbItemList, equipmentOnly: true }), { allowSoleProduct: true }) : null;
+        if (product?.dbItemId) {
+          const linked = stageTaskWithProduct(taskBatch, task, product, { createTask: true, materials: serviceMaterials,
+            quantity: Number(task.quantity || 1) * Math.max(Number(catalogItem.defaultQuantity || 1), 1) });
+          serviceMaterials = linked.materials;
+          return linked.task;
+        }
+        taskBatch.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task);
+        return task;
+      });
+      await taskBatch.commit();
+      setShoppingList(serviceMaterials);
 
       const quantity = Math.max(Number(catalogItem.defaultQuantity || 1), 1);
       const taskPriceCents = createdTasks.reduce((total, task) => total + cents(task.billingLaborPriceCents), 0);
@@ -12453,7 +12507,7 @@ const JobDetailView = () => {
     e?.preventDefault?.();
     setSelectedTaskType(null);
     setSelectedTaskPayType(null);
-    setNewTaskPayrollForm({});
+    setNewTaskPayrollForm({ payrollMode: "included" });
     setTaskDescription("");
     setTaskLaborCost("0");
     setTaskBillingLaborPrice("0");
@@ -12584,12 +12638,20 @@ const JobDetailView = () => {
         return;
       }
 
-      const tasksToSave = groupTasks.map(buildTaskFromGroupTask);
-      await Promise.all(
-        tasksToSave.map((task) => (
-          setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task)
-        ))
-      );
+      let groupMaterials = shoppingList;
+      const batch = writeBatch(db);
+      const tasksToSave = groupTasks.map(buildTaskFromGroupTask).map((task) => {
+        const product = taskTypeRequiresInstallItem(task.type)
+          ? findTaskProduct(task, buildTaskProductOptions({ materials: groupMaterials, products: jobProductList, databaseItems: shoppingDbItemList, equipmentOnly: true }), { allowSoleProduct: true }) : null;
+        if (!product?.dbItemId) {
+          batch.set(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), task);
+          return task;
+        }
+        const linked = stageTaskWithProduct(batch, task, product, { createTask: true, materials: groupMaterials, quantity: task.quantity || 1 });
+        groupMaterials = linked.materials;
+        return linked.task;
+      });
+      await batch.commit();
 
       if (newTaskLaborLineId) {
         await attachTasksToLaborLine(newTaskLaborLineId, tasksToSave.map((task) => task.id));
@@ -12635,7 +12697,8 @@ const JobDetailView = () => {
       payTypeId: task?.payTypeId || task?.workTypeId || "",
       bodyOfWaterId: task?.bodyOfWaterId || "",
       equipmentId: task?.equipmentId || "",
-      dataBaseItemId: task?.dataBaseItemId || linkedMaterial?.dbItemId || linkedMaterial?.itemId || "",
+      dataBaseItemId: getJobMaterialVendorItemId(linkedMaterial || {}) || task?.dataBaseItemId || "",
+      productSelection: findTaskProduct(task, taskProductOptions)?.value || "",
       quantity: String(linkedMaterial?.quantity || task?.quantity || "1"),
       customerApproval: Boolean(task?.customerApproval),
     };
@@ -12660,6 +12723,11 @@ const JobDetailView = () => {
     setTaskEditDbItemEquipmentMapping(databaseEquipmentMappingFromItem(linkedItem || {}));
   };
 
+  const chooseTaskEditProduct = (product) => {
+    setTaskEditForm((prev) => ({ ...prev, productSelection: product?.value || "", dataBaseItemId: product?.dbItemId || "", quantity: String(product?.material?.quantity || prev.quantity || "1") }));
+    setTaskEditDbItemEquipmentMapping(databaseEquipmentMappingFromItem(product || {}));
+  };
+
   const updateTaskEditForm = (field, value) => {
     setTaskEditForm((prev) => ({
       ...prev,
@@ -12675,6 +12743,7 @@ const JobDetailView = () => {
       bodyOfWaterId: taskTypeRequiresBodyOfWater(canonicalType) ? prev.bodyOfWaterId : "",
       equipmentId: taskTypeRequiresEquipment(canonicalType) ? prev.equipmentId : "",
       dataBaseItemId: taskTypeRequiresInstallItem(canonicalType) ? prev.dataBaseItemId : "",
+      productSelection: taskTypeRequiresInstallItem(canonicalType) ? prev.productSelection : "",
       quantity: taskTypeRequiresInstallItem(canonicalType) ? prev.quantity || "1" : "1",
     }));
   };
@@ -12712,137 +12781,22 @@ const JobDetailView = () => {
     );
   };
 
-  const syncEditedTaskToLinkedMaterials = async (task, taskUpdates, selectedDbItem, quantity) => {
-    const linkedMaterials = getLinkedShoppingItemsForTask(task);
-    if (!linkedMaterials.length) {
-      if (!editingTaskNeedsInstallItem || !selectedDbItem) return [];
+  const jobMaterialDefaults = () => ({
+    status: initialJobMaterialStatus(), purchaserId: "", purchaserName: "", datePurchased: null,
+    userId: "", userName: "", serviceStopId: "", serviceStopInternalId: "",
+    serviceLocationName: serviceLocation.nickName || "", scheduledDate: null,
+    needsAction: true, actionDate: Timestamp.fromDate(new Date()), assignedTechIds: [],
+    purchasedItem: "", invoiced: false, customerApprovalRequired: false,
+    customerApprovalStatus: "notRequired", customerApprovalRequestedAt: null,
+    approvalRequestId: "", partApprovalRequestId: "", estimateAccepted: isJobAcceptedForMaterials(),
+    jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
+  });
 
-      const linkedShoppingListItemId = "comp_shop_" + uuidv4();
-      const plannedUnitCostCents = Number(selectedDbItem.rate || selectedDbItem.cost || 0);
-      const plannedUnitPriceCents = Number(
-        selectedDbItem.sellPrice ??
-        selectedDbItem.rate ??
-        selectedDbItem.cost ??
-        0
-      );
-      const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
-      const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
-      const materialName = selectedDbItem.name || "";
-      const materialDescription = selectedDbItem.description || "";
-      const materialPhotoFields = itemPhotoFieldsFromSource(selectedDbItem, materialName || "Shopping item photo");
-      const materialStatus = initialJobMaterialStatus();
-
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), {
-        id: linkedShoppingListItemId,
-        category: "Job",
-        subCategory: "Data Base",
-        status: materialStatus,
-        purchaserId: "",
-        purchaserName: "",
-        genericItemId: selectedDbItem.genericItemId || "",
-        taxable: Boolean(selectedDbItem.taxable),
-        name: materialName,
-        description: materialDescription,
-        datePurchased: null,
-        quantity: String(quantity),
-        jobId: jobId || "",
-        jobName: job.internalId || "Job",
-        linkedTaskId: task.id,
-        linkedTaskName: taskUpdates.name,
-        linkedTaskType: taskUpdates.type,
-        customerId: job.customerId || "",
-        customerName:
-          job.customerName ||
-          [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
-          "",
-        userId: "",
-        userName: "",
-        serviceStopId: "",
-        serviceStopInternalId: "",
-        serviceLocationId: job.serviceLocationId || "",
-        serviceLocationName: serviceLocation.nickName || "",
-        scheduledDate: null,
-        prepKeys: [
-          jobId ? `job:${jobId}` : "",
-          job.customerId ? `customer:${job.customerId}` : "",
-          job.serviceLocationId ? `serviceLocation:${job.serviceLocationId}` : "",
-          task.id ? `jobTask:${task.id}` : "",
-        ].filter(Boolean),
-        needsAction: true,
-        actionDate: Timestamp.fromDate(new Date()),
-        assignedTechIds: [],
-        dbItemId: selectedDbItem.id || "",
-        dbItemName: selectedDbItem.name || "",
-        ...materialPhotoFields,
-        purchasedItem: "",
-        invoiced: false,
-        customerApprovalRequired: false,
-        customerApprovalStatus: "notRequired",
-        customerApprovalRequestedAt: null,
-        approvalRequestId: "",
-        partApprovalRequestId: "",
-        estimateAccepted: isJobAcceptedForMaterials(),
-        jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
-        itemId: selectedDbItem.id || "",
-        itemType: "Data Base",
-        cost: plannedUnitCostCents,
-        price: plannedUnitPriceCents,
-        plannedUnitCostCents,
-        plannedUnitPriceCents,
-        plannedTotalCostCents,
-        plannedTotalPriceCents,
-      });
-
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), {
-        shoppingListItemId: linkedShoppingListItemId,
-        shoppingListItemIds: arrayUnion(linkedShoppingListItemId),
-      });
-
-      return [linkedShoppingListItemId];
-    }
-
-    const materialUpdates = {
-      linkedTaskName: taskUpdates.name,
-      linkedTaskType: taskUpdates.type,
-      linkedTaskStatus: taskUpdates.status,
-      updatedAt: serverTimestamp(),
-    };
-
-    if (editingTaskNeedsInstallItem && selectedDbItem) {
-      const plannedUnitCostCents = Number(selectedDbItem.rate || selectedDbItem.cost || 0);
-      const plannedUnitPriceCents = Number(
-        selectedDbItem.sellPrice ??
-        selectedDbItem.rate ??
-        selectedDbItem.cost ??
-        0
-      );
-
-      materialUpdates.genericItemId = selectedDbItem.genericItemId || "";
-      materialUpdates.name = selectedDbItem.name || "";
-      materialUpdates.description = selectedDbItem.description || "";
-      materialUpdates.quantity = String(quantity);
-      materialUpdates.dbItemId = selectedDbItem.id || "";
-      materialUpdates.dbItemName = selectedDbItem.name || "";
-      materialUpdates.itemId = selectedDbItem.id || "";
-      materialUpdates.itemType = "Data Base";
-      materialUpdates.cost = plannedUnitCostCents;
-      materialUpdates.price = plannedUnitPriceCents;
-      materialUpdates.plannedUnitCostCents = plannedUnitCostCents;
-      materialUpdates.plannedUnitPriceCents = plannedUnitPriceCents;
-      materialUpdates.plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
-      materialUpdates.plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
-    }
-
-    const updatedMaterialIds = linkedMaterials.map((item) => item.id || item.docId || "").filter(Boolean);
-
-    await Promise.all(
-      updatedMaterialIds.map((materialId) =>
-        updateDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", materialId), materialUpdates)
-      )
-    );
-
-    return updatedMaterialIds;
-  };
+  const stageTaskWithProduct = (batch, task, product, { createTask = false, materials = shoppingList, quantity = 1 } = {}) => stageJobTaskProduct({
+    batch, db, companyId: recentlySelectedCompany, job: { ...job, id: jobId }, task, product,
+    materials, tasks: taskList, products: jobProductList, databaseItems: shoppingDbItemList,
+    quantity, newMaterialId: `comp_shop_${uuidv4()}`, materialDefaults: jobMaterialDefaults(), createTask,
+  });
 
   const saveEquipmentMappingForDatabaseItem = async (dbItem, mapping) => {
     if (!dbItem?.id) return null;
@@ -12858,9 +12812,15 @@ const JobDetailView = () => {
       return null;
     }
 
-    const updatedItem = { ...dbItem, ...patch, category: EQUIPMENT_DATABASE_CATEGORY };
+    const vendorId = dbItem.dbItemId || dbItem.id;
+    if (!vendorId) { toast.error("Connect this product to a database item in Products first."); return null; }
+    const updatedItem = { ...dbItem, id: vendorId, dbItemId: vendorId, ...patch, category: EQUIPMENT_DATABASE_CATEGORY };
+    const currentVendor = shoppingDbItemById.get(vendorId) || {};
+    const mappingChanged = JSON.stringify(databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(currentVendor))) !== JSON.stringify(patch);
+    if (!mappingChanged) return updatedItem;
+    if (!requirePermission("854", "update database equipment details")) return null;
     await updateDoc(
-      doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", dbItem.id),
+      doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", vendorId),
       {
         ...patch,
         category: EQUIPMENT_DATABASE_CATEGORY,
@@ -12868,7 +12828,7 @@ const JobDetailView = () => {
       }
     );
     setShoppingDbItemList((prev) =>
-      prev.map((item) => (item.id === dbItem.id ? buildShoppingDbItemOption(updatedItem, dbItem.id) : item))
+      prev.map((item) => (item.id === vendorId ? buildShoppingDbItemOption({ ...item, ...patch }, vendorId) : item))
     );
 
     return updatedItem;
@@ -12888,7 +12848,7 @@ const JobDetailView = () => {
     const nextBillingLaborPriceCents = centsFromCurrencyInput(taskEditForm.billingLaborPrice);
     const nextEstimatedMinutes = Number(taskEditForm.estimatedTime || 0);
     const nextQuantity = Number(taskEditForm.quantity || 0);
-    let selectedDbItem = shoppingDbItemById.get(taskEditForm.dataBaseItemId);
+    let selectedDbItem = editingTaskProduct;
     const selectedPayType = taskPayTypeById.get(taskEditForm.payTypeId) || null;
     const selectedEditEquipment = equipmentById.get(taskEditForm.equipmentId);
     const resolvedEditBodyOfWaterId =
@@ -12914,7 +12874,7 @@ const JobDetailView = () => {
     if (editingTaskNeedsEquipment && !taskEditForm.equipmentId) {
       return toast.error("Select equipment.");
     }
-    if (editingTaskNeedsInstallItem && !selectedDbItem) {
+    if (editingTaskNeedsInstallItem && !selectedDbItem?.dbItemId) {
       return toast.error("Select an item.");
     }
     if (editingTaskNeedsEquipmentDatabaseItem && selectedDbItem && !isEquipmentDatabaseItem(selectedDbItem)) {
@@ -12943,7 +12903,7 @@ const JobDetailView = () => {
       customerApproval: Boolean(taskEditForm.customerApproval),
       bodyOfWaterId: editingTaskNeedsBodyOfWater ? resolvedEditBodyOfWaterId : "",
       equipmentId: editingTaskNeedsEquipment ? taskEditForm.equipmentId : "",
-      dataBaseItemId: editingTaskNeedsInstallItem ? taskEditForm.dataBaseItemId : "",
+      dataBaseItemId: editingTaskNeedsInstallItem ? selectedDbItem?.dbItemId || "" : "",
       updatedAt: serverTimestamp(),
       updatedByUserId: getUserId(),
       updatedByUserName: getUserName(),
@@ -12998,10 +12958,12 @@ const JobDetailView = () => {
         };
       }
 
-      await updateDoc(
-        doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", editingTaskId),
-        taskUpdates
-      );
+      const batch = writeBatch(db);
+      const linked = stageTaskWithProduct(batch, { ...originalTask, ...taskUpdates }, selectedDbItem || null, { quantity: nextQuantity });
+      await batch.commit();
+      Object.assign(taskUpdates, { genericItemId: linked.task.genericItemId, dataBaseItemId: linked.task.dataBaseItemId,
+        shoppingListItemId: linked.task.shoppingListItemId, shoppingListItemIds: linked.task.shoppingListItemIds });
+      if (completionTask) Object.assign(completionTask, taskUpdates);
 
       const scheduledServiceStopId =
         idValue(originalTask.serviceStopId) ||
@@ -13009,12 +12971,7 @@ const JobDetailView = () => {
         "";
 
       await syncEditedTaskToScheduledStop(editingTaskId, scheduledServiceStopId, taskUpdates);
-      const linkedShoppingItemIds = await syncEditedTaskToLinkedMaterials(
-        originalTask,
-        taskUpdates,
-        selectedDbItem,
-        nextQuantity
-      );
+      const linkedShoppingItemIds = linked.task.shoppingListItemIds;
 
       if (completionTask) {
         const effects = await runWorkCompletionEffects({
@@ -13137,11 +13094,17 @@ const JobDetailView = () => {
       setSelectedTaskDbItem(null);
       setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
       setTaskQuantity("1");
-    } else if (taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && !isEquipmentDatabaseItem(selectedTaskDbItem)) {
+    } else if (taskNeedsEquipmentDatabaseItem && selectedTaskDbItem?.dbItemId && !isEquipmentDatabaseItem(selectedTaskDbItem)) {
       setSelectedTaskDbItem(null);
       setSelectedTaskDbItemEquipmentMapping(emptyDatabaseEquipmentMapping());
     }
   }, [selectedTaskDbItem, taskNeedsBodyOfWater, taskNeedsEquipment, taskNeedsEquipmentDatabaseItem, taskNeedsInstallItem]);
+
+  useEffect(() => {
+    if (!newTask || !taskNeedsInstallItem || selectedTaskDbItem) return;
+    const match = findTaskProduct({}, taskProductOptions, { allowSoleProduct: true });
+    if (match?.dbItemId && isEquipmentDatabaseItem(match)) { setSelectedTaskDbItem(match); setTaskQuantity(String(match.material?.quantity || "1")); }
+  }, [newTask, taskNeedsInstallItem, selectedTaskDbItem, taskProductOptions]);
 
   useEffect(() => {
     setSelectedTaskDbItemEquipmentMapping(databaseEquipmentMappingFromItem(selectedTaskDbItem || {}));
@@ -13161,9 +13124,9 @@ const JobDetailView = () => {
     }
 
     setTaskEditDbItemEquipmentMapping(
-      databaseEquipmentMappingFromItem(shoppingDbItemById.get(taskEditForm.dataBaseItemId) || {})
+      databaseEquipmentMappingFromItem(editingTaskProduct || shoppingDbItemById.get(taskEditForm.dataBaseItemId) || {})
     );
-  }, [editingTaskNeedsInstallItem, shoppingDbItemById, taskEditForm.dataBaseItemId]);
+  }, [editingTaskNeedsInstallItem, editingTaskProduct, shoppingDbItemById, taskEditForm.dataBaseItemId]);
 
   const handleAddTask = async (e) => {
     e.preventDefault();
@@ -13198,7 +13161,7 @@ const JobDetailView = () => {
       if (taskNeedsInstallItem && !selectedTaskDbItem?.id) {
         return toast.error("Select an item");
       }
-      if (taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && !isEquipmentDatabaseItem(selectedTaskDbItem)) {
+      if (taskNeedsEquipmentDatabaseItem && selectedTaskDbItem?.dbItemId && !isEquipmentDatabaseItem(selectedTaskDbItem)) {
         return toast.error("Select an equipment database item");
       }
       if (
@@ -13218,7 +13181,7 @@ const JobDetailView = () => {
       const billingLaborPriceCents = centsFromCurrencyInput(taskBillingLaborPrice || "0");
       const estMin = estimatedTimeNumber;
       const taskPayType = selectedTaskPayType || null;
-      const linkedShoppingListItemId = taskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
+
       const quantity = taskNeedsInstallItem ? parseFloat(taskQuantity) : 0;
       const newTaskType = canonicalJobTaskType(selectedTaskType.value);
       let taskDbItem = selectedTaskDbItem;
@@ -13230,7 +13193,7 @@ const JobDetailView = () => {
         if (!taskDbItem) return;
       }
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), {
+      const taskPayload = {
         id,
         name: taskDescription,
         type: newTaskType,
@@ -13258,92 +13221,15 @@ const JobDetailView = () => {
         equipmentId: taskNeedsEquipment ? selectedTaskEquipment?.id || "" : "",
         serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
         bodyOfWaterId: taskNeedsBodyOfWater ? resolvedTaskBodyOfWaterId : "",
-        dataBaseItemId: taskNeedsInstallItem ? taskDbItem?.id || "" : "",
-        shoppingListItemId: linkedShoppingListItemId,
-        shoppingListItemIds: linkedShoppingListItemId ? [linkedShoppingListItemId] : [],
+        dataBaseItemId: taskNeedsInstallItem ? taskDbItem?.dbItemId || "" : "",
+
         customerApprovalRequired: false,
         customerApprovalStatus: "notRequired",
         customerApprovalRequestId: "",
-      });
-
-      if (taskNeedsInstallItem) {
-        const plannedUnitCostCents = Number(taskDbItem?.rate || taskDbItem?.cost || 0);
-        const plannedUnitPriceCents = Number(
-          taskDbItem?.sellPrice ??
-          taskDbItem?.rate ??
-          taskDbItem?.cost ??
-          0
-        );
-        const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
-        const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
-
-        const materialName = taskDbItem?.name || "";
-        const materialDescription = taskDbItem?.description || "";
-        const materialPhotoFields = itemPhotoFieldsFromSource(taskDbItem, materialName || "Shopping item photo");
-        const materialStatus = initialJobMaterialStatus();
-
-        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), {
-          id: linkedShoppingListItemId,
-          category: "Job",
-          subCategory: "Data Base",
-          status: materialStatus,
-          purchaserId: "",
-          purchaserName: "",
-          genericItemId: taskDbItem?.genericItemId || "",
-          taxable: Boolean(taskDbItem?.taxable),
-          name: materialName,
-          description: materialDescription,
-          datePurchased: null,
-          quantity: String(quantity),
-          jobId: jobId || "",
-          jobName: job.internalId || "Job",
-          linkedTaskId: id,
-          linkedTaskName: taskDescription,
-          linkedTaskType: newTaskType,
-          customerId: job.customerId || "",
-          customerName:
-            job.customerName ||
-            [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
-            "",
-          userId: "",
-          userName: "",
-          serviceStopId: "",
-          serviceStopInternalId: "",
-          serviceLocationId: job.serviceLocationId || "",
-          serviceLocationName: serviceLocation.nickName || "",
-          scheduledDate: null,
-          prepKeys: [
-            jobId ? `job:${jobId}` : "",
-            job.customerId ? `customer:${job.customerId}` : "",
-            job.serviceLocationId ? `serviceLocation:${job.serviceLocationId}` : "",
-            `jobTask:${id}`,
-          ].filter(Boolean),
-          needsAction: true,
-          actionDate: Timestamp.fromDate(new Date()),
-          assignedTechIds: [],
-          dbItemId: taskDbItem?.id || "",
-          dbItemName: taskDbItem?.name || "",
-          ...materialPhotoFields,
-          purchasedItem: "",
-          invoiced: false,
-          customerApprovalRequired: false,
-          customerApprovalStatus: "notRequired",
-          customerApprovalRequestedAt: null,
-          approvalRequestId: "",
-          partApprovalRequestId: "",
-          estimateAccepted: isJobAcceptedForMaterials(),
-          jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
-          itemId: taskDbItem?.id || "",
-          itemType: "Data Base",
-          cost: plannedUnitCostCents,
-          price: plannedUnitPriceCents,
-          plannedUnitCostCents,
-          plannedUnitPriceCents,
-          plannedTotalCostCents,
-          plannedTotalPriceCents,
-        });
-
-      }
+      };
+      const batch = writeBatch(db);
+      stageTaskWithProduct(batch, taskPayload, taskNeedsInstallItem ? taskDbItem : null, { createTask: true, quantity });
+      await batch.commit();
 
       if (targetLaborLineId) {
         await attachTaskToLaborLine(targetLaborLineId, id);
@@ -13643,26 +13529,28 @@ const JobDetailView = () => {
         )
       );
 
-      for (const shoppingListItemId of linkedShoppingItemIds) {
-        await deleteDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", shoppingListItemId));
-      }
-
-      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id));
+      const batch = writeBatch(db);
+      const remainingShoppingList = (shoppingList || []).map((item) => {
+        if (!linkedShoppingItemIds.includes(planProductId(item)) && !productTaskIds(item).includes(id)) return item;
+        const updates = unlinkTaskFromPlanProduct(item, id, taskList);
+        batch.update(doc(db, "companies", recentlySelectedCompany, "shoppingList", planProductId(item)), updates);
+        return { ...item, ...updates };
+      });
+      batch.delete(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id));
+      await batch.commit();
       await removeTaskFromLaborLines(id);
       await recordJobHistory({
         eventType: "Task",
         title: `Task deleted: ${deletedTask?.name || deletedTask?.type || id}`,
         description: deletedTask?.name || "",
-        metadata: { taskId: id, deletedShoppingListItemIds: linkedShoppingItemIds },
+        metadata: { taskId: id, unlinkedShoppingListItemIds: linkedShoppingItemIds },
         severity: "danger",
       });
 
       const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
       const tasksSnap = await getDocs(tasksRef);
       const tasks = tasksSnap.docs.map((d) => ({ ...d.data(), id: d.id }));
-      const remainingShoppingList = (shoppingList || []).filter(
-        (item) => !linkedShoppingItemIds.includes(item.id)
-      );
+
       setTaskList(tasks);
       setShoppingList(remainingShoppingList);
 
@@ -13753,6 +13641,13 @@ const JobDetailView = () => {
       ...prev,
       dbItemId: option?.id || "",
       genericItemId: option?.genericItemId || "",
+      linkedTaskId: prev.linkedTaskId || (() => {
+        const unlinked = taskList.filter((task) => taskTypeRequiresInstallItem(task.type) && !isFinishedTaskStatus(task.status)
+          && !getLinkedShoppingItemsForTask(task).length);
+        const matches = unlinked.filter((task) => task.genericItemId ? task.genericItemId === option?.genericItemId
+          : task.dataBaseItemId && task.dataBaseItemId === option?.dbItemId);
+        return matches.length === 1 ? matches[0].id : unlinked.length === 1 && !unlinked[0].genericItemId && !unlinked[0].dataBaseItemId && isEquipmentDatabaseItem(option || {}) ? unlinked[0].id : "";
+      })(),
       name: option?.name || "",
       description: option?.description || "",
       plannedUnitCost,
@@ -13971,6 +13866,7 @@ const JobDetailView = () => {
       status: nextStatus,
       quantity: String(nextQuantity),
       linkedTaskId: nextLinkedTask?.id || "",
+      linkedTaskIds: [...new Set([...productTaskIds(item).filter((id) => id !== existingLinkedTaskId), nextLinkedTask?.id].filter(Boolean))],
       linkedTaskName: nextLinkedTask?.name || "",
       linkedTaskType: nextLinkedTask?.type || "",
       customerApprovalRequired: nextCustomerApprovalRequired,
@@ -13994,34 +13890,20 @@ const JobDetailView = () => {
     try {
       setSavingShoppingEdit(true);
 
-      await updateDoc(
-        doc(db, "companies", recentlySelectedCompany, "shoppingList", itemId),
-        materialUpdates
-      );
-
-      const taskLinkWrites = [];
+      const linkBatch = writeBatch(db);
+      linkBatch.update(doc(db, "companies", recentlySelectedCompany, "shoppingList", itemId), materialUpdates);
       if (existingLinkedTaskId && existingLinkedTaskId !== nextLinkedTask?.id) {
-        const previousLinkedTask = (taskList || []).find((task) => task.id === existingLinkedTaskId);
-        if (previousLinkedTask) {
-          taskLinkWrites.push(
-            updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", existingLinkedTaskId), {
-              ...(previousLinkedTask.shoppingListItemId === itemId ? { shoppingListItemId: "" } : {}),
-              shoppingListItemIds: arrayRemove(itemId),
-            })
-          );
-        }
+        const previous = taskList.find((task) => task.id === existingLinkedTaskId);
+        if (previous) linkBatch.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", previous.id), {
+          ...(previous.shoppingListItemId === itemId ? { shoppingListItemId: "", dataBaseItemId: "", genericItemId: "" } : {}),
+          shoppingListItemIds: arrayRemove(itemId),
+        });
       }
-
-      if (nextLinkedTask?.id && existingLinkedTaskId !== nextLinkedTask.id) {
-        taskLinkWrites.push(
-          updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", nextLinkedTask.id), {
-            shoppingListItemId: itemId,
-            shoppingListItemIds: arrayUnion(itemId),
-          })
-        );
-      }
-
-      if (taskLinkWrites.length) await Promise.all(taskLinkWrites);
+      if (nextLinkedTask?.id) linkBatch.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", nextLinkedTask.id), {
+        shoppingListItemId: itemId, shoppingListItemIds: arrayUnion(itemId),
+        ...(taskTypeRequiresInstallItem(nextLinkedTask.type) && databaseItemId ? { genericItemId: item.genericItemId || "", dataBaseItemId: databaseItemId } : {}),
+      });
+      await linkBatch.commit();
 
       if (shoppingEditForm.updateDatabaseItem) {
         const batch = writeBatch(db);
@@ -14177,7 +14059,8 @@ const JobDetailView = () => {
       savingShoppingItemRef.current = true;
       setSavingShoppingItemAction(keepOpen ? "addMore" : "add");
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", id), {
+      const batch = writeBatch(db);
+      batch.set(doc(db, "companies", recentlySelectedCompany, "shoppingList", id), {
         id,
         category: "Job",
         subCategory: shoppingFormData.subCategory,
@@ -14199,6 +14082,7 @@ const JobDetailView = () => {
         jobId: jobId || "",
         jobName: job.internalId || "Job",
         linkedTaskId: linkedTask?.id || "",
+        linkedTaskIds: linkedTask?.id ? [linkedTask.id] : [],
         linkedTaskName: linkedTask?.name || "",
         linkedTaskType: linkedTask?.type || "",
 
@@ -14251,10 +14135,15 @@ const JobDetailView = () => {
       });
 
       if (linkedTask?.id) {
-        await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", linkedTask.id), {
-          shoppingListItemId: id,
-          shoppingListItemIds: arrayUnion(id),
+        batch.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", linkedTask.id), {
+          shoppingListItemId: id, shoppingListItemIds: arrayUnion(id),
+          ...(taskTypeRequiresInstallItem(linkedTask.type) && selectedShoppingDbItem?.dbItemId ? {
+            genericItemId: shoppingFormData.genericItemId || "", dataBaseItemId: selectedShoppingDbItem.dbItemId,
+          } : {}),
         });
+      }
+      await batch.commit();
+      if (linkedTask?.id) {
         setTaskList((prev) =>
           prev.map((task) =>
             task.id === linkedTask.id
@@ -14262,6 +14151,7 @@ const JobDetailView = () => {
                 ...task,
                 shoppingListItemId: id,
                 shoppingListItemIds: Array.from(new Set([...(task.shoppingListItemIds || []), id])),
+                ...(taskTypeRequiresInstallItem(task.type) && selectedShoppingDbItem?.dbItemId ? { genericItemId: shoppingFormData.genericItemId || "", dataBaseItemId: selectedShoppingDbItem.dbItemId } : {}),
               }
               : task
           )
@@ -14324,15 +14214,19 @@ const JobDetailView = () => {
         "";
 
       // fixed path bug: delete from shoppingList collection, not workOrders/{jobId}/items
-      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", id));
 
-      if (linkedTaskId) {
-        await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", linkedTaskId), {
-          shoppingListItemId: "",
-          shoppingListItemIds: arrayRemove(id),
-        });
-      }
 
+      const linkedTasks = taskList.filter((task) => taskProductIds(task).includes(id) || productTaskIds(deletedItem).includes(task.id));
+      const batch = writeBatch(db);
+      batch.delete(doc(db, "companies", recentlySelectedCompany, "shoppingList", id));
+      const taskUpdates = new Map(linkedTasks.map((task) => {
+        const remaining = taskProductIds(task).filter((itemId) => itemId !== id);
+        const updates = { shoppingListItemId: task.shoppingListItemId === id ? remaining[0] || "" : task.shoppingListItemId || "", shoppingListItemIds: remaining,
+          ...(task.shoppingListItemId === id ? { dataBaseItemId: "", genericItemId: "" } : {}) };
+        batch.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), updates);
+        return [task.id, updates];
+      }));
+      await batch.commit();
       await recordJobHistory({
         eventType: "Planned Product",
         title: `Planned product deleted: ${deletedItem ? getMaterialName(deletedItem) : id}`,
@@ -14348,19 +14242,7 @@ const JobDetailView = () => {
       const itemsSnap = await getDocs(itemsRef);
       const items = itemsSnap.docs.map(withFirestoreDocId);
       setShoppingList(items);
-      if (linkedTaskId) {
-        setTaskList((prev) =>
-          prev.map((task) =>
-            task.id === linkedTaskId
-              ? {
-                ...task,
-                shoppingListItemId: task.shoppingListItemId === id ? "" : task.shoppingListItemId,
-                shoppingListItemIds: (task.shoppingListItemIds || []).filter((itemId) => itemId !== id),
-              }
-              : task
-          )
-        );
-      }
+      setTaskList((prev) => prev.map((task) => taskUpdates.has(task.id) ? { ...task, ...taskUpdates.get(task.id) } : task));
 
       await loadJobWorkflowData({
         companyId: recentlySelectedCompany,
@@ -14914,6 +14796,7 @@ const JobDetailView = () => {
             <p className="mt-0.5 truncate text-xs text-slate-500">
               {item.subCategory || "Product"} • Qty: {getMaterialQuantity(item)}
               {(linkedTask || item.linkedTaskName) ? ` • Task: ${linkedTask?.name || item.linkedTaskName}` : ""}
+              {productTaskIds(item).length > 1 ? ` · ${productTaskIds(item).length} linked tasks` : ""}
             </p>
 
             {item.description && (
@@ -17087,9 +16970,6 @@ const JobDetailView = () => {
     const scheduleTaskEquipmentOption = scheduleTaskForm.equipmentId
       ? equipmentById.get(scheduleTaskForm.equipmentId) || null
       : null;
-    const scheduleTaskDbItemOption = scheduleTaskForm.dataBaseItemId
-      ? shoppingDbItemById.get(scheduleTaskForm.dataBaseItemId) || null
-      : null;
     const scheduleTaskFieldLabelClass = "block text-xs font-bold uppercase tracking-wide text-slate-600";
     const scheduleTaskInputClass =
       "mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 disabled:cursor-not-allowed disabled:opacity-50";
@@ -17388,40 +17268,9 @@ const JobDetailView = () => {
                     </div>
                   )}
 
-                  {scheduleTaskNeedsInstallItem && (
-                    <>
-                      <div className={scheduleTaskFieldLabelClass}>
-                        {scheduleTaskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
-                        <div className="mt-1 text-sm font-medium normal-case tracking-normal">
-                          <Select
-                            value={scheduleTaskDbItemOption}
-                            options={scheduleTaskDbItemOptions}
-                            onChange={(option) => updateScheduleTaskForm("dataBaseItemId", option?.id || "")}
-                            isSearchable
-                            isClearable
-                            isDisabled={saving || savingScheduleTask}
-                            placeholder={scheduleTaskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
-                            menuPortalTarget={selectPortalTarget}
-                            menuPosition="fixed"
-                            styles={scheduleSelectStyles}
-                          />
-                        </div>
-                      </div>
-
-                      <label className={scheduleTaskFieldLabelClass}>
-                        Quantity
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={scheduleTaskForm.quantity}
-                          onChange={(event) => updateScheduleTaskForm("quantity", event.target.value)}
-                          disabled={saving || savingScheduleTask}
-                          className={scheduleTaskInputClass}
-                        />
-                      </label>
-                    </>
-                  )}
+                  {scheduleTaskNeedsInstallItem && <JobTaskProductPicker options={taskProductOptions} value={scheduleTaskSelectedDbItem}
+                    onChange={(product) => updateScheduleTaskForm("productSelection", product?.value || "")}
+                    quantity={scheduleTaskForm.quantity} onQuantityChange={(quantity) => updateScheduleTaskForm("quantity", quantity)} />}
 
                   {scheduleTaskNeedsEquipmentDatabaseItem && scheduleTaskSelectedDbItem && (
                     <div className="rounded-md border border-slate-200 bg-slate-50 p-3 md:col-span-2 xl:col-span-4">
@@ -18087,6 +17936,7 @@ const JobDetailView = () => {
   const visibleActualServiceStops = showAllActualServiceStops ? serviceStops : serviceStops.slice(0, 5);
   const hiddenActualServiceStopCount = Math.max(serviceStops.length - 5, 0);
   const unfinishedJobFinishTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
+  const unfinishedJobFinishStops = serviceStops.filter(isOpenJobFinishStop);
   const selectedJobFinishTaskCount = jobFinishTaskIds.filter((taskId) =>
     unfinishedJobFinishTasks.some((task) => task.id === taskId)
   ).length;
@@ -18373,7 +18223,7 @@ const JobDetailView = () => {
       icon: CheckCircleIcon,
       tone: "emerald",
       onClick: openJobFinishConfirm,
-      disabled: markingJobFinished,
+      disabled: markingJobFinished || loadingJobFinish || Object.values(sectionLoading).some(Boolean),
     },
     ...(salesWorkflowEnabled
       ? [{
@@ -18502,6 +18352,8 @@ const JobDetailView = () => {
     </div>
   );
 
+  const servicePayrollData = useServicePayrollData(recentlySelectedCompany, showServiceCatalogCreator || newLaborLine || Boolean(editingLaborLineId));
+
   const renderPlanInvoiceLaborLineForm = () => {
     if (!newLaborLine && !editingLaborLineId) return null;
 
@@ -18592,6 +18444,12 @@ const JobDetailView = () => {
           </label>
         </div>
 
+        <ServicePayrollCostPreview data={servicePayrollData}
+          scopeLabel="For the linked tasks in this service line"
+          tasks={taskList.filter((task) => (laborLineForm.taskIds || []).includes(task.id))}
+          inheritedPayTypeId={laborLineForm.payTypeId || ""}
+          priceInput={(totalPriceCents / 100).toFixed(2)} costInput={laborLineForm.internalCost}
+          onUseHighCost={(cents) => updateLaborLineForm("internalCost", (cents / 100).toFixed(2))} />
         <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-xs text-slate-600">
@@ -18986,7 +18844,7 @@ const JobDetailView = () => {
                       Default payroll pay item
                       <select value={serviceCatalogCreatorForm.payTypeId || ""} onChange={(event) => updateServiceCatalogCreatorField("payTypeId", event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
                         <option value="">Select a payroll pay item</option>
-                        {companyWorkTypes.filter((type) => type.isActive !== false && type.active !== false).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+                        {servicePayrollData.payTypes.filter((type) => type.isActive !== false && type.active !== false).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
                       </select>
                     </label>
 	                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -19061,6 +18919,9 @@ const JobDetailView = () => {
 	                  />
 	                  Taxable
 	                </label>
+                <ServicePayrollCostPreview data={servicePayrollData} tasks={taskTemplates}
+                  inheritedPayTypeId={serviceCatalogCreatorForm.payTypeId || ""} priceInput={serviceCatalogCreatorForm.unitAmount} costInput={serviceCatalogCreatorForm.unitCost}
+                  onUseHighCost={(cents) => updateServiceCatalogCreatorField("unitCost", (cents / 100).toFixed(2))} />
 	                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
 	                  <p className="text-sm font-semibold text-slate-800">Stripe Object</p>
 	                  <p className="mt-1 text-xs text-slate-500">
@@ -19182,7 +19043,9 @@ const JobDetailView = () => {
 	                          Remove
 	                        </button>
                             <div className="col-span-full">
-                              <JobPayrollFields value={template} payTypes={companyWorkTypes} inheritedPayTypeId={serviceCatalogCreatorForm.payTypeId || ""} onChange={(field, value) => updateServiceCatalogCreatorTaskTemplate(template.id, field, value)} />
+                              <ServiceTaskProductFields task={template} products={jobProductList} databaseItems={shoppingDbItemList} materials={shoppingList}
+                                onChange={(field, value) => updateServiceCatalogCreatorTaskTemplate(template.id, field, value)} />
+                              <JobPayrollFields value={template} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={serviceCatalogCreatorForm.unitAmount} inheritedPayTypeId={serviceCatalogCreatorForm.payTypeId || ""} onChange={(field, value) => updateServiceCatalogCreatorTaskTemplate(template.id, field, value)} />
                             </div>
 	                      </div>
 	                    </div>
@@ -19329,36 +19192,8 @@ const JobDetailView = () => {
             </select>
           </label>
         )}
-        {editingTaskNeedsInstallItem && (
-          <>
-            <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-              {editingTaskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
-              <select
-                value={taskEditForm.dataBaseItemId}
-                onChange={(event) => updateTaskEditForm("dataBaseItemId", event.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-              >
-                <option value="">
-                  {editingTaskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
-                </option>
-                {editingTaskDbItemOptions.map((item) => (
-                  <option key={item.id} value={item.id}>{item.label || item.name || "Item"}</option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-              Quantity
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={taskEditForm.quantity}
-                onChange={(event) => updateTaskEditForm("quantity", event.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-              />
-            </label>
-          </>
-        )}
+        {editingTaskNeedsInstallItem && <JobTaskProductPicker options={taskProductOptions} value={editingTaskProduct}
+          onChange={chooseTaskEditProduct} quantity={taskEditForm.quantity} onQuantityChange={(quantity) => updateTaskEditForm("quantity", quantity)} />}
         {editingTaskNeedsEquipmentDatabaseItem && taskEditForm.dataBaseItemId && (
           <div className="md:col-span-2 xl:col-span-4 rounded-md border border-slate-200 bg-white p-3">
             <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
@@ -19550,35 +19385,9 @@ const JobDetailView = () => {
             </div>
           </div>
         )}
-        {taskNeedsInstallItem && (
-          <>
-            <div className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-              {taskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
-              <div className="mt-1 text-sm font-medium normal-case tracking-normal">
-                <Select
-                  value={selectedTaskDbItem}
-                  options={selectedTaskDbItemOptions}
-                  onChange={setSelectedTaskDbItem}
-                  isSearchable
-                  placeholder={taskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
-                  theme={selectTheme}
-                  styles={selectStyles}
-                />
-              </div>
-            </div>
-            <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-              Quantity
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={taskQuantity}
-                onChange={(event) => setTaskQuantity(event.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800"
-              />
-            </label>
-          </>
-        )}
+        {taskNeedsInstallItem && <JobTaskProductPicker options={taskProductOptions} value={selectedTaskDbItem}
+          onChange={(product) => { setSelectedTaskDbItem(product); if (product?.material) setTaskQuantity(String(product.material.quantity || "1")); }}
+          quantity={taskQuantity} onQuantityChange={setTaskQuantity} />}
         {taskNeedsEquipmentDatabaseItem && selectedTaskDbItem && (
           <div className="md:col-span-2 xl:col-span-4 rounded-md border border-slate-200 bg-white p-3">
             <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
@@ -19715,8 +19524,8 @@ const JobDetailView = () => {
                 </div>
 
                 {requiresShoppingDbItem ? (
-                  <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_auto]">
-                    <div className="min-w-0">
+                  <div className="mt-3 grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                    <div className="min-w-0 sm:col-span-2">
                       <Select
                         value={selectedShoppingDbItem}
                         options={jobProductList}
@@ -19736,6 +19545,8 @@ const JobDetailView = () => {
                         styles={selectStyles}
                         menuPortalTarget={selectMenuPortalTarget || undefined}
                         menuPosition="fixed"
+                        menuPlacement="auto"
+                        maxMenuHeight={520}
                         aria-label="Select purchase line item"
                       />
                     </div>
@@ -19752,7 +19563,7 @@ const JobDetailView = () => {
                       type="button"
                       onClick={() => setShowShoppingDbItemCreator(true)}
                       disabled={showShoppingDbItemCreator || savingShoppingItem}
-                      className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 sm:justify-self-start"
                     >
                       <PlusIcon className="h-4 w-4" aria-hidden="true" />
                       New Item
@@ -19938,7 +19749,7 @@ const JobDetailView = () => {
         aria-modal="true"
         aria-labelledby="add-planned-product-title"
       >
-        <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+        <div className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
             <div>
               <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Planned Product</p>
@@ -20037,6 +19848,7 @@ const JobDetailView = () => {
     const laborLine = (laborLineItems || []).find((item) => item.id === line.sourceId) || null;
     const isEditingLaborLine = Boolean(laborLine?.id && editingLaborLineId === laborLine.id);
     const linkedTasks = (taskList || []).filter((task) => (line.taskIds || []).includes(task.id));
+    const linkedProducts = [...new Map(linkedTasks.flatMap(getLinkedShoppingItemsForTask).map((item) => [planProductId(item), item])).values()];
     const showLaborLineWorkDetails = Boolean(
       laborLine && !isEditingLaborLine && (linkedTasks.length || canBuildJobEstimatePlan)
     );
@@ -20052,6 +19864,7 @@ const JobDetailView = () => {
               <span className="font-semibold text-slate-950">{line.name}</span>
             </div>
             {line.description && <p className="mt-1 max-w-xl text-xs text-slate-500">{line.description}</p>}
+            {linkedProducts.length > 0 && <p className="mt-2 text-xs font-semibold text-emerald-700">Products: {linkedProducts.map((item) => item.name || "Product").join(", ")}</p>}
             {linkedTasks.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {linkedTasks.slice(0, 4).map((task) => (
@@ -20842,6 +20655,74 @@ const JobDetailView = () => {
 	                      <section className="overflow-hidden rounded-md border border-slate-200">
 	                        <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
 	                          <div>
+	                            <h4 className="text-sm font-bold text-slate-950">Products</h4>
+	                            <p className="mt-0.5 text-xs text-slate-500">
+	                              Products needed for the job, purchase prep, and customer billing.
+	                            </p>
+	                          </div>
+	                          <div className="flex flex-wrap items-center gap-2">
+	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+	                              Price {moneyFromCents(currentPlanMaterialPriceCents)}
+	                            </span>
+	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+	                              Cost {moneyFromCents(currentPlanMaterialCostCents)}
+	                            </span>
+	                            {canBuildJobEstimatePlan && (
+	                              <button
+	                                type="button"
+	                                onClick={showNewShoppingListItem}
+	                                disabled={Boolean(editingShoppingItemId) || newShoppingList}
+	                                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+	                              >
+	                                <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                                Product Line
+	                              </button>
+	                            )}
+	                          </div>
+	                        </div>
+
+	                        <div className="space-y-2 bg-white p-4">
+	                          {!shoppingList.length ? (
+	                            <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
+	                              <p className="text-sm font-medium text-slate-700">No planned products yet.</p>
+	                              <p className="mt-0.5 text-xs text-slate-500">
+	                                Add products to estimate purchase cost and billing.
+	                              </p>
+	                              {canBuildJobEstimatePlan && (
+	                                <button
+	                                  type="button"
+	                                  onClick={showNewShoppingListItem}
+	                                  disabled={Boolean(editingShoppingItemId) || newShoppingList}
+	                                  className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+	                                >
+	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
+	                                  Add first product
+	                                </button>
+	                              )}
+	                            </div>
+	                          ) : (
+	                            visiblePlannedMaterials.map((item) => renderPlannedMaterialCard(item))
+	                          )}
+
+	                          {hiddenPlannedMaterialCount > 0 && (
+	                            <div className="pt-2 text-center">
+	                              <button
+	                                type="button"
+	                                onClick={() => setShowAllPlannedMaterials((prev) => !prev)}
+	                                className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+	                              >
+	                                {showAllPlannedMaterials
+	                                  ? "Show first 5 planned products"
+	                                  : `Show ${hiddenPlannedMaterialCount} more planned product${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
+	                              </button>
+	                            </div>
+	                          )}
+	                        </div>
+	                      </section>
+
+	                      <section className="overflow-hidden rounded-md border border-slate-200">
+	                        <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+	                          <div>
 	                            <h4 className="text-sm font-bold text-slate-950">Services</h4>
 	                            <p className="mt-0.5 text-xs text-slate-500">
 	                              Billable service lines from the catalog with customer-facing tasks underneath.
@@ -20927,74 +20808,6 @@ const JobDetailView = () => {
 	                              {renderUnassignedLaborScopeRow()}
 	                            </tbody>
 	                          </table>
-	                        </div>
-	                      </section>
-
-	                      <section className="overflow-hidden rounded-md border border-slate-200">
-	                        <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-	                          <div>
-	                            <h4 className="text-sm font-bold text-slate-950">Products</h4>
-	                            <p className="mt-0.5 text-xs text-slate-500">
-	                              Products needed for the job, purchase prep, and customer billing.
-	                            </p>
-	                          </div>
-	                          <div className="flex flex-wrap items-center gap-2">
-	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
-	                              Price {moneyFromCents(currentPlanMaterialPriceCents)}
-	                            </span>
-	                            <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
-	                              Cost {moneyFromCents(currentPlanMaterialCostCents)}
-	                            </span>
-	                            {canBuildJobEstimatePlan && (
-	                              <button
-	                                type="button"
-	                                onClick={showNewShoppingListItem}
-	                                disabled={Boolean(editingShoppingItemId) || newShoppingList}
-	                                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-	                              >
-	                                <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                Product Line
-	                              </button>
-	                            )}
-	                          </div>
-	                        </div>
-
-	                        <div className="space-y-2 bg-white p-4">
-	                          {!shoppingList.length ? (
-	                            <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
-	                              <p className="text-sm font-medium text-slate-700">No planned products yet.</p>
-	                              <p className="mt-0.5 text-xs text-slate-500">
-	                                Add products to estimate purchase cost and billing.
-	                              </p>
-	                              {canBuildJobEstimatePlan && (
-	                                <button
-	                                  type="button"
-	                                  onClick={showNewShoppingListItem}
-	                                  disabled={Boolean(editingShoppingItemId) || newShoppingList}
-	                                  className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-	                                >
-	                                  <PlusIcon className="h-4 w-4" aria-hidden="true" />
-	                                  Add first product
-	                                </button>
-	                              )}
-	                            </div>
-	                          ) : (
-	                            visiblePlannedMaterials.map((item) => renderPlannedMaterialCard(item))
-	                          )}
-
-	                          {hiddenPlannedMaterialCount > 0 && (
-	                            <div className="pt-2 text-center">
-	                              <button
-	                                type="button"
-	                                onClick={() => setShowAllPlannedMaterials((prev) => !prev)}
-	                                className="text-sm font-semibold text-blue-700 hover:text-blue-900"
-	                              >
-	                                {showAllPlannedMaterials
-	                                  ? "Show first 5 planned products"
-	                                  : `Show ${hiddenPlannedMaterialCount} more planned product${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
-	                              </button>
-	                            </div>
-	                          )}
 	                        </div>
 	                      </section>
 
@@ -21352,40 +21165,8 @@ const JobDetailView = () => {
                                             </label>
                                           )}
 
-                                          {editingTaskNeedsInstallItem && (
-                                            <>
-                                              <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                                {editingTaskNeedsEquipmentDatabaseItem ? "Equipment Item" : "Item"}
-                                                <select
-                                                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
-                                                  value={taskEditForm.dataBaseItemId}
-                                                  onChange={(e) => updateTaskEditForm("dataBaseItemId", e.target.value)}
-                                                >
-                                                  <option value="">
-                                                    {editingTaskNeedsEquipmentDatabaseItem ? "Select equipment item" : "Select item"}
-                                                  </option>
-                                                  {editingTaskDbItemOptions.map((item) => (
-                                                    <option key={item.id} value={item.id}>
-                                                      {item.label || item.name || "Item"}
-                                                    </option>
-                                                  ))}
-                                                </select>
-                                              </label>
-
-                                              <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                                Quantity
-                                                <input
-                                                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
-                                                  type="number"
-                                                  min="0"
-                                                  step="0.01"
-                                                  value={taskEditForm.quantity}
-                                                  onChange={(e) => updateTaskEditForm("quantity", e.target.value)}
-                                                />
-                                              </label>
-                                            </>
-                                          )}
-
+                                          {editingTaskNeedsInstallItem && <JobTaskProductPicker options={taskProductOptions} value={editingTaskProduct}
+                                            onChange={chooseTaskEditProduct} quantity={taskEditForm.quantity} onQuantityChange={(quantity) => updateTaskEditForm("quantity", quantity)} />}
                                           {editingTaskNeedsEquipmentDatabaseItem && taskEditForm.dataBaseItemId && (
                                             <div className="md:col-span-2 xl:col-span-4 rounded-md border border-slate-200 bg-white p-3">
                                               <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">
@@ -21522,29 +21303,9 @@ const JobDetailView = () => {
                             </div>
                           )}
 
-                          {taskNeedsInstallItem && (
-                            <>
-                              <div className="w-full">
-                                <Select
-                                  value={selectedTaskDbItem}
-                                  options={selectedTaskDbItemOptions}
-                                  onChange={setSelectedTaskDbItem}
-                                  isSearchable
-                                  placeholder={taskNeedsEquipmentDatabaseItem ? "Select Equipment Item" : "Select Item"}
-                                  theme={selectTheme}
-                                  styles={selectStyles}
-                                />
-                              </div>
-
-                              <input
-                                className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                                type="text"
-                                placeholder="Quantity"
-                                value={taskQuantity}
-                                onChange={(e) => setTaskQuantity(e.target.value)}
-                              />
-                            </>
-                          )}
+                          {taskNeedsInstallItem && <JobTaskProductPicker options={taskProductOptions} value={selectedTaskDbItem}
+                            onChange={(product) => { setSelectedTaskDbItem(product); if (product?.material) setTaskQuantity(String(product.material.quantity || "1")); }}
+                            quantity={taskQuantity} onQuantityChange={setTaskQuantity} />}
 
                           <input
                             className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
@@ -24093,19 +23854,45 @@ const JobDetailView = () => {
 	      )}
 	      {showJobFinishConfirm && (
 	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-	          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-2xl">
-	            <h2 className="text-xl font-bold text-slate-950">Finish Job</h2>
+	          <div role="dialog" aria-modal="true" aria-labelledby="finish-job-title" className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-2xl">
+	            <h2 id="finish-job-title" className="text-xl font-bold text-slate-950">Finish Job</h2>
 	            <p className="mt-2 text-sm text-slate-600">
-	              Choose which unfinished tasks should also be marked finished, and clear any open planned products by marking them installed or deleting the unused ones.
+	              Review services, tasks, service stops, and products to finish. Selected service stops and their unfinished tasks will be marked completed manually.
 	            </p>
 
 	            <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-4">
-                <label className="flex gap-2 font-semibold"><input type="checkbox" checked={closeoutWholeJob} onChange={e=>setCloseoutWholeJob(e.target.checked)} />Finish the entire job</label>
-                {closeoutWholeJob && <label className="flex gap-2"><input type="checkbox" checked={closeoutCancelVisits} onChange={e=>setCloseoutCancelVisits(e.target.checked)} />Cancel unused visits and unaccepted offers</label>}
-                <button type="button" className="rounded border px-3 py-2 font-semibold" onClick={()=>{setAllJobFinishTasks(true);setJobFinishServiceIds(laborLineItems.map(v=>v.id));setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(shoppingList));}}>Quick Finish All Remaining Work</button>
+                <label className="flex gap-2 font-semibold"><input type="checkbox" checked={closeoutWholeJob} disabled={markingJobFinished} onChange={e=>setCloseoutWholeJob(e.target.checked)} />Finish the entire job</label>
+                {closeoutWholeJob && <label className="flex gap-2"><input type="checkbox" checked={closeoutCancelVisits} disabled={markingJobFinished} onChange={e=>setCloseoutCancelVisits(e.target.checked)} />Cancel unchecked visits, unscheduled planned visits, and unaccepted offers</label>}
+                <button type="button" disabled={markingJobFinished} className="rounded border px-3 py-2 font-semibold disabled:opacity-50" onClick={()=>{setAllJobFinishTasks(true);selectJobFinishStops(unfinishedJobFinishStops.map((stop)=>stop.id));setJobFinishServiceIds(laborLineItems.map(v=>v.id));setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(shoppingList));setCloseoutCancelVisits(true);}}>Quick Finish All Remaining Work</button>
+                <p className="text-xs text-slate-600">Quick Finish selects all remaining work and service stops, marks products installed, and cancels unused plans and unaccepted offers when finishing the job.</p>
                 <h3 className="font-bold">Service items</h3>
                 {laborLineItems.map(line=><label key={line.id} className="flex gap-2"><input type="checkbox" checked={line.completionStatus === "Finished" || jobFinishServiceIds.includes(line.id)} disabled={markingJobFinished || line.completionStatus === "Finished"} onChange={e=>{setJobFinishServiceIds(ids=>e.target.checked?[...ids,line.id]:ids.filter(v=>v!==line.id));if(e.target.checked)setJobFinishTaskIds(ids=>[...new Set([...ids,...getLaborLineTaskIds(line)])]);}} />{line.name || "Service"}</label>)}
               </div>
+              {unfinishedJobFinishStops.length > 0 && (
+                <div className="mt-4 rounded-lg border border-slate-200">
+                  <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                    <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                      <input type="checkbox" checked={jobFinishServiceStopIds.length === unfinishedJobFinishStops.length} disabled={markingJobFinished}
+                        onChange={(event) => selectJobFinishStops(event.target.checked ? unfinishedJobFinishStops.map((stop) => stop.id) : [])} />
+                      Mark all unfinished service stops finished
+                    </label>
+                    <p className="mt-1 text-xs text-slate-500">Only select visits whose work was performed. Unchecked visits stay open unless you choose to cancel them.</p>
+                  </div>
+                  <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+                    {unfinishedJobFinishStops.map((stop) => (
+                      <label key={stop.id} className="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-slate-50">
+                        <input type="checkbox" checked={jobFinishServiceStopIds.includes(stop.id)} disabled={markingJobFinished}
+                          onChange={(event) => selectJobFinishStops(event.target.checked ? [...jobFinishServiceStopIds, stop.id] : jobFinishServiceStopIds.filter((id) => id !== stop.id))} />
+                        <span>
+                          <span className="block font-semibold text-slate-900">{stop.internalId || stop.type || "Service stop"}</span>
+                          <span className="block text-sm text-slate-500">{[formatDateValue(stop.serviceDate), stop.tech, stop.operationStatus, `${(jobFinishStopTasks[stop.id] || []).filter((task) => isOpenTaskStatus(task.status)).length} unfinished task(s)`].filter(Boolean).join(" · ")}</span>
+                          <span className="block text-xs text-slate-500">{(jobFinishStopTasks[stop.id] || []).filter((task) => isOpenTaskStatus(task.status)).map((task) => task.name || task.type || "Unnamed task").join(", ")}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               {unfinishedJobFinishTasks.length > 0 ? (
 	              <div className="mt-4 rounded-lg border border-slate-200">
 	                <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
@@ -24158,7 +23945,7 @@ const JobDetailView = () => {
 	              </div>
 	            ) : (
 	              <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-	                All tasks are already finished. This will only finish the job.
+	                All job tasks are already finished. Review any remaining services, stops, and products below.
 	              </div>
 	            )}
 
@@ -24271,6 +24058,7 @@ const JobDetailView = () => {
 	              </div>
 	            )}
 
+	            {jobFinishError && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-800">{jobFinishError}</p>}
 	            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
 	              <button
 	                type="button"

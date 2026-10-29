@@ -144,7 +144,7 @@ export const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, 
     if (!selectedPayId || !type) return review("Select an active payroll pay item for this work.");
     if (type.isActive === false || type.active === false || type.archived === true) return review("The selected payroll pay item is inactive.");
     const hourly = ["hourlyActualTime", "hourlyEstimatedTime", "hourlyServiceStopDuration"].includes(sourceSetting);
-    const basis = hourly || type.defaultRateType === "hourly" ? "technicianHourly" : task ? "serviceStopTask" : suggestedBasis(type);
+    const basis = hourly || type.defaultRateType === "hourly" ? "technicianHourly" : task ? "serviceStopTask" : "serviceStop";
     const rateArgs = { companyId, technicianId: workerId, workTypeId: selectedPayId, rates: agreement && acceptedTask ? agreement.rates || rates : rates, date: agreement && acceptedTask ? dateValue(agreement.rateDate || agreement.acceptedAt) || on : on, hourlyFallback: basis === "technicianHourly" };
     let rate = selectPayRate({ ...rateArgs, basis });
     if (!rate && !task && ["serviceStop", "serviceStopTask"].includes(basis)) rate = selectPayRate({ ...rateArgs, basis: basis === "serviceStop" ? "serviceStopTask" : "serviceStop" });
@@ -232,9 +232,9 @@ export const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, 
     && other.technicianId === line.technicianId && other.payrollStackBehavior === "replacesBase"));
   const exclusiveWorkers = unique(selected.filter((line) => line.payrollStackBehavior === "exclusive").map((line) => line.technicianId));
   exclusiveWorkers.forEach((workerId) => {
-    const candidates = selected.filter((line) => line.technicianId === workerId && line.calculationStatus !== "needsReview");
+    const candidates = selected.filter((line) => line.technicianId === workerId && !line.additionalPayExplicit && line.calculationStatus !== "needsReview");
     const winner = candidates.sort((a, b) => b.totalAmountCents - a.totalAmountCents || a.id.localeCompare(b.id))[0];
-    selected = selected.filter((line) => line.technicianId !== workerId || line.calculationStatus === "needsReview" || line === winner);
+    selected = selected.filter((line) => line.technicianId !== workerId || line.additionalPayExplicit || line.calculationStatus === "needsReview" || line === winner);
   });
   const bonusLines = [];
   const agreements = new Map();

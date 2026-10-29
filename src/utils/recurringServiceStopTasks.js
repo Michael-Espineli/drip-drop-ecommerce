@@ -1,3 +1,4 @@
+import { jobPayFields } from "./payroll/payCalculation";
 import { collection, doc, getDocs, query, setDoc, where } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { canonicalJobTaskType } from "./jobTaskTypes";
@@ -100,6 +101,7 @@ export const buildRecurringTaskFromTemplate = ({
     typeId: task.typeId || "",
     type,
     contractedRate: numberValue(task.contractedRate, task.laborCost, task.rate),
+    ...jobPayFields(task),
     estimatedTime: numberValue(task.estimatedTime, task.estimatedMinutes, task.minutes, task.durationMinutes),
     status: task.status || "Accepted",
     equipmentId: task.equipmentId || "",
@@ -129,6 +131,7 @@ const buildServiceStopTaskFromRecurringTask = ({
   type: canonicalJobTaskType(recurringTask.type || ""),
   status: "Not Finished",
   contractedRate: numberValue(recurringTask.contractedRate),
+  ...jobPayFields(recurringTask),
   estimatedTime: numberValue(recurringTask.estimatedTime),
   customerApproval: Boolean(recurringTask.customerApproval),
   actualTime: 0,

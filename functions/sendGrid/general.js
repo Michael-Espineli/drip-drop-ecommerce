@@ -21,6 +21,9 @@ if (process.env.SEND_GRID_API_KEY && process.env.SEND_GRID_API_KEY.startsWith('S
 }
 
 const db = admin.firestore();
+const recurringReportAccess = require("../recurringAccess").createRecurringAccess(db, {
+    verifyIdToken: (token) => admin.auth().verifyIdToken(token, true),
+});
 const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
 const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
 const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
@@ -2482,10 +2485,9 @@ const sendServiceReportOnFinishCore = async (payload = {}) => {
 
 exports.sendServiceReportOnFinishCore = sendServiceReportOnFinishCore;
 
-exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context) => {
-    const payload = data?.data || data || {};
-    return sendServiceReportOnFinishCore(payload);
-});
+exports.sendServiceReportOnFinish = functions.https.onCall(
+    recurringReportAccess.wrap("report", (payload) => sendServiceReportOnFinishCore(payload))
+);
 exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
 
     console.log('Send Job Estiamte Email')

@@ -7,6 +7,7 @@ const list = (value) => Array.isArray(value) ? value : [];
 const ids = (value) => list(value).map(id).filter(Boolean);
 const amount = (value) => Number.isFinite(Number(value)) ? Math.round(Number(value)) : 0;
 const linkedTaskId = (item) => id(item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.sourceTaskId || item.taskId);
+const linkedTaskIds = (item) => [...new Set([linkedTaskId(item), ...ids(item.linkedTaskIds)].filter(Boolean))];
 const taskIds = (item) => ids(item.taskIds?.length ? item.taskIds : item.laborLineTaskIds);
 const stopIds = (item) => ids(item.plannedServiceStopIds?.length ? item.plannedServiceStopIds : item.laborLinePlannedServiceStopIds);
 const materialIds = (task) => [id(task.shoppingListItemId), ...ids(task.shoppingListItemIds)].filter(Boolean);
@@ -41,7 +42,7 @@ const preserveRuntime = (incoming, current) => {
   if (!current) return incoming;
   const actual = hasActualWork(current) || hasPurchasedMaterial(current);
   const fields = Object.entries(current).filter(([name]) => runtimeFields.has(name) || runtimePrefix.test(name) ||
-    (actual && ['linkedTaskId', 'linkedTaskName', 'linkedTaskType', 'dbItemId', 'genericItemId'].includes(name)));
+    (actual && ['linkedTaskId', 'linkedTaskIds', 'linkedTaskName', 'linkedTaskType', 'dbItemId', 'genericItemId'].includes(name)));
   return { ...incoming, ...Object.fromEntries(fields) };
 };
 
@@ -56,8 +57,8 @@ function reconcileJobPlanScope(current, incoming) {
   do {
     previousSize = Object.values(protectedIds).reduce((sum, items) => sum + items.size, 0);
     current.shoppingItems.forEach((item) => {
-      if (protectedIds.shoppingItems.has(item.id) && linkedTaskId(item)) protectedIds.tasks.add(linkedTaskId(item));
-      if (protectedIds.tasks.has(linkedTaskId(item))) protectedIds.shoppingItems.add(item.id);
+      if (protectedIds.shoppingItems.has(item.id)) linkedTaskIds(item).forEach((taskId) => protectedIds.tasks.add(taskId));
+      if (linkedTaskIds(item).some((taskId) => protectedIds.tasks.has(taskId))) protectedIds.shoppingItems.add(item.id);
     });
     current.tasks.forEach((task) => {
       if (materialIds(task).some((value) => protectedIds.shoppingItems.has(value))) protectedIds.tasks.add(task.id);
@@ -180,6 +181,7 @@ async function prepareJobPlanWorkspace({
     return {
       ...plannedFields(item), ...base, id: item.id || newId('comp_shop'), category: 'Job', customerId, serviceLocationId,
       customerName: job.customerName || '', status: 'Need to Purchase', linkedTaskId: validTasks.has(taskId) ? taskId : '',
+      linkedTaskIds: linkedTaskIds(item).filter((value) => validTasks.has(value)),
       purchasedItem: '', invoiced: false, datePurchased: null,
       customerApprovalStatus: item.customerApprovalRequired ? 'pending' : 'notRequired',
       estimateAccepted: accepted, estimateAcceptedAt: accepted ? timestamp : null,
@@ -205,7 +207,7 @@ async function prepareJobPlanWorkspace({
   scope.tasks = scope.tasks.map((task) => {
     const shoppingListItemIds = [...new Set([
       ...materialIds(task).filter((value) => scope.shoppingItems.some((item) => item.id === value)),
-      ...scope.shoppingItems.filter((item) => linkedTaskId(item) === task.id).map((item) => item.id),
+      ...scope.shoppingItems.filter((item) => linkedTaskIds(item).includes(task.id)).map((item) => item.id),
     ])];
     return { ...task, shoppingListItemId: shoppingListItemIds[0] || '', shoppingListItemIds };
   });

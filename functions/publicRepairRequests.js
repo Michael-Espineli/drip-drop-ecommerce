@@ -8,6 +8,7 @@ const MAX_TOTAL_PHOTO_BYTES = 5 * 1024 * 1024;
 const HOUR_MS = 60 * 60 * 1000;
 const LEASE_MS = 3 * 60 * 1000;
 const EQUIPMENT_STATUSES = ["Operational", "Needs Repair", "Non-Operational", "Needs Maintenance"];
+const PRIORITY_LABELS = { 1: "Critical", 2: "Recommended", 3: "Preventive", 4: "Optional Upgrade" };
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
 const text = (value, label, maxLength, required = false) => {
@@ -106,6 +107,10 @@ const validateSubmission = (data = {}) => {
     throw new HttpsError("invalid-argument", "Please select a valid equipment status and equipment.");
   }
   const description = text(data.description, "Description", 5000, true);
+  const issuePriorityLevel = data.issuePriorityLevel ?? 2;
+  if (!Number.isInteger(issuePriorityLevel) || !PRIORITY_LABELS[issuePriorityLevel]) {
+    throw new HttpsError("invalid-argument", "Please select a valid priority.");
+  }
   if (data.photos !== undefined && (!Array.isArray(data.photos) || data.photos.length > MAX_PHOTOS)) {
     throw new HttpsError("invalid-argument", "Please attach no more than 3 photos.");
   }
@@ -113,7 +118,7 @@ const validateSubmission = (data = {}) => {
   if (photos.reduce((total, photo) => total + photo.buffer.length, 0) > MAX_TOTAL_PHOTO_BYTES) {
     throw new HttpsError("invalid-argument", "Please keep the total photo size under 5 MB.");
   }
-  return { companyId, submissionId: data.submissionId, requesterCompanyUserId, customerId, locationId, bodyOfWaterId, equipmentId, equipmentStatusUpdate, description, photos };
+  return { companyId, submissionId: data.submissionId, requesterCompanyUserId, customerId, locationId, bodyOfWaterId, equipmentId, equipmentStatusUpdate, description, issuePriorityLevel, photos };
 };
 
 const loadCompany = async (firestore, companyId) => {
@@ -178,7 +183,10 @@ const createHandlers = ({ firestore, getBucket, now = Date.now }) => ({
     const receiptRef = firestore.doc(`publicRepairRequestSubmissions/${hash(`${input.companyId}:${input.submissionId}`)}`);
     const collectionPath = `companies/${input.companyId}/repairRequests`;
     const requestRef = firestore.doc(`${collectionPath}/${requestId}`);
-    const fingerprint = hash(JSON.stringify({ ...input, photos: input.photos.map(({ name, contentType, buffer }) => ({ name, contentType, hash: hash(buffer) })) }));
+    const fingerprintInput = { ...input };
+    // Keep receipts from forms submitted before priority existed retryable.
+    if (input.issuePriorityLevel === 2) delete fingerprintInput.issuePriorityLevel;
+    const fingerprint = hash(JSON.stringify({ ...fingerprintInput, photos: input.photos.map(({ name, contentType, buffer }) => ({ name, contentType, hash: hash(buffer) })) }));
     const leaseId = randomUUID();
     const timestamp = now();
     const clientKey = hash(`${input.companyId}:${request.rawRequest?.ip || "unknown"}`);
@@ -259,6 +267,10 @@ const createHandlers = ({ firestore, getBucket, now = Date.now }) => ({
           equipmentName: equipment ? equipmentLabel(equipment) : "",
           equipmentStatusUpdate: input.equipmentStatusUpdate,
           description: input.description,
+          issuePriorityLevel: input.issuePriorityLevel,
+          issuePriorityLabel: PRIORITY_LABELS[input.issuePriorityLevel],
+          priorityLevel: input.issuePriorityLevel,
+          priorityLabel: PRIORITY_LABELS[input.issuePriorityLevel],
           status: "Unresolved",
           jobIds: [],
           photoUrls,

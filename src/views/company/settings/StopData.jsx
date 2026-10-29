@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowPathIcon,
@@ -11,6 +11,8 @@ import { collection, getDocs } from "firebase/firestore";
 import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+
+const STORE_READ_CONCURRENCY = 6;
 
 const emptyFilters = {
   search: "",
@@ -364,12 +366,22 @@ const StopData = () => {
   const [serviceStopCount, setServiceStopCount] = useState(0);
   const [filters, setFilters] = useState(emptyFilters);
   const [loading, setLoading] = useState(true);
+  const [loadWarning, setLoadWarning] = useState("");
   const [selectedRecord, setSelectedRecord] = useState(null);
+  const activeLoad = useRef(null);
 
   const loadStopData = useCallback(async () => {
+    activeLoad.current?.abort();
+    const controller = new AbortController();
+    activeLoad.current = controller;
+    const { signal } = controller;
+
+    setLoadWarning("");
+    setSelectedRecord(null);
+    setRecords([]);
+    setServiceStopCount(0);
+
     if (!recentlySelectedCompany) {
-      setRecords([]);
-      setServiceStopCount(0);
       setLoading(false);
       return;
     }
@@ -377,6 +389,7 @@ const StopData = () => {
     setLoading(true);
 
     try {
+      let serviceStopsFailed = false;
       const [
         companyStopDataSnap,
         serviceStopsSnap,
@@ -387,6 +400,7 @@ const StopData = () => {
       ] = await Promise.all([
         getDocs(collection(db, "companies", recentlySelectedCompany, "stopData")),
         getDocs(collection(db, "companies", recentlySelectedCompany, "serviceStops")).catch((error) => {
+          serviceStopsFailed = true;
           console.warn("Could not load service stops for stop data enrichment:", error);
           return { docs: [] };
         }),
@@ -395,6 +409,8 @@ const StopData = () => {
         fetchCollectionMap(recentlySelectedCompany, "bodiesOfWater"),
         fetchCollectionMap(recentlySelectedCompany, "companyUsers"),
       ]);
+
+      if (signal.aborted) return;
 
       const maps = { customers, serviceLocations, bodiesOfWater, companyUsers };
       const serviceStops = serviceStopsSnap.docs.map((serviceStopDoc) => ({
@@ -413,48 +429,66 @@ const StopData = () => {
         });
       });
 
-      const storeResults = await Promise.allSettled(
-        serviceStops.map(async (serviceStop) => {
-          const storeSnap = await getDocs(
-            collection(db, "companies", recentlySelectedCompany, "serviceStops", serviceStop.id, "stores")
-          );
+      const storeRecords = [];
+      const failedStoreReads = [];
+      let nextServiceStop = 0;
 
-          return storeSnap.docs.map((storeDoc) => enrichRecord({
-            record: {
-              id: storeDoc.id,
-              ...storeDoc.data(),
-              serviceStopId: storeDoc.data().serviceStopId || serviceStop.id,
-            },
-            source: "stores",
-            serviceStop,
-            maps,
-          }));
-        })
+      // getDocs cannot be aborted. Limit active reads and stop scheduling new ones
+      // when this load is superseded or the screen is left.
+      const loadStores = async () => {
+        while (!signal.aborted && nextServiceStop < serviceStops.length) {
+          const serviceStop = serviceStops[nextServiceStop++];
+
+          try {
+            const storeSnap = await getDocs(
+              collection(db, "companies", recentlySelectedCompany, "serviceStops", serviceStop.id, "stores")
+            );
+            if (signal.aborted) return;
+
+            storeSnap.docs.forEach((storeDoc) => {
+              const data = storeDoc.data();
+              storeRecords.push(enrichRecord({
+                record: { id: storeDoc.id, ...data, serviceStopId: data.serviceStopId || serviceStop.id },
+                source: "stores",
+                serviceStop,
+                maps,
+              }));
+            });
+          } catch (error) {
+            if (signal.aborted) return;
+            failedStoreReads.push({ serviceStopId: serviceStop.id, error });
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(STORE_READ_CONCURRENCY, serviceStops.length) }, loadStores)
       );
+      if (signal.aborted) return;
 
-      const storeRecords = storeResults.flatMap((result) =>
-        result.status === "fulfilled" ? result.value : []
-      );
-      const failedStoreReads = storeResults.filter((result) => result.status === "rejected").length;
-
-      if (failedStoreReads) {
-        console.warn(`Failed to load ${failedStoreReads} stop data store collection(s).`);
+      if (serviceStopsFailed) {
+        setLoadWarning("Service stop history could not be loaded. Showing available company stop data. Refresh to try again.");
+      } else if (failedStoreReads.length) {
+        console.warn(`Failed to load ${failedStoreReads.length} stop data store collection(s).`, failedStoreReads);
+        setLoadWarning(`Could not load history for ${failedStoreReads.length} service stop${failedStoreReads.length === 1 ? "" : "s"}. Showing available records. Refresh to try again.`);
       }
 
       setServiceStopCount(serviceStops.length);
       setRecords(mergeStopDataRecords(companyRecords, storeRecords));
     } catch (error) {
+      if (signal.aborted) return;
       console.error("Failed to load stop data:", error);
       toast.error("Could not load stop data.");
       setRecords([]);
       setServiceStopCount(0);
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
     loadStopData();
+    return () => activeLoad.current?.abort();
   }, [loadStopData]);
 
   const filteredRecords = useMemo(() => {
@@ -527,6 +561,12 @@ const StopData = () => {
             </button>
           </div>
         </section>
+
+        {loadWarning && (
+          <div role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            {loadWarning}
+          </div>
+        )}
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Stat label="Records" value={stats.records} />

@@ -19,7 +19,15 @@ jest.mock("firebase/firestore", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  onSnapshot.mockImplementation((_, callback) => { callback({ docs: [] }); return () => {}; });
+  onSnapshot.mockImplementation((path, callback) => {
+    if (path.endsWith('/repairRequests') || path === 'homeownerRepairRequests') {
+      let active = true;
+      getDocs(path).then((snapshot) => { if (active) callback(snapshot); });
+      return () => { active = false; };
+    }
+    callback({ docs: [] });
+    return () => {};
+  });
 });
 
 test("external technician requests open company records while homeowner requests keep their own source", async () => {
@@ -33,6 +41,9 @@ test("external technician requests open company records while homeowner requests
   ] : path === "homeownerRepairRequests" ? [snapshot("homeowner-request", "Homeowner issue")] : [] }));
   render(<MemoryRouter><Context.Provider value={{ recentlySelectedCompany: "test-company" }}><RepairRequests /></Context.Provider></MemoryRouter>);
   await screen.findByText("Internal issue");
+  expect(screen.getByText("Technician issue")).toBeInTheDocument();
+  expect(screen.getByText("Homeowner issue")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Internal Requests/ }));
   expect(screen.queryByText("Technician issue")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^External Requests/ }));
   expect(await screen.findByText("Technician issue")).toBeInTheDocument();
@@ -52,7 +63,9 @@ test("unresolved comment badges update live and disappear when all comments are 
   getDocs.mockImplementation(async (path) => ({ docs: path.endsWith("/repairRequests") ? requests : [] }));
   let updateComments;
   const unsubscribe = jest.fn();
+  const defaultSnapshot = onSnapshot.getMockImplementation();
   onSnapshot.mockImplementation((path, callback) => {
+    if (!path.endsWith('/comments')) return defaultSnapshot(path, callback);
     if (path.endsWith("/with-comments/comments")) {
       updateComments = callback;
       callback({ docs: [{ data: () => ({ resolved: false }) }, { data: () => ({ resolved: true }) }, { data: () => ({ comment: "Legacy open comment" }) }] });
@@ -77,16 +90,50 @@ test("company and homeowner requests with the same ID use their own comment coll
   }] : path === "homeownerRepairRequests" ? [{
     id: "shared-id", data: () => ({ id: "shared-id", description: "Homeowner issue", status: "Unresolved" }),
   }] : [] }));
+  const defaultSnapshot = onSnapshot.getMockImplementation();
   onSnapshot.mockImplementation((path, callback) => {
+    if (!path.endsWith('/comments')) return defaultSnapshot(path, callback);
     const count = path.startsWith("companies/") ? 1 : 3;
     callback({ docs: Array.from({ length: count }, () => ({ data: () => ({ resolved: false }) })) });
     return () => {};
   });
   render(<MemoryRouter><Context.Provider value={{ recentlySelectedCompany: "test-company" }}><RepairRequests /></Context.Provider></MemoryRouter>);
-  await screen.findByText("No repair requests found.");
-  fireEvent.click(screen.getByRole("button", { name: /^External Requests/ }));
+  await screen.findByText("Technician issue");
   await waitFor(() => expect(within(screen.getByText("Technician issue").closest("tr")).getByLabelText("1 unresolved comments")).toHaveTextContent(/^1$/));
   expect(within(screen.getByText("Homeowner issue").closest("tr")).getByLabelText("3 unresolved comments")).toHaveTextContent(/^3$/);
   expect(onSnapshot).toHaveBeenCalledWith("companies/test-company/repairRequests/shared-id/comments", expect.any(Function), expect.any(Function));
   expect(onSnapshot).toHaveBeenCalledWith("homeownerRepairRequests/shared-id/comments", expect.any(Function), expect.any(Function));
+});
+
+test("the initial list matches the needs-action badge across all dates and sources, and filters remain adjustable", async () => {
+  const requests = require('../../../utils/models/repairRequestQueueFixtures.json');
+  getDocs.mockImplementation(async (path) => ({ docs: requests.filter((request) => path === 'homeownerRepairRequests' ? request.sourcePath === 'homeowner' : request.sourcePath === 'company').map((request) => ({
+    id: request.id, data: () => ({ ...request, description: `${request.sourcePath}:${request.id}` }),
+  })) }));
+  render(<MemoryRouter><Context.Provider value={{ recentlySelectedCompany: 'test-company' }}><RepairRequests /></Context.Provider></MemoryRouter>);
+  await screen.findByText('company:old-open');
+  expect(screen.getByText('Needs action: 12')).toBeInTheDocument();
+  expect(screen.getAllByRole('row')).toHaveLength(13);
+  expect(screen.getByText('homeowner:homeowner')).toBeInTheDocument();
+  expect(screen.queryByText('company:in-progress')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Repair requests start date'), { target: { value: '2026-01-01' } });
+  expect(screen.queryByText('company:old-open')).not.toBeInTheDocument();
+  expect(screen.getByText('Needs action: 12')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'All', exact: true }));
+  expect(screen.getByText('company:in-progress')).toBeInTheDocument();
+  expect(screen.getByText('company:resolved')).toBeInTheDocument();
+});
+
+test('opening My Repair Requests initially shows only submissions by the signed-in technician', async () => {
+  const requests = require('../../../utils/models/repairRequestQueueFixtures.json');
+  getDocs.mockImplementation(async (path) => ({ docs: requests.filter((request) => path === 'homeownerRepairRequests' ? request.sourcePath === 'homeowner' : request.sourcePath === 'company').map((request) => ({
+    id: request.id, data: () => ({ ...request, description: `${request.sourcePath}:${request.id}` }),
+  })) }));
+  render(<MemoryRouter initialEntries={['/company/repair-requests?submittedBy=me']}><Context.Provider value={{ recentlySelectedCompany: 'test-company', user: { uid: 'tech-1' } }}><RepairRequests /></Context.Provider></MemoryRouter>);
+  await screen.findByText('6 requests showing');
+  expect(screen.getByRole('checkbox', { name: 'Only requests I submitted' })).toBeChecked();
+  expect(screen.queryByText('company:assigned-customer')).not.toBeInTheDocument();
+  expect(screen.queryByText('company:different-submitter')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Only requests I submitted' }));
+  expect(screen.getByText('12 requests showing')).toBeInTheDocument();
 });

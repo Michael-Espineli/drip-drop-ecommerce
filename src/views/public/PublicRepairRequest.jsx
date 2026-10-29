@@ -7,7 +7,10 @@ import { functions } from "../../utils/config";
 import Select from "react-select";
 import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from "../../utils/models/Equipment";
 
-const initialForm = { requesterCompanyUserId: "", customerId: "", locationId: "", bodyOfWaterId: "", equipmentId: "", equipmentStatusUpdate: "", description: "", website: "" };
+import RepairRequestPriority from '../../components/RepairRequestPriority';
+import { DEFAULT_ISSUE_PRIORITY } from '../../utils/models/JobPlan';
+
+const initialForm = { requesterCompanyUserId: "", customerId: "", locationId: "", bodyOfWaterId: "", equipmentId: "", equipmentStatusUpdate: "", description: "", issuePriorityLevel: DEFAULT_ISSUE_PRIORITY, website: "" };
 const fieldClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 const selectStyles = { control: (base) => ({ ...base, minHeight: 48, borderRadius: "0.5rem", borderColor: "#cbd5e1" }), menu: (base) => ({ ...base, zIndex: 30 }) };
 const toOptions = (items = []) => items.map(({ id, label }) => ({ value: id, label }));
@@ -236,6 +239,15 @@ const RepairRequestForm = ({ companyId }) => {
                   <section aria-labelledby="repair-details" className="border-t border-slate-100 pt-6">
                     <h2 id="repair-details" className="mb-4 text-lg font-semibold">Request Details</h2>
                     <div className="space-y-4">
+                      <RepairRequestPriority
+                        value={form.issuePriorityLevel}
+                        onChange={(issuePriorityLevel) => {
+                          setForm((current) => ({ ...current, issuePriorityLevel }));
+                          setSubmissionId(uuidv4());
+                          setError("");
+                        }}
+                        disabled={saving}
+                      />
                       <label htmlFor="repair-description" className="block text-sm font-medium text-slate-700">
                         Description <span aria-hidden="true">*</span>
                         <textarea id="repair-description" name="description" required rows={5} maxLength={5000} value={form.description} onChange={updateField} placeholder="Describe the issue, when it started, and any error messages or unusual sounds." className={fieldClass} />

@@ -11,6 +11,7 @@ import {
   displayRepairRequestStatus,
   normalizeRepairRequestStatus,
   repairRequestStatusForSelection,
+  getRepairRequestIssuePriority,
 } from '../../../utils/models/RepairRequest';
 import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from '../../../utils/models/Equipment';
 import { Context } from "../../../context/AuthContext";
@@ -35,6 +36,8 @@ import { appAlert, appConfirm } from '../../../utils/appDialog';
 import ShareItemButton from '../../components/share/ShareItemButton';
 import PartApprovalCreateModal from '../partApprovals/PartApprovalCreateModal';
 import CreateJobFlowLauncher from '../jobs/CreateJobFlowLauncher';
+import RepairRequestPriority from '../../../components/RepairRequestPriority';
+import { getIssuePriorityLabel } from '../../../utils/models/JobPlan';
 
 const RepairRequestDetailView = () => {
   const { recentlySelectedCompany, dataBaseUser, user } = useContext(Context);
@@ -42,15 +45,17 @@ const RepairRequestDetailView = () => {
   const { repairRequestId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const requestedSourcePath = (location.state?.sourcePath || new URLSearchParams(location.search).get('sourcePath')) === 'homeowner' ? 'homeowner' : 'company';
 
   const [repairRequest, setRepairRequest] = useState(null);
-  const [sourcePath, setSourcePath] = useState(location.state?.sourcePath || "company");
+  const [sourcePath, setSourcePath] = useState(requestedSourcePath);
   const [loading, setLoading] = useState(true);
 
   const [formData, setFormData] = useState({
     status: REPAIR_REQUEST_STATUS.UNRESOLVED,
   });
   const [savingStatus, setSavingStatus] = useState(false);
+  const [savingPriority, setSavingPriority] = useState(false);
   const [connectedEquipmentStatus, setConnectedEquipmentStatus] = useState(EQUIPMENT_STATUS.OPERATIONAL);
   const [savingEquipmentStatus, setSavingEquipmentStatus] = useState(false);
 
@@ -285,7 +290,7 @@ const RepairRequestDetailView = () => {
               ? doc(db, 'homeownerRepairRequests', repairRequestId)
               : doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId)
           );
-          const preferredSourcePath = location.state?.sourcePath || "company";
+          const preferredSourcePath = requestedSourcePath;
           const fallbackSourcePath = preferredSourcePath === "homeowner" ? "company" : "homeowner";
           let docSnap = await getDoc(requestRefForSource(preferredSourcePath));
           let loadedSourcePath = preferredSourcePath;
@@ -303,6 +308,7 @@ const RepairRequestDetailView = () => {
               id: data.id || docSnap.id,
             };
             setRepairRequest(req);
+            setSuggestedWorkTier(getRepairRequestIssuePriority(req));
             setSourcePath(loadedSourcePath);
             setDescriptionDraft(req.description || "");
             setFormData({
@@ -320,7 +326,7 @@ const RepairRequestDetailView = () => {
     };
 
     fetchRepairRequest();
-  }, [repairRequestId, recentlySelectedCompany, location.state?.sourcePath]);
+  }, [repairRequestId, recentlySelectedCompany, requestedSourcePath]);
 
   useEffect(() => {
     const fetchCustomerJobs = async () => {
@@ -640,6 +646,24 @@ const RepairRequestDetailView = () => {
     }
   };
 
+  const handlePriorityChange = async (issuePriorityLevel) => {
+    if (!repairRequest || savingPriority || !requirePermission("34", "update repair requests")) return;
+    if (issuePriorityLevel === getRepairRequestIssuePriority(repairRequest)) return;
+    const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
+    const updates = { issuePriorityLevel, issuePriorityLabel, priorityLevel: issuePriorityLevel, priorityLabel: issuePriorityLabel };
+    setSavingPriority(true);
+    try {
+      await updateDoc(getRequestRef(), updates);
+      setRepairRequest((current) => ({ ...current, ...updates }));
+      setSuggestedWorkTier(issuePriorityLevel);
+    } catch (error) {
+      console.error("Error updating repair request priority:", error);
+      appAlert("Failed to update repair request priority.");
+    } finally {
+      setSavingPriority(false);
+    }
+  };
+
   const handleStatusChange = async (e) => {
     const status = repairRequestStatusForSelection(e.target.value);
     const previousStatus = repairRequestStatusForSelection(repairRequest?.status);
@@ -915,10 +939,17 @@ const RepairRequestDetailView = () => {
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="text-xl font-bold text-gray-800 mb-4">Information</h3>
               <div className="space-y-3 text-gray-700">
+                <RepairRequestPriority
+                  value={getRepairRequestIssuePriority(repairRequest)}
+                  onChange={handlePriorityChange}
+                  disabled={!can("34") || savingPriority}
+                />
+                {savingPriority && <p role="status" className="text-xs text-gray-500">Saving priority...</p>}
                 <div>
                   <strong>Status:</strong>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <select
+                      aria-label="Status"
                       name="status"
                       value={formData.status}
                       onChange={handleStatusChange}
@@ -1197,6 +1228,7 @@ const RepairRequestDetailView = () => {
               )}
 
               <CreateJobFlowLauncher
+                disabled={savingPriority}
                 buttonLabel="Create Job from Request"
                 buttonClassName="w-full rounded-md bg-blue-600 px-4 py-3 font-bold text-white transition hover:bg-blue-700"
                 contextState={{

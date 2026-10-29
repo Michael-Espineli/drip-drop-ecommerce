@@ -1,4 +1,6 @@
 import { resolveJobCreator } from "../../../utils/jobHistory";
+import JobPayrollFields from "./JobPayrollFields";
+import useServicePayrollData from "../../../hooks/useServicePayrollData";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { loadJobProductCatalog } from "../../../utils/productCatalog";
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
@@ -23,7 +25,7 @@ import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
 import Select from "react-select";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
-import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
+import { REPAIR_REQUEST_STATUS, getRepairRequestIssuePriority } from "../../../utils/models/RepairRequest";
 import {
     canonicalJobTaskType,
     isInstallOrReplaceTaskType,
@@ -297,7 +299,7 @@ const CreateNewJob = () => {
     const [rate, setRate] = useState("0");
     const [laborCost, setLaborCost] = useState("0");
     const [issuePriorityLevel, setIssuePriorityLevel] = useState(
-        normalizeIssuePriority(suggestedWork?.priorityLevel || suggestedWork?.solutionTier || DEFAULT_ISSUE_PRIORITY)
+        repairRequest ? getRepairRequestIssuePriority(repairRequest) : normalizeIssuePriority(suggestedWork?.priorityLevel || suggestedWork?.solutionTier || DEFAULT_ISSUE_PRIORITY)
     );
     const [starterPlanTier, setStarterPlanTier] = useState(DEFAULT_STARTER_PLAN_TIER);
 
@@ -311,6 +313,7 @@ const CreateNewJob = () => {
     const [selectedTaskEquipment, setSelectedTaskEquipment] = useState(null);
     const [taskDescription, setTaskDescription] = useState("");
     const [taskLaborCost, setTaskLaborCost] = useState("");
+    const [taskPayroll, setTaskPayroll] = useState({ payrollMode: "included" });
     const [taskBillingLaborPrice, setTaskBillingLaborPrice] = useState("");
     const [estimatedTime, setEstimatedTime] = useState("");
     const [selectedTaskDbItemId, setSelectedTaskDbItemId] = useState("");
@@ -318,6 +321,7 @@ const CreateNewJob = () => {
 
     const createJobSections = ["Info", "Template", "Tasks", "Materials", "Schedule", "Review"];
     const [activeCreateSection, setActiveCreateSection] = useState("Info");
+    const taskPayData = useServicePayrollData(recentlySelectedCompany, activeCreateSection === "Tasks");
 
     const moneyFromCents = (value) =>
         new Intl.NumberFormat("en-US", {
@@ -1777,7 +1781,7 @@ const CreateNewJob = () => {
             setDescription(template.description || "");
             setRate(((Number(template.defaultRateCents || 0) / 100) || 0).toFixed(2));
             setLaborCost(((Number(template.defaultLaborCostCents || 0) / 100) || 0).toFixed(2));
-            setIssuePriorityLevel(getTemplateDefaultIssuePriority(template));
+            setIssuePriorityLevel(repairRequest ? getRepairRequestIssuePriority(repairRequest) : getTemplateDefaultIssuePriority(template));
 
             setTemplateApplied(true);
         } catch (error) {
@@ -1968,6 +1972,7 @@ const CreateNewJob = () => {
                 name: taskDescription.trim(),
                 type: newTaskType,
                 contractedRate: techLaborCents,
+                ...jobPayFields(taskPayroll),
                 billingLaborPriceCents,
                 estimatedTime: Number(estimatedTime || 0),
                 status: "Draft",
@@ -1995,6 +2000,7 @@ const CreateNewJob = () => {
         setTaskDescription("");
         setSelectedTaskType(null);
         setTaskLaborCost("");
+        setTaskPayroll({ payrollMode: "included" });
         setTaskBillingLaborPrice("");
         setEstimatedTime("");
         setSelectedTaskBodyOfWater(null);
@@ -2688,8 +2694,9 @@ const CreateNewJob = () => {
                             >
                                 <div className="grid gap-4 lg:grid-cols-2">
                                     <div>
-                                        <label className={fieldLabelClasses}>Issue Priority</label>
+                                        <label htmlFor="job-issue-priority" className={fieldLabelClasses}>Issue Priority</label>
                                         <select
+                                            id="job-issue-priority"
                                             value={issuePriorityLevel}
                                             onChange={(e) => setIssuePriorityLevel(normalizeIssuePriority(e.target.value))}
                                             className={fieldInputClasses}
@@ -3148,6 +3155,8 @@ const CreateNewJob = () => {
                                         />
                                     </div>
                                 )}
+
+                                <JobPayrollFields value={taskPayroll} payTypes={taskPayData.payTypes} onChange={(field, value) => setTaskPayroll((current) => ({ ...current, [field]: value }))} />
 
                                 <button
                                     type="button"

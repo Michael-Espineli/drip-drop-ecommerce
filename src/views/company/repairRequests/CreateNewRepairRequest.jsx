@@ -11,6 +11,8 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { buildCompanyRepairRequestPhotoPath, uploadRepairRequestPhoto } from "../../../utils/repairRequestPhotos";
 import { appAlert } from "../../../utils/appDialog";
 import PublicRepairRequestLink from "../../../components/PublicRepairRequestLink";
+import RepairRequestPriority from "../../../components/RepairRequestPriority";
+import { DEFAULT_ISSUE_PRIORITY } from "../../../utils/models/JobPlan";
 
 const CreateNewRepairRequest = () => {
   const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
@@ -34,6 +36,7 @@ const CreateNewRepairRequest = () => {
   const [equipmentStatusUpdate, setEquipmentStatusUpdate] = useState("");
 
   const [description, setDescription] = useState("");
+  const [issuePriorityLevel, setIssuePriorityLevel] = useState(DEFAULT_ISSUE_PRIORITY);
   const [photos, setPhotos] = useState([]);
   const [saving, setSaving] = useState(false);
 
@@ -350,6 +353,7 @@ const CreateNewRepairRequest = () => {
         requesterId: user.uid,
         requesterName,
         description: description.trim(),
+        issuePriorityLevel,
         locationId: selectedLocation ? selectedLocation.value : "",
         locationName: selectedLocation ? selectedLocation.label : "",
         bodyOfWaterId: selectedBodyOfWater ? selectedBodyOfWater.value : "",
@@ -504,6 +508,8 @@ const CreateNewRepairRequest = () => {
           {/* Section 2: Request Details */}
           <div className="grid grid-cols-1 gap-6 border-b pb-6">
             <h3 className="text-lg font-semibold text-gray-700">Request Details</h3>
+
+            <RepairRequestPriority value={issuePriorityLevel} onChange={setIssuePriorityLevel} disabled={saving} />
 
             <div>
               <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">

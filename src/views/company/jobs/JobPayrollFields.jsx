@@ -1,4 +1,5 @@
 import React, { useId } from "react";
+import ServicePayrollCostPreview from "../sales/ServicePayrollCostPreview";
 
 const displayLabel = (value) => String(value || "")
   .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -28,9 +29,16 @@ const payItemDetails = (item) => {
   return { group, category: categoryDetail, rateLabel, label: item.name || item.label || item.id };
 };
 
-export default function JobPayrollFields({ value = {}, onChange, payTypes = [], inheritedPayTypeId = "", showPayType = true }) {
+export default function JobPayrollFields({ value = {}, onChange, payTypes = [], inheritedPayTypeId = "", showPayType = true, previewData, previewPrice = "", scope = "task" }) {
   const payItemDetailsId = useId();
   const mode = value.payrollMode || (value.manualPayOverrideCents !== undefined && value.manualPayOverrideCents !== null ? "custom" : "automatic");
+  const isTask = scope === "task";
+  const payable = !["included", "unpaid"].includes(mode);
+  const selectMode = (next) => {
+    onChange("payrollMode", next);
+    if (next !== "custom") onChange("manualPayOverrideCents", null);
+    if (isTask) onChange("payrollStackBehavior", "stackable");
+  };
   const active = payTypes.filter((type) => type.isActive !== false && type.active !== false && type.archived !== true);
   const groups = new Map();
   active.forEach((item) => {
@@ -43,9 +51,24 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
   const fieldClass = "mt-1 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900";
   return (
     <div className="space-y-2 rounded-md border border-blue-100 bg-blue-50/40 p-3 text-sm normal-case tracking-normal">
-      <p className="font-semibold text-slate-800">Technician pay</p>
+      <p className="font-semibold text-slate-800">{isTask ? "Technician pay" : "Service stop pay"}</p>
       <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-        {showPayType && <div className="min-w-0">
+        {isTask && <label className="min-w-0 font-semibold text-slate-700">
+          Task pay
+          <select value={payable ? "additional" : "none"} onChange={(event) => {
+            if (event.target.value === "additional") selectMode(mode === "custom" ? "custom" : "automatic");
+            else {
+              onChange("payrollMode", "included");
+              onChange("manualPayOverrideCents", null);
+              onChange("manualPayOverrideNotes", "");
+              onChange("payrollStackBehavior", null);
+            }
+          }} className={fieldClass}>
+            <option value="none">No additional task pay</option>
+            <option value="additional">Additional Task pay</option>
+          </select>
+        </label>}
+        {showPayType && (!isTask || mode === "automatic") && <div className="min-w-0">
           <label className="block font-semibold text-slate-700">
           Payroll pay item
           <select value={value.payTypeId || ""} onChange={(event) => {
@@ -68,39 +91,40 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
             {[selectedDetails.group, selectedDetails.category, `Default rate: ${selectedDetails.rateLabel}`].filter(Boolean).join(" · ")}
           </p>}
         </div>}
-        <label className="min-w-0 font-semibold text-slate-700">
+        {(!isTask || payable) && <label className="min-w-0 font-semibold text-slate-700">
           Pay calculation
-          <select value={mode} onChange={(event) => {
-            onChange("payrollMode", event.target.value);
-            if (event.target.value !== "custom") onChange("manualPayOverrideCents", null);
-          }} className={fieldClass}>
+          <select value={mode} onChange={(event) => selectMode(event.target.value)} className={fieldClass}>
             <option value="automatic">Assigned technician's rate</option>
             <option value="custom">Custom amount</option>
-            <option value="included">Included in another payment</option>
-            <option value="unpaid">Unpaid work</option>
+            {!isTask && <option value="included">Included in another payment</option>}
+            {!isTask && <option value="unpaid">Unpaid work</option>}
           </select>
-        </label>
+        </label>}
         {mode === "automatic" && <>
           <label className="min-w-0 font-semibold text-slate-700">
             Payroll quantity
             <input type="number" min="0.01" step="0.01" value={value.payQuantity ?? 1} onChange={(event) => onChange("payQuantity", event.target.value === "" ? null : Number(event.target.value))} className={fieldClass} />
           </label>
-          <label className="min-w-0 font-semibold text-slate-700">
-            Payment alongside visit pay
-            <select value={value.payrollStackBehavior || ""} onChange={(event) => onChange("payrollStackBehavior", event.target.value)} className={fieldClass}>
-              <option value="">Use company rules; pay matching work once</option>
-              <option value="stackable">Additional payment</option>
-              <option value="replacesBase">Replace this technician's visit pay</option>
-              <option value="exclusive">Use highest payment for this technician</option>
-            </select>
-          </label>
         </>}
+        {isTask && payable && value.payrollStackBehavior !== "stackable" && <label className="min-w-0 font-semibold text-slate-700">
+          Payment alongside visit pay
+          <select aria-label="Payment alongside visit pay" value={value.payrollStackBehavior || ""} onChange={(event) => onChange("payrollStackBehavior", event.target.value)} className={fieldClass}>
+            <option value="">Keep existing company rules</option>
+            <option value="stackable">Additional Task pay</option>
+            <option value="replacesBase">Replace this technician's visit pay</option>
+            <option value="exclusive">Use highest payment for this technician</option>
+          </select>
+          <span className="mt-1 block text-xs font-normal text-slate-600">This saved task retains its existing payment rule until changed.</span>
+        </label>}
         {mode === "custom" && <>
           <label className="min-w-0 font-semibold text-slate-700">
             Custom pay amount
             <input type="number" min="0" step="0.01" required
               value={value.manualPayOverrideCents === undefined || value.manualPayOverrideCents === null ? "" : value.manualPayOverrideCents / 100}
-              onChange={(event) => onChange("manualPayOverrideCents", event.target.value === "" ? null : Math.round(Number(event.target.value) * 100))} className={fieldClass} />
+              onChange={(event) => {
+                onChange("manualPayOverrideCents", event.target.value === "" ? null : Math.round(Number(event.target.value) * 100));
+                if (isTask) onChange("payrollStackBehavior", "stackable");
+              }} className={fieldClass} />
           </label>
           <label className="min-w-0 font-semibold text-slate-700">
             Custom pay note
@@ -108,8 +132,14 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
           </label>
         </>}
       </div>
-      <p className="text-xs font-normal text-slate-600">Automatic pay uses the assigned technician's rate on the work date. Custom pay replaces automatic pay for this work. Customer pricing stays separate.</p>
+      <p className="text-xs font-normal text-slate-600">{isTask
+        ? payable ? "Additional Task pay uses a technician rate or custom amount. Service stop pay is calculated separately; task amounts do not need to add up to it."
+          : "No additional task pay is created for this task. Service stop pay is calculated separately."
+        : "Service stop pay uses the assigned technician's rate or a custom stop amount. Additional task pay is calculated separately."}</p>
+      {isTask && mode === "unpaid" && <p className="text-xs text-slate-600">This saved task is explicitly marked as unpaid work.</p>}
       {mode === "automatic" && !value.payTypeId && !inheritedPayTypeId && <p className="text-xs font-semibold text-amber-800">A pay item is needed to calculate technician pay.</p>}
+      {previewData && <ServicePayrollCostPreview compact data={previewData} tasks={[value]} inheritedPayTypeId={inheritedPayTypeId}
+        priceInput={previewPrice} onUseHighCost={(cents) => onChange("laborCost", (cents / 100).toFixed(2))} />}
     </div>
   );
 }

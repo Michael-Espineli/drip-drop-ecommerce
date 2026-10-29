@@ -45,6 +45,16 @@ const fillRequiredFields = async () => {
   fireEvent.change(screen.getByRole("textbox", { name: "Description", exact: true }), { target: { value: "The pump is leaking." } });
 };
 
+test('the public intake sends the selected numeric priority', async () => {
+  await openForm();
+  await fillRequiredFields();
+  const priority = screen.getByRole('combobox', { name: 'Priority', exact: true });
+  expect(priority).toHaveValue('2');
+  fireEvent.change(priority, { target: { value: '1' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Submit repair request' }));
+  await waitFor(() => expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ issuePriorityLevel: 1 })));
+});
+
 test.each(["/request-repair/test-company", "/public/repair-request/test-company"])("%s renders without an auth provider or sign-in", async (path) => {
   await openForm(path);
   expect(screen.getByText(/For technicians: select your name and customer/)).toBeInTheDocument();

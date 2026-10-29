@@ -1,3 +1,4 @@
+import useCompanyRepairRequests from '../../hooks/useCompanyRepairRequests';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -28,7 +29,7 @@ import { roleHasCompanyPermission } from '../../utils/companyPermissionAccess';
 import { SalesAgreementSourceType, SalesAgreementStatus, salesCollectionNames } from '../../utils/models/Sales';
 import { SERVICE_STOP_TYPE_USE_CASES, normalizeServiceStopTypeBucket } from '../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { normalizeEquipmentStatus } from '../../utils/models/Equipment';
-import { isOpenRepairRequestStatus } from '../../utils/models/RepairRequest';
+import { compareRepairRequestsByDate, isOpenRepairRequestStatus, isRepairRequestSubmittedByUser } from '../../utils/models/RepairRequest';
 import {
     customerHasAnyTag,
     getCustomerTagAccessList,
@@ -262,23 +263,6 @@ const getRecordAdminNames = (record = {}) => normalizeCustomerTags([
     record.assignedAdminName,
 ]);
 
-const getRecordSubmitterIds = (record = {}) => normalizeCustomerTags([
-    record.requesterId,
-    record.userId,
-    record.uid,
-    record.homeownerId,
-    record.createdBy,
-    record.createdById,
-    record.createdByUid,
-    record.createdByUserId,
-    record.requestedBy,
-    record.requestedByUid,
-    record.requestedByUserId,
-    record.submittedBy,
-    record.submittedByUserId,
-    record.authorId,
-]);
-
 const recordBelongsToUser = (record = {}, userIds = []) => {
     const normalizedUserIds = normalizeCustomerTags(userIds).map((id) => id.toLowerCase());
     if (normalizedUserIds.length === 0) return false;
@@ -303,14 +287,6 @@ const jobAdminAssignedToUser = (job = {}, userIds = [], userTags = []) => {
         jobAdminIds.some((id) => normalizedUserIds.includes(id)) ||
         jobAdminNames.some((name) => normalizedUserTags.includes(name))
     );
-};
-
-const recordSubmittedByUser = (record = {}, userIds = []) => {
-    const normalizedUserIds = normalizeCustomerTags(userIds).map((id) => id.toLowerCase());
-    if (normalizedUserIds.length === 0) return false;
-
-    const submitterIds = getRecordSubmitterIds(record).map((id) => id.toLowerCase());
-    return submitterIds.some((id) => normalizedUserIds.includes(id));
 };
 
 const getRecordCustomer = (record = {}, customersById = new Map()) => {
@@ -1108,13 +1084,13 @@ const OperationsOverviewSection = ({ overview }) => (
                 {overview.repairRequestRows.length === 0 ? (
                     <EmptyRow>No open repair requests.</EmptyRow>
                 ) : overview.repairRequestRows.map((request) => (
-                    <Link key={`${request.source || 'repair'}-${request.id}`} to={`/company/repair-requests/detail/${request.id}`} className="block px-4 py-3 transition hover:bg-slate-50">
+                    <Link key={`${request.sourcePath}-${request.id}`} to={`/company/repair-requests/detail/${request.id}?sourcePath=${request.sourcePath}`} className="block px-4 py-3 transition hover:bg-slate-50">
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <p className="truncate text-sm font-bold text-slate-900">{request.title || request.issue || request.problem || request.equipmentName || 'Repair request'}</p>
+                                <p className="truncate text-sm font-bold text-slate-900">{request.description || request.title || request.issue || request.problem || request.equipmentName || 'Repair request'}</p>
                                 <p className="mt-0.5 truncate text-xs text-slate-500">{request.customerName || request.homeownerName || 'Customer not set'}</p>
                             </div>
-                            <span className="shrink-0 text-xs font-bold text-slate-500">{formatShortDate(request.createdAt || request.dateCreated || request.updatedAt)}</span>
+                            <span className="shrink-0 text-xs font-bold text-slate-500">{formatShortDate(request.date || request.dateCreated || request.createdAt)}</span>
                         </div>
                     </Link>
                 ))}
@@ -1301,7 +1277,7 @@ const PersonalDashboardView = ({
                         title="My Repair Requests"
                         value={personalDashboard.submittedRepairRequests.length}
                         helper="open requests I submitted"
-                        to="/company/repair-requests"
+                        to="/company/repair-requests?submittedBy=me"
                         tone={personalDashboard.submittedRepairRequests.length ? 'amber' : 'emerald'}
                     />
                     <PersonalStatCard
@@ -1446,7 +1422,7 @@ const Dashboard = () => {
     const [customers, setCustomers] = useState([]);
     const [jobs, setJobs] = useState([]);
     const [leads, setLeads] = useState([]);
-    const [repairRequests, setRepairRequests] = useState([]);
+    const { requests: repairRequests } = useCompanyRepairRequests(recentlySelectedCompany);
     const [shoppingItems, setShoppingItems] = useState([]);
     const [purchasedItems, setPurchasedItems] = useState([]);
     const [activeRoutes, setActiveRoutes] = useState([]);
@@ -1509,7 +1485,6 @@ const Dashboard = () => {
             setCustomers([]);
             setJobs([]);
             setLeads([]);
-            setRepairRequests([]);
             setShoppingItems([]);
             setPurchasedItems([]);
             setActiveRoutes([]);
@@ -1535,8 +1510,6 @@ const Dashboard = () => {
                     customersSnap,
                     jobsSnap,
                     leadsSnap,
-                    internalRepairsSnap,
-                    externalRepairsSnap,
                     invoicesSnap,
                     paymentsSnap,
                     subscriptionsSnap,
@@ -1552,8 +1525,6 @@ const Dashboard = () => {
                     getDocs(query(collection(db, "companies", recentlySelectedCompany, "customers"), where("active", "==", true))),
                     getDocs(query(collection(db, "companies", recentlySelectedCompany, "workOrders"), where("operationStatus", "in", Array.from(activeJobStatuses)))),
                     getDocs(query(collection(db, "homeownerServiceRequests"), where("companyId", "==", recentlySelectedCompany), where("status", "==", "Pending"))),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "repairRequests")),
-                    getDocs(query(collection(db, "homeownerRepairRequests"), where("companyId", "==", recentlySelectedCompany))),
                     getDocs(query(collection(db, salesCollectionNames.invoices), where("companyId", "==", recentlySelectedCompany))),
                     getDocs(query(collection(db, salesCollectionNames.payments), where("companyId", "==", recentlySelectedCompany))),
                     getDocs(query(collection(db, salesCollectionNames.billingSubscriptions), where("companyId", "==", recentlySelectedCompany))),
@@ -1575,10 +1546,6 @@ const Dashboard = () => {
                 setCustomers(customersSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
                 setJobs(jobsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
                 setLeads(leadsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
-                setRepairRequests([
-                    ...internalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'internal', ...itemDoc.data() })),
-                    ...externalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'external', ...itemDoc.data() })),
-                ]);
                 setInvoices(invoicesSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
                 setPayments(paymentsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
                 setSubscriptions(subscriptionsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
@@ -1736,7 +1703,7 @@ const Dashboard = () => {
             customers: personalAssignedCustomers,
             jobs: personalRecordFilter(jobs),
             leads: personalRecordFilter(leads),
-            repairRequests: personalRecordFilter(repairRequests),
+            repairRequests: repairRequests.filter((request) => isRepairRequestSubmittedByUser(request, currentUserIds)),
             shoppingItems: personalRecordFilter(shoppingItems),
             purchasedItems: personalRecordFilter(purchasedItems),
             activeRoutes: personalRecordFilter(activeRoutes),
@@ -2014,7 +1981,7 @@ const Dashboard = () => {
                 ))
                 .slice(0, 4),
             openRepairRequests: summary.activeRepairs,
-            repairRequestRows: sortFresh(summary.activeRepairs).slice(0, 4),
+            repairRequestRows: [...summary.activeRepairs].sort(compareRepairRequestsByDate).slice(0, 4),
             openJobs: scopedData.jobs,
             scheduledJobs,
             inProgressJobs,
@@ -2056,7 +2023,7 @@ const Dashboard = () => {
             };
         });
         const submittedRepairRequests = repairRequests.filter((request) => (
-            isOpenRepairRequestStatus(request.status) && recordSubmittedByUser(request, currentUserIds)
+            isOpenRepairRequestStatus(request.status) && isRepairRequestSubmittedByUser(request, currentUserIds)
         ));
         const equipmentNeedingMaintenance = scopedData.equipment.filter(equipmentNeedsMaintenance);
         const equipmentNeedingRepair = scopedData.equipment.filter(equipmentNeedsRepair);

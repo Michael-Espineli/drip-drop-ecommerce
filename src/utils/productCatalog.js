@@ -1,4 +1,5 @@
 import { collection, doc, getDocs } from "firebase/firestore";
+import { databaseEquipmentMappingFromItem, databaseEquipmentMappingPatch } from "./databaseEquipmentItems";
 
 export const PRODUCT_CATALOG_SETTINGS_DOC = "genericItems";
 export const PRODUCT_CATALOG_COLLECTION = "genericItems";
@@ -194,7 +195,9 @@ export const buildJobProductCatalog = (products = [], vendorItems = []) => {
   const options = products.filter((product) => product.active !== false && !product.archived && isProductAvailableForJobs(product)).map((product) => {
     const vendor = linkedVendors.find((item) => item.id === product.preferredVendorItemId) || linkedVendors.find((item) => item.genericItemId === product.id);
     return {
-      ...product, name: getProductDisplayName(product), genericItemId: product.id,
+      ...vendor, ...product, name: getProductDisplayName(product), genericItemId: product.id,
+      category: vendor?.category || product.category || "",
+      ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(vendor || product)),
       dbItemId: vendor?.id || "", dataBaseItemId: vendor?.id || "",
       rate: getVendorItemCostCents(vendor), cost: getVendorItemCostCents(vendor),
       sellPrice: getProductSellPriceCents(product), billingRate: getProductSellPriceCents(product),

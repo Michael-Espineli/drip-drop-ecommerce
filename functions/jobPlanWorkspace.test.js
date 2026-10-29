@@ -64,6 +64,25 @@ const applyPlan = (options = {}) => db.runTransaction(async (transaction) => {
   return prepared;
 });
 
+test('loading a plan preserves one product shared by multiple service tasks and repairs both task links', async () => {
+  const plan = planB();
+  plan.tasks.push({ id: 'task-configure', name: 'Configure installed pump', type: 'Basic' });
+  plan.shoppingItems = [{ id: 'shared-product', name: 'Pump', genericItemId: 'sell-pump', dbItemId: 'db-pump', quantity: '1', linkedTaskId: 'task-B', linkedTaskIds: ['task-B', 'task-configure', 'stale-task'] }];
+  db.set(planPath, plan);
+  await applyPlan();
+  for (const taskId of ['task-B', 'task-configure']) {
+    assert.deepEqual(db.records.get(`${jobPath}/tasks/${taskId}`).shoppingListItemIds, ['shared-product']);
+  }
+  assert.deepEqual(db.records.get('companies/company-1/shoppingList/shared-product').linkedTaskIds, ['task-B', 'task-configure']);
+});
+
+test('purchased products protect every linked task when reconciling a replacement plan', () => {
+  const current = { ...empty(), tasks: [{ id: 'primary' }, { id: 'secondary' }],
+    shoppingItems: [{ id: 'pump', status: 'Purchased', linkedTaskId: 'primary', linkedTaskIds: ['primary', 'secondary'] }] };
+  const incoming = { ...current, tasks: [{ id: 'primary' }] };
+  assert.throws(() => reconcileJobPlanScope(current, incoming), /assigned|started|completed|purchased|scope/i);
+});
+
 beforeEach(() => {
   sequence = 0;
   db = new MemoryFirestore({

@@ -1,6 +1,7 @@
 const { HttpsError } = require('firebase-functions/v2/https');
 const { createHash, randomUUID } = require('node:crypto');
 const { calculatePayLines, jobPayFields } = require('./payrollCalculation');
+const { started:workStarted, newActiveRoute } = require('./routeState');
 const str = v => String(v ?? '').trim();
 const id = v => str(typeof v === 'object' ? v?.id : v);
 const list = v => Array.isArray(v) ? v : [];
@@ -109,13 +110,20 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
     const stops = (await Promise.all(claim.stopIds.map(value=>t.get(c.collection('serviceStops').doc(value))))).map(record);
     if (stops.some(s=>!s || done(s) || s.pendingWorkOfferId && s.pendingWorkOfferId!==offer.id || false)) fail('failed-precondition','Offered stops have changed or are finished.');
     const stopTasks=await Promise.all(stops.map(stop=>t.get(c.collection('serviceStops').doc(stop.id).collection('tasks'))));
+    for (let index=0;index<stops.length;index++) {
+      const stop=stops[index], original=offer.scopeSnapshot?.stops?.find(value=>value.id===stop.id);
+      // Date/worker/revision are part of the offered scope even for an offer
+      // posted before assignmentRevision existed. Check again during approval.
+      if (!original || id(original.techId)!==id(stop.techId) || date(original.serviceDate).getTime()!==date(stop.serviceDate).getTime() || Number(original.assignmentRevision || 0)!==Number(stop.assignmentRevision || 0)) fail('failed-precondition','The offered assignment or date changed. Ask management to refresh this offer.');
+      if (workStarted(stop) || rows(stopTasks[index]).some(workStarted)) fail('failed-precondition','Work has already started. Management must review completed work and pay before transferring this stop.');
+    }
     const transfers=new Map();
     const linkedJobTasks=[];
     for(let index=0;index<stops.length;index++) {
       const stop=stops[index],previousId=stop.workOfferId;
       for(const task of rows(stopTasks[index]).filter(v=>(claim.agreement.stopTasks || []).some(ref=>ref.stopId===stop.id && ref.taskId===v.id))) {
         const jobTaskId=id(task.jobTaskId || task.workOrderTaskId),jobId=id(stop.jobId);
-        if(jobTaskId && jobId){const doc=await t.get(c.collection('workOrders').doc(jobId).collection('tasks').doc(jobTaskId));if(doc.exists)linkedJobTasks.push(doc);}
+        if(jobTaskId && jobId){const doc=await t.get(c.collection('workOrders').doc(jobId).collection('tasks').doc(jobTaskId));if(doc.exists){if(workStarted(doc.data()))fail('failed-precondition','A linked task has already started. Review the work before transferring this stop.');linkedJobTasks.push(doc);}}
       }
       if(!previousId || previousId===offer.id)continue;
       if(['inprogress','started'].includes(key(stop.operationStatus)) || rows(stopTasks[index]).some(done)) fail('failed-precondition','Work has already started. Management must review completed work and pay before transferring this stop.');
@@ -131,7 +139,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
     }
     const routes = stops.length ? rows(await t.get(c.collection('activeRoutes'))) : [];
     const tasks = offer.jobId ? (await Promise.all(claim.taskIds.map(value=>t.get(c.collection('workOrders').doc(id(offer.jobId)).collection('tasks').doc(value))))).map(record) : [];
-    if (tasks.some(v=>!v || done(v) || (v.claimedWorkOfferId && v.claimedWorkOfferId !== offer.id))) fail('failed-precondition','Some tasks have already been completed or claimed.');
+    if (tasks.some(v=>!v || workStarted(v) || (v.claimedWorkOfferId && v.claimedWorkOfferId !== offer.id))) fail('failed-precondition','Some tasks have already been started, completed or claimed.');
     if (stops.length + tasks.length + routes.length + linkedJobTasks.length + stopTasks.reduce((n,v)=>n+v.docs.length,0) > 350) fail('resource-exhausted','Split this offer into smaller scopes.');
     return () => {
       stopTasks.forEach((snap,index)=>rows(snap).filter(task=>(claim.agreement.stopTasks || []).some(v=>v.stopId===stops[index].id && v.taskId===task.id)).forEach(task=>t.set(c.collection('serviceStops').doc(stops[index].id).collection('tasks').doc(task.id),{workerId:claim.workerId,workerName:claim.workerName,workerType:claim.workerType,workerAssignmentMode:'stop',payrollAgreement:agreementReference(claim.agreement)},{merge:true})));
@@ -153,8 +161,12 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const targetId = target?.id || 'coverage_'+stable(claim.workerId+'_'+dayKey);
         destinationIds.add(targetId);
         let dest = changedRoutes.get(targetId);
-        if (!dest) { const source = routes.find(r=>routeIds(r).includes(stop.id)); dest = { ...(target || source || {}), id:targetId, techId:claim.workerId, techName:claim.workerName, tech:claim.workerName, date:day,
-          ...(target ? {} : { serviceStopsIds:[], order:[], finishedStops:0, status:'Did Not Start', startTime:null, endTime:null, startMilage:null, endMilage:null }) }; }
+        if (!dest) {
+          const sources=routes.filter(r=>routeIds(r).includes(stop.id));
+          dest = { ...(target || newActiveRoute({companyId:c.id,workerId:claim.workerId,workerName:claim.workerName,dayKey,zone:'UTC'})), id:targetId, date:day,
+            coverageSourceRouteIds:unique([...(target?.coverageSourceRouteIds || []),...sources.map(r=>r.id)]) };
+        }
+        dest.coverageSourceRouteIds=unique([...(dest.coverageSourceRouteIds || []),...routes.filter(r=>routeIds(r).includes(stop.id)).map(r=>r.id)]);
         const ids = unique([...list(dest.serviceStopsIds),stop.id]);
         const order = list(dest.order).filter(v=>v.serviceStopId!==stop.id);
         order.push({ id:stop.id, serviceStopId:stop.id, order:order.length+1, customerId:stop.customerId || '', customerName:stop.customerName || '' });
@@ -303,6 +315,12 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (!management) fail('permission-denied','Management approval is required.');
         const pending = claims.filter(v=>v.status==='Acceptance Pending Approval' && (!data.claimId || v.id===data.claimId));
         if (pending.length>1) fail('invalid-argument','Choose one pending claim to approve at a time.');
+        if (pending.length) {
+          const {scope}=await scopeFor(t,c,offer);
+          const unchangedClaims=claims.filter(claim=>!pending.some(p=>p.id===claim.id) && !['Rejected','Cancelled','Transferred'].includes(claim.status));
+          const checked={...scope,stops:scope.stops.map(stop=>(offer.transferredStopIds || []).includes(stop.id) || unchangedClaims.some(claim=>(claim.stopIds || []).includes(stop.id)) ? offer.scopeSnapshot?.stops?.find(original=>original.id===stop.id) || stop : stop)};
+          if (offer.scopeSignature && offer.scopeSignature!==scopeSignature(checked)) fail('failed-precondition','The job scope changed. Refresh this offer before approving it.');
+        }
         const applies = []; for (const claim of pending) applies.push(await prepareAssignment(t,c,offer,claim));
         applies.forEach(apply=>apply());
         if (!pending.length && key(offer.status)!=='pendingapproval') fail('failed-precondition','There is no pending approval.');

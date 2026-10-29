@@ -140,3 +140,26 @@ test('a custom visit payment includes its technician work and preserves another 
   const reconciled = server.reconcilePayLines({ generated: output, existing: [locked] });
   assert.equal(reconciled.writes.length, 1); assert.equal(reconciled.writes[0].technicianId, 'tech-B');
 });
+
+test('stop pay prefers its own rate and additional task pay remains a separate component', () => {
+  const rates = [rate('tech-A', 5000, { id: 'stop-rate', payBasis: 'serviceStop', rateType: 'flatPerStop' }), rate('tech-A', 1500)];
+  const ordinary = { ...task, payTypeId: '', contractedRate: 0, payrollMode: 'included' };
+  const extra = { ...task, id: 'extra', jobTaskId: 'extra', contractedRate: 0, payrollStackBehavior: 'stackable' };
+  const base = calculate({ rates, tasks: [ordinary] });
+  assert.deepEqual(base.map(line => [line.source, line.totalAmountCents]), [['serviceStop', 5000]]);
+  const lines = calculate({ rates, tasks: [ordinary, extra] });
+  assert.deepEqual(lines.map(line => [line.source, line.totalAmountCents]), [['serviceStop', 5000], ['serviceStopTask', 1500]]);
+  for (const manualPayOverrideCents of [0, 1200]) {
+    const custom = { ...extra, payrollMode: 'custom', manualPayOverrideCents };
+    assert.equal(sum(calculate({ rates, tasks: [ordinary, custom] })), 5000 + manualPayOverrideCents);
+    assert.equal(sum(calculate({ rates, serviceStop: { ...stop, payrollMode: 'custom', manualPayOverrideCents: 5000 }, tasks: [ordinary, custom] })), 5000 + manualPayOverrideCents);
+  }
+  assert.equal(sum(calculate({ rates, serviceStop: { ...stop, payrollStackBehavior: 'exclusive' }, tasks: [ordinary, extra] })), 6500);
+  const approvedBase = { ...base[0], calculationStatus: 'approved' };
+  const added = server.reconcilePayLines({ generated: lines, existing: [approvedBase] });
+  assert.deepEqual(added.conflicts, []);
+  assert.deepEqual(added.writes.map(line => line.totalAmountCents), [1500]);
+  const removed = server.reconcilePayLines({ generated: base, existing: [approvedBase, ...added.writes] });
+  assert.deepEqual(removed.conflicts, []);
+  assert.deepEqual(removed.writes.map(line => line.calculationStatus), ['voided']);
+});

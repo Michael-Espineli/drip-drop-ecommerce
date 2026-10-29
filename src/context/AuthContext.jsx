@@ -143,7 +143,6 @@ export function AuthContext({ children }) {
                 try {
                     const docRef = doc(db, "users", currentUser.uid);
                     const docSnap = await getDoc(docRef);
-                    console.log("currentUser.uid ", currentUser.uid)
                     if (docSnap.exists()) {
                         const dbUser = docSnap.data();
                         const normalizedAccountType = normalizeAccountType(dbUser.accountType);

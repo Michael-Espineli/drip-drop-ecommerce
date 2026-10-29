@@ -3,6 +3,7 @@ import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
 import { createJobAtomically } from "../../../utils/createJobAtomically";
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from "react";
+import Select from "react-select";
 import { Context } from "../../../context/AuthContext";
 import CompanyUserSelect from "../../../components/CompanyUserSelect";
 import { db } from "../../../utils/config";
@@ -4717,22 +4718,26 @@ export default function EquipmentList() {
               <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
                 <div className="min-w-0 space-y-3">
                   <Field label="Template">
-                    <select
-                      value={scheduleTemplateId}
-                      onChange={(event) => {
-                        setScheduleTemplateId(event.target.value);
+                    <Select
+                      aria-label="Template"
+                      classNamePrefix="react-select"
+                      value={selectedScheduleTemplate}
+                      options={scheduleTemplateOptions}
+                      getOptionLabel={(template) => template.name || "Template"}
+                      getOptionValue={(template) => template.id}
+                      onChange={(template) => {
+                        setScheduleTemplateId(template?.id || "");
                         setSchedulePriorityOverride(null);
                       }}
-                      disabled={loadingJobTemplates || schedulingJob}
-                      className={inputBase}
-                    >
-                      <option value="">Select template</option>
-                      {scheduleTemplateOptions.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.name || "Template"}
-                        </option>
-                      ))}
-                    </select>
+                      isSearchable
+                      isLoading={loadingJobTemplates}
+                      isDisabled={loadingJobTemplates || schedulingJob}
+                      placeholder="Select template"
+                      noOptionsMessage={({ inputValue }) => inputValue ? "No matching templates" : "No active technician-enabled templates found"}
+                      menuPosition="fixed"
+                      menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+                      styles={{ menuPortal: (base) => ({ ...base, zIndex: 9999 }) }}
+                    />
                     {!loadingJobTemplates && scheduleTemplateOptions.length === 0 && (
                       <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                         No active technician-enabled templates found.

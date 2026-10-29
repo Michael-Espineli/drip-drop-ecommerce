@@ -1,4 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
+import ServicePayrollTaskEditor from './ServicePayrollTaskEditor';
+import { serializeServiceTasks } from '../../../utils/payroll/servicePayrollPreview';
 import { Link } from 'react-router-dom';
 import {
   collection,
@@ -797,8 +799,8 @@ const SalesAgreementEditorModal = ({
         description: catalogItemDraft.description.trim(),
         type: catalogItemDraft.type,
         billingBehavior: catalogItemDraft.billingBehavior,
-        sourceType: SalesCatalogSourceType.manual,
-        sourceId: '',
+        sourceType: catalogItemDraft.payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual,
+        sourceId: catalogItemDraft.payTypeId || '',
         unitAmountCents: moneyInputToCents(catalogItemDraft.unitAmount),
         unitCostCents: moneyInputToCents(catalogItemDraft.unitCost),
         defaultQuantity: Math.max(Number(catalogItemDraft.defaultQuantity || 1), 1),
@@ -806,6 +808,7 @@ const SalesAgreementEditorModal = ({
         active: true,
         currency: 'usd',
         stripeConnectedAccountId,
+        metadata: { taskTemplates: serializeServiceTasks(catalogItemDraft.taskTemplates) },
       });
 
       await saveSalesCatalogItem(db, recentlySelectedCompany, catalogItem);
@@ -1992,6 +1995,7 @@ const SalesAgreementEditorModal = ({
                     placeholder="Customer-facing description for this catalog item"
                   />
                 </div>
+                <ServicePayrollTaskEditor companyId={recentlySelectedCompany} form={catalogItemDraft} setForm={setCatalogItemDraft} />
               </div>
 
               <div className="sticky bottom-0 flex flex-col gap-2 border-t border-slate-200 bg-white p-5 sm:flex-row sm:justify-end">

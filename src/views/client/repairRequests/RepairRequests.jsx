@@ -6,7 +6,8 @@ import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { PlusIcon, TruckIcon } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
-import { REPAIR_REQUEST_STATUS, displayRepairRequestStatus, normalizeRepairRequestStatus } from '../../../utils/models/RepairRequest';
+import { REPAIR_REQUEST_STATUS, displayRepairRequestStatus, normalizeRepairRequestStatus, getRepairRequestIssuePriority } from '../../../utils/models/RepairRequest';
+import { getIssuePriorityLabel } from '../../../utils/models/JobPlan';
 
 const RepairRequests = () => {
     const { user } = useContext(Context);
@@ -106,7 +107,7 @@ const RepairRequestList = ({ requests }) => (
                                 </div>
                                 <div className="mt-2 sm:flex sm:justify-between">
                                     <div className="sm:flex">
-                                        {/* Can add more details here later */}
+                                        <p className="text-sm font-semibold text-slate-700">{getRepairRequestIssuePriority(req)} - {getIssuePriorityLabel(getRepairRequestIssuePriority(req))}</p>
                                     </div>
                                     <div className="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
                                         <p>

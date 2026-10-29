@@ -3,6 +3,7 @@ import React, { useState, useEffect, useContext, useMemo, useCallback } from "re
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion, where, serverTimestamp } from "firebase/firestore";
 import { db } from "../../../utils/config";
+import JobPayrollFields from "../jobs/JobPayrollFields";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
@@ -299,6 +300,7 @@ const CreateNewServiceStop = () => {
     const [selectedTaskGroup, setSelectedTaskGroup] = useState(null);
     const [taskDescription, setTaskDescription] = useState("");
     const [taskLaborCost, setTaskLaborCost] = useState("");
+    const [taskPayroll, setTaskPayroll] = useState({ payrollMode: "included" });
     const [taskEstimatedTime, setTaskEstimatedTime] = useState("");
     const [addingTask, setAddingTask] = useState(false);
     const [applyingTaskGroup, setApplyingTaskGroup] = useState(false);
@@ -427,36 +429,19 @@ const CreateNewServiceStop = () => {
     const effectivePaySummary = useMemo(() => {
         if (!manualPayOverrideEnabled) return selectedPaySummary;
 
-        return {
-            lines: [
-                {
-                    id: "manual_pay_override",
-                    source: "Manual Adjustment",
-                    sourceTaskId: null,
-                    payTypeId: selectedPayWorkType?.id || "",
-                    payTypeName: selectedPayWorkType?.label || selectedPayWorkType?.name || "",
-                    workTypeId: selectedPayWorkType?.id || "",
-                    workTypeName: selectedPayWorkType?.label || selectedPayWorkType?.name || "",
-                    title: "Manual Pay Amount",
-                    rateAmountCents: manualPayOverrideCents,
-                    rateType: "Manual",
-                    quantity: 1,
-                    quantityUnit: "Each",
-                    totalAmountCents: manualPayOverrideCents,
-                    calculationStatus: "Calculated",
-                    notes: manualPayOverrideNotes?.trim() || "Manual payroll amount set while scheduling this service stop.",
-                },
-            ],
-            totalAmountCents: manualPayOverrideCents,
-            needsReview: false,
-        };
-    }, [
-        manualPayOverrideCents,
-        manualPayOverrideEnabled,
-        manualPayOverrideNotes,
-        selectedPaySummary,
-        selectedPayWorkType,
-    ]);
+        return estimateServiceStopPaySummary({
+            companyId: recentlySelectedCompany, settings: paySettings,
+            serviceStop: { payrollMode: "custom", manualPayOverrideCents, manualPayOverrideNotes, estimatedMinutes: estimatedDuration },
+            serviceStopType: selectedServiceStopType,
+            serviceStopUseCaseSourceId: selectedCategory.sourceId,
+            serviceStopWorkTypeIds: selectedPayWorkType?.id ? [selectedPayWorkType.id] : null,
+            tasks: selectedTasks, worker: selectedUser, workTypes: companyWorkTypes,
+            mappings: workTypeMappings, rates: technicianRates, date: serviceDate,
+        });
+    }, [manualPayOverrideCents, manualPayOverrideEnabled, manualPayOverrideNotes,
+        selectedPaySummary, recentlySelectedCompany, paySettings, estimatedDuration,
+        selectedServiceStopType, selectedCategory.sourceId, selectedPayWorkType,
+        selectedTasks, selectedUser, companyWorkTypes, workTypeMappings, technicianRates, serviceDate]);
 
     const selectedPlannedStopPayRange = useMemo(() => {
         if (!selectedPlannedStop) return null;
@@ -881,6 +866,7 @@ const CreateNewServiceStop = () => {
                     typeId: selectedTaskType.id || "",
                     type: canonicalJobTaskType(selectedTaskType.value || selectedTaskType.name),
                     contractedRate: dollarsToCents(taskLaborCost),
+                    ...jobPayFields(taskPayroll),
                     estimatedTime: Number(taskEstimatedTime || 0),
                     status: "Unassigned",
                 },
@@ -895,6 +881,7 @@ const CreateNewServiceStop = () => {
                 setTaskDescription("");
                 setSelectedTaskType(null);
                 setTaskLaborCost("");
+                setTaskPayroll({ payrollMode: "included" });
                 setTaskEstimatedTime("");
             }
         } catch (error) {
@@ -1459,6 +1446,9 @@ const CreateNewServiceStop = () => {
                                 setSelectedTaskType={setSelectedTaskType}
                                 taskDescription={taskDescription}
                                 setTaskDescription={setTaskDescription}
+                                taskPayroll={taskPayroll}
+                                setTaskPayroll={setTaskPayroll}
+                                payTypes={workTypeOptions}
                                 taskLaborCost={taskLaborCost}
                                 setTaskLaborCost={setTaskLaborCost}
                                 taskEstimatedTime={taskEstimatedTime}
@@ -1898,7 +1888,7 @@ const AssignTechTab = ({
                 <span>
                     <span className="block text-sm font-semibold text-gray-800">Manual pay amount</span>
                     <span className="mt-1 block text-sm text-gray-600">
-                        Use one fixed payroll amount for this scheduled stop instead of automatic stop or task rates.
+                        Set the service stop pay amount. Additional Task pay is added separately.
                     </span>
                 </span>
             </label>
@@ -1948,6 +1938,9 @@ const TasksTab = ({
     setSelectedTaskType,
     taskDescription,
     setTaskDescription,
+    taskPayroll,
+    setTaskPayroll,
+    payTypes,
     taskLaborCost,
     setTaskLaborCost,
     taskEstimatedTime,
@@ -2016,6 +2009,8 @@ const TasksTab = ({
                         </p>
                     </div>
                 </div>
+
+                <div className="mb-3"><JobPayrollFields value={taskPayroll} payTypes={payTypes} onChange={(field, value) => setTaskPayroll((current) => ({ ...current, [field]: value }))} /></div>
 
                 <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)_120px_120px_auto]">
                     <input

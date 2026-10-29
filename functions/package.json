@@ -9,8 +9,10 @@
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
     "test:payroll": "node --test payrollCalculation.test.js payrollWorkflow.test.js",
-    "test:technician-work": "node --test technicianWork.test.js",
-    "test:workflow-rules": "node --test firestoreWorkflow.rules.test.js"
+    "test:technician-work": "node --test technicianWork.test.js jobCloseout.test.js",
+    "test:workflow-rules": "node --test firestoreWorkflow.rules.test.js",
+    "test:recurring": "node --test recurringAccess.test.js recurringCallables.test.js recurringSchedule.test.js",
+    "test:route-work": "node --test routeWork.test.js"
   },
   "engines": {
     "node": "20"

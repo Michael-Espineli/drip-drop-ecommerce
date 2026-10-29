@@ -7,11 +7,13 @@ import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { appConfirm, appPrompt } from "../../../utils/appDialog";
 import JobDetailView from "./JobDetailView";
+import { runWorkCompletionEffects } from "../../../utils/workCompletionEffects";
 
 let mockJob;
 let mockPermissions;
 let mockBatchWrites;
 let mockBatchError;
+let mockBatchCommit;
 const mockWorkspaceCall = jest.fn();
 const mockSites = {
   "site-1": { customerId: "customer-1", nickName: "Pool", address: { streetAddress: "11 Old Street" } },
@@ -30,7 +32,9 @@ jest.mock("../../../hooks/useCompanyPermissions", () => () => ({
   requirePermission: (id) => mockPermissions.includes(String(id)),
 }));
 jest.mock("../../../utils/appDialog", () => ({ appConfirm: jest.fn(), appPrompt: jest.fn() }));
+jest.mock("react-hot-toast", () => ({ __esModule: true, default: { success: jest.fn(), error: jest.fn() } }));
 jest.mock("../../components/share/ShareItemButton", () => () => null);
+jest.mock("../../../utils/workCompletionEffects", () => ({ runWorkCompletionEffects: jest.fn(async () => ({})) }));
 jest.mock("firebase/firestore", () => {
   const ref = (first, ...parts) => [typeof first === "string" ? first : "", ...parts].filter(Boolean).join("/");
   return {
@@ -47,6 +51,7 @@ jest.mock("firebase/firestore", () => {
       delete: (ref) => mockBatchWrites.push({ type: "delete", ref }),
       commit: async () => {
         if (mockBatchError) throw mockBatchError;
+        if (mockBatchCommit) await mockBatchCommit(mockBatchWrites);
         mockBatchWrites.filter((write) => write.ref.endsWith("workOrders/job-1")).forEach((write) => Object.assign(mockJob, write.data));
       },
     }),
@@ -54,15 +59,16 @@ jest.mock("firebase/firestore", () => {
 });
 
 const snapshot = (id, data) => ({ id, ref: id, exists: () => Boolean(data), data: () => data });
-const openJob = async () => {
+const openJob = async (initialEntry = "/company/jobs/detail/job-1/overview") => {
   await act(async () => { render(
-    <MemoryRouter initialEntries={["/company/jobs/detail/job-1/overview"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter initialEntries={[initialEntry]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Context.Provider value={{ recentlySelectedCompany: "company-1", user: { uid: "user-1" } }}>
         <Routes><Route path="/company/jobs/detail/:jobId/:section?" element={<JobDetailView />} /></Routes>
       </Context.Provider>
     </MemoryRouter>
   ); });
-  await screen.findByText("11 Old Street");
+  if (typeof initialEntry === 'string' || initialEntry.pathname.endsWith('/overview')) await screen.findByText("11 Old Street");
+  else await screen.findByRole('button', { name: 'Actions', exact: true });
 };
 const openActions = () => fireEvent.click(screen.getByRole("button", { name: "Actions", exact: true }));
 const enterEdit = async () => {
@@ -80,9 +86,11 @@ const chooseNewSite = async () => {
 beforeEach(() => {
   jest.clearAllMocks();
   setDoc.mockResolvedValue(undefined);
+  runWorkCompletionEffects.mockResolvedValue({});
   mockPermissions = ["24", "26"];
   mockBatchWrites = [];
   mockBatchError = null;
+  mockBatchCommit = null;
   mockWorkspaceCall.mockReset();
   httpsCallable.mockImplementation((functions,name) => name === "manageTechnicianWork" ? async () => ({data:{offers:[]}}) : mockWorkspaceCall);
   onSnapshot.mockImplementation((ref, callback) => { callback(typeof ref === "string" && ref.split("/").length % 2 === 0 ? snapshot(ref.split("/").pop(), ref.endsWith("/workOrders/job-1") ? mockJob : null) : { docs: [], empty: true, size: 0 }); return () => {}; });
@@ -370,7 +378,7 @@ test.each([
   const dialog = await openManualProductLine();
   let finishWrite;
   const pendingWrite = new Promise((resolve) => { finishWrite = resolve; });
-  setDoc.mockImplementation((path) => path.includes('/shoppingList/') ? pendingWrite : Promise.resolve());
+  mockBatchCommit = () => pendingWrite;
   const originalGetDocs = getDocs.getMockImplementation();
   let finishRefresh;
   const pendingRefresh = new Promise((resolve) => { finishRefresh = resolve; });
@@ -388,7 +396,7 @@ test.each([
 
   // Enter or another submit event must not create a second part while the first is pending.
   fireEvent.submit(pendingButton.closest('form'));
-  expect(setDoc.mock.calls.filter(([path]) => path.includes('/shoppingList/'))).toHaveLength(1);
+  expect(mockBatchWrites.filter((write) => write.type === 'set' && write.ref.includes('/shoppingList/'))).toHaveLength(1);
   await act(async () => { finishWrite(); });
   expect(pendingButton).toBeDisabled();
   expect(dialog).toBeInTheDocument();
@@ -409,7 +417,7 @@ test.each([
 
 test.each(['Add Part', 'Save & Add More Parts'])('%s restores the draft and controls after a failed save so it can be retried', async (label) => {
   const dialog = await openManualProductLine();
-  setDoc.mockRejectedValueOnce(new Error('Connection interrupted'));
+  mockBatchCommit = jest.fn().mockRejectedValueOnce(new Error('Connection interrupted')).mockResolvedValue(undefined);
   const errorToast = jest.spyOn(toast, 'error');
   const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
   try {
@@ -423,7 +431,7 @@ test.each(['Add Part', 'Save & Add More Parts'])('%s restores the draft and cont
     expect(within(dialog).getByRole('button', { name: 'Close product line creator' })).toBeEnabled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add Part', exact: true }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Product Line' })).not.toBeInTheDocument());
-    expect(setDoc.mock.calls.filter(([path]) => path.includes('/shoppingList/'))).toHaveLength(2);
+    expect(mockBatchWrites.filter((write) => write.type === 'set' && write.ref.includes('/shoppingList/'))).toHaveLength(2);
   } finally { errorToast.mockRestore(); consoleError.mockRestore(); }
 });
 
@@ -436,4 +444,181 @@ test('overview includes the next-visit assignment snapshot inside the job summar
   const assignment = await screen.findByRole('region', { name: 'Next work assignment' });
   await waitFor(() => expect(within(assignment).getByText('Alex Rivera')).toBeInTheDocument());
   expect(within(assignment).getByRole('link', { name: 'View visit' })).toHaveAttribute('href', '/company/serviceStops/detail/next-visit');
+});
+
+const installCloseoutFixtures = () => {
+  Object.assign(mockJob, { operationStatus: 'In Progress', equipmentId: '', equipmentIds: [], laborLineItems: [
+    { id: 'service', name: 'Repair service', quantity: 1, unitPriceCents: 1000 },
+  ] });
+  Object.defineProperty(global, 'crypto', { configurable: true, value: { randomUUID: () => 'completion-request' } });
+  mockWorkspaceCall.mockResolvedValue({ data: { jobId: 'job-1', finished: true, completedServiceStopIds: ['visit'] } });
+  const originalGetDocs = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async (ref) => {
+    const path = ref.path || ref;
+    const data = path.endsWith('/workOrders/job-1/tasks') ? [snapshot('repair', { name: 'Repair pump', type: 'Basic', status: 'Scheduled', workerId: 'tech' })]
+      : path.endsWith('/serviceStops') ? [snapshot('visit', { id: 'visit', internalId: 'Visit 42', jobId: 'job-1', operationStatus: 'Not Finished', techId: 'tech', tech: 'Alex' })]
+        : path.endsWith('/serviceStops/visit/tasks') ? [
+          snapshot('repair-copy', { jobTaskId: 'repair', name: 'Repair pump copy', type: 'Basic', status: 'Not Finished' }),
+          snapshot('cleanup', { name: 'Clean up site', type: 'Basic', status: 'Not Finished' }),
+        ] : null;
+    return data ? { docs: data, empty: !data.length, size: data.length } : originalGetDocs(ref);
+  });
+};
+
+const openFinishJob = async () => {
+  openActions();
+  const finish = await screen.findByRole('menuitem', { name: 'Mark As Finished', exact: true });
+  await waitFor(() => expect(finish).toBeEnabled());
+  fireEvent.click(finish);
+  return screen.findByRole('dialog', { name: 'Finish Job', exact: true });
+};
+
+test('Quick Finish includes stop tasks and services in the job completion request', async () => {
+  installCloseoutFixtures();
+  await openJob();
+  const dialog = await openFinishJob();
+  expect(within(dialog).getByRole('checkbox', { name: 'Repair service', exact: true })).toBeChecked();
+  expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).not.toBeChecked();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Quick Finish All Remaining Work' }));
+  expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).toBeChecked();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
+  await waitFor(() => expect(mockWorkspaceCall).toHaveBeenCalledWith(expect.objectContaining({
+    finishJob: true, serviceIds: ['service'], taskIds: ['repair'], serviceStopIds: ['visit'],
+    serviceStopTaskIds: { visit: ['repair-copy', 'cleanup'] }, cancelRemainingVisits: true,
+  })));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(runWorkCompletionEffects).toHaveBeenCalledWith(expect.objectContaining({
+    task: expect.objectContaining({ id: 'cleanup', workerId: 'tech' }),
+    serviceStop: expect.objectContaining({ id: 'visit' }),
+  }));
+  expect(runWorkCompletionEffects).not.toHaveBeenCalledWith(expect.objectContaining({ task: expect.objectContaining({ id: 'repair-copy' }) }));
+});
+
+test('selected stop work can finish while keeping the job open with accurate feedback', async () => {
+  installCloseoutFixtures();
+  await openJob();
+  const dialog = await openFinishJob();
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Finish the entire job' }));
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: /^Visit 42/ }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Selected Work' }));
+  await waitFor(() => expect(mockWorkspaceCall).toHaveBeenCalledWith(expect.objectContaining({ finishJob: false, serviceStopIds: ['visit'] })));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Selected work finished. Job kept open.'));
+  expect(setDoc).not.toHaveBeenCalledWith(expect.stringContaining('/history/'), expect.objectContaining({ title: 'Job marked as finished' }));
+});
+
+test('whole-job completion requires a decision for unchecked visits before any task writes', async () => {
+  installCloseoutFixtures();
+  await openJob();
+  const dialog = await openFinishJob();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Finish the remaining service stops');
+  expect(mockWorkspaceCall).not.toHaveBeenCalled();
+  expect(updateDoc).not.toHaveBeenCalled();
+});
+
+test('failed finalization keeps selections, shows the server error, and reuses its request ID', async () => {
+  installCloseoutFixtures();
+  mockWorkspaceCall.mockRejectedValueOnce(new Error('Review the remaining scheduled visits before closing the job.'));
+  await openJob();
+  const dialog = await openFinishJob();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Quick Finish All Remaining Work' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Review the remaining scheduled visits');
+  expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).toBeChecked();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(mockWorkspaceCall).toHaveBeenCalledTimes(2);
+  expect(mockWorkspaceCall.mock.calls.map(([data]) => data.requestId)).toEqual(['completion-request', 'completion-request']);
+});
+
+test('service-stop finish handoff waits for task and visit loading before selecting remaining work', async () => {
+  installCloseoutFixtures();
+  const loadedGetDocs = getDocs.getMockImplementation();
+  let finishTaskLoad;
+  const pending = new Promise((resolve) => { finishTaskLoad = resolve; });
+  let firstTaskRead = true;
+  getDocs.mockImplementation(async (ref) => {
+    if ((ref.path || ref).endsWith('/workOrders/job-1/tasks') && firstTaskRead) {
+      firstTaskRead = false;
+      return pending;
+    }
+    return loadedGetDocs(ref);
+  });
+  await openJob({ pathname: '/company/jobs/detail/job-1/Actual', state: { openFinishJobConfirm: true, fromServiceStopId: 'previous' } });
+  expect(screen.queryByRole('dialog', { name: 'Finish Job', exact: true })).not.toBeInTheDocument();
+  await act(async () => { finishTaskLoad(await loadedGetDocs('companies/company-1/workOrders/job-1/tasks')); });
+  const dialog = await screen.findByRole('dialog', { name: 'Finish Job', exact: true });
+  expect(within(dialog).getByRole('checkbox', { name: /^Repair pump/ })).toBeChecked();
+  expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).toBeInTheDocument();
+});
+
+const installProductLinkFixtures = ({ withProduct = true, withInstallTask = false } = {}) => {
+  const previousGetDocs = getDocs.getMockImplementation();
+  const supplier = { id: 'db-pump', name: 'Supplier pump', category: 'Equipment', rate: 80000, equipmentType: 'Pump', equipmentMake: 'Pentair', equipmentModel: 'VS' };
+  const product = { id: 'sell-pump', name: 'Variable speed pump', preferredVendorItemId: 'db-pump', sellPrice: 150000, taxable: true };
+  const service = { id: 'install-service', name: 'Install pump service', type: 'service', billingBehavior: 'oneTime', unitAmountCents: 30000,
+    metadata: { taskTemplates: [{ id: 'install-template', name: 'Install the pump', type: 'Install', genericItemId: 'sell-pump', dataBaseItemId: 'db-pump', productQuantity: 1 }] } };
+  const previousOnSnapshot = onSnapshot.getMockImplementation();
+  onSnapshot.mockImplementation((ref, callback, ...rest) => {
+    if ((ref.path || ref).endsWith('/salesCatalogItems')) { callback({ docs: [snapshot(service.id, service)] }); return () => {}; }
+    return previousOnSnapshot(ref, callback, ...rest);
+  });
+  const materials = withProduct ? [{ id: 'quoted-pump', name: 'Quoted pump', quantity: '2', genericItemId: 'sell-pump', dbItemId: 'db-pump', plannedUnitPriceCents: 120000, plannedTotalPriceCents: 240000, plannedUnitCostCents: 70000, plannedTotalCostCents: 140000, status: 'Need to Purchase' }] : [];
+  const tasks = withInstallTask ? [{ id: 'existing-install', name: 'Install the pump', type: 'Install', status: 'Unassigned', shoppingListItemIds: [], dataBaseItemId: '', genericItemId: '' }] : [];
+  getDocs.mockImplementation(async (ref) => {
+    const path = ref.path || ref;
+    const records = path.endsWith('genericItems/genericItems') ? [product]
+      : path.endsWith('dataBase/dataBase') ? [supplier]
+        : path.endsWith('/salesCatalogItems') ? [service]
+          : path.endsWith('/workOrders/job-1/tasks') ? tasks
+            : path.endsWith('/shoppingList') ? materials : null;
+    return records ? { docs: records.map((item) => snapshot(item.id, { ...item })), empty: !records.length, size: records.length } : previousGetDocs(ref);
+  });
+  mockBatchCommit = async (writes) => {
+    writes.forEach((write) => {
+      const records = write.ref.includes('/workOrders/job-1/tasks/') ? tasks : write.ref.includes('/shoppingList/') ? materials : null;
+      if (!records) return;
+      const id = write.ref.split('/').pop();
+      const index = records.findIndex((item) => item.id === id);
+      if (write.type === 'set' && index < 0) records.push({ ...write.data });
+      else if (write.type === 'update' && index >= 0) Object.assign(records[index], write.data);
+    });
+  };
+  return { materials, tasks };
+};
+
+test.each([true, false])('adding an install service links or creates its plan product without duplicate billing (existing product: %s)', async (withProduct) => {
+  const { materials, tasks } = installProductLinkFixtures({ withProduct });
+  await openJob();
+  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  const productsHeading = await screen.findByRole('heading', { name: 'Products', exact: true });
+  const servicesHeading = screen.getByRole('heading', { name: 'Services', exact: true });
+  expect(productsHeading.compareDocumentPosition(servicesHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Service', exact: true })[0]);
+  const name = await screen.findByText('Install pump service', { exact: true });
+  await act(async () => { fireEvent.click(within(name.closest('tr')).getByRole('button', { name: 'Add', exact: true })); });
+  await waitFor(() => expect(tasks).toHaveLength(1));
+  expect(materials).toHaveLength(1);
+  expect(tasks[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', dataBaseItemId: 'db-pump', shoppingListItemId: materials[0].id, shoppingListItemIds: [materials[0].id] }));
+  expect(materials[0].linkedTaskIds).toContain(tasks[0].id);
+  expect(mockBatchWrites.filter((write) => write.type === 'set' && write.ref.includes('/shoppingList/'))).toHaveLength(withProduct ? 0 : 1);
+  expect(materials[0].plannedUnitPriceCents).toBe(withProduct ? 120000 : 150000);
+  expect(materials[0].quantity).toBe(withProduct ? '2' : '1');
+  expect(mockJob.laborLineItems[0].totalPriceCents).toBe(30000);
+});
+
+test('adding a product first connects an unambiguous install task and its database item', async () => {
+  const { materials, tasks } = installProductLinkFixtures({ withProduct: false, withInstallTask: true });
+  await openJob();
+  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add first product', exact: true }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add Product Line' });
+  const chooser = within(dialog).getByRole('combobox', { name: 'Select purchase line item' });
+  fireEvent.keyDown(chooser, { key: 'ArrowDown', code: 'ArrowDown' });
+  fireEvent.click(await screen.findByText('Variable speed pump', { exact: true }));
+  expect(within(dialog).getByRole('combobox', { name: 'Linked Task' })).toHaveValue('existing-install');
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Add Part', exact: true })); });
+  await waitFor(() => expect(materials).toHaveLength(1));
+  expect(materials[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', dbItemId: 'db-pump', linkedTaskId: 'existing-install', linkedTaskIds: ['existing-install'] }));
+  expect(tasks[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', dataBaseItemId: 'db-pump', shoppingListItemId: materials[0].id }));
 });

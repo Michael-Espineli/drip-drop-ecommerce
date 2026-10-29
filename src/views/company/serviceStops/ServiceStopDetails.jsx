@@ -22,6 +22,7 @@ import { Context } from "../../../context/AuthContext";
 import { ServiceStop } from "../../../utils/models/ServiceStop";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
+import Select from "react-select";
 import { runWorkCompletionEffects } from "../../../utils/workCompletionEffects";
 import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import {
@@ -2829,8 +2830,9 @@ const ServiceStopDetails = () => {
 
         const selectedTaskIdSet = new Set(manualFinishTaskIds);
         const tasksToFinish = unfinishedManualFinishTasks.filter((task) => selectedTaskIdSet.has(task.id));
-        const linkedJobId = serviceStop.jobId || "";
+        const linkedJobId = serviceStop.jobId?.id || serviceStop.jobId || "";
         const followUpAction = linkedJobId ? manualFinishFollowUpAction : "stay";
+        if (followUpAction !== "stay" && !requirePermission("24", "update the linked job")) return;
         const taskPlans = [];
         for (const task of tasksToFinish) {
             const completionContext = validateTaskCompletionPrerequisites(task);
@@ -2875,7 +2877,7 @@ const ServiceStopDetails = () => {
                     task: finishedTask,
                     serviceStop,
                     currentJobOperationStatus: serviceStop?.operationStatus || "",
-                    syncJobStatus: true,
+                    syncJobStatus: false,
                 });
                 const taskUpdates = {
                     status: "Finished",
@@ -2914,6 +2916,7 @@ const ServiceStopDetails = () => {
                 duration,
                 manuallyFinished: true,
                 manualFinishSource: "admin_web",
+                completedByUserId: activeCompanyUserId,
                 updatedAt: Timestamp.fromDate(completedAt),
             };
 
@@ -2936,11 +2939,17 @@ const ServiceStopDetails = () => {
             setShowFinishConfirm(false);
             setManualFinishTaskIds([]);
             setManualFinishFollowUpAction("stay");
-            await syncActiveRouteForServiceStops({
-                date: nextStop.serviceDate,
-                techId: nextStop.techId,
-                techName: nextStop.tech,
-            });
+            toggleEditEnabled(false);
+            try {
+                await syncActiveRouteForServiceStops({
+                    date: nextStop.serviceDate,
+                    techId: nextStop.techId,
+                    techName: nextStop.tech,
+                });
+            } catch (routeError) {
+                console.warn("Service stop finished, but its route summary could not refresh:", routeError);
+                toast.error("Stop finished, but its route summary could not refresh.");
+            }
 
             try {
                 const sendServiceReportOnFinish = httpsCallable(functions, "sendServiceReportOnFinish");
@@ -2955,7 +2964,7 @@ const ServiceStopDetails = () => {
 
             if (followUpAction === "finishJob") {
                 toast.success("Service stop finished. Opening the linked job finish options.");
-                navigate(`/company/jobs/detail/${linkedJobId}/Actual`, {
+                navigate(`/company/jobs/detail/${linkedJobId}/actual`, {
                     state: {
                         openFinishJobConfirm: true,
                         fromServiceStopId: serviceStopId,
@@ -2966,7 +2975,7 @@ const ServiceStopDetails = () => {
 
             if (followUpAction === "scheduleNextStop") {
                 toast.success("Service stop finished. Opening the linked job scheduler.");
-                navigate(`/company/jobs/detail/${linkedJobId}/Actual`, {
+                navigate(`/company/jobs/detail/${linkedJobId}/actual`, {
                     state: {
                         openScheduleServiceStop: true,
                         fromServiceStopId: serviceStopId,
@@ -5388,21 +5397,25 @@ const ServiceStopDetails = () => {
                                         </div>
 
                                         <div>
-                                            <label className="mb-1 block text-sm font-semibold text-slate-600">
+                                            <label htmlFor="service-stop-admin-technician" className="mb-1 block text-sm font-semibold text-slate-600">
                                                 Technician
                                             </label>
-                                            <select
-                                                value={editForm.techId}
-                                                onChange={(event) => handleEditFieldChange("techId", event.target.value)}
-                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
-                                            >
-                                                <option value="">Select technician</option>
-                                                {companyUsers.map((user) => (
-                                                    <option key={user.id} value={user.userId}>
-                                                        {user.label}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                            <Select
+                                                inputId="service-stop-admin-technician"
+                                                options={companyUsers}
+                                                value={companyUsers.find((user) => user.userId === editForm.techId) || null}
+                                                onChange={(option) => handleEditFieldChange("techId", option?.userId || "")}
+                                                getOptionValue={(option) => option.userId}
+                                                getOptionLabel={(option) => option.label}
+                                                isSearchable
+                                                isClearable
+                                                isDisabled={savingEdit}
+                                                placeholder="Search technicians..."
+                                                noOptionsMessage={() => "No technicians found"}
+                                                menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+                                                menuPosition="fixed"
+                                                styles={{ menuPortal: (base) => ({ ...base, zIndex: 10000 }) }}
+                                            />
                                         </div>
                                     </div>
 
@@ -5461,8 +5474,8 @@ const ServiceStopDetails = () => {
             )}
             {showFinishConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-                    <div className="w-full max-w-xl rounded-lg bg-white p-5 shadow-2xl">
-                        <h2 className="text-xl font-bold text-slate-950">Finish Service Stop</h2>
+                    <div role="dialog" aria-modal="true" aria-labelledby="finish-service-stop-title" className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg bg-white p-5 shadow-2xl">
+                        <h2 id="finish-service-stop-title" className="text-xl font-bold text-slate-950">Finish Service Stop</h2>
                         <p className="mt-2 text-sm text-slate-600">
                             Choose which unfinished tasks should also be marked finished. Any unchecked task will stay unfinished after the stop is finished.
                         </p>
@@ -5541,14 +5554,14 @@ const ServiceStopDetails = () => {
                                         {
                                             value: "finishJob",
                                             title: "Finish linked job",
-                                            helper: "Open the job finish confirmation for tasks and planned products.",
+                                            helper: "Continue to review and finish all remaining job services, tasks, visits, and products.",
                                         },
                                         {
                                             value: "scheduleNextStop",
                                             title: "Schedule next stop",
                                             helper: "Open the linked job scheduler after the stop is finished.",
                                         },
-                                    ].map((option) => (
+                                    ].filter((option) => option.value === "stay" || can("24")).map((option) => (
                                         <label
                                             key={option.value}
                                             className={[
@@ -5595,7 +5608,7 @@ const ServiceStopDetails = () => {
                                 disabled={finishingStop}
                                 className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                {finishingStop ? "Finishing..." : "Finish Stop"}
+                                {finishingStop ? "Finishing..." : manualFinishFollowUpAction === "finishJob" ? "Finish Stop and Review Job" : manualFinishFollowUpAction === "scheduleNextStop" ? "Finish Stop and Schedule Next" : "Finish Stop"}
                             </button>
                         </div>
                     </div>

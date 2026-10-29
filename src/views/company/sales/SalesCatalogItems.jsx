@@ -34,6 +34,11 @@ import { appConfirm } from '../../../utils/appDialog';
 import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs } from '../../../utils/jobTaskTypes';
 import { jobPayFields } from '../../../utils/payroll/payCalculation';
 import JobPayrollFields from '../jobs/JobPayrollFields';
+import useServicePayrollData from '../../../hooks/useServicePayrollData';
+import useJobProductCatalog from '../../../hooks/useJobProductCatalog';
+import ServiceTaskProductFields from '../jobs/ServiceTaskProductFields';
+import ServicePayrollCostPreview from './ServicePayrollCostPreview';
+import { taskDefaultsFromPayItem, updateServiceTaskPayrollField } from '../../../utils/payroll/servicePayrollPreview';
 import {
   fetchRecurringTaskGroupOptions,
   fetchTaskGroupTasks,
@@ -89,6 +94,7 @@ const minutesToLabel = (minutes) => {
 };
 
 const emptyTaskTemplate = () => ({
+  ...jobPayFields({ payrollMode: "included" }),
   id: `service_task_template_${uuidv4()}`,
   name: '',
   type: 'General',
@@ -118,6 +124,8 @@ const templateCentsToInput = (template = {}, ...fields) => {
 
 const templateToForm = (template = {}) => ({
   ...jobPayFields(template),
+  genericItemId: template.genericItemId || "", dataBaseItemId: template.dataBaseItemId || template.dbItemId || "",
+  productQuantity: String(template.productQuantity || 1),
   id: template.id || template.templateId || `service_task_template_${uuidv4()}`,
   name: template.name || template.title || template.description || '',
   type: template.type || template.taskType || template.taskTypeName || 'General',
@@ -161,6 +169,8 @@ const normalizeTaskTemplatesForSave = (templates = []) => (
       return {
         id: template.id || `service_task_template_${uuidv4()}`,
         ...jobPayFields(template),
+        genericItemId: template.genericItemId || "", dataBaseItemId: template.dataBaseItemId || "",
+        productQuantity: Math.max(Number(template.productQuantity || 1), 0.01),
         name,
         title: name,
         type: template.type || 'General',
@@ -203,6 +213,7 @@ const taskGroupTaskToTemplateForm = (task = {}, taskGroup = {}) => {
   const name = String(task.name || task.taskName || task.title || rawType || 'Task').trim();
 
   return {
+    ...jobPayFields(task),
     id: `service_task_template_${uuidv4()}`,
     name,
     type: canonicalJobTaskType(rawType) || 'General',
@@ -347,6 +358,8 @@ const SalesCatalogItems = () => {
   const [form, setForm] = useState(initialForm);
   const [editingItemId, setEditingItemId] = useState('');
   const [formModalOpen, setFormModalOpen] = useState(false);
+  const servicePayrollData = useServicePayrollData(recentlySelectedCompany, formModalOpen);
+  const productData = useJobProductCatalog(recentlySelectedCompany, formModalOpen);
   const [filterType, setFilterType] = useState('all');
   const [catalogSearchTerm, setCatalogSearchTerm] = useState('');
   const [taskTypeList, setTaskTypeList] = useState([]);
@@ -570,7 +583,7 @@ const SalesCatalogItems = () => {
     setForm((current) => ({
       ...current,
       taskTemplates: (current.taskTemplates || []).map((template) => (
-        template.id === templateId ? { ...template, [field]: value } : template
+        template.id === templateId ? updateServiceTaskPayrollField(template, field, value, servicePayrollData.payTypes, current.sourceType === SalesCatalogSourceType.serviceStopType ? current.sourceId : '') : template
       )),
     }));
   };
@@ -578,7 +591,7 @@ const SalesCatalogItems = () => {
   const addTaskTemplate = () => {
     setForm((current) => ({
       ...current,
-      taskTemplates: [...(current.taskTemplates || []), emptyTaskTemplate()],
+      taskTemplates: [...(current.taskTemplates || []), taskDefaultsFromPayItem(emptyTaskTemplate(), servicePayrollData.payTypes.find((type) => type.id === current.sourceId))],
     }));
   };
 
@@ -681,6 +694,7 @@ const SalesCatalogItems = () => {
         description: current.description || sourceDescription,
         unitAmount: current.unitAmount || centsToDollarsInput(unitAmountCents),
         unitCost: current.unitCost || centsToDollarsInput(unitCostCents),
+        taskTemplates: current.sourceType === SalesCatalogSourceType.serviceStopType ? (current.taskTemplates || []).map((task) => task.payTypeId ? task : taskDefaultsFromPayItem(task, source, servicePayrollData.payTypes.find((type) => type.id === current.sourceId))) : current.taskTemplates,
       };
     });
   };
@@ -970,7 +984,7 @@ const SalesCatalogItems = () => {
         <div className="mt-3 space-y-3">
           {form.taskTemplates.map((template, index) => (
             <div key={template.id} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
-              <JobPayrollFields value={template} payTypes={sourceOptions[SalesCatalogSourceType.serviceStopType] || []}
+              <JobPayrollFields value={template} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={form.unitAmount}
                 inheritedPayTypeId={form.sourceType === SalesCatalogSourceType.serviceStopType ? form.sourceId : ""}
                 onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1003,6 +1017,7 @@ const SalesCatalogItems = () => {
                   Task Type
                   <div className="mt-1 font-normal">
                     <Select
+                      aria-label="Task Type"
                       value={taskTypeOptionFor(template.type)}
                       options={taskTypeOptionsFor(template.type)}
                       onChange={(option) => updateTaskTemplate(template.id, 'type', option?.value || '')}
@@ -1059,6 +1074,7 @@ const SalesCatalogItems = () => {
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   />
                 </label>
+                <div className="col-span-full"><ServiceTaskProductFields task={template} {...productData} onChange={(field, value) => updateTaskTemplate(template.id, field, value)} /></div>
                 <label className="flex min-h-[38px] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
                   <input
                     type="checkbox"
@@ -1382,6 +1398,10 @@ const SalesCatalogItems = () => {
                   </div>
                 )}
 
+              <ServicePayrollCostPreview data={servicePayrollData} tasks={form.taskTemplates}
+                inheritedPayTypeId={form.sourceType === SalesCatalogSourceType.serviceStopType ? form.sourceId : ""}
+                priceInput={form.unitAmount} costInput={form.unitCost}
+                onUseHighCost={(cents) => handleFieldChange('unitCost', (cents / 100).toFixed(2))} />
                 {renderStripeReferencePanel(editingItem)}
               </div>
             </div>

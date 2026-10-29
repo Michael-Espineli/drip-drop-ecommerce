@@ -36,7 +36,7 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
       quantity: String(item.quantity ?? "1"), category: "Job", status: SHOPPING_LIST_STATUS.needToPurchase,
       purchaserId: userId, purchaserName: userName, invoiced: false, purchasedItem: "", datePurchased: null,
       planId, solutionId: planId, planWorkspaceOnly: true, needsAction: false, estimateAccepted: false,
-      linkedTaskId, sortOrder: index,
+      linkedTaskId, linkedTaskIds: [...new Set([linkedTaskId, ...remap(item.linkedTaskIds, taskIds)].filter(Boolean))], sortOrder: index,
       prepKeys: [`job:${job.id}`, job.customerId && `customer:${job.customerId}`, job.serviceLocationId && `serviceLocation:${job.serviceLocationId}`, linkedTaskId && `jobTask:${linkedTaskId}`].filter(Boolean),
     };
   });
@@ -44,10 +44,10 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     const id = taskIds.get(task.id);
     const shoppingListItemIds = [...new Set([
       ...remap([task.shoppingListItemId, ...ids(task.shoppingListItemIds)], materialIds),
-      ...shoppingItems.filter((item) => item.linkedTaskId === id).map((item) => item.id),
+      ...shoppingItems.filter((item) => item.linkedTaskId === id || item.linkedTaskIds.includes(id)).map((item) => item.id),
     ])];
     return {
-      ...fields(task, ["name", "description", "contractedRate", "billingLaborPriceCents", "estimatedTime", "customerApproval", "dataBaseItemId", "requiresEquipment", "requiresBodyOfWater"]),
+      ...fields(task, ["name", "description", "contractedRate", "billingLaborPriceCents", "estimatedTime", "customerApproval", "dataBaseItemId", "genericItemId", "quantity", "requiresEquipment", "requiresBodyOfWater"]),
       ...jobPayFields(task),
       ...base, ...context(task), id, sourceTemplateTaskId: task.id,
       name: task.name || task.description || "Task", type: canonicalJobTaskType(task.type || ""),

@@ -1,9 +1,6 @@
 import React, { useEffect, useMemo, useState, useContext } from "react";
 import {
     collection,
-    query,
-    where,
-    getDocs,
     onSnapshot,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
@@ -11,17 +8,20 @@ import {
     DEFAULT_REPAIR_REQUEST_FILTER_STATUSES,
     REPAIR_REQUEST_STATUS,
     REPAIR_REQUEST_STATUS_OPTIONS,
-    RepairRequest,
     displayRepairRequestStatus,
     isOpenRepairRequestStatus,
     normalizeRepairRequestStatus,
+    getRepairRequestIssuePriority,
+    compareRepairRequestsByDate,
+    isRepairRequestSubmittedByUser,
 } from "../../../utils/models/RepairRequest";
 import { Context } from "../../../context/AuthContext";
-import { Link, useNavigate } from "react-router-dom";
-import { format, subDays } from "date-fns";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { format } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
-import { sortCompanyUsersByName } from "../../../utils/companyUsers";
+import useCompanyRepairRequests from "../../../hooks/useCompanyRepairRequests";
 import PublicRepairRequestLink from "../../../components/PublicRepairRequestLink";
+import { getIssuePriorityLabel } from "../../../utils/models/JobPlan";
 
 const getRequestDateValue = (request) => (
     request.date || request.dateCreated || request.createdAt || null
@@ -36,123 +36,47 @@ const toDate = (value) => {
     return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const toDateSortValue = (request) => {
-    const date = toDate(getRequestDateValue(request));
-    return date ? date.getTime() : 0;
-};
-
 const getRequestCommentKey = (request, companyId) => `${companyId}:${request.sourcePath}:${request.id}`;
 
 const RepairRequests = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, user, dataBaseUser, companyUserAccess } = useContext(Context);
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const onlyMyRequests = searchParams.get('submittedBy') === 'me';
+    const currentUserIds = useMemo(() => [
+        user?.uid, dataBaseUser?.uid, dataBaseUser?.id,
+        companyUserAccess?.id, companyUserAccess?.userId, companyUserAccess?.uid,
+        companyUserAccess?.companyUserId, companyUserAccess?.companyUserDocId,
+    ], [user, dataBaseUser, companyUserAccess]);
     const { can } = useCompanyPermissions();
 
-    const [internalRequests, setInternalRequests] = useState([]);
-    const [externalRequests, setExternalRequests] = useState([]);
+    const { requests, loading, refresh: refreshRequests } = useCompanyRepairRequests(recentlySelectedCompany);
+    const internalRequests = useMemo(() => requests.filter((request) => request.source === "internal"), [requests]);
+    const externalRequests = useMemo(() => requests.filter((request) => request.source === "external"), [requests]);
     const [commentCounts, setCommentCounts] = useState({});
 
-    const [companyUsers, setCompanyUsers] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState("internal");
+    const [activeTab, setActiveTab] = useState("all");
 
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedStatuses, setSelectedStatuses] = useState(DEFAULT_REPAIR_REQUEST_FILTER_STATUSES);
     const [dateSortDirection, setDateSortDirection] = useState("desc");
 
-    const [startDate, setStartDate] = useState(() => {
-        return format(subDays(new Date(), 60), "yyyy-MM-dd");
-    });
-
-    const [endDate, setEndDate] = useState(() => {
-        return format(new Date(), "yyyy-MM-dd");
-    });
+    const [startDate, setStartDate] = useState("");
+    const [endDate, setEndDate] = useState("");
 
     const statusOptions = REPAIR_REQUEST_STATUS_OPTIONS;
 
-    useEffect(() => {
-        fetchRepairRequests();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [recentlySelectedCompany]);
-
-    const fetchRepairRequests = async () => {
-        if (!recentlySelectedCompany) return;
-
-        setLoading(true);
-
-        try {
-            const usersSnap = await getDocs(
-                query(
-                    collection(db, "companies", recentlySelectedCompany, "companyUsers"),
-                    where("status", "==", "Active")
-                )
-            );
-
-            const activeUsers = sortCompanyUsersByName(usersSnap.docs.map((docSnap) => ({
-                id: docSnap.id,
-                ...docSnap.data(),
-            })));
-
-            setCompanyUsers(activeUsers);
-
-            const internalSnap = await getDocs(
-                collection(db, "companies", recentlySelectedCompany, "repairRequests")
-            );
-
-            const internal = internalSnap.docs.map((docSnap) => {
-                const data = docSnap.data();
-                const request = RepairRequest.fromFirestore(docSnap);
-
-                return {
-                    ...data,
-                    ...request,
-                    dateCreated: toDate(data.dateCreated),
-                    createdAt: toDate(data.createdAt),
-                    source: data.source === "publicTechnician" ? "external" : "internal",
-                    sourcePath: "company",
-                };
-            });
-
-            setInternalRequests(internal.filter((request) => request.source === "internal"));
-
-            const externalSnap = await getDocs(
-                query(
-                    collection(db, "homeownerRepairRequests"),
-                    where("companyId", "==", recentlySelectedCompany)
-                )
-            );
-
-            const external = externalSnap.docs.map((docSnap) => {
-                const data = docSnap.data();
-                const request = RepairRequest.fromFirestore(docSnap);
-
-                return {
-                    ...data,
-                    ...request,
-                    dateCreated: toDate(data.dateCreated),
-                    createdAt: toDate(data.createdAt),
-                    source: "external",
-                    sourcePath: "homeowner",
-                };
-            });
-
-            setExternalRequests([...internal.filter((request) => request.source === "external"), ...external]);
-        } catch (error) {
-            console.error("Error fetching repair requests:", error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const selectedRequests = activeTab === "internal"
-        ? internalRequests
-        : externalRequests;
+    const selectedRequests = useMemo(() => {
+        const selected = activeTab === "all" ? requests : activeTab === "internal" ? internalRequests : externalRequests;
+        return onlyMyRequests ? selected.filter((request) => isRepairRequestSubmittedByUser(request, currentUserIds)) : selected;
+    }, [activeTab, requests, internalRequests, externalRequests, onlyMyRequests, currentUserIds]);
 
     const filteredRequests = useMemo(() => {
         const term = searchTerm.trim().toLowerCase();
 
         const start = startDate ? new Date(`${startDate}T00:00:00`) : null;
-        const end = endDate ? new Date(`${endDate}T23:59:59`) : null;
+        const end = endDate ? new Date(`${endDate}T23:59:59.999`) : null;
+        const selectedStatusSet = new Set(selectedStatuses.map(normalizeRepairRequestStatus));
 
         return selectedRequests.filter((request) => {
             const requestDate = toDate(getRequestDateValue(request));
@@ -163,19 +87,9 @@ const RepairRequests = () => {
 
             const requestStatus = request.status || REPAIR_REQUEST_STATUS.UNRESOLVED;
             const normalizedRequestStatus = normalizeRepairRequestStatus(requestStatus);
-            const selectedStatusSet = new Set(selectedStatuses.map(normalizeRepairRequestStatus));
-
             const matchesStatus =
                 selectedStatuses.length === 0 ||
-                selectedStatuses.includes(requestStatus) ||
-                (
-                    selectedStatusSet.has(normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.UNRESOLVED)) &&
-                    isOpenRepairRequestStatus(requestStatus)
-                ) ||
-                (
-                    selectedStatusSet.has(normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)) &&
-                    normalizedRequestStatus === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)
-                );
+                selectedStatusSet.has(normalizedRequestStatus);
 
             const searchable = [
                 request.customerName,
@@ -183,6 +97,7 @@ const RepairRequests = () => {
                 request.description,
                 request.notes,
                 displayRepairRequestStatus(request.status),
+                getIssuePriorityLabel(getRepairRequestIssuePriority(request)),
                 request.serviceLocationName,
                 request.serviceLocationAddress,
                 request.customerEmail,
@@ -198,8 +113,8 @@ const RepairRequests = () => {
 
             return matchesDate && matchesStatus && matchesSearch;
         }).sort((left, right) => {
-            const result = toDateSortValue(left) - toDateSortValue(right);
-            return dateSortDirection === "asc" ? result : -result;
+            const result = compareRepairRequestsByDate(left, right);
+            return dateSortDirection === "asc" ? -result : result;
         });
     }, [selectedRequests, selectedStatuses, searchTerm, startDate, endDate, dateSortDirection]);
 
@@ -327,6 +242,7 @@ const RepairRequests = () => {
                             <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                                 Description
                             </th>
+                            <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Priority</th>
                             <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                                 Status
                             </th>
@@ -379,6 +295,10 @@ const RepairRequests = () => {
                                     </p>
                                 </td>
 
+                                <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-700">
+                                    {getRepairRequestIssuePriority(request)} - {getIssuePriorityLabel(getRepairRequestIssuePriority(request))}
+                                </td>
+
                                 <td className="whitespace-nowrap px-5 py-3">
                                     <span
                                         className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(request.status)}`}
@@ -422,11 +342,11 @@ const RepairRequests = () => {
 
                             <div className="mt-3 flex flex-wrap gap-2">
                                 <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                                    Internal: {internalRequests.length}
+                                    Internal: {internalNeedsActionCount}
                                 </span>
 
                                 <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                                    External: {externalRequests.length}
+                                    External: {externalNeedsActionCount}
                                 </span>
 
                                 <span className="rounded-full border border-yellow-200 bg-yellow-50 px-3 py-1 text-xs font-semibold text-yellow-800">
@@ -451,6 +371,18 @@ const RepairRequests = () => {
                 <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-slate-200 px-5 pt-4">
                         <nav className="-mb-px flex gap-8">
+                            <button
+                                type="button"
+                                onClick={() => setActiveTab("all")}
+                                className={`whitespace-nowrap border-b-2 px-1 pb-4 text-sm font-bold ${activeTab === "all"
+                                    ? "border-blue-500 text-blue-600"
+                                    : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700"}`}
+                            >
+                                All Requests
+                                <span className="ml-2 rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-800">
+                                    {internalNeedsActionCount + externalNeedsActionCount}
+                                </span>
+                            </button>
                             <button
                                 type="button"
                                 onClick={() => setActiveTab("internal")}
@@ -497,6 +429,7 @@ const RepairRequests = () => {
                             <div className="flex items-center gap-2">
                                 <input
                                     type="date"
+                                    aria-label="Repair requests start date"
                                     value={startDate}
                                     onChange={(event) => setStartDate(event.target.value)}
                                     className="rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
@@ -506,6 +439,7 @@ const RepairRequests = () => {
 
                                 <input
                                     type="date"
+                                    aria-label="Repair requests end date"
                                     value={endDate}
                                     onChange={(event) => setEndDate(event.target.value)}
                                     className="rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
@@ -524,7 +458,7 @@ const RepairRequests = () => {
 
                             <button
                                 type="button"
-                                onClick={fetchRepairRequests}
+                                onClick={refreshRequests}
                                 className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
                             >
                                 Refresh
@@ -532,6 +466,19 @@ const RepairRequests = () => {
                         </div>
 
                         <div className="flex flex-wrap gap-2 border-b border-slate-200 px-5 py-4">
+                            <label className="mr-3 inline-flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    checked={onlyMyRequests}
+                                    onChange={(event) => {
+                                        const next = new URLSearchParams(searchParams);
+                                        if (event.target.checked) next.set('submittedBy', 'me');
+                                        else next.delete('submittedBy');
+                                        setSearchParams(next, { replace: true });
+                                    }}
+                                />
+                                Only requests I submitted
+                            </label>
                             <button
                                 type="button"
                                 onClick={() => setSelectedStatuses(statusOptions)}
@@ -567,6 +514,7 @@ const RepairRequests = () => {
                             })}
                         </div>
 
+                        <p className="px-5 py-3 text-sm text-slate-500" aria-live="polite">{filteredRequests.length} requests showing</p>
                         {loading ? (
                             <div className="p-10 text-center">
                                 <p className="font-semibold text-slate-700">

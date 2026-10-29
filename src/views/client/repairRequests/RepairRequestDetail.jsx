@@ -5,7 +5,8 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../../firebase';
 import { Context } from '../../../context/AuthContext';
 import { DripDropStoredImage } from '../../../utils/models/DripDropStoredImage';
-import { REPAIR_REQUEST_STATUS, displayRepairRequestStatus, normalizeRepairRequestStatus } from '../../../utils/models/RepairRequest';
+import { REPAIR_REQUEST_STATUS, displayRepairRequestStatus, normalizeRepairRequestStatus, getRepairRequestIssuePriority } from '../../../utils/models/RepairRequest';
+import { getIssuePriorityLabel } from '../../../utils/models/JobPlan';
 
 const RepairRequestDetail = () => {
     const { user } = useContext(Context);
@@ -102,6 +103,8 @@ const RepairRequestDetail = () => {
                                 <p className="text-gray-600">{request.description}</p>
                             </div>
                             <div>
+                                <h3 className="font-semibold text-lg text-gray-700 mb-2">Priority</h3>
+                                <p className="mb-4">{getRepairRequestIssuePriority(request)} - {getIssuePriorityLabel(getRepairRequestIssuePriority(request))}</p>
                                 <h3 className="font-semibold text-lg text-gray-700 mb-2">Request Status</h3>
                                 <span className={`px-3 py-1 rounded-full text-sm font-semibold ${repairRequestStatusClass(request.status)}`}>
                                     {displayRepairRequestStatus(request.status)}

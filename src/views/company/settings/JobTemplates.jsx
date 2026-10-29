@@ -1,5 +1,9 @@
 import { getJobMaterialVendorItemId, loadJobProductCatalog, buildJobProductCatalog, buildProductFromVendorItem, buildVendorItemProductPatch, productCatalogDocRef } from "../../../utils/productCatalog";
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import ServicePayrollTaskEditor from "../sales/ServicePayrollTaskEditor";
+import ServicePayrollCostPreview from "../sales/ServicePayrollCostPreview";
+import useServicePayrollData from "../../../hooks/useServicePayrollData";
+import { serializeServiceTasks } from "../../../utils/payroll/servicePayrollPreview";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, writeBatch } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
@@ -54,7 +58,7 @@ const emptyTemplateForm = () => ({
 });
 
 const emptyTaskForm = () => ({
-  ...jobPayFields(),
+  ...jobPayFields({ payrollMode: "included" }),
   name: "",
   type: "Basic",
   description: "",
@@ -373,6 +377,7 @@ const JobTemplates = () => {
   const [details, setDetails] = useState({ tasks: [], plannedServiceStops: [], laborLineItems: [], shoppingItems: [] });
   const [itemModal, setItemModal] = useState(null);
   const [itemForm, setItemForm] = useState({});
+  const servicePayrollData = useServicePayrollData(recentlySelectedCompany, itemModal?.type === "laborLineItems");
   const [savingItem, setSavingItem] = useState(false);
   const [companyUsers, setCompanyUsers] = useState([]);
   const [defaultAdminId, setDefaultAdminId] = useState("");
@@ -925,15 +930,15 @@ const JobTemplates = () => {
         description: serviceCatalogForm.description.trim(),
         type: serviceCatalogForm.type || SalesCatalogItemType.service,
         billingBehavior: serviceCatalogForm.billingBehavior || SalesCatalogBillingBehavior.oneTime,
-        sourceType: SalesCatalogSourceType.manual,
-        sourceId: "",
+        sourceType: serviceCatalogForm.payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual,
+        sourceId: serviceCatalogForm.payTypeId || "",
         unitAmountCents: centsFromMoney(serviceCatalogForm.unitAmount),
         unitCostCents: centsFromMoney(serviceCatalogForm.unitCost),
         defaultQuantity: Math.max(Number(serviceCatalogForm.defaultQuantity || 1) || 1, 1),
         taxable: Boolean(serviceCatalogForm.taxable),
         active: true,
         currency: "usd",
-        metadata: { taskTemplates: [] },
+        metadata: { taskTemplates: serializeServiceTasks(serviceCatalogForm.taskTemplates) },
       });
 
       await saveSalesCatalogItem(db, recentlySelectedCompany, catalogItem);
@@ -1569,6 +1574,7 @@ const JobTemplates = () => {
         </label>
       </div>
 
+      <div className="mt-3"><ServicePayrollTaskEditor companyId={recentlySelectedCompany} form={serviceCatalogForm} setForm={setServiceCatalogForm} /></div>
       <div className="mt-3 flex justify-end">
         <button
           type="button"
@@ -2864,7 +2870,7 @@ const JobTemplates = () => {
                 </>
               ) : itemModal.type === "plannedServiceStops" ? (
                 <>
-                  <JobPayrollFields value={{ ...itemForm, payTypeId: itemForm.serviceStopTypeId }} payTypes={payTypes} showPayType={false} onChange={(field, value) => setItemForm((form) => ({ ...form, [field]: value }))} />
+                  <JobPayrollFields scope="stop" value={{ ...itemForm, payTypeId: itemForm.serviceStopTypeId }} payTypes={payTypes} showPayType={false} onChange={(field, value) => setItemForm((form) => ({ ...form, [field]: value }))} />
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="text-sm font-semibold text-slate-700">
                       Stop type name
@@ -2950,6 +2956,10 @@ const JobTemplates = () => {
 	                      <input type="number" min="0" step="0.01" value={itemForm.internalCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, internalCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
 	                    </label>
 	                  </div>
+	                  <ServicePayrollCostPreview data={servicePayrollData} scopeLabel="For the linked template tasks"
+                        tasks={details.tasks.filter((task) => (itemForm.taskTemplateIds || []).includes(task.id))}
+                        inheritedPayTypeId={itemForm.payTypeId || ""} priceInput={itemForm.totalPrice} costInput={itemForm.internalCost}
+                        onUseHighCost={(cents) => setItemForm((form) => ({ ...form, internalCost: (cents / 100).toFixed(2) }))} />
 	                  <div className="grid gap-4">
 	                    {renderIdCheckboxPicker({
 	                      title: "Linked Tasks",

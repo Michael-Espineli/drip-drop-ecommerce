@@ -25,7 +25,7 @@ jest.mock('../utils/firestoreCounts', () => ({
 jest.mock('../utils/chatMessaging', () => ({ isChatUnreadFor: jest.fn(), listenVisibleChats: jest.fn() }));
 jest.mock('../navigation/index', () => ({
   COMPANY_PINNED_CATEGORY: 'Pinned',
-  getNav: () => ({ Operations: [{ path: '/company/part-approvals', title: 'Part Approvals', role: 'Company' }] }),
+  getNav: () => ({ Operations: [{ path: '/company/part-approvals', title: 'Part Approvals', role: 'Company' }, { path: '/company/repair-requests', title: 'Repair Requests', role: 'Company' }] }),
 }));
 
 const context = {
@@ -113,9 +113,26 @@ test('company changes clear the old badge, unsubscribe, and ignore old callbacks
   expect(link).toHaveTextContent(/^Part Approvals$/);
   emit(previous, [{ status: 'pending' }]);
   expect(link).toHaveTextContent(/^Part Approvals$/);
-  expect(subscriptions[1].query.filters[0].value).toBe('company-2');
-  emit(subscriptions[1], [{ status: 'pending' }, { status: 'pending' }]);
+  expect(subscriptions.find((item) => item.query.path === 'customerPartApprovals' && item.query.filters[0].value === 'company-2').query.filters[0].value).toBe('company-2');
+  const current = subscriptions.find((item) => item.query.path === 'customerPartApprovals' && item.query.filters[0].value === 'company-2');
+  emit(current, [{ status: 'pending' }, { status: 'pending' }]);
   expect(within(link).getByText('2')).toBeInTheDocument();
   view.unmount();
-  expect(subscriptions[1].unsubscribe).toHaveBeenCalledTimes(1);
+  expect(current.unsubscribe).toHaveBeenCalledTimes(1);
+});
+
+test('repair badge matches the default list and reacts to changes from both sources', async () => {
+  const requests = require('../utils/models/repairRequestQueueFixtures.json');
+  await renderSidebar();
+  const company = subscriptions.find((item) => item.query === 'companies/company-1/repairRequests');
+  const homeowner = subscriptions.find((item) => item.query.path === 'homeownerRepairRequests');
+  expect(homeowner.query.filters).toEqual([{ field: 'companyId', operator: '==', value: 'company-1' }]);
+  const link = await screen.findByRole('link', { name: 'Repair Requests' });
+  emit(company, requests.filter((request) => request.sourcePath === 'company'));
+  emit(homeowner, requests.filter((request) => request.sourcePath === 'homeowner'));
+  expect(within(link).getByText('12')).toBeInTheDocument();
+  emit(homeowner, [{ status: 'Resolved' }]);
+  expect(within(link).getByText('9')).toBeInTheDocument();
+  emit(company, [{ status: 'Converted To Job' }]);
+  expect(link).toHaveTextContent(/^Repair Requests$/);
 });

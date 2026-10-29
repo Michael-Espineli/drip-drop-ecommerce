@@ -121,6 +121,8 @@ test("a signed-out request is stored as external and creates an office alert ato
   const { requestId } = await submit({ ...payload, requesterId: "victim", requesterName: "Spoofed", userId: "victim", customerName: "Spoofed", status: "Resolved", companyName: "Spoofed" });
   const record = (await requestRef(requestId).get()).data();
   assert.equal(record.status, "Unresolved");
+  assert.equal(record.issuePriorityLevel, 2);
+  assert.equal(record.issuePriorityLabel, "Recommended");
   assert.equal(record.companyName, "Test Pool Company");
   assert.equal(record.companyId, companyId);
   assert.equal(record.customerId, "customer-taylor");
@@ -140,6 +142,32 @@ test("a signed-out request is stored as external and creates an office alert ato
   assert.equal(alert.route, `/company/repair-requests/detail/${requestId}`);
   assert.equal(alert.relatedEntity.collectionPath, `companies/${companyId}/repairRequests`);
   assert.equal((await firestore.doc(`companies/${companyId}/equipment/pump-main`).get()).data().status, "Needs Repair");
+});
+
+test("selected priorities are validated and saved with server-derived labels", async () => {
+  for (const [level, label] of [[1, "Critical"], [2, "Recommended"], [3, "Preventive"], [4, "Optional Upgrade"]]) {
+    const { requestId } = await submit({ ...payload, submissionId: randomUUID(), issuePriorityLevel: level, issuePriorityLabel: "Forged", priorityLevel: 999 });
+    const record = (await requestRef(requestId).get()).data();
+    assert.equal(record.issuePriorityLevel, level);
+    assert.equal(record.priorityLevel, level);
+    assert.equal(record.issuePriorityLabel, label);
+    assert.equal(record.priorityLabel, label);
+  }
+  for (const level of [0, 5, 1.5, "1", true, {}, []]) {
+    assert.throws(() => validateSubmission({ ...payload, issuePriorityLevel: level }), { code: "invalid-argument" });
+  }
+});
+
+test("default-priority submissions preserve pre-priority retry receipts and reject a changed priority", async () => {
+  const { requestId } = await submit();
+  const oldInput = validateSubmission(payload);
+  delete oldInput.issuePriorityLevel;
+  const receiptId = createHash("sha256").update(`${companyId}:${payload.submissionId}`).digest("hex");
+  const receipt = (await firestore.doc(`publicRepairRequestSubmissions/${receiptId}`).get()).data();
+  assert.equal(receipt.fingerprint, createHash("sha256").update(JSON.stringify(oldInput)).digest("hex"));
+  assert.deepEqual(await submit({ ...payload, issuePriorityLevel: 2 }), { requestId });
+  await assert.rejects(submit({ ...payload, issuePriorityLevel: 1 }), { code: "invalid-argument" });
+  assert.equal((await companyRequests()).size, 1);
 });
 
 test("requires technician and customer selections, description, a valid link and a submission id", () => {

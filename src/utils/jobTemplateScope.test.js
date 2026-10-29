@@ -81,3 +81,14 @@ test("template copies keep payroll choices and custom zero amounts while clearin
   expect(copy.tasks[0]).toEqual(expect.objectContaining({ payTypeId: "filter", payrollMode: "custom", manualPayOverrideCents: 0, payrollStackBehavior: "exclusive", payQuantity: 2, workerId: "" }));
   expect(copy.plannedServiceStops[0]).toEqual(expect.objectContaining({ payTypeId: "visit-pay", payrollMode: "included", billingLaborPriceCents: 7000 }));
 });
+
+test("template copies remap a shared product to all its tasks and retain canonical catalog identities", () => {
+  const scope = source();
+  scope.tasks.push({ id: "configure-template", name: "Configure equipment", type: "Basic" });
+  Object.assign(scope.tasks[0], { genericItemId: "sell-pump", dataBaseItemId: "db-pump" });
+  Object.assign(scope.shoppingItems[0], { genericItemId: "sell-pump", dbItemId: "db-pump", linkedTaskIds: [scope.tasks[0].id, "configure-template"] });
+  const copy = copyJobTemplateScope({ template, scope, job, companyId: "company", planId: "plan" });
+  expect(copy.shoppingItems[0].linkedTaskIds).toEqual(copy.tasks.map((task) => task.id));
+  expect(copy.tasks[1].shoppingListItemIds).toEqual([copy.shoppingItems[0].id]);
+  expect(copy.tasks[0]).toEqual(expect.objectContaining({ genericItemId: "sell-pump", dataBaseItemId: "db-pump" }));
+});

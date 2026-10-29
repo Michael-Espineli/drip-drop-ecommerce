@@ -18,6 +18,11 @@ const { reportCloudFunctionError } = require("../appErrorReporting");
 const { sendCompanyUserInviteEmailInternal } = require("../sendGrid/general");
 
 const db = admin.firestore();
+const { weeklyServiceDates } = require("../recurringSchedule");
+const recurringAccess = require("../recurringAccess").createRecurringAccess(db, {
+  verifyIdToken: (token) => admin.auth().verifyIdToken(token, true),
+});
+const recurringCallable = (action, handler) => functions.https.onCall(recurringAccess.wrap(action, handler));
 
 const mySecret = defineSecret('stripe_secret_key');
 
@@ -2067,7 +2072,7 @@ function normalizeRecurringStopTypeFieldsForFunction(source, contextLabel) {
 }
 
 // Build to replace createFirstRecurringServiceStop
-exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, context) => {
+exports.createFirstRecurringServiceStop2 = recurringCallable("create", async (data, context) => {
   console.log("createFirstRecurringServiceStop2 (refactored, seed 4 weeks)");
   let companyId = "";
   let rssData = null;
@@ -2507,57 +2512,14 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
       return lastCreated;
     };
 
-    const seedWeekly = async () => {
-      const firstServiceDate = alignDateToDayOnOrAfter(functionalStartDate, rssData.day);
-      const targetDow = dayNameToIndex(rssData.day);
-      const firstServiceDateDow = firstServiceDate.getDay();
-
-      if (firstServiceDate.getTime() !== normalizeToNoon(functionalStartDate).getTime()) {
-        console.warn("Weekly RSS startDate day does not match selected day", {
-          rssDay: rssData.day,
-          targetDow,
-          startDateDow: normalizeToNoon(functionalStartDate).getDay(),
-          firstServiceDate: firstServiceDate.toISOString(),
-        });
-      }
-
-      console.log("Weekly seed debug:", {
-        rssDay: rssData.day,
-        targetDow,
-        firstServiceDateDow,
-        firstServiceDate: firstServiceDate.toISOString(),
-        functionalEndDate: functionalEndDate.toISOString(),
-      });
-
+    const seedWeeklyInterval = async (intervalDays) => {
+      const dates = weeklyServiceDates({ startDate: functionalStartDate, horizon: functionalEndDate, day: rssData.day, intervalDays });
       let lastCreated = null;
-
-      for (
-        let d = new Date(firstServiceDate);
-        d.getTime() <= functionalEndDate.getTime();
-        d.setDate(d.getDate() + 7)
-      ) {
-        const serviceDate = normalizeToNoon(d);
-        lastCreated = await uploadStop(serviceDate);
-      }
-
+      for (const serviceDate of dates) lastCreated = await uploadStop(serviceDate);
       return lastCreated;
     };
-
-    const seedBiWeekly = async () => {
-      let lastCreated = null;
-      const firstServiceDate = alignDateToDayOnOrAfter(functionalStartDate, rssData.day);
-
-      for (
-        let d = new Date(firstServiceDate);
-        d.getTime() <= functionalEndDate.getTime();
-        d.setDate(d.getDate() + 14)
-      ) {
-        const serviceDate = normalizeToNoon(d);
-        lastCreated = await uploadStop(serviceDate);
-      }
-
-      return lastCreated;
-    };
+    const seedWeekly = () => seedWeeklyInterval(7);
+    const seedBiWeekly = () => seedWeeklyInterval(14);
 
     const seedMonthly = async () => {
       let lastCreated = null;
@@ -3108,594 +3070,9 @@ async function updateRecurringRoute({ db, companyId, rss } = {}) {
   }
 }
 
-exports.createFirstRecurringServiceStop = functions.https.onCall(async (data, context) => {
-
-  console.log('create FirstRecurring ServiceStop')
-  console.log(data)
-
-  let weekdayArry = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-  let companyId = data.data.companyId
-  let rssData = data.data.recurringServiceStop
-  const rssTypeFields = normalizeRecurringStopTypeFieldsForFunction(
-    rssData,
-    "createFirstRecurringServiceStop.legacy"
-  );
-  rssData = {
-    ...rssData,
-    typeId: rssTypeFields.typeId,
-    type: rssTypeFields.type,
-    typeImage: rssTypeFields.typeImage,
-  };
-
-  console.log(rssData)
-  try {
-
-    console.log("Creating More Service Stops For Rss", rssData.id);
-    // const counter = 0;
-    // const monthCounter = 0;
-    let numFrequency = 0;
-    // const lastCreated = new Date();
-    const standardFrequency = rssData.frequency;
-    // const customFrequencyType = rssData.customFrequencyType;
-    // let custom = false;
-    // let skipWeekEnds = false;
-
-    let counterPush = 0;
-
-    let serviceDate = new Date()
-    let date = new Date()
-    let currentDayOfWeek = 0
-    let serviceDayOfWeek = 0
-
-
-    const SSIncrementCol = "companies/" + companyId + "/settings";
-    const RSSCol = "companies/" + companyId + "/recurringServiceStop";
-    const rssDocRef = "companies/" + companyId + "/recurringServiceStop";
-    const docRef = "companies/" + companyId + "/serviceStops";
-
-    let recurringServiceStopDoc = getFirestore().collection(RSSCol).doc(rssData.id);
-    //Gets Internal Service Stop Count
-
-    await getFirestore()
-      .collection(SSIncrementCol)
-      .doc("serviceStops")
-      .get().then((doc) => {
-        if (doc.exists) {
-          console.log("Settings data:", doc.data());
-          counterPush = doc.data().increment
-        } else {
-          // doc.data() will be undefined in this case
-          console.log("No Service Stop Setting Docuement");
-        }
-      }).catch((error) => {
-        console.log("Error getting document:", error);
-      });
-
-    //Uploads Recurring Service Stop 
-    await getFirestore()
-      .collection(rssDocRef).doc(rssData.id)
-      .set(rssData);
-
-    switch (standardFrequency) {
-      // Daily
-      case "Daily":
-        console.log('Creating Daily')
-        numFrequency = 7;
-        let date1 = new Date(rssData.lastCreated);
-
-        let serviceDate1 = date1
-
-        //Update Recurring Service Stop with last Created Service Stop 
-
-        await recurringServiceStopDoc.update({ lastCreated: date1 });
-
-
-        for (let i = 0; i < 28; i++) {
-
-          //
-          // Amount to crease to create Service stops for the first 4 weeks
-          //
-
-          serviceDate1.setDate(serviceDate1.getDate() + 1);
-
-
-          console.log('Week Day ', weekdayArry[serviceDate1.getDay()])
-          const newInternalId = "S" + String(counterPush + 1);
-
-          counterPush = counterPush + 1;
-
-          //
-          //Update Recurring Service Stop with last Created Service Stop 
-          //
-
-          await recurringServiceStopDoc.update({ lastCreated: serviceDate1 });
-
-          const idss = 'com_ss_' + uuidv4()
-
-          let serviceStop = {
-            address: {
-              city: rssData.address.city,
-              state: rssData.address.state,
-              streetAddress: rssData.address.streetAddress,
-              zip: rssData.address.zip,
-              latitude: rssData.address.latitude,
-              longitude: rssData.address.longitude,
-            },
-            customerId: rssData.customerId,
-            customerName: rssData.customerName,
-            description: rssData.description,
-            duration: rssData.estimatedTime ?? 15,
-            // duration: 15,
-            dateCreated: new Date(),
-            serviceDate: serviceDate1,
-            operationStatus: "Not Started",
-            billingStatus: "Not Invoiced",
-            rate: 0,
-            recurringServiceStopId: rssData.id,
-            tech: rssData.tech,
-            serviceLocationId: rssData.serviceLocationId,
-            techId: rssData.techId,
-            type: rssData.type,
-            typeId: rssData.typeId,
-            typeImage: rssData.typeImage,
-            jobId: "",
-            jobName: "Cleaning - Update",
-            internalId: newInternalId,
-            id: idss,
-            checkList: [],
-            includeReadings: true,
-            includeDosages: true,
-            contractedCompanyId: rssData.contractedCompanyId,
-            laborContractId: rssData.laborContractId,
-            otherCompany: rssData.otherCompany,
-
-          }
-
-          //
-          //Uploading the service Stop
-          //
-
-          await getFirestore()
-            .collection(docRef).doc(idss)
-            .set(serviceStop);
-        }
-        console.log('------------')
-
-        console.log("Last Updated RSS", rssData.id, "To Date", serviceDate2);
-        break;
-      case "Week Day":
-        console.log('Creating Week Day')
-        numFrequency = 7;
-        let date2 = new Date(rssData.lastCreated);
-
-        let serviceDate2 = date2
-
-        //Update Recurring Service Stop with last Created Service Stop 
-
-        await recurringServiceStopDoc.update({ lastCreated: date2 });
-
-
-        for (let i = 0; i < 28; i++) {
-
-          //
-          // Amount to crease to create Service stops for the first 4 weeks
-          //
-
-          serviceDate2.setDate(serviceDate2.getDate() + 1);
-
-          if (serviceDate2.getDay() != 0 && serviceDate2.getDay() != 6) {
-
-            console.log('Week Day ', weekdayArry[serviceDate2.getDay()])
-            const newInternalId = "S" + String(counterPush + 1);
-
-            counterPush = counterPush + 1;
-
-            //
-            //Update Recurring Service Stop with last Created Service Stop 
-            //
-
-            await recurringServiceStopDoc.update({ lastCreated: serviceDate2 });
-
-            const idss = 'com_ss_' + uuidv4()
-
-            let serviceStop = {
-              address: {
-                city: rssData.address.city,
-                state: rssData.address.state,
-                streetAddress: rssData.address.streetAddress,
-                zip: rssData.address.zip,
-                latitude: rssData.address.latitude,
-                longitude: rssData.address.longitude,
-              },
-              customerId: rssData.customerId,
-              customerName: rssData.customerName,
-              description: rssData.description,
-              //duration: Int(rssData.estimatedTime),
-              duration: rssData.estimatedTime ?? 15,
-              dateCreated: new Date(),
-              serviceDate: serviceDate2,
-              operationStatus: "Not Started",
-              billingStatus: "Not Invoiced",
-              rate: 0,
-              recurringServiceStopId: rssData.id,
-              tech: rssData.tech,
-              serviceLocationId: rssData.serviceLocationId,
-              techId: rssData.techId,
-              type: rssData.type,
-              typeId: rssData.typeId,
-              typeImage: rssData.typeImage,
-              jobId: "",
-              jobName: "Cleaning - Update",
-              internalId: newInternalId,
-              id: idss,
-              checkList: [],
-              includeReadings: true,
-              includeDosages: true,
-              contractedCompanyId: rssData.contractedCompanyId,
-              laborContractId: rssData.laborContractId,
-              otherCompany: rssData.otherCompany,
-
-            }
-
-            //
-            //Uploading the service Stop
-            //
-
-            await getFirestore()
-              .collection(docRef).doc(idss)
-              .set(serviceStop);
-          } else {
-            console.log('Weekend  ', weekdayArry[serviceDate2.getDay()], ' - Skip')
-          }
-        }
-        console.log('------------')
-
-        console.log("Last Updated RSS", rssData.id, "To Date", serviceDate2);
-        break;
-      case "Weekly":
-        console.log("Creating Weekly")
-        date = new Date(rssData.lastCreated);
-
-        serviceDate = date
-
-        //Update Recurring Service Stop with last Created Service Stop 
-
-        await recurringServiceStopDoc.update({ lastCreated: date });
-
-        //
-        //  Get Day of week represented as number 0 - 6 (Sunday - Saturday)
-        //
-        currentDayOfWeek = date.getDay();
-
-        //
-        //  Gets Service Day as number
-        //
-        serviceDayOfWeek = 0
-
-        console.log('Switch')
-
-        switch (rssData.day) {
-          case 'Sunday':
-            console.log('Sunday - ', rssData.day)
-            serviceDayOfWeek = 0
-            break;
-          case 'Monday':
-            console.log('Monday - ', rssData.day)
-            serviceDayOfWeek = 1
-            break;
-          case 'Tuesday':
-            console.log('Tuesday - ', rssData.day)
-            serviceDayOfWeek = 2
-            break;
-          case 'Wednesday':
-            console.log('Wednesday - ', rssData.day)
-            serviceDayOfWeek = 3
-            break;
-          case 'Thursday':
-            console.log('Thursday - ', rssData.day)
-            serviceDayOfWeek = 4
-            break;
-          case 'Friday':
-            console.log('Friday - ', rssData.day)
-            serviceDayOfWeek = 5
-            break;
-          case 'Saturday':
-            console.log('Saturday - ', rssData.day)
-            serviceDayOfWeek = 6
-            break;
-          default:
-            console.log('Default - ', rssData.day)
-            serviceDayOfWeek = 6
-            break;
-        }
-
-        for (let i = 0; i < 4; i++) {
-
-          //
-          //  Compare the two to determine how to create the first service stop. If the difference is negative that day of week has already passed and creating the service stops will start next week by adding 6
-          //  if it is positive, add the difference to count which should create the service stop this week
-          //
-          let differenceInServiceDays = (serviceDayOfWeek + 1) - (currentDayOfWeek + 1)
-          let amountToIncrease = 0
-
-          if (differenceInServiceDays < 0) {
-
-            amountToIncrease = differenceInServiceDays + 7
-            // } else if (differenceInServiceDays == 0) {
-            //   amountToIncrease = 0
-          } else {
-            amountToIncrease = differenceInServiceDays
-          }
-
-          //
-          // Amount to crease to create Service stops for the first 4 weeks
-          //
-          let amountToIncreaseThisWeek = (amountToIncrease + (i * 7))
-
-          // serviceDate.setFullYear(year, month, day + amountToIncreaseThisWeek );
-          let updatedDate = new Date()
-          updatedDate.setDate(updatedDate.getDate() + amountToIncreaseThisWeek);
-          serviceDate = updatedDate
-
-          const newInternalId = "S" + String(counterPush + 1);
-
-          counterPush = counterPush + 1;
-
-
-          console.log('Service Day Of Week: ', weekdayArry[serviceDate.getDay()], ' - Service Date: ', serviceDate)
-
-          //
-          //Update Recurring Service Stop with last Created Service Stop 
-          //
-
-          await recurringServiceStopDoc.update({ lastCreated: serviceDate });
-
-
-          const idss = 'com_ss_' + uuidv4()
-
-          let serviceStop = {
-            address: {
-              city: rssData.address.city,
-              state: rssData.address.state,
-              streetAddress: rssData.address.streetAddress,
-              zip: rssData.address.zip,
-              latitude: rssData.address.latitude,
-              longitude: rssData.address.longitude,
-            },
-            customerId: rssData.customerId,
-            customerName: rssData.customerName,
-            description: rssData.description,
-            //duration: Int(rssData.estimatedTime),
-            duration: rssData.estimatedTime ?? 15,
-            dateCreated: new Date(),
-            serviceDate: serviceDate,
-            operationStatus: "Not Started",
-            billingStatus: "Not Invoiced",
-            rate: 0,
-            recurringServiceStopId: rssData.id,
-            tech: rssData.tech,
-            serviceLocationId: rssData.serviceLocationId,
-            techId: rssData.techId,
-            type: rssData.type,
-            typeId: rssData.typeId,
-            typeImage: rssData.typeImage,
-            jobId: "",
-            jobName: "Cleaning - Update",
-            internalId: newInternalId,
-            id: idss,
-            checkList: [],
-            includeReadings: true,
-            includeDosages: true,
-            contractedCompanyId: rssData.contractedCompanyId,
-            laborContractId: rssData.laborContractId,
-            otherCompany: rssData.otherCompany,
-
-          }
-          console.log("Service Stop: ", serviceStop)
-          //
-          //Uploading the service Stop
-          //
-
-          await getFirestore()
-            .collection(docRef).doc(idss)
-            .set(serviceStop);
-          console.log("Successfully Adding New Service Stop")
-        }
-        console.log('------------')
-
-        console.log("Last Updated RSS", rssData.id, "To Date", serviceDate);
-        break;
-      case "Bi-Weekly":
-        console.log("Creating Bi-Weekly")
-        date = new Date(rssData.lastCreated);
-
-        serviceDate = date
-
-        //Update Recurring Service Stop with last Created Service Stop 
-
-        await recurringServiceStopDoc.update({ lastCreated: date });
-
-        //
-        //  Get Day of week represented as number 0 - 6 (Sunday - Saturday)
-        //
-        currentDayOfWeek = date.getDay();
-
-        //
-        //  Gets Service Day as number
-        //
-        serviceDayOfWeek = 0
-
-        console.log('Switch')
-
-        switch (rssData.day) {
-          case 'Sunday':
-            console.log('Sunday - ', rssData.day)
-            serviceDayOfWeek = 0
-            break;
-          case 'Monday':
-            console.log('Monday - ', rssData.day)
-            serviceDayOfWeek = 1
-            break;
-          case 'Tuesday':
-            console.log('Tuesday - ', rssData.day)
-            serviceDayOfWeek = 2
-            break;
-          case 'Wednesday':
-            console.log('Wednesday - ', rssData.day)
-            serviceDayOfWeek = 3
-            break;
-          case 'Thursday':
-            console.log('Thursday - ', rssData.day)
-            serviceDayOfWeek = 4
-            break;
-          case 'Friday':
-            console.log('Friday - ', rssData.day)
-            serviceDayOfWeek = 5
-            break;
-          case 'Saturday':
-            console.log('Saturday - ', rssData.day)
-            serviceDayOfWeek = 6
-            break;
-          default:
-            console.log('Default - ', rssData.day)
-            serviceDayOfWeek = 6
-            break;
-        }
-
-        for (let i = 0; i < 4; i++) {
-
-          //
-          //  Compare the two to determine how to create the first service stop. If the difference is negative that day of week has already passed and creating the service stops will start next week by adding 6
-          //  if it is positive, add the difference to count which should create the service stop this week
-          //
-          let differenceInServiceDays = (serviceDayOfWeek + 1) - (currentDayOfWeek + 1)
-          let amountToIncrease = 0
-
-          if (differenceInServiceDays < 0) {
-
-            amountToIncrease = differenceInServiceDays + 7
-            // } else if (differenceInServiceDays == 0) {
-            //   amountToIncrease = 0
-          } else {
-            amountToIncrease = differenceInServiceDays
-          }
-
-          //
-          // Amount to crease to create Service stops for the first 4 weeks
-          //
-          let amountToIncreaseThisWeek = (amountToIncrease + (i * 14))
-
-          // serviceDate.setFullYear(year, month, day + amountToIncreaseThisWeek );
-          let updatedDate = new Date()
-          updatedDate.setDate(updatedDate.getDate() + amountToIncreaseThisWeek);
-          serviceDate = updatedDate
-
-          const newInternalId = "S" + String(counterPush + 1);
-
-          counterPush = counterPush + 1;
-
-
-          console.log('Service Day Of Week - Check - ', weekdayArry[serviceDate.getDay()], ' ', serviceDate)
-          console.log()
-
-          //
-          //Update Recurring Service Stop with last Created Service Stop 
-          //
-
-          await recurringServiceStopDoc.update({ lastCreated: serviceDate });
-
-
-          const idss = 'com_ss_' + uuidv4()
-
-          let serviceStop = {
-            address: {
-              city: rssData.address.city,
-              state: rssData.address.state,
-              streetAddress: rssData.address.streetAddress,
-              zip: rssData.address.zip,
-              latitude: rssData.address.latitude,
-              longitude: rssData.address.longitude,
-            },
-            customerId: rssData.customerId,
-            customerName: rssData.customerName,
-            description: rssData.description,
-            //duration: Int(rssData.estimatedTime),
-            duration: rssData.estimatedTime ?? 15,
-            dateCreated: new Date(),
-            serviceDate: serviceDate,
-            operationStatus: "Not Started",
-            billingStatus: "Not Invoiced",
-            rate: 0,
-            recurringServiceStopId: rssData.id,
-            tech: rssData.tech,
-            serviceLocationId: rssData.serviceLocationId,
-            techId: rssData.techId,
-            type: rssData.type,
-            typeId: rssData.typeId,
-            typeImage: rssData.typeImage,
-            jobId: "",
-            jobName: "Cleaning - Update",
-            internalId: newInternalId,
-            id: idss,
-            checkList: [],
-            includeReadings: true,
-            includeDosages: true,
-            contractedCompanyId: rssData.contractedCompanyId,
-            laborContractId: rssData.laborContractId,
-            otherCompany: rssData.otherCompany,
-
-          }
-          //
-          //Uploading the service Stop
-          //
-          await getFirestore()
-            .collection(docRef).doc(idss)
-            .set(serviceStop);
-
-        }
-        console.log('------------')
-
-        console.log("Last Updated RSS", rssData.id, "To Date", serviceDate);
-        break;
-      case "Monthly":
-        numFrequency = 30;
-        // everyweekday
-        break;
-      case "Yearly":
-        numFrequency = 1;
-        // skipWeekEnds = true;
-        // Custom
-        break;
-
-      default:
-        numFrequency = 100;
-    }
-    await getFirestore()
-      .collection(SSIncrementCol)
-      .doc("serviceStops")
-      .set({
-        increment: counterPush,
-        category: "serviceStops",
-      });
-    console.log("New Service Stop Count ", counterPush);
-
-
-    console.log('Successfully Created')
-    return {
-      status: 200,
-      rssId: rssData.id
-    };
-  } catch (error) {
-    console.error(
-      "An error occurred when calling the Create New Recurring Service Stop API",
-      error
-    );
-    return {
-      status: 500,
-      error: error.message
-    };
-  }
-});
+exports.createFirstRecurringServiceStop = recurringCallable("create", async (data, context) => (
+  exports.createFirstRecurringServiceStop2.run({ data, auth: context.auth, rawRequest: {} })
+));
 
 exports.deleteUser = functions.https.onCall(async (data, context) => {
   try {
@@ -6793,7 +6170,7 @@ exports.migrateLegacyVendorsToCanonical = functions.https.onCall(async (data, co
   }
 });
 
-exports.updateServiceStopDayPermanently = functions.https.onCall(async (data, context) => {
+exports.updateServiceStopDayPermanently = recurringCallable("permanentMove", async (data, context) => {
 
   const db = getFirestore();
 
@@ -7074,7 +6451,7 @@ exports.updateCompanyReadingsSettings = functions.https.onCall(async (data, cont
 });
 
 
-exports.updateRecurringRouteOrderPermanently = functions.https.onCall(async (data, context) => {
+exports.updateRecurringRouteOrderPermanently = recurringCallable("routeOrder", async (data, context) => {
   const db = getFirestore();
 
   const receivedData = data?.data ?? data ?? {};
@@ -7204,7 +6581,7 @@ exports.updateRecurringRouteOrderPermanently = functions.https.onCall(async (dat
   };
 });
 
-exports.updateRecurringServiceStopsRouteAssignment = functions.https.onCall(async (data, context) => {
+exports.updateRecurringServiceStopsRouteAssignment = recurringCallable("routeAssignment", async (data, context) => {
   const db = getFirestore();
   const receivedData = data?.data ?? data ?? {};
   const companyId = receivedData.companyId;
@@ -7331,28 +6708,8 @@ exports.createHomeOwnerCustomerBasedOnCompany = functions.https.onCall(async (da
   }
 });
 
-exports.makeUpdatesToRecurringRoutes = functions.https.onCall(async (data, context) => {
-  const db = getFirestore();
-
-  let receivedData = data.data
-  let companyId = receivedData.companyUserId
-  console.log("companyId ", companyId)
-
-  //Maybe its something like
-
-  // On create of recurring service stop
-
-  //Check to see if recurring Route exists
-
-  // if exists make updates to route. 
-
-  // if does not exist make a new route
-
-
-  return {
-    success: true,
-    count: finalRecurring.length
-  };
+exports.makeUpdatesToRecurringRoutes = recurringCallable("routeOrder", async () => {
+  throw new functions.https.HttpsError("unimplemented", "Use updateRecurringRouteOrderPermanently to update route order.");
 });
 
 function isNonEmptyRouteId(value) {
@@ -7849,7 +7206,7 @@ async function deleteRecurringServiceStopCascade({
   };
 }
 
-exports.deleteRecurringServiceStop = functions.https.onCall(async (data, context) => {
+exports.deleteRecurringServiceStop = recurringCallable("delete", async (data, context) => {
   const db = getFirestore();
   const receivedData = data?.data ?? data;
   const companyId = receivedData?.companyId;
@@ -7888,7 +7245,7 @@ exports.deleteRecurringServiceStop = functions.https.onCall(async (data, context
   }
 });
 
-exports.deleteRecurringRoute = functions.https.onCall(async (data, context) => {
+exports.deleteRecurringRoute = recurringCallable("routeDelete", async (data, context) => {
   const db = getFirestore();
   const receivedData = data?.data ?? data;
   const companyId = receivedData?.companyId;
@@ -8041,26 +7398,12 @@ async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
 
 
 
-exports.endRecurringServiceStop = functions.https.onCall(async (data, context) => {
-  const db = getFirestore();
-
-  let receivedData = data.data
-  let companyId = receivedData.companyId
-  let stopId = receivedData.stopId
-  console.log("companyId ", companyId)
-  console.log("stopId ", stopId)
-
-
-
-
-  return {
-    success: true,
-    count: finalRecurring.length
-  };
+exports.endRecurringServiceStop = recurringCallable("end", async () => {
+  throw new functions.https.HttpsError("unimplemented", "Use updateRecurringServiceStop with an end date to end recurring service.");
 });
 
 
-exports.updateRecurringServiceStop = functions.https.onCall(async (data, context) => {
+exports.updateRecurringServiceStop = recurringCallable("update", async (data, context) => {
   const db = getFirestore();
 
   let receivedData = data?.data || data || {};

@@ -1,3 +1,4 @@
+import useCompanyRepairRequests from '../../../hooks/useCompanyRepairRequests';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, getDocs, query, Timestamp, where } from 'firebase/firestore';
@@ -211,7 +212,7 @@ const OperationsDashboard = () => {
     const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const [loading, setLoading] = useState(true);
     const [jobs, setJobs] = useState([]);
-    const [repairRequests, setRepairRequests] = useState([]);
+    const { requests: repairRequests } = useCompanyRepairRequests(recentlySelectedCompany);
     const [equipmentDue, setEquipmentDue] = useState([]);
     const [serviceStopsWindow, setServiceStopsWindow] = useState([]);
     const [operationsServiceStops, setOperationsServiceStops] = useState([]);
@@ -233,8 +234,6 @@ const OperationsDashboard = () => {
                 const nextSevenDaysEnd = Timestamp.fromDate(endOfNextSevenDays());
                 const [
                     jobsSnap,
-                    internalRepairsSnap,
-                    externalRepairsSnap,
                     equipmentSnap,
                     customersSnap,
                     serviceStopsSnap,
@@ -244,8 +243,6 @@ const OperationsDashboard = () => {
                     contractsSnap,
                 ] = await Promise.all([
                     getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'workOrders'), where('operationStatus', 'in', activeJobStatuses))),
-                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'repairRequests')),
-                    getDocs(query(collection(db, 'homeownerRepairRequests'), where('companyId', '==', recentlySelectedCompany))),
                     getDocs(collection(db, 'companies', recentlySelectedCompany, 'equipment')),
                     getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers')).catch((customerError) => {
                         console.warn("Unable to load customers for equipment maintenance dashboard count:", customerError);
@@ -266,10 +263,6 @@ const OperationsDashboard = () => {
                 );
 
                 setJobs(jobsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
-                setRepairRequests([
-                    ...internalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'internal', ...itemDoc.data() })),
-                    ...externalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'external', ...itemDoc.data() })),
-                ]);
                 setEquipmentDue(equipmentSnap.docs
                     .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
                     .filter((equipment) => equipmentNeedsMaintenanceForActiveBoard(equipment, customerActiveById)));

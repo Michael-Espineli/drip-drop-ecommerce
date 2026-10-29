@@ -1,0 +1,122 @@
+[
+  {
+    "id": "old-open",
+    "sourcePath": "company",
+    "status": "Unresolved",
+    "requesterId": "former-tech",
+    "date": "2020-01-01T12:00:00Z",
+    "description": "Old unresolved request"
+  },
+  {
+    "id": "lowercase",
+    "sourcePath": "company",
+    "status": " unresolved ",
+    "requesterId": "tech-1",
+    "date": "2026-10-01T12:00:00Z"
+  },
+  {
+    "id": "pending",
+    "sourcePath": "company",
+    "status": "Pending",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "pending-lower",
+    "sourcePath": "homeowner",
+    "status": " pending ",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "public-tech",
+    "sourcePath": "company",
+    "status": "Unresolved",
+    "source": "publicTechnician",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "homeowner",
+    "sourcePath": "homeowner",
+    "status": "Unresolved",
+    "requesterId": "homeowner-1"
+  },
+  {
+    "id": "shared",
+    "sourcePath": "company",
+    "status": "Unresolved",
+    "requesterId": "other-tech"
+  },
+  {
+    "id": "shared",
+    "sourcePath": "homeowner",
+    "status": "Unresolved",
+    "requesterId": "other-tech"
+  },
+  {
+    "id": "missing-status",
+    "sourcePath": "company",
+    "userId": "tech-1"
+  },
+  {
+    "id": "blank-status",
+    "sourcePath": "company",
+    "status": "  ",
+    "createdByUserId": "tech-1"
+  },
+  {
+    "id": "converted",
+    "sourcePath": "company",
+    "status": "Converted To Job",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "in-progress",
+    "sourcePath": "company",
+    "status": "In Progress",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "in-progress-slug",
+    "sourcePath": "homeowner",
+    "status": "in-progress",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "suggested",
+    "sourcePath": "company",
+    "status": "Suggested Work",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "resolved",
+    "sourcePath": "company",
+    "status": "Resolved",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "cancelled",
+    "sourcePath": "homeowner",
+    "status": "Cancelled",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "future",
+    "sourcePath": "company",
+    "status": "Future Status",
+    "requesterId": "tech-1"
+  },
+  {
+    "id": "assigned-customer",
+    "sourcePath": "company",
+    "status": "Unresolved",
+    "requesterId": "other-tech",
+    "techId": "tech-1",
+    "customerId": "my-route-customer"
+  },
+  {
+    "id": "different-submitter",
+    "sourcePath": "company",
+    "status": "Unresolved",
+    "requesterId": "other-tech",
+    "userId": "tech-1"
+  }
+]

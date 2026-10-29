@@ -4,6 +4,8 @@ if (!admin.apps.length) admin.initializeApp();
 const db=admin.firestore();
 const work=require('./technicianWorkWorkflow').createTechnicianWorkWorkflow(db);
 const execution=require('./technicianExecution').createTechnicianExecution(db);
+const routeWork=require('./routeWork').createRouteWork(db);
+exports.manageRouteWork=onCall({timeoutSeconds:120},request=>routeWork.command(request));
 exports.manageTechnicianWork=onCall({timeoutSeconds:120},request=>work.command(request));
 exports.scheduleTechnicianWork=onCall({timeoutSeconds:120},request=>execution.schedule(request));
 const {onDocumentWritten}=require('firebase-functions/v2/firestore');

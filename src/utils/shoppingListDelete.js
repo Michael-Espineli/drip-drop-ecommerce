@@ -1,5 +1,6 @@
 import { arrayRemove, doc, getDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { syncLinkedShoppingPurchase } from "./shoppingPurchaseSync";
+import { productTaskIds, taskProductIds } from "./jobPlanProducts";
 
 const compactString = (value) => String(value || "").trim();
 
@@ -58,14 +59,18 @@ export const deleteShoppingListItemWithLinks = async ({
     }
   }
 
-  if (jobId && linkedTaskId) {
-    const taskRef = doc(db, "companies", companyDocId, "workOrders", jobId, "tasks", linkedTaskId);
+  const linkedTaskIds = productTaskIds(item);
+  for (const taskId of jobId ? linkedTaskIds : []) {
+    const taskRef = doc(db, "companies", companyDocId, "workOrders", jobId, "tasks", taskId);
     const taskSnap = await getDoc(taskRef);
 
     if (taskSnap.exists()) {
+      const task = taskSnap.data();
+      const remaining = taskProductIds(task).filter((id) => id !== shoppingListItemId);
       batch.update(taskRef, {
-        shoppingListItemId: "",
+        shoppingListItemId: task.shoppingListItemId === shoppingListItemId ? remaining[0] || "" : task.shoppingListItemId || "",
         shoppingListItemIds: arrayRemove(shoppingListItemId),
+        ...(task.shoppingListItemId === shoppingListItemId ? { dataBaseItemId: "", genericItemId: "" } : {}),
         updatedAt: serverTimestamp(),
       });
     }
@@ -78,5 +83,6 @@ export const deleteShoppingListItemWithLinks = async ({
     partApprovalRequestId,
     purchasedItemId,
     linkedTaskId,
+    linkedTaskIds,
   };
 };

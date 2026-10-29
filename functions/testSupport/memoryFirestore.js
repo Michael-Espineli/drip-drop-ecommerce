@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const copy = value => value instanceof Date ? new Date(value) : Array.isArray(value) ? value.map(copy) : value && Object.getPrototypeOf(value) === Object.prototype ? Object.fromEntries(Object.entries(value).map(([k,v])=>[k,copy(v)])) : value;
+const comparable = value => value?.toMillis?.() ?? (value instanceof Date ? value.getTime() : value);
 class MemoryFirestore {
   constructor(records) { this.records = new Map(Object.entries(records)); this.version = 0; }
   doc(path) {
@@ -14,20 +16,20 @@ class MemoryFirestore {
   read(ref, records = this.records) {
     if (ref.document) {
       const data = records.get(ref.path);
-      return { exists: records.has(ref.path), id: ref.id || ref.path.split('/').pop(), ref: this.doc(ref.path), data: () => data };
+      return { exists: records.has(ref.path), id: ref.id || ref.path.split('/').pop(), ref: this.doc(ref.path), data: () => copy(data) };
     }
     const docs = [...records].filter(([path, data]) => path.startsWith(`${ref.path}/`) && !path.slice(ref.path.length + 1).includes('/') && (ref.constraints || []).every(([field, operator, value]) => {
         if (field === "__limit") return true;
         if (field === "__cursor") return path.split("/").pop() > operator;
-        const actual = data[field];
-        return operator === ">=" ? actual >= value : operator === "<" ? actual < value : operator === "<=" ? actual <= value : operator === "array-contains" ? (actual || []).includes(value) : actual === value;
+        const actual = comparable(data[field]), expected = comparable(value);
+        return operator === ">=" ? actual >= expected : operator === ">" ? actual > expected : operator === "<" ? actual < expected : operator === "<=" ? actual <= expected : operator === "array-contains" ? (actual || []).includes(value) : actual === expected;
       }))
       .sort(([a], [b]) => a.localeCompare(b)).slice(0, ref.constraints?.find(([key]) => key === "__limit")?.[1] ?? Infinity)
       .map(([path]) => this.read(this.doc(path), records));
     return { docs, size: docs.length, empty: !docs.length };
   }
   set(path, data, options) {
-    this.records.set(path, options?.merge ? { ...this.records.get(path), ...data } : { ...data }); this.version += 1;
+    this.records.set(path, copy(options?.merge ? { ...this.records.get(path), ...data } : { ...data })); this.version += 1;
   }
   async runTransaction(callback) {
     for (let attempt = 0; attempt < 4; attempt += 1) {

@@ -66,7 +66,7 @@ import {
     recordOptionById,
     uniqueStringList,
 } from "../../../utils/jobEquipmentScope";
-import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
+import { REPAIR_REQUEST_STATUS, getRepairRequestIssuePriority } from "../../../utils/models/RepairRequest";
 
 const selectStyles = {
     control: (base, state) => ({
@@ -360,6 +360,7 @@ const BasicWorkOrderCreate = () => {
     const [scheduledAt, setScheduledAt] = useState(defaultScheduledAt);
     const [customPrice, setCustomPrice] = useState("0.00");
     const [customEstimatedMinutes, setCustomEstimatedMinutes] = useState("60");
+    const newJobIssuePriority = repairRequest ? getRepairRequestIssuePriority(repairRequest) : getTemplateDefaultIssuePriority(selectedTemplate || {});
 
     const loggedInUser = currentUser || user || {};
     const { userId: createdByUserId, userName: createdByUserName } = resolveJobCreator({ user: loggedInUser, profile: dataBaseUser || {} });
@@ -1462,7 +1463,7 @@ const BasicWorkOrderCreate = () => {
             : 0;
         const planTier = DEFAULT_JOB_PLAN_TIER;
         const planTierLabel = getJobPlanRecommendationLabel(planTier);
-        const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedTemplate);
+        const issuePriorityLevel = newJobIssuePriority;
         const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
         const planName = selectedTemplate?.name ? `${selectedTemplate.name} Plan` : "Basic Job Plan";
 
@@ -1923,7 +1924,7 @@ const BasicWorkOrderCreate = () => {
                     nowTimestamp,
                     nowMillis,
                 });
-                const issuePriorityLevel = getTemplateDefaultIssuePriority(selectedTemplate);
+                const issuePriorityLevel = newJobIssuePriority;
                 const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
                 const starterPlanTierLabel = getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER);
                 const jobData = {
@@ -2517,6 +2518,7 @@ const BasicWorkOrderCreate = () => {
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h2 className="text-base font-semibold text-slate-950">Assignment</h2>
                             <div className="mt-4 space-y-3 text-sm">
+                                    <Detail label="Priority" value={`${newJobIssuePriority} - ${getIssuePriorityLabel(newJobIssuePriority)}`} />
                                 <Detail label="Technician" value={selectedAssignee?.userName || "Not selected"} />
                                 <Detail label="Assigned Admin" value={resolvedAdmin?.name || "Not assigned"} />
                                 <Detail label="Admin Source" value={resolvedAdmin?.source || "Set a user admin or company default"} />

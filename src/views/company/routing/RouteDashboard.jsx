@@ -31,6 +31,8 @@ import {
     canUsePersonalRouteVehicle,
 } from '../../../utils/models/CompanyUser';
 import { sortCompanyUsersByName } from '../../../utils/companyUsers';
+import { moveRouteStops } from '../../../utils/routeMoves';
+import { mergeStopsIntoRouteOrder } from '../../../utils/routeOrdering';
 import {
     buildServiceStopTextTemplateContext,
     buildSmsHref,
@@ -207,10 +209,9 @@ const getStopDisplayStatus = (stop) => {
 };
 
 const isStopMovable = (stop) => {
-    const { end } = getStopTiming(stop);
-    const operationStatus = String(stop?.operationStatus || '').toLowerCase();
-
-    return !end && operationStatus !== 'finished';
+    const { start, end } = getStopTiming(stop);
+    const status = String(stop?.operationStatus || '').replace(/[^a-z]/gi, '').toLowerCase();
+    return !start && !end && !['started', 'inprogress', 'finished', 'completed', 'skipped', 'cancelled', 'canceled'].includes(status);
 };
 
 const formatTimeValue = (date) => {
@@ -332,60 +333,6 @@ const routeHasWorkActivity = (route) => Boolean(
     route?.endMileage ||
     (route?.status && route.status !== 'Did Not Start')
 );
-
-const plannedRouteOrderItems = (route) => {
-    if (!route) return [];
-
-    const order = Array.isArray(route.order) ? route.order : [];
-    const recurringRouteOrder = Array.isArray(route.recurringRouteOrder) ? route.recurringRouteOrder : [];
-    const rssIds = Array.isArray(route.rssIds) ? route.rssIds : [];
-
-    if (order.length || recurringRouteOrder.length) {
-        return [...(order.length ? order : recurringRouteOrder)]
-            .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
-    }
-
-    return rssIds.map((recurringServiceStopId, index) => ({
-        recurringServiceStopId,
-        order: index + 1,
-    }));
-};
-
-const mergeStopsIntoRouteOrder = (route, stops, plannedRoute = null) => {
-    const stopById = new Map(stops.map(stop => [stop.id, stop]));
-    const stopByRecurringId = new Map(
-        stops
-            .filter(stop => stop.recurringServiceStopId)
-            .map(stop => [stop.recurringServiceStopId, stop])
-    );
-    const activeRouteOrderIds = route?.serviceStopsIds?.length
-        ? route.serviceStopsIds
-        : (Array.isArray(route?.order) ? [...route.order]
-            .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
-            .map(item => item.serviceStopId || item.id)
-            .filter(Boolean) : []);
-    const plannedRouteOrderIds = !routeHasWorkActivity(route)
-        ? plannedRouteOrderItems(plannedRoute)
-            .map(item => item.recurringServiceStopId || item.rssId || item.id)
-            .filter(Boolean)
-        : [];
-    const orderedIds = plannedRouteOrderIds.length ? plannedRouteOrderIds : activeRouteOrderIds;
-    const getStopForOrderedId = plannedRouteOrderIds.length
-        ? (stopId) => stopByRecurringId.get(stopId) || stopById.get(stopId)
-        : (stopId) => stopById.get(stopId);
-    const includedStopIds = new Set();
-    const orderedStops = orderedIds
-        .map(getStopForOrderedId)
-        .filter(Boolean)
-        .filter(stop => {
-            if (includedStopIds.has(stop.id)) return false;
-            includedStopIds.add(stop.id);
-            return true;
-        });
-    const remainingStops = stops.filter(stop => !includedStopIds.has(stop.id));
-
-    return [...orderedStops, ...remainingStops];
-};
 
 const buildActiveRouteOrder = (route, orderedStops) => {
     const existingOrder = Array.isArray(route?.order) ? route.order : [];
@@ -1461,7 +1408,7 @@ const RouteDashboard = () => {
                     await updateDoc(routeRef, {
                         totalStops: 0,
                         finishedStops: 0,
-                        status: 'Did Not Start',
+                        status: routeHasWorkActivity(routeForTech) ? routeForTech.status : 'Did Not Start',
                         serviceStopsIds: [],
                         order: []
                     });
@@ -1495,7 +1442,8 @@ const RouteDashboard = () => {
                 await updateDoc(routeRef, {
                     totalStops: totalStopsCount,
                     finishedStops: finishedStopsCount,
-                    status: newStatus,
+                    status: routeForTech.endTime ? routeForTech.status
+                        : routeHasWorkActivity(routeForTech) && newStatus === 'Did Not Start' ? routeForTech.status : newStatus,
                     serviceStopsIds: orderedTechStops.map(stop => stop.id),
                     order: buildActiveRouteOrder(routeForTech, orderedTechStops)
                 });
@@ -2035,20 +1983,12 @@ const RouteDashboard = () => {
 
                 toast.success('Permanent move submitted.');
             } else {
-                const nextServiceDate = new Date(moveDate);
-                nextServiceDate.setHours(0, 0, 0, 0);
-                const batch = writeBatch(db);
-
-                selectedStopsForMove.forEach(stop => {
-                    batch.update(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', stop.id), {
-                        serviceDate: Timestamp.fromDate(nextServiceDate),
-                        techId: destinationTech.userId,
-                        tech: destinationTech.userName,
-                        updatedAt: Timestamp.fromDate(new Date()),
-                    });
+                await moveRouteStops({
+                    companyId: recentlySelectedCompany,
+                    stops: selectedStopsForMove,
+                    techId: destinationTech.userId,
+                    serviceDate: moveDate,
                 });
-
-                await batch.commit();
                 toast.success('Selected stops moved.');
             }
 
@@ -2057,7 +1997,7 @@ const RouteDashboard = () => {
             refreshWeekMetrics();
         } catch (error) {
             console.error('Error moving selected stops:', error);
-            toast.error('Failed to move selected stops.');
+            toast.error(error.message || 'Failed to move selected stops.');
         } finally {
             setIsMovingStops(false);
         }
@@ -2283,6 +2223,7 @@ const RouteDashboard = () => {
         const activeRoutePayload = {
             serviceStopsIds,
             order: nextOrder,
+            dailyOrderOverride: !updatePlannedRoute,
             totalStops: orderedStops.length,
             updatedAt: Timestamp.fromDate(new Date()),
         };

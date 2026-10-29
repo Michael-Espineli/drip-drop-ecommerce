@@ -833,6 +833,7 @@ exports.onCompanyRepairRequestCreatedNotification = functions1.firestore
     return null;
   });
 const technicianWork = require('./technicianWork');
+exports.manageRouteWork = technicianWork.manageRouteWork;
 exports.manageTechnicianWork = technicianWork.manageTechnicianWork;
 exports.scheduleTechnicianWork = technicianWork.scheduleTechnicianWork;
 exports.manageTechnicianPayRequest = technicianWork.manageTechnicianPayRequest;
