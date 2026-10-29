@@ -1,4 +1,5 @@
 import WorkOfferReview from './WorkOfferReview';
+import WorkOfferManagementDialog from './WorkOfferManagementDialog';
 import WorkOfferSchedule from './WorkOfferSchedule';
 import { manageTechnicianWork } from '../../../utils/technicianWorkflow';
 import React, { useContext, useEffect, useMemo, useState } from "react";
@@ -72,6 +73,7 @@ import {
   getWorkOfferIncentiveText,
   getWorkOfferTargetText,
   getWorkOfferTaskCount,
+  hasAcceptedWorkOffer,
   getWorkOfferTypeText,
   isAcceptedReadyToScheduleWorkOffer,
   isAcceptedWorkOffer,
@@ -482,15 +484,6 @@ const OfferedWork = () => {
   const [boardModalOpen, setBoardModalOpen] = useState(false);
   const [boardForm, setBoardForm] = useState({ id: "", name: "", memberUserIds: [] });
   const [savingBoard, setSavingBoard] = useState(false);
-  const [incentiveOffer, setIncentiveOffer] = useState(null);
-  const [incentiveForm, setIncentiveForm] = useState({
-    type: "none",
-    amount: "",
-    percentage: "",
-    notes: "",
-  });
-  const [savingIncentive, setSavingIncentive] = useState(false);
-
   const currentUserIds = useMemo(
     () => currentUserIdsFor({ user, dataBaseUser, companyUserAccess }),
     [user, dataBaseUser, companyUserAccess]
@@ -557,6 +550,7 @@ const OfferedWork = () => {
   };
 
   useEffect(() => {
+    setOfferDetails(null);
     loadOffers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentlySelectedCompany]);
@@ -1135,71 +1129,7 @@ const OfferedWork = () => {
     try { await manageTechnicianWork(recentlySelectedCompany, "rejectClaim", {offerId:offer.id,claimId:claim.id}); await refreshOffer(offer.id);toast.success("Coverage claim rejected."); }
     catch(error){toast.error(error.message);}finally{setOfferActionId("");}
   };
-  const openIncentiveModal = (offer) => {
-    if (!requirePermission(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, "add work offer incentives")) return;
-    const incentive = normalizeWorkOfferIncentive(offer);
-    setIncentiveOffer(offer);
-    setIncentiveForm({
-      type: incentive.type,
-      amount: incentive.amountCents ? String((incentive.amountCents / 100).toFixed(2)) : "",
-      percentage: incentive.percentage ? String(incentive.percentage) : "",
-      notes: incentive.notes || "",
-    });
-  };
-
-  const saveIncentive = async () => {
-    if (!requirePermission(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, "add work offer incentives")) return;
-    if (!recentlySelectedCompany || !incentiveOffer?.id) return;
-
-    const basePayCents = getWorkOfferBasePayCents(incentiveOffer);
-    const nextIncentive = normalizeWorkOfferIncentive({
-      incentive: {
-        type: incentiveForm.type,
-        amountCents: centsFromDollars(incentiveForm.amount),
-        percentage: Number(incentiveForm.percentage || 0),
-        notes: incentiveForm.notes,
-      },
-    });
-    const incentiveCents =
-      nextIncentive.type === "flat"
-        ? nextIncentive.amountCents
-        : nextIncentive.type === "percentage"
-          ? Math.round(basePayCents * (nextIncentive.percentage / 100))
-          : 0;
-    const effectiveIncentive = incentiveCents > 0 ? nextIncentive : normalizeWorkOfferIncentive();
-    const estimatedTotal = basePayCents + incentiveCents;
-    const updates = {
-      incentive: effectiveIncentive,
-      incentiveType: effectiveIncentive.type,
-      incentiveAmountCents: effectiveIncentive.amountCents,
-      incentivePercentage: effectiveIncentive.percentage,
-      incentiveEstimatedCents: incentiveCents,
-      estimatedBasePayCents: basePayCents,
-      estimatedPayCents: estimatedTotal,
-      estimatedPayTotalCents: estimatedTotal,
-      estimatedPayWithIncentiveCents: estimatedTotal,
-      updatedAt: serverTimestamp(),
-      incentiveUpdatedAt: serverTimestamp(),
-      incentiveUpdatedByUserId: user?.uid || "",
-      incentiveUpdatedByName: name || user?.displayName || user?.email || "Company user",
-    };
-
-    setSavingIncentive(true);
-
-    try {
-      await manageTechnicianWork(recentlySelectedCompany, "incentive", { offerId: incentiveOffer.id, incentive: effectiveIncentive });
-      setOffers((current) => current.map((item) =>
-        item.id === incentiveOffer.id ? { ...item, ...updates, updatedAt: new Date() } : item
-      ));
-      setIncentiveOffer(null);
-      toast.success(incentiveCents > 0 ? "Incentive saved." : "Incentive removed.");
-    } catch (error) {
-      console.error("Failed to save incentive:", error);
-      toast.error("Could not save the incentive.");
-    } finally {
-      setSavingIncentive(false);
-    }
-  };
+  const openOfferManagement = (offer, tab = "details") => setOfferDetails({ offer, tab });
 
   const openBoardModal = () => {
     if (!requirePermission(UPDATE_OFFERED_WORK_PERMISSION_ID, "manage work offer boards")) return;
@@ -1280,7 +1210,7 @@ const OfferedWork = () => {
 
   return (
     <div className="min-h-screen bg-page px-2 py-6 text-theme sm:px-3 lg:px-4">
-      {offerDetails && <WorkOfferReview companyId={recentlySelectedCompany} offer={offerDetails} readOnly onClose={()=>setOfferDetails(null)}/>}
+      {offerDetails && <WorkOfferManagementDialog key={`${recentlySelectedCompany}:${offerDetails.offer.id}:${offerDetails.tab}`} companyId={recentlySelectedCompany} offer={offerDetails.offer} initialTab={offerDetails.tab} workers={companyUsers} boards={boards} onClose={() => setOfferDetails(null)} onChanged={refreshOffer} />}
       {scheduleOffer && <WorkOfferSchedule companyId={recentlySelectedCompany} offer={scheduleOffer} onClose={()=>setScheduleOffer(null)} onScheduled={async()=>{await refreshOffer(scheduleOffer.id);toast.success("Work scheduled.");}}/>}
       {reviewOffer && <WorkOfferReview companyId={recentlySelectedCompany} offer={reviewOffer} onClose={()=>setReviewOffer(null)} onAccepted={async result=>{ await refreshOffer(result.offerId); toast.success(result.status === "Accepted" ? "Work accepted." : "Acceptance sent for approval."); }} />}
       <div className="w-full space-y-6">
@@ -1516,7 +1446,7 @@ const OfferedWork = () => {
                     const typeText = getWorkOfferTypeText(offer);
                     const status = normalizeWorkOfferStatus(offer.status);
                     const statusKey = normalizedWorkOfferStatusKey(status);
-                    const jobPath = offer.jobId ? `/company/jobs/detail/${offer.jobId}` : "/company/jobs/operations";
+                    const jobPath = offer.jobId ? `/company/jobs/detail/${offer.jobId}/actual` : "/company/jobs/operations";
                     const basePayCents = getWorkOfferBasePayCents(offer);
                     const incentiveCents = getWorkOfferIncentiveCents(offer);
                     const totalPayCents = getWorkOfferEstimatedPayCents(offer);
@@ -1530,9 +1460,9 @@ const OfferedWork = () => {
                       <tr key={offer.id} className="align-top transition hover:bg-surface-soft">
                         <td className="px-5 py-3">
                           <div className="max-w-sm">
-                            <p className="font-semibold text-theme">
+                            <button type="button" onClick={() => openOfferManagement(offer)} className="text-left font-semibold text-blue-700 hover:underline">
                               {offer.title || offer.name || offer.serviceStopTypeName || "Offered Work"}
-                            </p>
+                            </button>
                             <p className="mt-1 text-xs text-theme-subtle">
                               {[offer.jobInternalId || offer.jobName || offer.jobId, getWorkOfferCategoryText(offer)].filter(Boolean).join(" - ") || "No job reference"}
                             </p>
@@ -1601,7 +1531,11 @@ const OfferedWork = () => {
                         <td className="px-5 py-3 text-sm text-theme-muted">{formatDate(offer.createdAt)}</td>
                         <td className="px-5 py-3 text-right">
                           <div className="flex flex-col items-end gap-2">
-                            {offer.claims?.some(claim=>currentUserIds.includes(claim.workerId)) && <button onClick={()=>setOfferDetails(offer)} className="rounded border px-3 py-2 text-sm">Scope and agreed pay</button>}
+                            <button type="button" onClick={() => openOfferManagement(offer)} className="rounded-md border border-theme px-3 py-2 text-sm font-semibold">Open offer</button>
+                            {(can(UPDATE_OFFERED_WORK_PERMISSION_ID) || (canCreateOffers && currentUserIds.includes(offer.createdByUserId))) && <>
+                              <button type="button" onClick={() => openOfferManagement(offer, "edit")} className="inline-flex items-center gap-2 rounded-md border border-theme px-3 py-2 text-sm font-semibold">Edit offer <FiEdit2 /></button>
+                              <button type="button" disabled={hasAcceptedWorkOffer(offer)} title="Accepted work and agreed pay must be preserved" onClick={() => openOfferManagement(offer, "delete")} className="rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 disabled:opacity-50">Delete offer</button>
+                            </>}
                             {showApprove && (
                               <button
                                 type="button"
@@ -1613,7 +1547,7 @@ const OfferedWork = () => {
                               </button>
                             )}
                             {canApproveOffers && offer.claims?.filter(claim=>claim.status === "Acceptance Pending Approval").map(claim=><div key={claim.id} className="flex flex-wrap items-center justify-end gap-2 text-xs"><span>{claim.workerName} · pending review</span><button disabled={offerActionId === offer.id} onClick={()=>rejectPendingClaim(offer,claim)} className="rounded border border-red-200 px-2 py-1 text-red-700">Reject claim</button></div>)}
-                            {isAcceptedReadyToScheduleWorkOffer(offer) && !offer.routeId && (can('324') || currentUserIds.includes(offer.acceptedByUserId) && offer.allowsTechnicianSelfScheduling) && <button onClick={()=>setScheduleOffer(offer)} className="rounded bg-blue-700 px-3 py-2 text-sm font-semibold text-white">Schedule Work</button>}
+                            {isAcceptedReadyToScheduleWorkOffer(offer) && !offer.routeId && (can('324') || (currentUserIds.includes(offer.acceptedByUserId) && offer.allowsTechnicianSelfScheduling)) && <button onClick={()=>setScheduleOffer(offer)} className="rounded bg-blue-700 px-3 py-2 text-sm font-semibold text-white">Schedule Work</button>}
                             {showAccept && (
                               <button
                                 type="button"
@@ -1627,7 +1561,7 @@ const OfferedWork = () => {
                             {canAddIncentives && (
                               <button
                                 type="button"
-                                onClick={() => openIncentiveModal(offer)}
+                                onClick={() => openOfferManagement(offer, "incentive")}
                                 className="inline-flex items-center justify-end gap-2 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted transition hover:bg-surface-soft"
                               >
                                 Incentive
@@ -1638,7 +1572,7 @@ const OfferedWork = () => {
                               to={jobPath}
                               className="inline-flex items-center justify-end gap-2 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted transition hover:bg-surface-soft"
                             >
-                              Open
+                              Open job
                               <FiArrowUpRight className="h-4 w-4" />
                             </Link>
                           </div>
@@ -2201,107 +2135,7 @@ const OfferedWork = () => {
         </div>
       )}
 
-      {incentiveOffer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-theme bg-surface shadow-xl">
-            <div className="flex items-start justify-between gap-4 border-b border-theme px-5 py-4">
-              <div>
-                <h2 className="text-xl font-bold text-theme">Offer Incentive</h2>
-                <p className="mt-1 text-sm text-theme-subtle">{incentiveOffer.title || "Offered Work"}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIncentiveOffer(null)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-theme-subtle transition hover:bg-surface-soft"
-                aria-label="Close incentive editor"
-              >
-                <FiX className="h-5 w-5" />
-              </button>
-            </div>
 
-            <div className="space-y-4 p-5">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">Type</span>
-                  <select
-                    value={incentiveForm.type}
-                    onChange={(event) => setIncentiveForm((current) => ({ ...current, type: event.target.value }))}
-                    className="mt-1 h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-                  >
-                    {WORK_OFFER_INCENTIVE_TYPES.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-
-                {incentiveForm.type === "flat" && (
-                  <label className="block">
-                    <span className="text-sm font-semibold text-slate-700">Amount</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={incentiveForm.amount}
-                      onChange={(event) => setIncentiveForm((current) => ({ ...current, amount: event.target.value }))}
-                      className="mt-1 h-11 w-full rounded-md border border-slate-300 px-3 text-sm"
-                    />
-                  </label>
-                )}
-
-                {incentiveForm.type === "percentage" && (
-                  <label className="block">
-                    <span className="text-sm font-semibold text-slate-700">Percent</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={incentiveForm.percentage}
-                      onChange={(event) => setIncentiveForm((current) => ({ ...current, percentage: event.target.value }))}
-                      className="mt-1 h-11 w-full rounded-md border border-slate-300 px-3 text-sm"
-                    />
-                  </label>
-                )}
-              </div>
-
-              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-semibold text-emerald-800">Base pay</span>
-                  <span className="font-bold text-emerald-900">{moneyFromCents(getWorkOfferBasePayCents(incentiveOffer))}</span>
-                </div>
-              </div>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-700">Notes</span>
-                <textarea
-                  rows={3}
-                  value={incentiveForm.notes}
-                  onChange={(event) => setIncentiveForm((current) => ({ ...current, notes: event.target.value }))}
-                  className="mt-1 w-full rounded-md border border-slate-300 p-3 text-sm"
-                />
-              </label>
-            </div>
-
-            <div className="flex flex-col-reverse gap-3 border-t border-theme bg-surface-soft px-5 py-4 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setIncentiveOffer(null)}
-                disabled={savingIncentive}
-                className="rounded-md border border-theme bg-surface px-4 py-2 text-sm font-semibold text-theme-muted hover:bg-surface-soft disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={saveIncentive}
-                disabled={savingIncentive}
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-              >
-                {savingIncentive ? "Saving..." : "Save Incentive"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

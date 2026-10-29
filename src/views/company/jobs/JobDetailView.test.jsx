@@ -71,6 +71,144 @@ const openJob = async (initialEntry = "/company/jobs/detail/job-1/overview") => 
   else await screen.findByRole('button', { name: 'Actions', exact: true });
 };
 const openActions = () => fireEvent.click(screen.getByRole("button", { name: "Actions", exact: true }));
+const openWorkOffer = async ({ canIncentivize = true, services = [] } = {}) => {
+  if (canIncentivize) mockPermissions.push("328");
+  mockJob.laborLineItems = services;
+  const originalGetDocs = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async (ref) => {
+    const path = ref.path || ref;
+    const records = path.endsWith("companyUsers") ? [
+      { id: "alex", userId: "alex", userName: "Alex Adams" },
+      { id: "zoe", userId: "zoe", userName: "Zoe Baker" },
+    ] : path.endsWith("workOrders/job-1/tasks") ? [
+      { id: "repair-task", name: "Repair pump", payTypeId: "repair", payrollMode: "automatic", estimatedTime: 60 },
+      { id: "custom-task", name: "Clean filter", payTypeId: "clean", payrollMode: "custom", manualPayOverrideCents: 2500, estimatedTime: 30 },
+    ] : path.endsWith("companyPayTypes") ? [
+      { id: "unrelated", name: "Unrelated first pay item" }, { id: "repair", name: "Pump repair" }, { id: "clean", name: "Filter cleaning" },
+    ] : null;
+    return records ? { docs: records.map((row) => snapshot(row.id, row)), empty: false, size: records.length } : originalGetDocs(ref);
+  });
+  const offerCall = jest.fn(async ({ action, offer, technicianId }) => {
+    if (action !== "quote") return { data: { offers: [], status: "Sent" } };
+    if (!technicianId && offer.paySource === "Technician Rate") return { data: { totalCents: null, needsReview: false } };
+    const baseCents = offer.paySource === "Offered Amount" ? offer.offeredAmountCents : 7500;
+    const incentiveCents = offer.incentive.type === "flat" ? offer.incentive.amountCents
+      : offer.incentive.type === "percentage" ? Math.round(baseCents * offer.incentive.percentage / 100) : 0;
+    return { data: { baseCents, incentiveCents, totalCents: baseCents + incentiveCents, needsReview: false } };
+  });
+  httpsCallable.mockImplementation((functions, name) => name === "manageTechnicianWork" ? offerCall : mockWorkspaceCall);
+  await openJob({ pathname: "/company/jobs/detail/job-1/actual" });
+  fireEvent.click(screen.getByRole("button", { name: "Create Work Offer", exact: true }));
+  return { dialog: await screen.findByRole("dialog", { name: "Create Work Offer" }), offerCall };
+};
+
+test("work offers search technician names and use the selected plan tasks' pay without extra setup", async () => {
+  const { dialog, offerCall } = await openWorkOffer();
+  expect(within(dialog).getByRole("checkbox", { name: /Override pay for this offer/ })).not.toBeChecked();
+  expect(within(dialog).queryByLabelText("Visit pay type override")).not.toBeInTheDocument();
+  const pay = within(dialog).getByRole("region", { name: "Technician pay" });
+  expect(pay).toHaveTextContent("Pump repair");
+  expect(pay).toHaveTextContent("Custom pay: $25.00");
+  expect(pay).not.toHaveTextContent("Unrelated first pay item");
+  fireEvent.change(within(dialog).getByRole("combobox", { name: "Technician" }), { target: { value: "Zoe" } });
+  expect(await screen.findByText("Zoe Baker")).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Zoe Baker"));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "quote", technicianId: "zoe", offer: expect.objectContaining({ serviceStopTypeId: "", paySource: "Technician Rate", jobTaskIds: ["repair-task", "custom-task"] }) })));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create Offer" }));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "save", offer: expect.objectContaining({ offeredToUserId: "zoe", serviceStopTypeId: "", paySource: "Technician Rate", offeredAmountCents: 0, jobTaskIds: ["repair-task", "custom-task"], incentive: expect.objectContaining({ type: "none" }) }) })));
+});
+
+test("turning off optional pay overrides and incentives restores planned pay in the saved offer", async () => {
+  const { dialog, offerCall } = await openWorkOffer();
+  const override = within(dialog).getByRole("checkbox", { name: /Override pay for this offer/ });
+  fireEvent.click(override);
+  fireEvent.change(within(dialog).getByLabelText("Visit pay type override"), { target: { value: "unrelated" } });
+  fireEvent.change(within(dialog).getByLabelText("Pay source override"), { target: { value: "Offered Amount" } });
+  fireEvent.change(within(dialog).getByLabelText("Offered amount"), { target: { value: "120" } });
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "quote", offer: expect.objectContaining({ serviceStopTypeId: "unrelated", paySource: "Offered Amount", offeredAmountCents: 12000 }) })));
+  fireEvent.click(override);
+  expect(within(dialog).queryByLabelText("Pay source override")).not.toBeInTheDocument();
+  const incentive = within(dialog).getByRole("checkbox", { name: "Add incentive" });
+  fireEvent.click(incentive);
+  fireEvent.change(within(dialog).getByLabelText("Incentive amount"), { target: { value: "10" } });
+  fireEvent.click(incentive);
+  expect(within(dialog).queryByLabelText("Incentive amount")).not.toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create Offer" }));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "save", offer: expect.objectContaining({ serviceStopTypeId: "", paySource: "Technician Rate", offeredAmountCents: 0, incentive: expect.objectContaining({ type: "none", amountCents: 0, percentage: 0 }) }) })));
+});
+
+test("the separate incentive section supports percentages and notes before a personal quote is available", async () => {
+  const { dialog, offerCall } = await openWorkOffer();
+  const incentive = within(dialog).getByRole("region", { name: "Offer incentive" });
+  expect(within(incentive).queryByLabelText("Incentive type")).not.toBeInTheDocument();
+  fireEvent.click(within(incentive).getByRole("checkbox", { name: "Add incentive" }));
+  fireEvent.change(within(incentive).getByLabelText("Incentive type"), { target: { value: "percentage" } });
+  fireEvent.change(within(incentive).getByLabelText("Incentive percent"), { target: { value: "10" } });
+  fireEvent.change(within(incentive).getByLabelText("Incentive notes"), { target: { value: "Complete by Friday" } });
+  await waitFor(() => expect(within(dialog).getByRole("status")).toHaveTextContent("$82.50"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create Offer" }));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "save", offer: expect.objectContaining({ incentive: expect.objectContaining({ type: "percentage", percentage: 10, notes: "Complete by Friday" }) }) })));
+});
+
+test("offer incentives stay hidden without permission and diagnostics use the estimate pay type", async () => {
+  const { dialog, offerCall } = await openWorkOffer({ canIncentivize: false });
+  expect(within(dialog).queryByRole("checkbox", { name: "Add incentive" })).not.toBeInTheDocument();
+  fireEvent.change(within(dialog).getByRole("combobox", { name: "Requested work" }), { target: { value: "diagnostic" } });
+  expect(within(dialog).queryByText("Work Scope")).not.toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create Offer" }));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "save", offer: expect.objectContaining({ workPurpose: "diagnostic", serviceStopTypeId: "system_job_estimate_service_stop", jobTaskIds: [], incentive: expect.objectContaining({ type: "none" }) }) })));
+});
+
+test("board offers keep incentive notes available without a personal pay quote", async () => {
+  const { dialog, offerCall } = await openWorkOffer();
+  const offerType = within(dialog).getAllByRole("combobox").find((element) => element.value === "Direct User");
+  fireEvent.change(offerType, { target: { value: "Internal Board" } });
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "Add incentive" }));
+  fireEvent.change(within(dialog).getByLabelText("Incentive amount"), { target: { value: "15" } });
+  fireEvent.change(within(dialog).getByLabelText("Incentive notes"), { target: { value: "Board bonus" } });
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "quote", technicianId: "", offer: expect.objectContaining({ incentive: expect.objectContaining({ amountCents: 1500, notes: "Board bonus" }) }) })));
+  expect(within(dialog).getByLabelText("Incentive notes")).toHaveValue("Board bonus");
+  expect(within(dialog).getByRole("status")).toHaveTextContent("Each technician reviews their personal pay before accepting.");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create Offer" }));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "save", offer: expect.objectContaining({ offerType: "Internal Board", offeredToUserId: "", incentive: expect.objectContaining({ type: "flat", amountCents: 1500, notes: "Board bonus" }) }) })));
+});
+
+test("a planned service's visit pay item is inherited without selecting a pay override", async () => {
+  const { dialog, offerCall } = await openWorkOffer({ services: [
+    { id: "service", name: "Pump service", sourceType: "serviceStopType", sourceId: "repair", taskIds: ["repair-task", "custom-task"] },
+  ] });
+  const pay = within(dialog).getByRole("region", { name: "Technician pay" });
+  expect(pay).toHaveTextContent("Pump service · visit pay item");
+  expect(within(dialog).getByRole("checkbox", { name: /Override pay for this offer/ })).not.toBeChecked();
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "quote", offer: expect.objectContaining({ serviceStopTypeId: "repair", paySource: "Technician Rate" }) })));
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Override pay for this offer/ }));
+  expect(within(dialog).getByLabelText("Visit pay type override")).toHaveValue("repair");
+  fireEvent.change(within(dialog).getByLabelText("Visit pay type override"), { target: { value: "unrelated" } });
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Override pay for this offer/ }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create Offer" }));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "save", offer: expect.objectContaining({ serviceStopTypeId: "repair", paySource: "Technician Rate" }) })));
+});
+
+test("different service visit pay items require a clear choice and follow the selected work scope", async () => {
+  const { dialog, offerCall } = await openWorkOffer({ services: [
+    { id: "pump", name: "Pump service", sourceType: "serviceStopType", sourceId: "repair", taskIds: ["repair-task"] },
+    { id: "filter", name: "Filter service", sourceType: "serviceStopType", sourceId: "clean", taskIds: ["custom-task"] },
+  ] });
+  expect(within(dialog).getByRole("status")).toHaveTextContent("Selected services use different visit pay items");
+  expect(within(dialog).getByRole("button", { name: "Create Offer" })).toBeDisabled();
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Clean filter/ }));
+  await waitFor(() => expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "quote", offer: expect.objectContaining({ serviceStopTypeId: "repair", jobTaskIds: ["repair-task"] }) })));
+  expect(within(dialog).getByRole("status")).not.toHaveTextContent("Selected services use different visit pay items");
+  expect(within(dialog).getByRole("button", { name: "Create Offer" })).toBeEnabled();
+});
+
+const openServiceCreator = async () => {
+  await openJob();
+  fireEvent.click(screen.getByRole("button", { name: /^Create Plans/ }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Service", exact: true }))[0]);
+  fireEvent.click(await screen.findByRole("button", { name: "Create Service", exact: true }));
+  return screen.findByRole("combobox", { name: "Default payroll pay item" });
+};
 const enterEdit = async () => {
   openActions();
   fireEvent.click(await screen.findByRole("menuitem", { name: "Edit", exact: true }));
@@ -114,6 +252,55 @@ beforeEach(() => {
   });
   appConfirm.mockResolvedValue(false);
   appPrompt.mockResolvedValue(null);
+});
+
+test.each(["button", "search"])("creating a payroll pay item from the %s selects it without saving or clearing the service draft", async (entry) => {
+  mockPermissions.push("424");
+  const picker = await openServiceCreator();
+  fireEvent.change(screen.getByLabelText("Service Name"), { target: { value: "Service draft" } });
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Keep this description" } });
+  if (entry === "search") {
+    fireEvent.change(picker, { target: { value: "Filter cleaning" } });
+    fireEvent.click(await screen.findByText('Create payroll pay item "Filter cleaning"'));
+  } else {
+    fireEvent.click(screen.getByRole("button", { name: "Create payroll pay item" }));
+  }
+  const dialog = await screen.findByRole("dialog", { name: "Create payroll pay item" });
+  if (entry === "button") fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Filter cleaning" } });
+  else expect(within(dialog).getByLabelText("Name")).toHaveValue("Filter cleaning");
+  const submit = within(dialog).getByRole("button", { name: "Create & select" });
+  await waitFor(() => expect(submit).toBeEnabled());
+  fireEvent.click(submit);
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Create payroll pay item" })).not.toBeInTheDocument());
+  expect(setDoc).toHaveBeenCalledTimes(1);
+  expect(setDoc).toHaveBeenCalledWith(expect.stringContaining("companies/company-1/companyPayTypes/comp_work_type_"), expect.objectContaining({ name: "Filter cleaning", bucketId: "job", createdByUserId: "user-1" }), { merge: true });
+  expect(screen.getByLabelText("Service Name")).toHaveValue("Service draft");
+  expect(screen.getByLabelText("Description")).toHaveValue("Keep this description");
+  expect(picker.parentElement.parentElement).toHaveTextContent("Filter cleaning");
+  expect(mockWorkspaceCall).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Add Task", exact: true }));
+  expect(screen.getByPlaceholderText("Clean filter")).toHaveValue("Filter cleaning");
+});
+
+test("canceling pay item creation keeps the service draft and does not create an item", async () => {
+  mockPermissions.push("424");
+  await openServiceCreator();
+  fireEvent.change(screen.getByLabelText("Service Name"), { target: { value: "Service draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create payroll pay item" }));
+  const dialog = await screen.findByRole("dialog", { name: "Create payroll pay item" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Create payroll pay item" })).not.toBeInTheDocument());
+  expect(screen.getByLabelText("Service Name")).toHaveValue("Service draft");
+  expect(setDoc).not.toHaveBeenCalled();
+});
+
+test("service editors without Manage Payroll permission can search but cannot create pay items", async () => {
+  const picker = await openServiceCreator();
+  expect(screen.queryByRole("button", { name: "Create payroll pay item" })).not.toBeInTheDocument();
+  fireEvent.change(picker, { target: { value: "New payroll item" } });
+  expect(await screen.findByText("No matching payroll pay items")).toBeInTheDocument();
+  expect(screen.queryByText('Create payroll pay item "New payroll item"')).not.toBeInTheDocument();
+  expect(setDoc).not.toHaveBeenCalled();
 });
 
 test("site edits are customer-scoped, save with history, and refresh the displayed address", async () => {
@@ -303,6 +490,7 @@ const installSavedPlanFixtures = () => {
     return () => {};
   });
   appConfirm.mockResolvedValue(true);
+  return plans;
 };
 
 test('loading a saved plan uses the protected server workflow and refreshes its committed selection', async () => {
@@ -621,4 +809,136 @@ test('adding a product first connects an unambiguous install task and its databa
   await waitFor(() => expect(materials).toHaveLength(1));
   expect(materials[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', dbItemId: 'db-pump', linkedTaskId: 'existing-install', linkedTaskIds: ['existing-install'] }));
   expect(tasks[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', dataBaseItemId: 'db-pump', shoppingListItemId: materials[0].id }));
+});
+
+
+const installEditablePlan = () => {
+  const plans = installSavedPlanFixtures();
+  const tasks = [{ id: 'task-1', name: 'Inspect pump', type: 'Basic', status: 'Unassigned', contractedRate: 1500, billingLaborPriceCents: 5000, estimatedTime: 30 }];
+  const lines = [{ id: 'line-1', name: 'Inspection service', quantity: 1, unitPriceCents: 5000, totalPriceCents: 5000, internalCostCents: 1500, taskIds: ['task-1'] }];
+  Object.assign(plans[0], { tasks: tasks.map((task) => ({ ...task })), laborLineItems: lines.map((line) => ({ ...line })), totalAmountCents: 5000 });
+  Object.assign(mockJob, { laborLineItems: lines, rate: 5000, laborCost: 1500 });
+  const originalGetDocs = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async (ref) => {
+    const path = ref.path || ref;
+    if (path.endsWith('/workOrders/job-1/tasks')) return { docs: tasks.map((task) => snapshot(task.id, task)) };
+    return originalGetDocs(ref);
+  });
+  mockBatchCommit = async (writes) => {
+    writes.filter((write) => write.ref.endsWith('/tasks/task-1') && ['set', 'update'].includes(write.type))
+      .forEach((write) => Object.assign(tasks[0], write.data));
+  };
+  return { plans, tasks };
+};
+const openPlanEditor = async () => {
+  await openJob();
+  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  const name = await screen.findByRole('textbox', { name: 'Plan Name', exact: true });
+  await waitFor(() => expect(name).toHaveValue('Saved plan A'));
+  return name;
+};
+const savedPlanWrites = () => mockBatchWrites.filter((write) => write.type === 'set' && write.ref.endsWith('/plans/plan-A'));
+
+test('plan metadata automatically saves with the selected job and removes the extra save button', async () => {
+  installEditablePlan();
+  const name = await openPlanEditor();
+  expect(screen.queryByRole('button', { name: 'Save Changes', exact: true })).not.toBeInTheDocument();
+  fireEvent.change(name, { target: { value: 'Updated inspection' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Plan Description' }), { target: { value: 'Updated scope' } });
+  fireEvent.change(screen.getByRole('combobox', { name: 'Recommendation Rank' }), { target: { value: '3' } });
+  await waitFor(() => expect(savedPlanWrites()).toHaveLength(1));
+  expect(savedPlanWrites()[0].data).toEqual(expect.objectContaining({ title: 'Updated inspection', description: 'Updated scope', planTier: 3, totalAmountCents: 5000 }));
+  expect(mockJob).toEqual(expect.objectContaining({ activePlanId: 'plan-A', activePlanTier: 3, rate: 5000, laborCost: 1500, estimateTotalCents: 5000 }));
+  await screen.findByText('All changes saved');
+  expect(savedPlanWrites()).toHaveLength(1);
+  expect(mockBatchWrites.some((write) => write.ref.endsWith('/plans/plan-B'))).toBe(false);
+});
+
+test('task actions float outside the services table and saving a task updates the plan automatically', async () => {
+  installEditablePlan();
+  await openPlanEditor();
+  fireEvent.click(screen.getByRole('button', { name: 'Task actions', exact: true }));
+  const menu = await screen.findByRole('menu');
+  expect(menu.closest('table')).toBeNull();
+  fireEvent.click(within(menu).getByRole('menuitem', { name: 'Edit', exact: true }));
+  const dialog = await screen.findByRole('dialog', { name: 'Edit Task' });
+  fireEvent.change(within(dialog).getByRole('textbox', { name: 'Description', exact: true }), { target: { value: 'Inspect and test pump' } });
+  fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'Tech Labor Cost', exact: true }), { target: { value: '30' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save Task', exact: true }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit Task' })).not.toBeInTheDocument());
+  await waitFor(() => expect(savedPlanWrites().some((write) => write.data.tasks[0]?.name === 'Inspect and test pump')).toBe(true));
+  expect(mockJob.taskCount).toBe(1);
+  expect(mockJob.laborCost).toBe(3000);
+  expect(savedPlanWrites().at(-1).data.laborCostCents).toBe(3000);
+});
+
+test('switching plans flushes pending edits without a discard confirmation', async () => {
+  installSavedPlanFixtures();
+  const name = await openPlanEditor();
+  fireEvent.change(name, { target: { value: 'Saved before switch' } });
+  mockWorkspaceCall.mockImplementation(async () => {
+    expect(savedPlanWrites().at(-1).data.title).toBe('Saved before switch');
+    mockJob.activePlanId = 'plan-B';
+    return { data: { planId: 'plan-B' } };
+  });
+  fireEvent.change(screen.getByRole('combobox', { name: 'Editing plan' }), { target: { value: 'plan-B' } });
+  await waitFor(() => expect(name).toHaveValue('Saved plan B'));
+  expect(appConfirm).not.toHaveBeenCalled();
+  expect(mockJob.activePlanId).toBe('plan-B');
+});
+
+test('autosave failures keep the latest draft visible and expose a retry', async () => {
+  installEditablePlan();
+  const name = await openPlanEditor();
+  mockBatchError = new Error('offline');
+  fireEvent.change(name, { target: { value: 'Keep this draft' } });
+  const retry = await screen.findByRole('button', { name: 'Retry save' });
+  expect(name).toHaveValue('Keep this draft');
+  expect(screen.queryByText('All changes saved')).not.toBeInTheDocument();
+  mockBatchError = null;
+  fireEvent.click(retry);
+  await screen.findByText('All changes saved');
+  expect(savedPlanWrites().at(-1).data.title).toBe('Keep this draft');
+});
+
+
+test('an earlier autosave response cannot replace a newer plan name, including a reversion', async () => {
+  installEditablePlan();
+  const name = await openPlanEditor();
+  let finishWrite;
+  const pendingWrite = new Promise((resolve) => { finishWrite = resolve; });
+  mockBatchCommit = jest.fn().mockReturnValueOnce(pendingWrite);
+  fireEvent.change(name, { target: { value: 'First edit' } });
+  await waitFor(() => expect(savedPlanWrites()).toHaveLength(1));
+  expect(name).toBeEnabled();
+  fireEvent.change(name, { target: { value: 'Newer edit' } });
+  fireEvent.change(name, { target: { value: 'Saved plan A' } });
+  await act(async () => { finishWrite(); });
+  await screen.findByText('All changes saved');
+  expect(name).toHaveValue('Saved plan A');
+  expect(savedPlanWrites().at(-1).data.title).toBe('Saved plan A');
+});
+
+test("Actual job view lists linked offers and opens their shared editor with list refresh after saving", async () => {
+  mockPermissions.push("324", "328");
+  let offer = { id: "comp_work_offer_job", jobId: "job-1", title: "Existing pump offer", status: "Sent", offerType: "Direct User", offeredToUserId: "tech", offeredToUserName: "Alex", jobTaskIds: ["task"], estimatedMinutes: 60, paySource: "Offered Amount", offeredAmountCents: 10000, revision: 1 };
+  const offerCall = jest.fn(async payload => {
+    if (payload.action === "update") {
+      offer = { ...offer, ...payload.changes, revision: 2 };
+      return { data: { offerId: offer.id, revision: 2 } };
+    }
+    if (payload.action === "details") return { data: { offer, scope: { tasks: [], services: [], products: [], stops: [] }, management: { canEdit: true, canDelete: true, canIncentivize: true, termsLocked: false } } };
+    return { data: { offers: [offer] } };
+  });
+  httpsCallable.mockImplementation((functions, name) => name === "manageTechnicianWork" ? offerCall : mockWorkspaceCall);
+  await openJob({ pathname: "/company/jobs/detail/job-1/actual" });
+  const card = await screen.findByRole("article", { name: "Work offer: Existing pump offer" });
+  expect(within(card).getByRole("button", { name: "Open offer" })).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: "Delete offer" })).toBeEnabled();
+  fireEvent.click(within(card).getByRole("button", { name: "Edit offer" }));
+  fireEvent.change(await screen.findByLabelText("Offer title"), { target: { value: "Revised pump offer" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save offer" }));
+  expect(await screen.findByRole("article", { name: "Work offer: Revised pump offer" })).toBeInTheDocument();
+  expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "list", jobId: "job-1" }));
+  expect(offerCall).toHaveBeenCalledWith(expect.objectContaining({ action: "update", offerId: "comp_work_offer_job", revision: 1 }));
 });

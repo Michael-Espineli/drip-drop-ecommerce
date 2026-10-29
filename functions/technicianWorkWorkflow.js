@@ -5,6 +5,10 @@ const { started:workStarted, newActiveRoute } = require('./routeState');
 const str = v => String(v ?? '').trim();
 const id = v => str(typeof v === 'object' ? v?.id : v);
 const list = v => Array.isArray(v) ? v : [];
+const hasAcceptedWork = offer => ['Accepted','Scheduled','In Progress','Completed'].includes(offer.status) || list(offer.claims).some(v=>['Accepted','Scheduled','In Progress','Completed'].includes(v.status)) || !!offer.acceptedByUserId && offer.status!=='Acceptance Pending Approval' && !list(offer.claims).some(v=>v.status==='Acceptance Pending Approval');
+const offerTermsLocked = offer => hasAcceptedWork(offer) || list(offer.claims).length > 0 || ['Rejected','Cancelled','Expired'].includes(offer.status);
+const offerMetadataFields = ['title','description','adminNotes','workerNotes'];
+const offerEditableFields = [...offerMetadataFields,'proposedStartDate','proposedEndDate','completionDeadlineAt','timelineNotes','estimatedMinutes','allowsTechnicianSelfScheduling','paySource','offeredAmountCents','offerType','postedToBoard','offeredToUserId','offeredToUserName','offeredToWorkerType','boardVisibility','boardIds','boardNames','boardName','boardMemberUserIds','jobTaskIds','serviceStopTypeId'];
 const unique = v => [...new Set(list(v).map(id).filter(Boolean))];
 const key = v => str(v).replace(/[^a-z0-9]/gi, '').toLowerCase();
 const date = v => v?.toDate?.() || (v instanceof Date ? v : new Date(typeof v === 'number' ? v : v?.seconds ? v.seconds * 1000 : v));
@@ -25,6 +29,12 @@ const presentScope = scope => Object.fromEntries(Object.entries(scope).map(([nam
 const stopIds = o => unique([o.serviceStopId, ...list(o.routeServiceStopIds), ...list(o.serviceStopIds), ...list(o.serviceStopsIds)]);
 const routeIds = r => unique([...list(r.serviceStopsIds), ...list(r.serviceStopIds), ...list(r.rssIds), ...list(r.order).map(v => v.serviceStopId || v.recurringServiceStopId)]);
 const agreementReference = a => { const {rates,settings,workTypes,quotedPayLines,baseCents,totalCents,...reference}=a; return reference; };
+// Keep the preview and accepted payroll rules aligned when job task pay is used
+// without adding a separate visit pay item.
+const paySettingsForOffer = (offer, settings) => offer.paySource === 'Task Contracted Rates'
+  ? { ...settings, routePaySource:'completedTasks', taskPaySource:'taskContractedRate' }
+  : offer.jobId && !offer.routeId && !stopIds(offer).length && offer.workPurpose !== 'diagnostic' && !offer.serviceStopTypeId
+    ? { ...settings, routePaySource:'completedTasks' } : settings;
 const allocation = (amount, scope, selected) => selected.reduce((n, value) => { const at = scope.indexOf(value); return n + (at < 0 ? 0 : Math.floor(amount / scope.length) + (at < amount % scope.length ? 1 : 0)); }, 0);
 const coverageMode = s => ['review','notify','automatic'].includes(s.routeCoverageMode) ? s.routeCoverageMode : s.workOffersRequireApprovalBeforeAssignment || s.workOffersAutoAssignOnAcceptance === false ? 'review' : 'automatic';
 const timestampFields = v => { const result = { ...v }; for (const k of ['serviceDate','proposedStartDate','proposedEndDate','completionDeadlineAt','routeDate','createdAt']) if (result[k] != null && !(result[k] instanceof Date)) { const d = date(result[k]); if (Number.isFinite(d.getTime())) result[k] = d; else delete result[k]; } return result; };
@@ -78,7 +88,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
   function estimate({companyId, offer, scope, ctx, actor}) {
     if(ctx.settings.payrollEnabled===false || ctx.settings.companyPayrollEnabled===false || ctx.settings.payrollDisabled===true)return {lines:[],baseCents:0,incentiveCents:0,totalCents:0,needsReview:offer.paySource!=='Unpaid' || Number(offer.incentive?.amountCents || 0)>0 || Number(offer.incentive?.percentage || 0)>0};
     const selectedIds = unique(scope.stops.map(v=>v.id));
-    if (offer.paySource==='Task Contracted Rates') ctx={...ctx,settings:{...ctx.settings,routePaySource:'completedTasks',taskPaySource:'taskContractedRate'}};
+    ctx={...ctx,settings:paySettingsForOffer(offer,ctx.settings)};
     const allIds = selectedIds.length ? selectedIds : ['job'];
     const fixed = offer.paySource === 'Offered Amount';
     const incentive = offer.incentive || {};
@@ -212,12 +222,37 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const quote=estimate({companyId,offer:draft,scope,ctx:targetId===uid?ctx:await context(t,c,target),actor:target});
         return {...quote,personal:true,lines:quote.lines.map(v=>({...v,title:v.taskName || v.workTypeName || 'Work Pay',sourceTaskId:v.jobTaskId || v.serviceStopTaskId || null}))};
       }
-      if (action === 'save') {
-        if (!can(actor,'322')) fail('permission-denied','You cannot post offered work.');
-        const incoming = timestampFields(data.offer || {}); const offerId = id(incoming.id);
+      if (action === 'save' || action === 'update') {
+        const updating = action === 'update';
+        if (!updating && !can(actor,'322')) fail('permission-denied','You cannot post offered work.');
+        const offerId = id(updating ? data.offerId : data.offer?.id);
         if (!offerId || offerId.includes('/')) fail('invalid-argument','A stable offer ID is required.');
         const existing = record(await t.get(c.collection('workOffers').doc(offerId)));
+        if (updating && !existing) fail('not-found','Work offer not found.');
+        if (updating && !can(actor,'324') && !(can(actor,'322') && existing.createdByUserId===uid)) fail('permission-denied','You cannot edit this offer.');
+        if (updating && data.revision !== undefined && Number(data.revision)!==(existing.revision || 1)) fail('failed-precondition','This offer changed. Refresh it before saving.');
+        const changes = data.changes || {};
+        if (updating && Object.keys(changes).some(field=>!offerEditableFields.includes(field))) fail('invalid-argument','Only offer details, assignment, scope, timing, and pay can be edited here.');
+        if (updating) {
+          for (const field of offerMetadataFields) if (Object.hasOwn(changes,field) && typeof changes[field]!=='string') fail('invalid-argument','Offer titles and notes must be text.');
+          for (const field of ['jobTaskIds','boardIds','boardNames','boardMemberUserIds']) if (Object.hasOwn(changes,field) && (!Array.isArray(changes[field]) || changes[field].some(value=>typeof value!=='string'))) fail('invalid-argument','Choose valid offer tasks and boards.');
+          for (const field of ['proposedStartDate','proposedEndDate','completionDeadlineAt']) if (changes[field]!=null && !Number.isFinite(date(changes[field]).getTime())) fail('invalid-argument','Enter valid offer dates.');
+          if (changes.offeredAmountCents!==undefined && (!Number.isFinite(Number(changes.offeredAmountCents)) || Number(changes.offeredAmountCents)<0)) fail('invalid-argument','Enter a valid non-negative offered amount.');
+        }
+        const incoming = timestampFields(updating ? {...existing,...changes} : data.offer || {});
+        if (updating && Object.hasOwn(changes,'proposedStartDate')) Object.assign(incoming,{timelineStartAt:incoming.proposedStartDate,availableFromAt:incoming.proposedStartDate,availableFrom:incoming.proposedStartDate});
+        if (updating && (Object.hasOwn(changes,'completionDeadlineAt') || Object.hasOwn(changes,'proposedEndDate'))) {
+          const deadline=Object.hasOwn(changes,'completionDeadlineAt')?incoming.completionDeadlineAt:incoming.proposedEndDate;
+          Object.assign(incoming,{completionDeadlineAt:deadline,proposedEndDate:deadline,deadlineAt:deadline,dueAt:deadline,mustCompleteBy:deadline,completeBy:deadline});
+        }
         if (existing && !can(actor,'324') && existing.createdByUserId !== uid) fail('permission-denied','You cannot edit this offer.');
+        if (updating && offerTermsLocked(existing)) {
+          if (Object.keys(changes).some(field=>!offerMetadataFields.includes(field))) fail('failed-precondition','Accepted or closed offer terms are locked. You can still edit the title, description, and notes.');
+          if (!str(incoming.title)) fail('invalid-argument','Enter an offer title.');
+          const patch={...changes,revision:(existing.revision || 1)+1,updatedAt:now(),updatedByUserId:uid,updatedByUserName:actor.name};
+          t.set(c.collection('workOffers').doc(offerId),patch,{merge:true});
+          return {offerId,status:existing.status,revision:patch.revision};
+        }
         if (existing && (list(existing.claims).length || existing.acceptedByUserId || ['Accepted','Scheduled','In Progress','Completed'].includes(existing.status))) fail('failed-precondition','Accepted terms are locked. Create an offer for additional work.');
         incoming.workPurpose=incoming.workPurpose || (key(incoming.serviceStopTypeUseCaseRawValue).includes('estimate')?'diagnostic':'execution');
         incoming.paySource=incoming.paySource || 'Technician Rate';
@@ -226,7 +261,8 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const {job,scope} = await scopeFor(t,c,incoming);
         const management = can(actor,'324');
         if (incoming.paySource==='Offered Amount' && !management && !can(actor,'424')) fail('permission-denied','Management must set fixed offered pay.');
-        if ((cents(incoming.incentive?.amountCents)>0 || Number(incoming.incentive?.percentage)>0) && (!can(actor,'328') || ctx.wide.workOfferIncentivesCreatePayrollLines===false)) fail('permission-denied','Management must authorize payroll incentives.');
+        const changedIncentive=!existing || JSON.stringify(incoming.incentive)!==JSON.stringify(existing.incentive);
+        if (changedIncentive && (cents(incoming.incentive?.amountCents)>0 || Number(incoming.incentive?.percentage)>0) && (!can(actor,'328') || ctx.wide.workOfferIncentivesCreatePayrollLines===false)) fail('permission-denied','Management must authorize payroll incentives.');
         if (!management && incoming.routeTechId && incoming.routeTechId !== uid) fail('permission-denied','You can only offer your own route.');
         if (!management && scope.stops.some(s=>s.techId !== uid)) fail('permission-denied','You can only offer stops assigned to you.');
         if (incoming.routeId && !management && ctx.wide[incoming.routeOfferMode === 'partial' ? 'technicianCanOfferPartialRoutes' : 'technicianCanOfferFullRoutes'] === false) fail('permission-denied','Route coverage posting is disabled.');
@@ -235,15 +271,38 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (purpose==='diagnostic' && !incoming.serviceStopTypeId) incoming.serviceStopTypeId='system_job_estimate_service_stop';
         if (job && purpose !== 'diagnostic' && !scope.tasks.length) fail('failed-precondition','Select the work to offer, or choose an estimate visit.');
         const status = ctx.wide.workOffersRequireApprovalBeforePosting || ctx.wide.workOffersGoLiveByDefault === false ? 'Pending Approval' : incoming.offerType === 'Direct User' ? 'Sent' : 'Posted';
-        const offer = { ...incoming, id:offerId, companyId, status, schemaVersion:2, revision:(existing?.revision || 0)+1, workPurpose:purpose, scopeSnapshot:scope, scopeSignature:scopeSignature(scope), jobTaskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), routeServiceStopIds:scope.stops.map(v=>v.id), serviceStopIds:scope.stops.map(v=>v.id), acceptedByUserId:'', acceptedByUserName:'', claims:[], createdAt:existing?.createdAt || now(), createdByUserId:existing?.createdByUserId || uid, createdByUserName:existing?.createdByUserName || actor.name, updatedAt:now(), rejectionReason:'', workerNotes:incoming.workerNotes || '', adminNotes:incoming.adminNotes || '', serviceStopId:incoming.serviceStopId || '', serviceStopInternalId:incoming.serviceStopInternalId || '', sourceLaborContractId:'', externalCompanyId:'', externalCompanyName:'' };
+        const offer = { ...incoming, id:offerId, companyId, status, schemaVersion:2, revision:existing ? (existing.revision || 1)+1 : 1, workPurpose:purpose, scopeSnapshot:scope, scopeSignature:scopeSignature(scope), jobTaskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), routeServiceStopIds:scope.stops.map(v=>v.id), serviceStopIds:scope.stops.map(v=>v.id), acceptedByUserId:'', acceptedByUserName:'', claims:[], createdAt:existing?.createdAt || now(), createdByUserId:existing?.createdByUserId || uid, createdByUserName:existing?.createdByUserName || actor.name, updatedAt:now(), rejectionReason:'', workerNotes:incoming.workerNotes || '', adminNotes:incoming.adminNotes || '', serviceStopId:incoming.serviceStopId || '', serviceStopInternalId:incoming.serviceStopInternalId || '', sourceLaborContractId:'', externalCompanyId:'', externalCompanyName:'' };
+        if (updating) {
+          if (!str(offer.title) || !Number.isFinite(Number(offer.estimatedMinutes || 0)) || Number(offer.estimatedMinutes || 0)<0) fail('invalid-argument','Enter a title and a valid estimated duration.');
+          if (offer.offerType==='Direct User' && !offer.offeredToUserId) fail('invalid-argument','Select the technician receiving this offer.');
+          for (const field of ['proposedStartDate','proposedEndDate','completionDeadlineAt']) if (offer[field] && !Number.isFinite(date(offer[field]).getTime())) fail('invalid-argument','Enter valid offer dates.');
+          const base=offer.paySource==='Offered Amount' ? cents(offer.offeredAmountCents) : offer.paySource==='Unpaid' ? 0 : offer.paySource==='Task Contracted Rates' ? estimate({companyId,offer,scope,ctx,actor}).baseCents : null;
+          const bonus=offer.incentive?.type==='flat' ? cents(offer.incentive.amountCents) : base!==null && offer.incentive?.type==='percentage' ? Math.round(base*Number(offer.incentive.percentage || 0)/100) : 0;
+          Object.assign(offer,{estimatedBasePayCents:base,basePayCents:base,estimatedPayCents:base,estimatedPayTotalCents:base===null?null:base+bonus,estimatedPayWithIncentiveCents:base===null?null:base+bonus,totalPayWithIncentiveCents:base===null?null:base+bonus,estimatedLaborCents:base || 0,updatedByUserId:uid,updatedByUserName:actor.name});
+        }
         if(offer.paySource==='Technician Rate') { offer.estimatedPayLines=[];offer.estimatedPayTotalCents=null;offer.estimatedLaborCents=0; }
         t.set(c.collection('workOffers').doc(offerId),offer);
         return { offerId, status, revision:offer.revision, estimatedPayTotalCents:offer.estimatedPayTotalCents ?? null };
       }
-      const offerId = id(data.offerId), ref = c.collection('workOffers').doc(offerId);
-      if (!offerId) fail('invalid-argument','Choose a work offer.');
+      const offerId = id(data.offerId);
+      if (!offerId || offerId.includes('/')) fail('invalid-argument','Choose a work offer.');
+      const ref = c.collection('workOffers').doc(offerId);
       const offer = record(await t.get(ref)); if (!offer) fail('not-found','Work offer not found.');
       const claims = list(offer.claims), management = can(actor,'330');
+      if (action === 'delete') {
+        if (!can(actor,'324') && !(can(actor,'322') && offer.createdByUserId===uid)) fail('permission-denied','You cannot delete this offer.');
+        if (data.revision!==undefined && Number(data.revision)!==(offer.revision || 1)) fail('failed-precondition','This offer changed. Refresh it before deleting.');
+        if (hasAcceptedWork(offer)) fail('failed-precondition','Accepted work cannot be deleted. Its assignments and agreed pay must be preserved.');
+        const payroll=await t.get(c.collection('payLineItems').where('workOfferId','==',offerId).limit(1));
+        if (!payroll.empty) fail('failed-precondition','This offer has recorded payroll and cannot be deleted.');
+        const pending=claims.filter(v=>v.status==='Acceptance Pending Approval');
+        const tasks=offer.jobId ? await Promise.all(unique(pending.flatMap(v=>v.taskIds)).map(value=>t.get(c.collection('workOrders').doc(id(offer.jobId)).collection('tasks').doc(value)))) : [];
+        const stops=await Promise.all(unique(pending.flatMap(v=>v.stopIds)).map(value=>t.get(c.collection('serviceStops').doc(value))));
+        tasks.filter(v=>v.exists && v.data().claimedWorkOfferId===offerId).forEach(v=>t.set(v.ref,{claimedWorkOfferId:null},{merge:true}));
+        stops.filter(v=>v.exists && v.data().pendingWorkOfferId===offerId).forEach(v=>t.set(v.ref,{pendingWorkOfferId:null},{merge:true}));
+        t.delete(ref);
+        return {offerId,deleted:true};
+      }
       if(action==='verifyScheduledStop') {
         if(!can(actor,'324') && !claims.some(v=>v.workerId===uid))fail('permission-denied','Only the accepted technician or management can access scheduling.');
         if(!claims.some(v=>v.serviceStopId===id(data.serviceStopId)) && offer.serviceStopId!==id(data.serviceStopId))fail('failed-precondition','Use Schedule Work to create and link the stop atomically.');
@@ -255,14 +314,20 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         t.set(ref,{status:data.status,updatedAt:now()},{merge:true}); return {offerId,status:data.status};
       }
       if (action === 'details') {
-        if (!can(actor,'324') && offer.acceptedByUserId!==uid && offer.offeredToUserId!==uid && offer.createdByUserId!==uid && !claims.some(v=>v.workerId===uid)) await checkEligibility(t,c,actor,offer);
-        const {scope}=await scopeFor(t,c,offer),stored=offer.scopeSnapshot || scope;
+        if (!can(actor,'324') && !can(actor,'332') && offer.acceptedByUserId!==uid && offer.offeredToUserId!==uid && offer.createdByUserId!==uid && !claims.some(v=>v.workerId===uid)) await checkEligibility(t,c,actor,offer);
+        let scope, scopeUnavailable=false;
+        try { ({scope}=await scopeFor(t,c,offer)); }
+        catch(error) { if (!offer.scopeSnapshot || !['not-found','failed-precondition'].includes(error.code)) throw error; scope=offer.scopeSnapshot; scopeUnavailable=true; }
+        const stored=offer.scopeSnapshot || scope;
         const display=Object.fromEntries(Object.entries(stored).map(([name,items])=>[name,list(items).map(item=>{const live=list(scope[name]).find(v=>v.id===item.id);return {...item,status:live?.status || item.status,operationStatus:live?.operationStatus || item.operationStatus};})]));
         const ownClaim=claims.find(v=>v.workerId===uid && !['Rejected','Cancelled','Transferred'].includes(v.status));
         if(ownClaim && !can(actor,'324')){display.stops=display.stops.filter(v=>ownClaim.stopIds.includes(v.id) || v.id===ownClaim.serviceStopId);display.tasks=display.tasks.filter(v=>ownClaim.taskIds.includes(v.id) || (ownClaim.agreement.stopTasks || []).some(ref=>ref.taskId===v.id && ref.stopId===v.sourceStopId));display.products=display.products.filter(v=>!v.sourceStopId || ownClaim.stopIds.includes(v.sourceStopId));}
         const agreed=ownClaim?.agreement || ((can(actor,'420') || can(actor,'424'))?offer.acceptedTerms || claims.find(v=>!['Rejected','Cancelled','Transferred'].includes(v.status))?.agreement:null);
         const pay=agreed?{baseCents:agreed.baseCents || 0,totalCents:agreed.totalCents || 0,incentiveCents:(agreed.totalCents || 0)-(agreed.baseCents || 0),lines:agreed.quotedPayLines || [],hourlyPaySource:agreed.settings?.hourlyPaySource || null}:null;
-        return {pay,scope:presentScope(display),scopeChanged:!!offer.scopeSignature && offer.scopeSignature!==scopeSignature(scope)};
+        const finance=can(actor,'420') || can(actor,'424');
+        const terms=a=>a?{workerId:a.workerId,workerName:a.workerName,paySource:a.paySource,revision:a.revision,...(a.workerId===uid || finance?{baseCents:a.baseCents,totalCents:a.totalCents,fixedAmountCents:a.fixedAmountCents}:{})}:null;
+        const canEdit=can(actor,'324') || can(actor,'322') && offer.createdByUserId===uid;
+        return {pay,scope:presentScope(display),scopeChanged:scopeUnavailable || !!offer.scopeSignature && offer.scopeSignature!==scopeSignature(scope),offer:{...offer,adminNotes:can(actor,'324') || can(actor,'332')?offer.adminNotes:'',scopeSnapshot:presentScope(stored),acceptedTerms:terms(offer.acceptedTerms),claims:claims.map(v=>({...v,agreement:terms(v.agreement)}))},management:{canEdit,canDelete:canEdit && !hasAcceptedWork(offer),termsLocked:offerTermsLocked(offer),canIncentivize:can(actor,'328') && ctx.wide.workOfferIncentivesCreatePayrollLines!==false,incentiveLocked:(hasAcceptedWork(offer) || claims.length>0) && !list(offer.remainingStopIds).length}};
       }
       if (action === 'preview') {
         await checkEligibility(t,c,actor,offer);
@@ -296,7 +361,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (preview.needsReview && (ctx.settings.payrollEnabled===false || ctx.settings.companyPayrollEnabled===false || ctx.settings.payrollDisabled===true))fail('failed-precondition','Enable company payroll before accepting paid work.');
         if (!['Offered Amount','Unpaid'].includes(offer.paySource) && preview.needsReview) fail('failed-precondition','A manager must resolve missing pay setup before this work can be accepted.');
         const selectedTypes = new Set([...scope.tasks.map(v=>jobPayFields(v).payTypeId),...scope.stops.flatMap(v=>[v.payTypeId || v.typeId,...(v.defaultWorkTypeIds || [])]),offer.serviceStopTypeId].filter(Boolean));
-        const agreement = { offerId, revision:offer.revision || 1, workerId:uid, workerName:actor.name, taskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), stopTasks:scope.tasks.filter(v=>requested.includes(v.sourceStopId)).map(v=>({stopId:v.sourceStopId,taskId:v.id})), scopeStopIds:all, paySource:offer.paySource, rateDate:offer.proposedStartDate || scope.stops[0]?.serviceDate || now(), fixedAmountCents:cents(offer.offeredAmountCents), incentive:offer.incentive || {type:'none'}, rates:ctx.rates, settings:offer.paySource==='Task Contracted Rates'?{...ctx.settings,routePaySource:'completedTasks',taskPaySource:'taskContractedRate'}:ctx.settings, workTypes:ctx.workTypes.filter(v=>selectedTypes.has(v.id)), quotedPayLines:preview.lines, acceptedAt:now(), baseCents:preview.baseCents, totalCents:preview.totalCents };
+        const agreement = { offerId, revision:offer.revision || 1, workerId:uid, workerName:actor.name, taskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), stopTasks:scope.tasks.filter(v=>requested.includes(v.sourceStopId)).map(v=>({stopId:v.sourceStopId,taskId:v.id})), scopeStopIds:all, paySource:offer.paySource, rateDate:offer.proposedStartDate || scope.stops[0]?.serviceDate || now(), fixedAmountCents:cents(offer.offeredAmountCents), incentive:offer.incentive || {type:'none'}, rates:ctx.rates, settings:paySettingsForOffer(offer,ctx.settings), workTypes:ctx.workTypes.filter(v=>selectedTypes.has(v.id)), quotedPayLines:preview.lines, acceptedAt:now(), baseCents:preview.baseCents, totalCents:preview.totalCents };
         const claim = { id:id(data.claimId) || stable(offerId+'_'+uid+'_'+claims.length), workerId:uid, workerName:actor.name, workerType:actor.workerType, stopIds:requested, taskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), status:mode==='review' ? 'Acceptance Pending Approval' : 'Accepted', agreement, createdAt:now() };
         agreement.claimId=claim.id;
         const apply = await prepareAssignment(t,c,offer,claim);
@@ -359,10 +424,13 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
       }
       if (action === 'incentive') {
         if (!can(actor,'328') || ctx.wide.workOfferIncentivesCreatePayrollLines===false) fail('permission-denied','You cannot change incentives.');
-        if (claims.length && !list(offer.remainingStopIds).length) fail('failed-precondition','This work has already been claimed. Offer additional work separately.');
-        const value = data.incentive || {}; if (!['none','flat','percentage'].includes(value.type) || Number(value.amountCents || 0)<0 || Number(value.percentage || 0)<0) fail('invalid-argument','Enter a valid non-negative incentive.');
-        const incentive = {type:value.type,amountCents:cents(value.amountCents),percentage:Number(value.percentage || 0),notes:str(value.notes)};
-        t.set(ref,{incentive,revision:(offer.revision || 1)+1,incentiveUpdatedAt:now(),updatedAt:now()},{merge:true});
+        if (data.revision!==undefined && Number(data.revision)!==(offer.revision || 1)) fail('failed-precondition','This offer changed. Refresh it before changing incentives.');
+        if ((hasAcceptedWork(offer) || claims.length) && !list(offer.remainingStopIds).length) fail('failed-precondition','This work has already been claimed. Offer additional work separately.');
+        const value = data.incentive || {}; if (!['none','flat','percentage'].includes(value.type) || !Number.isFinite(Number(value.amountCents || 0)) || !Number.isFinite(Number(value.percentage || 0)) || Number(value.amountCents || 0)<0 || Number(value.percentage || 0)<0) fail('invalid-argument','Enter a valid non-negative incentive.');
+        const incentive = {type:value.type,amountCents:value.type==='flat'?cents(value.amountCents):0,percentage:value.type==='percentage'?Number(value.percentage || 0):0,notes:value.type==='none'?'':str(value.notes)};
+        const base=offer.paySource==='Offered Amount'?cents(offer.offeredAmountCents):offer.paySource==='Unpaid'?0:offer.estimatedBasePayCents ?? offer.basePayCents ?? null;
+        const bonus=incentive.type==='flat'?incentive.amountCents:base!==null && incentive.type==='percentage'?Math.round(base*incentive.percentage/100):0;
+        t.set(ref,{incentive,incentiveType:incentive.type,incentiveAmountCents:incentive.amountCents,incentivePercentage:incentive.percentage,incentiveNotes:incentive.notes,estimatedBasePayCents:base,basePayCents:base,estimatedPayWithIncentiveCents:base===null?null:base+bonus,totalPayWithIncentiveCents:base===null?null:base+bonus,revision:(offer.revision || 1)+1,incentiveUpdatedAt:now(),incentiveUpdatedByUserId:uid,updatedAt:now()},{merge:true});
         return {offerId,status:offer.status};
       }
       fail('invalid-argument','Unknown work-offer action.');
@@ -382,4 +450,4 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
   }
   return { command, actorFor, context, scopeFor, estimate, can, company };
 }
-module.exports = {createTechnicianWorkWorkflow, coverageMode, allocation, routeIds, stopIds, date, rows, record, id, key, done, stable, agreementReference};
+module.exports = {createTechnicianWorkWorkflow, coverageMode, allocation, routeIds, stopIds, date, rows, record, id, key, done, stable, agreementReference, paySettingsForOffer};

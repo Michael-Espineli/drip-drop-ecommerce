@@ -5,7 +5,10 @@ import { getJobMaterialVendorItemId, loadJobProductCatalog, buildJobProductCatal
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
 import { calculatePayLines, jobPayFields } from "../../../utils/payroll/payCalculation";
 import JobPayrollFields from "./JobPayrollFields";
+import WorkOfferPaySection from "./WorkOfferPaySection";
+import JobWorkOffers from "./JobWorkOffers";
 import useServicePayrollData from "../../../hooks/useServicePayrollData";
+import usePlanEditorAutosave from "../../../hooks/usePlanEditorAutosave";
 import ServicePayrollCostPreview from "../sales/ServicePayrollCostPreview";
 import { taskDefaultsFromPayItem, updateServiceTaskPayrollField } from "../../../utils/payroll/servicePayrollPreview";
 
@@ -35,6 +38,8 @@ import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import Select from "react-select";
+import CreatableSelect from "react-select/creatable";
+import CreatePayrollPayItemDialog from "../payroll/CreatePayrollPayItemDialog";
 import JobDeleteOptionsDialog from "./JobDeleteOptionsDialog";
 import JobUseTemplateDialog from "./JobUseTemplateDialog";
 import { copyJobTemplateScope, combineJobTemplateScope } from "../../../utils/jobTemplateScope";
@@ -302,8 +307,6 @@ const getFirestoreDocId = (record = {}) =>
   record.firestoreId || record.docId || record.id || "";
 const PLAN_EDITOR_UNSAVED_WARNING =
   "You have unsaved plan changes. Leave this page and discard those changes?";
-const PLAN_EDITOR_DISCARD_WARNING =
-  "You have unsaved plan changes. Load another plan and discard those changes?";
 
 const salesPaymentTermsDueDays = (paymentTerms = "") => {
   const key = String(paymentTerms || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
@@ -581,13 +584,18 @@ const JobLineActionMenu = ({
       <MenuButton
         type="button"
         disabled={disabled}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
         aria-label={label}
         title={label}
       >
         <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
       </MenuButton>
-      <MenuItems className="absolute right-0 z-30 mt-2 w-44 origin-top-right overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
+      <MenuItems
+        anchor={{ to: "bottom end", gap: 8, padding: 12 }}
+        portal
+        modal={false}
+        className="z-[60] w-48 rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none"
+      >
         {visibleActions.map((action) => {
           const Icon = action.icon;
           return (
@@ -597,7 +605,7 @@ const JobLineActionMenu = ({
                 onClick={(event) => action.onClick?.(event)}
                 disabled={action.disabled}
                 className={[
-                  "flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+                  "flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
                   toneClassFor(action.tone),
                 ].join(" ")}
               >
@@ -1313,6 +1321,8 @@ const JobDetailView = () => {
   const [showServiceCatalogCreator, setShowServiceCatalogCreator] = useState(false);
   const [savingServiceCatalogCreator, setSavingServiceCatalogCreator] = useState(false);
   const [serviceCatalogCreatorForm, setServiceCatalogCreatorForm] = useState(() => emptyJobCatalogServiceForm());
+  const [newPayrollPayItemName, setNewPayrollPayItemName] = useState(null);
+  const [createdServicePayItems, setCreatedServicePayItems] = useState([]);
   const [newTaskLaborLineId, setNewTaskLaborLineId] = useState("");
   const [taskSelectorLaborLineId, setTaskSelectorLaborLineId] = useState("");
   const [laborLineTaskSelectorSearch, setLaborLineTaskSelectorSearch] = useState("");
@@ -1737,7 +1747,6 @@ const JobDetailView = () => {
   const [acceptingPlanId, setAcceptingPlanId] = useState("");
   const [selectedPlanEditorId, setSelectedPlanEditorId] = useState("");
   const [loadingPlanEditorId, setLoadingPlanEditorId] = useState("");
-  const [savingPlanEditor, setSavingPlanEditor] = useState(false);
   const [planEditorDraft, setPlanEditorDraft] = useState({
     title: "",
     description: "",
@@ -4756,6 +4765,7 @@ const JobDetailView = () => {
     selectedTaskIds: [],
     serviceStopTypeId: "",
     paySource: "Technician Rate",
+    overridePay: false,
     offeredAmount: "",
     incentiveType: "none",
     incentiveAmount: "",
@@ -5142,17 +5152,28 @@ const JobDetailView = () => {
     setSelectedPlanEditorId(jobPlans[0]?.id || "");
   }, [activePlan?.id, job.activePlanId, job.activeSolutionId, jobPlans, selectedPlanEditorId]);
 
+  const previousEditorPlan = useRef(null);
+  const planEditorEditedFields = useRef(new Set());
+  const updatePlanEditorDraft = (field, value) => {
+    planEditorEditedFields.current.add(field);
+    setPlanEditorDraft((current) => ({ ...current, [field]: value }));
+  };
   useEffect(() => {
-    if (!selectedEditorPlan) {
-      setPlanEditorDraft({ title: "", description: "", planTier: DEFAULT_JOB_PLAN_TIER });
-      return;
-    }
-
-    setPlanEditorDraft({
-      title: getJobPlanDisplayName(selectedEditorPlan, ""),
-      description: selectedEditorPlan.description || "",
-      planTier: normalizeJobPlanTier(selectedEditorPlan.planTier || selectedEditorPlan.solutionTier || DEFAULT_JOB_PLAN_TIER),
-    });
+    const previous = previousEditorPlan.current;
+    const next = {
+      id: selectedEditorPlan?.id || "",
+      title: selectedEditorPlan ? getJobPlanDisplayName(selectedEditorPlan, "") : "",
+      description: selectedEditorPlan?.description || "",
+      planTier: normalizeJobPlanTier(selectedEditorPlan?.planTier || selectedEditorPlan?.solutionTier || DEFAULT_JOB_PLAN_TIER),
+    };
+    previousEditorPlan.current = next;
+    if (!previous || previous.id !== next.id) planEditorEditedFields.current.clear();
+    setPlanEditorDraft((current) => Object.fromEntries(
+      ["title", "description", "planTier"].map((field) => {
+        if (current[field] === next[field]) planEditorEditedFields.current.delete(field);
+        return [field, planEditorEditedFields.current.has(field) ? current[field] : next[field]];
+      })
+    ));
   }, [selectedEditorPlan]);
 
   const explicitPlanTotalCents = (solution = {}) =>
@@ -5298,8 +5319,6 @@ const JobDetailView = () => {
     hasPlanEditorContent &&
     currentPlanEditorSnapshot !== savedPlanEditorSnapshot
   );
-
-  useUnsavedChangesWarning(hasUnsavedPlanEditorChanges, PLAN_EDITOR_UNSAVED_WARNING);
 
   const currentIssuePriority = () =>
     normalizeIssuePriority(job.issuePriorityLevel || job.priorityLevel || job.solutionTier || DEFAULT_ISSUE_PRIORITY);
@@ -5711,11 +5730,10 @@ const JobDetailView = () => {
     const nextDescription = typeof description === "string"
       ? description.trim()
       : (existingSolution?.description || "").trim();
-    const currentLineItems = buildSuggestedContractSnapshot();
-    const totalAmountCents =
-      currentLineItems.reduce((total, item) => total + cents(item.totalAmountCents || item.amount || 0), 0) ||
-      cents(job.rate);
-    const laborCostCents = plannedTotalLaborCents || cents(job.laborCost);
+    const hasScopedPricing = [taskList, plannedServiceStops, laborLineItems, shoppingList,
+      existingSolution?.tasks, existingSolution?.plannedServiceStops,
+      existingSolution?.laborLineItems, existingSolution?.estimateLaborLineItems, existingSolution?.shoppingItems,
+    ].some((items) => items?.length);
     const requestedStatus = normalizeJobPlanStatus(status || existingSolution?.status || JOB_PLAN_STATUS.DRAFT);
     const nextStatus = existingSolution?.isAccepted ? JOB_PLAN_STATUS.ACCEPTED : requestedStatus;
     const nowMillis = Date.now();
@@ -5728,8 +5746,8 @@ const JobDetailView = () => {
         solutionTierLabel,
         title: nextTitle,
         description: nextDescription,
-        totalAmountCents,
-        laborCostCents,
+        fallbackRateCents: hasScopedPricing ? 0 : cents(job.rate),
+        fallbackLaborCostCents: hasScopedPricing ? 0 : cents(job.laborCost),
         status: nextStatus,
       }),
       isAccepted: Boolean(existingSolution?.isAccepted),
@@ -5743,10 +5761,11 @@ const JobDetailView = () => {
       createdByUserName: existingSolution?.createdByUserName || getAuditUserName(),
     };
 
-    await setDoc(doc(jobPlansPath(recentlySelectedCompany, jobId), solutionId), payload, { merge: true });
-
+    const batch = writeBatch(db);
+    batch.set(doc(jobPlansPath(recentlySelectedCompany, jobId), solutionId), payload, { merge: true });
+    let jobUpdates = null;
     if (makeActive) {
-      const jobUpdates = {
+      jobUpdates = {
         activePlanId: solutionId,
         activePlanTier: solutionTier,
         activePlanTierLabel: solutionTierLabel,
@@ -5757,28 +5776,38 @@ const JobDetailView = () => {
         activePlanRecommendationRankLabel: solutionTierLabel,
         planSelectionStatus: nextStatus,
         solutionSelectionStatus: nextStatus,
+        rate: payload.totalAmountCents,
+        laborCost: payload.laborCostCents,
+        estimateLineItems: payload.estimateLineItems,
+        estimateSubtotalCents: payload.subtotalAmountCents,
+        estimateTotalCents: payload.totalAmountCents,
+        taskCount: payload.taskCount,
+        plannedStopCount: payload.plannedStopCount,
+        laborLineCount: payload.laborLineCount,
+        materialCount: payload.materialCount,
         updatedAt: serverTimestamp(),
         updatedAtMillis: nowMillis,
       };
 
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobUpdates);
+      batch.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobUpdates);
 
-      const inactiveWrites = (jobPlans || [])
+      (jobPlans || [])
         .filter((solution) => solution.id !== solutionId && solution.isActivePlan)
-        .map((solution) => {
+        .forEach((solution) => {
           const sourcePath = solution._sourceCollection === "solutions"
             ? legacyJobSolutionsPath(recentlySelectedCompany, jobId)
             : jobPlansPath(recentlySelectedCompany, jobId);
 
-          return setDoc(doc(sourcePath, solution.id), {
+          batch.set(doc(sourcePath, solution.id), {
             isActivePlan: false,
             updatedAt: serverTimestamp(),
             updatedAtMillis: nowMillis,
           }, { merge: true });
         });
+    }
+    await batch.commit();
 
-      if (inactiveWrites.length) await Promise.all(inactiveWrites);
-
+    if (jobUpdates) {
       setJob((prev) => ({
         ...prev,
         ...jobUpdates,
@@ -5829,7 +5858,7 @@ const JobDetailView = () => {
       return;
     }
 
-    if (!(await confirmDiscardUnsavedPlanChanges())) return;
+    if (!(await savePendingPlanChanges())) return;
 
     try {
       setSavingPlan(true);
@@ -5934,14 +5963,15 @@ const JobDetailView = () => {
     return { tasksToWrite, plannedStopsToWrite, laborLinesToWrite, materialsToWrite, savedJob };
   };
 
-  const confirmDiscardUnsavedPlanChanges = async () => (
-    !hasUnsavedPlanEditorChanges || await appConfirm({
-      title: "Unsaved Plan Changes",
-      message: PLAN_EDITOR_DISCARD_WARNING,
-      confirmLabel: "Discard Changes",
-      variant: "danger",
-    })
-  );
+  const savePendingPlanChanges = async () => {
+    try {
+      await flushPlanEditorSave();
+      return true;
+    } catch (error) {
+      toast.error("Could not save plan changes. Retry before switching plans.");
+      return false;
+    }
+  };
 
   const loadPlanIntoEditor = async (
     solution,
@@ -5954,7 +5984,7 @@ const JobDetailView = () => {
     if (!requireBuildJobEstimatePlan("build job estimate plans")) return;
     if (!solution?.id || !recentlySelectedCompany || !jobId) return;
 
-    if (confirmUnsavedChanges && !(await confirmDiscardUnsavedPlanChanges())) return false;
+    if (confirmUnsavedChanges && !(await savePendingPlanChanges())) return false;
 
     try {
       setLoadingPlanEditorId(solution.id);
@@ -5988,46 +6018,39 @@ const JobDetailView = () => {
     await loadPlanIntoEditor(nextPlan);
   };
 
-  const saveSelectedEditorPlan = async () => {
-    if (!requireBuildJobEstimatePlan("build job estimate plans")) return;
+  const planEditorWorkspaceReady = !loading && !plansLoading && !loadingPlanEditorId &&
+    !Object.values(sectionLoading).some(Boolean);
+  const editorPlanMatchesJob = Boolean(selectedEditorPlan?.id) &&
+    ((!job.activePlanId && !job.activeSolutionId) || selectedEditorPlan.id === (job.activePlanId || job.activeSolutionId));
+  const {
+    status: planEditorSaveStatus,
+    flush: flushPlanEditorSave,
+    saving: savingPlanEditor,
+    hasPendingChanges: hasPendingPlanEditorSave,
+  } = usePlanEditorAutosave({
+    documentKey: `${recentlySelectedCompany}/${jobId}/${selectedEditorPlan?.id || ""}`,
+    snapshot: currentPlanEditorSnapshot,
+    dirty: hasUnsavedPlanEditorChanges,
+    enabled: canBuildJobEstimatePlan && editorPlanMatchesJob && planEditorWorkspaceReady && !applyingJobTemplate &&
+      !savingTaskEdit && !savingLaborLine && !addingCatalogServiceId,
+    save: () => saveCurrentEditorToPlan({
+      planId: selectedEditorPlan.id,
+      title: planEditorDraft.title.trim() || getJobPlanDisplayName(selectedEditorPlan, "Untitled Plan"),
+      planTier: planEditorDraft.planTier,
+      status: selectedEditorPlan.status || JOB_PLAN_STATUS.DRAFT,
+      description: planEditorDraft.description,
+      makeActive: editorPlanMatchesJob,
+      showToast: false,
+      recordHistory: true,
+      historyTitle: `Plan automatically saved: ${planEditorDraft.title.trim() || getJobPlanDisplayName(selectedEditorPlan, "Untitled Plan")}`,
+    }),
+  });
 
-    if (!selectedEditorPlan?.id) {
-      openAddPlanModal({
-        title: planEditorDraft.title.trim(),
-        description: planEditorDraft.description,
-      });
-      return;
-    }
-
-    try {
-      setSavingPlanEditor(true);
-      const editorTitle = planEditorDraft.title.trim();
-      const editorDescription = planEditorDraft.description.trim();
-      if (!editorTitle && !getJobPlanDisplayName(selectedEditorPlan, "")) {
-        toast.error("Add a plan name");
-        return;
-      }
-      await saveCurrentEditorToPlan({
-        planId: selectedEditorPlan.id,
-        title: editorTitle || getJobPlanDisplayName(selectedEditorPlan, ""),
-        planTier: planEditorDraft.planTier || selectedEditorPlan.planTier || selectedEditorPlan.solutionTier,
-        status: selectedEditorPlan.status || JOB_PLAN_STATUS.DRAFT,
-        description: editorDescription,
-        makeActive: true,
-        showToast: true,
-        recordHistory: true,
-        historyTitle: `Plan saved from Planned editor: ${editorTitle || getJobPlanDisplayName(selectedEditorPlan, "Untitled Plan")}`,
-      });
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to save plan");
-    } finally {
-      setSavingPlanEditor(false);
-    }
-  };
+  useUnsavedChangesWarning(hasPendingPlanEditorSave, PLAN_EDITOR_UNSAVED_WARNING);
 
   const refreshEditorPlanBeforeEstimate = async () => {
     if (!canBuildJobEstimatePlan) return null;
+    await flushPlanEditorSave();
 
     const hasEditableScope =
       (taskList || []).length > 0 ||
@@ -6058,6 +6081,7 @@ const JobDetailView = () => {
 
   const promotePlanToActiveWork = async (solution, options = {}) => {
     if (!solution?.id || !recentlySelectedCompany || !jobId) return { readyShoppingItemCount: 0 };
+    await flushPlanEditorSave();
     const { savedJob, materialsToWrite } = await replacePlannedWorkspace(solution, { ...options, accepted: true });
     setSelectedBillingStatus({ value: savedJob.billingStatus, label: savedJob.billingStatus });
     setSelectedOperationStatus({ value: savedJob.operationStatus, label: savedJob.operationStatus });
@@ -7763,15 +7787,34 @@ const JobDetailView = () => {
     [selectedWorkOfferTasks]
   );
 
-  const selectedWorkOfferLaborCents = useMemo(
-    () => selectedWorkOfferTasks.reduce((total, task) => total + cents(task.contractedRate), 0),
-    [selectedWorkOfferTasks]
-  );
-
-  const workOfferFormBasePayCents = workOfferQuote?.baseCents ?? (workOfferForm.paySource === "Offered Amount" ? Math.round(Number(workOfferForm.offeredAmount || 0) * 100) : 0);
+  const canIncentivizeWorkOffer = can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID);
+  const selectedWorkOfferServices = useMemo(() => {
+    const taskIds = new Set(selectedWorkOfferTasks.map((task) => task.id));
+    return (laborLineItems || []).filter((line) =>
+      (line.taskIds?.length ? line.taskIds : line.laborLineTaskIds || []).some((id) => taskIds.has(typeof id === "object" ? id.id : id)) ||
+      selectedWorkOfferTasks.some((task) => task.laborLineId === line.id || (task.laborLineIds || []).includes(line.id))
+    );
+  }, [laborLineItems, selectedWorkOfferTasks]);
+  const plannedWorkOfferPayTypeIds = useMemo(() => (
+    [...new Set(selectedWorkOfferServices.map((service) => jobPayFields(service).payTypeId).filter(Boolean))]
+  ), [selectedWorkOfferServices]);
+  const workOfferPlanPayError = workOfferForm.workPurpose !== "diagnostic" && !workOfferForm.overridePay && plannedWorkOfferPayTypeIds.length > 1
+    ? "Selected services use different visit pay items. Select tasks from services with the same pay item, or set an optional pay override for this offer."
+    : "";
+  const workOfferPayTerms = useMemo(() => {
+    const diagnostic = workOfferForm.workPurpose === "diagnostic";
+    const serviceStopTypeId = workOfferForm.overridePay ? workOfferForm.serviceStopTypeId
+      : diagnostic ? "" : plannedWorkOfferPayTypeIds.length === 1 ? plannedWorkOfferPayTypeIds[0] : "";
+    return {
+      serviceStopTypeId: serviceStopTypeId || (diagnostic ? "system_job_estimate_service_stop" : ""),
+      paySource: workOfferForm.overridePay ? workOfferForm.paySource : "Technician Rate",
+      offeredAmountCents: workOfferForm.overridePay && workOfferForm.paySource === "Offered Amount"
+        ? Math.round(Number(workOfferForm.offeredAmount || 0) * 100) : 0,
+    };
+  }, [workOfferForm.workPurpose, workOfferForm.overridePay, workOfferForm.serviceStopTypeId, workOfferForm.paySource, workOfferForm.offeredAmount, plannedWorkOfferPayTypeIds]);
 
   const workOfferFormIncentive = useMemo(() => (
-    can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID)
+    canIncentivizeWorkOffer
       ? normalizeWorkOfferIncentive({
         incentive: {
           type: workOfferForm.incentiveType,
@@ -7782,32 +7825,23 @@ const JobDetailView = () => {
       })
       : normalizeWorkOfferIncentive()
   ), [
-    can,
+    canIncentivizeWorkOffer,
     workOfferForm.incentiveAmount,
     workOfferForm.incentiveNotes,
     workOfferForm.incentivePercentage,
     workOfferForm.incentiveType,
   ]);
 
-  const workOfferFormIncentiveCents = useMemo(() => {
-    if (workOfferFormIncentive.type === "flat") return workOfferFormIncentive.amountCents;
-    if (workOfferFormIncentive.type === "percentage") {
-      return Math.round(workOfferFormBasePayCents * (workOfferFormIncentive.percentage / 100));
-    }
-    return 0;
-  }, [workOfferFormBasePayCents, workOfferFormIncentive]);
-
-  const workOfferFormEstimatedTotalCents = workOfferFormBasePayCents + workOfferFormIncentiveCents;
   useEffect(() => {
     if (!showCreateWorkOfferModal || !recentlySelectedCompany || !jobId) return;
     let cancelled = false;
     setWorkOfferQuote(null); setWorkOfferQuoteError("");
     const timer = setTimeout(() => manageTechnicianWork(recentlySelectedCompany,"quote",{
       technicianId:workOfferForm.offerType === "Direct User" ? workOfferForm.workerId : "",
-      offer:{jobId,jobTaskIds:workOfferForm.workPurpose === "diagnostic" ? [] : workOfferForm.selectedTaskIds,workPurpose:workOfferForm.workPurpose || "execution",serviceStopTypeId:workOfferForm.serviceStopTypeId,estimatedMinutes:workOfferForm.workPurpose === "diagnostic" ? Number(workOfferForm.diagnosticMinutes || 60) : selectedWorkOfferMinutes,paySource:workOfferForm.paySource,offeredAmountCents:Math.round(Number(workOfferForm.offeredAmount || 0)*100),incentive:workOfferFormIncentive,proposedStartDate:workOfferForm.includeDate ? new Date(workOfferForm.proposedStartDate) : null}
+      offer:{jobId,jobTaskIds:workOfferForm.workPurpose === "diagnostic" ? [] : workOfferForm.selectedTaskIds,workPurpose:workOfferForm.workPurpose || "execution",...workOfferPayTerms,estimatedMinutes:workOfferForm.workPurpose === "diagnostic" ? Number(workOfferForm.diagnosticMinutes || 60) : selectedWorkOfferMinutes,incentive:workOfferFormIncentive,proposedStartDate:workOfferForm.includeDate ? new Date(workOfferForm.proposedStartDate) : null}
     }).then(quote=>{if(!cancelled)setWorkOfferQuote(quote);}).catch(error=>{if(!cancelled)setWorkOfferQuoteError(error.message);}),200);
     return () => {cancelled=true;clearTimeout(timer);};
-  },[showCreateWorkOfferModal,recentlySelectedCompany,jobId,workOfferForm,selectedWorkOfferMinutes,workOfferFormIncentive]);
+  },[showCreateWorkOfferModal,recentlySelectedCompany,jobId,workOfferForm,selectedWorkOfferMinutes,workOfferFormIncentive,workOfferPayTerms]);
 
 
   const toInputDateValue = (value) => {
@@ -9575,8 +9609,9 @@ const JobDetailView = () => {
       notes: job.description || "",
       selectedTaskIds: availableWorkOfferTasks.map((task) => task.id),
       workPurpose:"execution",diagnosticMinutes:60,
-      serviceStopTypeId: companyServiceStopTypes?.[0]?.id || "",
+      serviceStopTypeId: "",
       paySource: "Technician Rate",
+      overridePay: false,
       offeredAmount: "",
       incentiveType: "none",
       incentiveAmount: "",
@@ -9598,6 +9633,7 @@ const JobDetailView = () => {
     setWorkOfferForm((prev) => ({
       ...prev,
       [field]: value,
+      ...(field === "overridePay" && value ? { serviceStopTypeId: workOfferPayTerms.serviceStopTypeId } : {}),
     }));
   };
 
@@ -9619,14 +9655,15 @@ const JobDetailView = () => {
 
   const saveWorkOffer = async () => {
     if (!recentlySelectedCompany || !jobId) return;
+    if (workOfferPlanPayError) return toast.error(workOfferPlanPayError);
     if (workOfferForm.workPurpose !== "diagnostic" && !selectedWorkOfferTasks.length) return toast.error("Select at least one available task.");
     const direct=workOfferForm.offerType === "Direct User",worker=findCompanyUserById(workOfferForm.workerId);
     if(direct && !worker)return toast.error("Select a technician before creating a direct offer.");
     setSavingWorkOffer(true);
     try {
-      const id="comp_work_offer_"+uuidv4(),type=(companyServiceStopTypes || []).find(v=>v.id===workOfferForm.serviceStopTypeId);
+      const id="comp_work_offer_"+uuidv4(),type=(companyServiceStopTypes || []).find(v=>v.id===workOfferPayTerms.serviceStopTypeId);
       const title=workOfferForm.title?.trim() || job.internalId || "Job work";
-      const result=await manageTechnicianWork(recentlySelectedCompany,"save",{offer:{id,jobId,jobInternalId:job.internalId || "",jobName:job.type || "Job",title,description:workOfferForm.notes || job.description || "",workerNotes:workOfferForm.notes || "",offerType:workOfferForm.offerType,postedToBoard:!direct,boardVisibility:workOfferForm.boardVisibility,offeredToUserId:direct?getCompanyUserId(worker):"",offeredToUserName:direct?getCompanyUserName(worker):"",offeredToWorkerType:direct?getCompanyUserWorkerType(worker):"Not Assigned",jobTaskIds:workOfferForm.workPurpose === "diagnostic"?[]:selectedWorkOfferTasks.map(v=>v.id),workPurpose:workOfferForm.workPurpose || "execution",customerId:job.customerId || "",customerName:job.customerName || "",serviceLocationId:job.serviceLocationId || "",estimatedMinutes:workOfferForm.workPurpose === "diagnostic"?Number(workOfferForm.diagnosticMinutes || 60):selectedWorkOfferMinutes,serviceStopTypeId:workOfferForm.serviceStopTypeId,serviceStopTypeName:type?.name || (workOfferForm.workPurpose === "diagnostic"?"Job Estimate":"Job Visit"),serviceStopTypeUseCaseRawValue:workOfferForm.workPurpose === "diagnostic"?"jobEstimate":"jobVisit",paySource:workOfferForm.paySource,offeredAmountCents:Math.round(Number(workOfferForm.offeredAmount || 0)*100),incentive:workOfferFormIncentive,proposedStartDate:workOfferForm.includeDate?new Date(workOfferForm.proposedStartDate):null,allowsTechnicianSelfScheduling:workOfferForm.allowsTechnicianSelfScheduling}});
+      const result=await manageTechnicianWork(recentlySelectedCompany,"save",{offer:{id,jobId,jobInternalId:job.internalId || "",jobName:job.type || "Job",title,description:workOfferForm.notes || job.description || "",workerNotes:workOfferForm.notes || "",offerType:workOfferForm.offerType,postedToBoard:!direct,boardVisibility:workOfferForm.boardVisibility,offeredToUserId:direct?getCompanyUserId(worker):"",offeredToUserName:direct?getCompanyUserName(worker):"",offeredToWorkerType:direct?getCompanyUserWorkerType(worker):"Not Assigned",jobTaskIds:workOfferForm.workPurpose === "diagnostic"?[]:selectedWorkOfferTasks.map(v=>v.id),workPurpose:workOfferForm.workPurpose || "execution",customerId:job.customerId || "",customerName:job.customerName || "",serviceLocationId:job.serviceLocationId || "",estimatedMinutes:workOfferForm.workPurpose === "diagnostic"?Number(workOfferForm.diagnosticMinutes || 60):selectedWorkOfferMinutes,...workOfferPayTerms,serviceStopTypeName:type?.name || (workOfferForm.workPurpose === "diagnostic"?"Job Estimate":"Job Visit"),serviceStopTypeUseCaseRawValue:workOfferForm.workPurpose === "diagnostic"?"jobEstimate":"jobVisit",incentive:workOfferFormIncentive,proposedStartDate:workOfferForm.includeDate?new Date(workOfferForm.proposedStartDate):null,allowsTechnicianSelfScheduling:workOfferForm.allowsTechnicianSelfScheduling}});
       const loaded=await manageTechnicianWork(recentlySelectedCompany,"list",{jobId});setWorkOffers(loaded.offers || []);
       await recordJobHistory({eventType:"Work Offer",title:"Work offer created: "+title,description:workOfferForm.notes || "",metadata:{workOfferId:id,status:result.status}});
       setShowCreateWorkOfferModal(false);toast.success("Work offer created");
@@ -11281,6 +11318,7 @@ const JobDetailView = () => {
     setJobTemplateApplyError("");
     setApplyingJobTemplate(true);
     try {
+      await flushPlanEditorSave();
       const companyPath = ["companies", recentlySelectedCompany];
       const jobRef = doc(db, ...companyPath, "workOrders", jobId);
       const templateRef = doc(db, ...companyPath, "jobTemplates", templateId);
@@ -11869,19 +11907,21 @@ const JobDetailView = () => {
 	    setNewTaskLaborLineId("");
 	    closeLaborLineTaskSelector({ force: true });
 	    setServiceCatalogCreatorForm(emptyJobCatalogServiceForm());
+	    setNewPayrollPayItemName(null);
 	    setShowServiceCatalogCreator(true);
 	  };
 
 	  const closeServiceCatalogCreator = () => {
 	    if (savingServiceCatalogCreator) return;
 	    setShowServiceCatalogCreator(false);
+	    setNewPayrollPayItemName(null);
 	    setServiceCatalogCreatorForm(emptyJobCatalogServiceForm());
 	  };
 
-	  const updateServiceCatalogCreatorField = (field, value) => {
+	  const updateServiceCatalogCreatorField = (field, value, selectedPayItem = null) => {
 	    setServiceCatalogCreatorForm((current) => {
           if (field !== "payTypeId") return { ...current, [field]: value };
-          const item = servicePayrollData.payTypes.find((type) => type.id === value);
+          const item = selectedPayItem || servicePayrollData.payTypes.find((type) => type.id === value);
           const previous = servicePayrollData.payTypes.find((type) => type.id === current.payTypeId);
           return { ...current, payTypeId: value, name: current.name || item?.name || "", taskTemplates: (current.taskTemplates || []).map((task) => task.payTypeId ? task : taskDefaultsFromPayItem(task, item, previous)) };
         });
@@ -18352,7 +18392,14 @@ const JobDetailView = () => {
     </div>
   );
 
-  const servicePayrollData = useServicePayrollData(recentlySelectedCompany, showServiceCatalogCreator || newLaborLine || Boolean(editingLaborLineId));
+  const liveServicePayrollData = useServicePayrollData(recentlySelectedCompany, showServiceCatalogCreator || newLaborLine || Boolean(editingLaborLineId));
+  const servicePayrollData = {
+    ...liveServicePayrollData,
+    payTypes: [
+      ...liveServicePayrollData.payTypes,
+      ...createdServicePayItems.filter((item) => item.companyId === recentlySelectedCompany && !liveServicePayrollData.payTypes.some((type) => type.id === item.id)),
+    ],
+  };
 
   const renderPlanInvoiceLaborLineForm = () => {
     if (!newLaborLine && !editingLaborLineId) return null;
@@ -18788,6 +18835,7 @@ const JobDetailView = () => {
 	    if (!showServiceCatalogCreator) return null;
 
 	    const taskTemplates = serviceCatalogCreatorForm.taskTemplates || [];
+	    const payrollPayItemOptions = servicePayrollData.payTypes.filter((type) => type.isActive !== false && type.active !== false);
 
 	    return (
 	      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
@@ -18840,13 +18888,41 @@ const JobDetailView = () => {
 	                  </label>
 	                </div>
 
-                    <label className="block text-sm font-semibold text-slate-700">
-                      Default payroll pay item
-                      <select value={serviceCatalogCreatorForm.payTypeId || ""} onChange={(event) => updateServiceCatalogCreatorField("payTypeId", event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
-                        <option value="">Select a payroll pay item</option>
-                        {servicePayrollData.payTypes.filter((type) => type.isActive !== false && type.active !== false).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
-                      </select>
-                    </label>
+                    <div className="block text-sm font-semibold text-slate-700">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label htmlFor="service-catalog-default-pay-item">Default payroll pay item</label>
+                        {can("424") && (
+                          <button type="button" onClick={() => setNewPayrollPayItemName("")} disabled={savingServiceCatalogCreator} className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-900 disabled:opacity-50">
+                            <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                            Create payroll pay item
+                          </button>
+                        )}
+                      </div>
+                      <CreatableSelect
+                        inputId="service-catalog-default-pay-item"
+                        className="mt-1 font-normal"
+                        classNamePrefix="react-select"
+                        value={payrollPayItemOptions.find((type) => type.id === serviceCatalogCreatorForm.payTypeId) || null}
+                        options={payrollPayItemOptions}
+                        getOptionLabel={(type) => type.name}
+                        getOptionValue={(type) => type.id}
+                        onChange={(type) => updateServiceCatalogCreatorField("payTypeId", type?.id || "")}
+                        onCreateOption={(name) => setNewPayrollPayItemName(name.trim())}
+                        isValidNewOption={(inputValue) => can("424") && !servicePayrollData.loading && Boolean(inputValue.trim()) && !payrollPayItemOptions.some((type) => String(type.name || "").trim().toLowerCase() === inputValue.trim().toLowerCase())}
+                        formatCreateLabel={(name) => `Create payroll pay item "${name.trim()}"`}
+                        getNewOptionData={(inputValue, label) => ({ id: inputValue, name: label, __isNew__: true })}
+                        isSearchable
+                        isClearable
+                        isLoading={servicePayrollData.loading}
+                        isDisabled={savingServiceCatalogCreator}
+                        placeholder="Select a payroll pay item"
+                        noOptionsMessage={({ inputValue }) => inputValue ? "No matching payroll pay items" : "No active payroll pay items found"}
+                        theme={selectTheme}
+                        styles={selectStyles}
+                        menuPosition="fixed"
+                        menuPortalTarget={selectMenuPortalTarget}
+                      />
+                    </div>
 	                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
 	                  <label className="block text-sm font-semibold text-slate-700">
 	                    Type
@@ -20465,8 +20541,8 @@ const JobDetailView = () => {
               <DetailDisclosure
                 panelId="planned-editor"
                 title="Plan Editor"
-                helper="Build the estimate workspace before saving or sending"
-                count={selectedEditorPlan ? "Saved" : "Draft"}
+                helper="Build the estimate workspace. Changes save automatically."
+                count={selectedEditorPlan ? (planEditorSaveStatus === "error" ? "Not saved" : hasPendingPlanEditorSave ? "Saving" : "Saved") : "Draft"}
                 collapsible={false}
               >
                 <div className="rounded-lg border border-blue-200 bg-white p-4 shadow-sm">
@@ -20478,10 +20554,13 @@ const JobDetailView = () => {
 	                          <>
 	                            <StatusBadge status={selectedEditorPlan.status || JOB_PLAN_STATUS.DRAFT} />
 	                            {plannedPayrollNeedsReview && <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-800">Pay setup needs review</span>}
-                            {hasUnsavedPlanEditorChanges && (
-	                              <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
-                                Unsaved Changes
-                              </span>
+                            <span role="status" className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-600">
+                              {planEditorSaveStatus === "error" ? "Changes could not be saved" : hasPendingPlanEditorSave ? "Saving..." : "All changes saved"}
+                            </span>
+                            {planEditorSaveStatus === "error" && (
+                              <button type="button" onClick={() => flushPlanEditorSave().catch(() => {})} className="text-xs font-semibold text-blue-700 underline">
+                                Retry save
+                              </button>
                             )}
                           </>
                         ) : (
@@ -20530,25 +20609,7 @@ const JobDetailView = () => {
                             Use Template
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={saveSelectedEditorPlan}
-                          disabled={
-                            !canBuildJobEstimatePlan ||
-                            savingPlanEditor ||
-                            Boolean(loadingPlanEditorId) ||
-                            (Boolean(selectedEditorPlan) && !hasUnsavedPlanEditorChanges)
-                          }
-                          className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {savingPlanEditor
-                            ? "Saving..."
-                            : hasUnsavedPlanEditorChanges
-                              ? "Save Changes"
-                              : selectedEditorPlan
-                                ? "Saved"
-                                : "Save Plan"}
-                        </button>
+
 	                        <button
 	                          type="button"
 	                          onClick={handleSendEstimate}
@@ -20560,7 +20621,7 @@ const JobDetailView = () => {
 	                        <button
 	                          type="button"
 	                          onClick={() => openAddPlanModal()}
-	                          disabled={!canBuildJobEstimatePlan || savingPlanEditor || Boolean(loadingPlanEditorId)}
+	                          disabled={!canBuildJobEstimatePlan || Boolean(loadingPlanEditorId)}
 	                          className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 	                        >
 	                          Add Plan
@@ -20575,8 +20636,8 @@ const JobDetailView = () => {
 	                      <input
 	                        type="text"
 	                        value={planEditorDraft.title}
-	                        onChange={(event) => setPlanEditorDraft((prev) => ({ ...prev, title: event.target.value }))}
-	                        disabled={!canBuildJobEstimatePlan || savingPlanEditor || Boolean(loadingPlanEditorId)}
+	                        onChange={(event) => updatePlanEditorDraft("title", event.target.value)}
+	                        disabled={!canBuildJobEstimatePlan || !planEditorWorkspaceReady}
 	                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
 	                        placeholder="Repair existing pump"
 	                      />
@@ -20588,9 +20649,9 @@ const JobDetailView = () => {
 	                        value={selectedEditorTier}
 	                        onChange={(event) => {
 	                          const nextTier = normalizeJobPlanTier(event.target.value);
-	                          setPlanEditorDraft((prev) => ({ ...prev, planTier: nextTier }));
+	                          updatePlanEditorDraft("planTier", nextTier);
 	                        }}
-	                        disabled={!canBuildJobEstimatePlan || savingPlanEditor || Boolean(loadingPlanEditorId) || !selectedEditorPlan}
+	                        disabled={!canBuildJobEstimatePlan || !planEditorWorkspaceReady || !selectedEditorPlan}
 	                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
 	                      >
 	                        {JOB_PLAN_TIER_OPTIONS.map((option) => (
@@ -20605,8 +20666,8 @@ const JobDetailView = () => {
 	                      Plan Description
 	                      <textarea
 	                        value={planEditorDraft.description}
-	                        onChange={(event) => setPlanEditorDraft((prev) => ({ ...prev, description: event.target.value }))}
-	                        disabled={!canBuildJobEstimatePlan || savingPlanEditor || Boolean(loadingPlanEditorId)}
+	                        onChange={(event) => updatePlanEditorDraft("description", event.target.value)}
+	                        disabled={!canBuildJobEstimatePlan || !planEditorWorkspaceReady}
 	                        className="mt-1 min-h-[86px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
 	                        placeholder="Describe what this plan includes for the customer."
 	                      />
@@ -21833,6 +21894,16 @@ const JobDetailView = () => {
                         ))}
                       </div>
                     </div>
+                    <JobWorkOffers
+                      companyId={recentlySelectedCompany}
+                      offers={workOffers}
+                      workers={companyUserList}
+                      tasks={taskList}
+                      onChanged={async () => {
+                        const result = await manageTechnicianWork(recentlySelectedCompany, "list", { jobId });
+                        setWorkOffers(result.offers || []);
+                      }}
+                    />
                   </div>
                 )}
               </DetailDisclosure>
@@ -23132,6 +23203,21 @@ const JobDetailView = () => {
 	      {renderPlanInvoiceLaborLineForm()}
 	      {renderLaborLineTaskSelectorModal()}
 	      {renderServiceCatalogCreatorModal()}
+      {showServiceCatalogCreator && newPayrollPayItemName !== null && (
+        <CreatePayrollPayItemDialog
+          key={recentlySelectedCompany}
+          companyId={recentlySelectedCompany}
+          userId={getUserId()}
+          initialName={newPayrollPayItemName}
+          onClose={() => setNewPayrollPayItemName(null)}
+          onCreated={(item) => {
+            setCreatedServicePayItems((items) => [...items, item]);
+            updateServiceCatalogCreatorField("payTypeId", item.id, item);
+            setNewPayrollPayItemName(null);
+            toast.success("Payroll pay item created and selected.");
+          }}
+        />
+      )}
 	      {renderNewTaskModal()}
 	      {renderNewShoppingListModal()}
 	      {renderTaskEditModal()}
@@ -24370,10 +24456,10 @@ const JobDetailView = () => {
       )}
       {showCreateWorkOfferModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+          <div role="dialog" aria-modal="true" aria-labelledby="create-work-offer-title" className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-200 flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-xl font-bold text-gray-800">Create Work Offer</h3>
+                <h3 id="create-work-offer-title" className="text-xl font-bold text-gray-800">Create Work Offer</h3>
                 <p className="mt-1 text-sm text-gray-600">
                   Send selected job tasks to a technician or post them to the internal board.
                 </p>
@@ -24388,9 +24474,8 @@ const JobDetailView = () => {
             </div>
 
             <div className="p-6 space-y-6">
-              <label className="block text-sm font-semibold">Requested work<select value={workOfferForm.workPurpose || "execution"} onChange={e=>setWorkOfferForm(v=>({...v,workPurpose:e.target.value,serviceStopTypeId:e.target.value === "diagnostic"?"system_job_estimate_service_stop":"system_job_service_stop"}))} className="ml-2 rounded border p-2"><option value="execution">Perform planned work</option><option value="diagnostic">Diagnostic / estimate visit</option></select></label>
+              <label className="block text-sm font-semibold">Requested work<select value={workOfferForm.workPurpose || "execution"} onChange={e=>setWorkOfferForm(v=>({...v,workPurpose:e.target.value,overridePay:false,serviceStopTypeId:""}))} className="ml-2 rounded border p-2"><option value="execution">Perform planned work</option><option value="diagnostic">Diagnostic / estimate visit</option></select></label>
               {workOfferForm.workPurpose === "diagnostic" && <label className="block text-sm">Estimated minutes<input type="number" min="1" value={workOfferForm.diagnosticMinutes || 60} onChange={e=>handleWorkOfferFormChange("diagnosticMinutes",e.target.value)} className="ml-2 rounded border p-2" /></label>}
-              <p className="text-sm" role="status">{workOfferQuoteError || (workOfferQuote?.totalCents == null ? "Each technician reviews their personal pay before accepting." : `Estimated pay: ${moneyFromCents(workOfferQuote.totalCents)} (base ${moneyFromCents(workOfferQuote.baseCents)} + incentive ${moneyFromCents(workOfferQuote.incentiveCents)})`)}{workOfferQuote?.needsReview && " Pay setup needs review."}</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-500 mb-2">
@@ -24408,24 +24493,25 @@ const JobDetailView = () => {
 
                 {workOfferForm.offerType === "Direct User" ? (
                   <div>
-                    <label className="block text-sm font-semibold text-gray-500 mb-2">
+                    <label htmlFor="work-offer-technician" className="block text-sm font-semibold text-gray-500 mb-2">
                       Technician
                     </label>
-                    <select
-                      value={workOfferForm.workerId}
-                      onChange={(e) => handleWorkOfferFormChange("workerId", e.target.value)}
-                      className="w-full p-3 border border-gray-300 rounded-lg bg-white"
-                    >
-                      <option value="">Select Technician</option>
-                      {(companyUserList || []).map((user) => {
-                        const userId = getCompanyUserId(user);
-                        return (
-                          <option key={userId || user.id} value={userId}>
-                            {getCompanyUserName(user)}
-                          </option>
-                        );
-                      })}
-                    </select>
+                    <Select
+                      inputId="work-offer-technician"
+                      options={(companyUserList || []).filter((user) => getCompanyUserId(user))}
+                      value={findCompanyUserById(workOfferForm.workerId) || null}
+                      onChange={(option) => handleWorkOfferFormChange("workerId", option ? getCompanyUserId(option) : "")}
+                      getOptionValue={getCompanyUserId}
+                      getOptionLabel={getCompanyUserName}
+                      isSearchable
+                      isClearable
+                      isDisabled={savingWorkOffer}
+                      placeholder="Search technicians by name..."
+                      noOptionsMessage={() => "No technicians found"}
+                      menuPortalTarget={typeof document !== "undefined" ? document.body : undefined}
+                      menuPosition="fixed"
+                      styles={{ menuPortal: (base) => ({ ...base, zIndex: 60 }), control: (base) => ({ ...base, minHeight: 50, borderRadius: 8 }) }}
+                    />
                   </div>
                 ) : (
                   <div>
@@ -24457,133 +24543,7 @@ const JobDetailView = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-gray-500 mb-2">
-                    Pay Type
-                  </label>
-                  <select
-                    value={workOfferForm.serviceStopTypeId}
-                    onChange={(e) => handleWorkOfferFormChange("serviceStopTypeId", e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg bg-white"
-                  >
-                    <option value="">No type selected</option>
-                    {(companyServiceStopTypes || []).map((type) => (
-                      <option key={type.id} value={type.id}>
-                        {type.name || type.type || "Service Stop"}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-500 mb-2">
-                    Pay Source
-                  </label>
-                  <select
-                    value={workOfferForm.paySource}
-                    onChange={(e) => handleWorkOfferFormChange("paySource", e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg bg-white"
-                  >
-                    <option value="Technician Rate">Technician Rate</option>
-                    <option value="Task Contracted Rates">Task Contracted Rates</option>
-                    <option value="Offered Amount">Offered Amount</option>
-                    <option value="Unpaid">Unpaid</option>
-                  </select>
-                </div>
-
-                {workOfferForm.paySource === "Offered Amount" && (
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-500 mb-2">
-                      Offered Amount
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={workOfferForm.offeredAmount}
-                      onChange={(e) => handleWorkOfferFormChange("offeredAmount", e.target.value)}
-                      className="w-full p-3 border border-gray-300 rounded-lg"
-                    />
-                  </div>
-                )}
-
-                {can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID) && (
-                  <>
-                    <div>
-                      <label className="block text-sm font-semibold text-gray-500 mb-2">
-                        Incentive
-                      </label>
-                      <select
-                        value={workOfferForm.incentiveType}
-                        onChange={(e) => handleWorkOfferFormChange("incentiveType", e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-lg bg-white"
-                      >
-                        <option value="none">No incentive</option>
-                        <option value="flat">Flat rate</option>
-                        <option value="percentage">Percentage bump</option>
-                      </select>
-                    </div>
-
-                    {workOfferForm.incentiveType === "flat" && (
-                      <div>
-                        <label className="block text-sm font-semibold text-gray-500 mb-2">
-                          Incentive Amount
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={workOfferForm.incentiveAmount}
-                          onChange={(e) => handleWorkOfferFormChange("incentiveAmount", e.target.value)}
-                          className="w-full p-3 border border-gray-300 rounded-lg"
-                        />
-                      </div>
-                    )}
-
-                    {workOfferForm.incentiveType === "percentage" && (
-                      <div>
-                        <label className="block text-sm font-semibold text-gray-500 mb-2">
-                          Incentive Percent
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={workOfferForm.incentivePercentage}
-                          onChange={(e) => handleWorkOfferFormChange("incentivePercentage", e.target.value)}
-                          className="w-full p-3 border border-gray-300 rounded-lg"
-                        />
-                      </div>
-                    )}
-                  </>
-                )}
               </div>
-
-              {can(INCENTIVIZE_OFFERED_WORK_PERMISSION_ID) && workOfferForm.incentiveType !== "none" && workOfferQuote?.totalCents != null && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                  <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Base Pay</p>
-                      <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(workOfferFormBasePayCents)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Incentive</p>
-                      <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(workOfferFormIncentiveCents)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Offer Total</p>
-                      <p className="mt-1 font-bold text-emerald-950">{moneyFromCents(workOfferFormEstimatedTotalCents)}</p>
-                    </div>
-                  </div>
-                  <textarea
-                    rows={2}
-                    value={workOfferForm.incentiveNotes}
-                    onChange={(e) => handleWorkOfferFormChange("incentiveNotes", e.target.value)}
-                    className="mt-3 w-full rounded-lg border border-emerald-200 bg-white p-3 text-sm text-emerald-950"
-                    placeholder="Incentive notes"
-                  />
-                </div>
-              )}
 
               <div>
                 <label className="block text-sm font-semibold text-gray-500 mb-2">
@@ -24597,6 +24557,7 @@ const JobDetailView = () => {
                 />
               </div>
 
+              {workOfferForm.workPurpose !== "diagnostic" && (
               <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>
@@ -24643,7 +24604,7 @@ const JobDetailView = () => {
                           <div className="flex-1">
                             <p className="font-bold text-gray-800">{task.name || task.type || "Task"}</p>
                             <p className="text-sm text-gray-600">
-                              {task.type || "Task"} • {Number(task.estimatedTime || 0)} min • {moneyFromCents(task.contractedRate)} tech labor
+                              {task.type || "Task"} • {Number(task.estimatedTime || 0)} min
                             </p>
                           </div>
                         </label>
@@ -24652,6 +24613,19 @@ const JobDetailView = () => {
                   )}
                 </div>
               </div>
+              )}
+
+              <WorkOfferPaySection
+                form={workOfferForm}
+                onChange={handleWorkOfferFormChange}
+                tasks={workOfferForm.workPurpose === "diagnostic" ? [] : selectedWorkOfferTasks}
+                services={workOfferForm.workPurpose === "diagnostic" ? [] : selectedWorkOfferServices}
+                payTypes={companyServiceStopTypes || []}
+                paySettings={paySettings || {}}
+                canIncentivize={canIncentivizeWorkOffer}
+                quote={workOfferQuote}
+                quoteError={workOfferPlanPayError || workOfferQuoteError}
+              />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className="flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
@@ -24702,7 +24676,7 @@ const JobDetailView = () => {
               <button
                 type="button"
                 onClick={saveWorkOffer}
-                disabled={savingWorkOffer || (workOfferForm.workPurpose !== "diagnostic" && !selectedWorkOfferTasks.length) || workOfferQuote?.needsReview || !!workOfferQuoteError}
+                disabled={savingWorkOffer || (workOfferForm.workPurpose !== "diagnostic" && !selectedWorkOfferTasks.length) || workOfferQuote?.needsReview || !!workOfferQuoteError || !!workOfferPlanPayError}
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition disabled:opacity-60"
               >
                 {savingWorkOffer ? "Creating..." : "Create Offer"}

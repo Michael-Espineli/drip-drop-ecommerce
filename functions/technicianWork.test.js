@@ -87,10 +87,71 @@ test('atomic accepted-job scheduling preserves task policy, frozen pay, and idem
  assert.equal([...f.db.records.keys()].filter(v=>v.startsWith(company+'/serviceStops/')&&!v.includes('/tasks/')).length,1);
  const stop=f.db.records.get(company+'/serviceStops/'+first.serviceStopId);assert.equal(stop.payrollAgreement.fixedAmountCents,10000);
 });
+for (const [taskPaySource,expectedBase] of [['technicianRate',7500],['taskContractedRate',5700]]) {
+ test('planned job pay retains '+taskPaySource+' and mixed task policies from quote through scheduled payroll',async()=>{
+  const f=fixture({
+   [company+'/paySettings/main']:{routePaySource:'serviceStop',taskPaySource},
+   [company+'/workOrders/job/tasks/task']:{id:'task',name:'Repair',status:'Draft',payTypeId:'repair',payrollMode:'automatic',contractedRate:3200,estimatedTime:60},
+   [company+'/workOrders/job/tasks/custom']:{id:'custom',name:'Custom work',status:'Draft',payTypeId:'repair',payrollMode:'custom',manualPayOverrideCents:2500,estimatedTime:30},
+   [company+'/workOrders/job/tasks/included']:{id:'included',name:'Included work',status:'Draft',payTypeId:'repair',payrollMode:'included'},
+   [company+'/workOrders/job/tasks/unpaid']:{id:'unpaid',name:'Unpaid work',status:'Draft',payTypeId:'repair',payrollMode:'unpaid'},
+   [company+'/companyPayTypes/system_job_service_stop']:{id:'system_job_service_stop',name:'Job Visit',category:'route',defaultRateType:'flatPerStop'},
+   [company+'/technicianRates/visit']:{id:'visit',technicianId:'tech',payTypeId:'system_job_service_stop',payBasis:'serviceStop',rateType:'flatPerStop',amountCents:99000,status:'active'},
+  });
+  const draft={jobId:'job',jobTaskIds:['task','custom','included','unpaid'],workPurpose:'execution',serviceStopTypeId:'',paySource:'Technician Rate',allowsTechnicianSelfScheduling:true,incentive:{type:'percentage',percentage:10}};
+  const quote=await f.call('quote',{technicianId:'tech',offer:draft});
+  assert.equal(quote.baseCents,expectedBase);assert.equal(quote.incentiveCents,expectedBase/10);assert.equal(quote.needsReview,false);
+  await f.save(draft);await f.call('accept',{offerId:'offer',claimId:'planned'},'tech');
+  const offer=f.db.records.get(company+'/workOffers/offer'),agreement=offer.claims[0].agreement;
+  assert.equal(agreement.baseCents,quote.baseCents);assert.equal(agreement.totalCents,quote.totalCents);
+  assert.equal(agreement.settings.taskPaySource,taskPaySource);assert.equal(agreement.settings.routePaySource,'completedTasks');
+  const scheduled=await createTechnicianExecution(f.db,()=>day).schedule({auth:{uid:'tech'},data:{companyId:'company',offerId:'offer',claimId:'planned',serviceDateMillis:day.getTime()}});
+  const stop=f.db.records.get(company+'/serviceStops/'+scheduled.serviceStopId);
+  const tasks=[...f.db.records].filter(([path])=>path.startsWith(company+'/serviceStops/'+stop.id+'/tasks/')).map(([,task])=>({...task,status:'Finished'}));
+  const lines=calculatePayLines({companyId:'company',serviceStop:{...stop,operationStatus:'Finished',payrollAgreement:agreement},tasks,settings:{routePaySource:'serviceStop'},workTypes:agreement.workTypes,rates:agreement.rates});
+  assert.equal(lines.reduce((sum,line)=>sum+line.totalAmountCents,0),quote.baseCents);
+  assert.equal(lines.some(line=>line.source==='serviceStop'),false);
+  const jobTasks=draft.jobTaskIds.map(id=>({...f.db.records.get(company+'/workOrders/job/tasks/'+id),status:'Finished',payrollAgreement:agreement}));
+  const jobLines=calculatePayLines({companyId:'company',jobTaskSource:true,serviceStop:{id:'job',jobId:'job'},tasks:jobTasks,settings:agreement.settings,workTypes:agreement.workTypes,rates:agreement.rates});
+  assert.equal(jobLines.reduce((sum,line)=>sum+line.totalAmountCents,0),quote.totalCents);
+  assert.equal(jobLines.filter(line=>line.payrollSource==='workOfferIncentive').length,1);
+  assert.equal(f.db.records.get(company+'/workOrders/job/tasks/task').payTypeId,'repair');
+  assert.equal(f.db.records.get(company+'/workOrders/job/tasks/custom').manualPayOverrideCents,2500);
+ });
+}
 test('failed scheduling commits no partial stop or task links',async()=>{
  const f=fixture();await f.save({paySource:'Offered Amount',offeredAmountCents:10000,allowsTechnicianSelfScheduling:true});await f.call('accept',{offerId:'offer'},'tech');f.db.commitError=new Error('offline');
  await assert.rejects(createTechnicianExecution(f.db).schedule({auth:{uid:'tech'},data:{companyId:'company',offerId:'offer',serviceDateMillis:day.getTime()}}),/offline/);
  assert.equal([...f.db.records.keys()].filter(v=>v.startsWith(company+'/serviceStops/')).length,0);
+});
+test('coverage of an existing stop linked to a job retains its visit pay rules',async()=>{
+ const f=fixture({
+  [company+'/paySettings/main']:{routePaySource:'serviceStop',taskPaySource:'none'},
+  [company+'/serviceStops/one']:{id:'one',jobId:'job',techId:'admin',payTypeId:'repair',serviceDate:day,operationStatus:'Not Finished'},
+  [company+'/technicianRates/visit']:{id:'visit',technicianId:'tech',payTypeId:'repair',payBasis:'serviceStop',rateType:'flatPerStop',amountCents:6600,status:'active'},
+ });
+ const draft={jobId:'job',jobTaskIds:[],serviceStopIds:['one'],paySource:'Technician Rate'};
+ const quote=await f.call('quote',{technicianId:'tech',offer:draft});
+ assert.equal(quote.baseCents,6600);assert.equal(quote.needsReview,false);
+ await f.save(draft);await f.call('accept',{offerId:'offer'},'tech');
+ assert.equal(f.db.records.get(company+'/workOffers/offer').claims[0].agreement.settings.routePaySource,'serviceStop');
+});
+test('a service visit pay item remains payable when its planned tasks have no additional pay',async()=>{
+ const f=fixture({
+  [company+'/workOrders/job/tasks/task']:{id:'task',name:'Included repair task',status:'Draft',payTypeId:'repair',payrollMode:'included',estimatedTime:60},
+  [company+'/workOrders/job/laborLineItems/service']:{id:'service',name:'Repair service',sourceType:'serviceStopType',sourceId:'repair',taskIds:['task']},
+  [company+'/technicianRates/visit']:{id:'visit',technicianId:'tech',payTypeId:'repair',payBasis:'serviceStop',rateType:'flatPerStop',amountCents:6500,status:'active'},
+ });
+ const draft={jobId:'job',jobTaskIds:['task'],serviceStopTypeId:'repair',paySource:'Technician Rate',allowsTechnicianSelfScheduling:true};
+ const quote=await f.call('quote',{technicianId:'tech',offer:draft});assert.equal(quote.baseCents,6500);assert.equal(quote.needsReview,false);
+ await f.save(draft);await f.call('accept',{offerId:'offer',claimId:'service'},'tech');
+ const scheduled=await createTechnicianExecution(f.db,()=>day).schedule({auth:{uid:'tech'},data:{companyId:'company',offerId:'offer',claimId:'service',serviceDateMillis:day.getTime()}});
+ const agreement=f.db.records.get(company+'/workOffers/offer').claims[0].agreement;
+ const stop=f.db.records.get(company+'/serviceStops/'+scheduled.serviceStopId);
+ const tasks=[...f.db.records].filter(([path])=>path.startsWith(company+'/serviceStops/'+stop.id+'/tasks/')).map(([,task])=>({...task,status:'Finished'}));
+ const lines=calculatePayLines({companyId:'company',serviceStop:{...stop,operationStatus:'Finished',payrollAgreement:agreement},tasks,workTypes:agreement.workTypes,rates:agreement.rates});
+ assert.equal(lines.reduce((sum,line)=>sum+line.totalAmountCents,0),quote.totalCents);
+ assert.equal(lines.length,1);assert.equal(lines[0].source,'serviceStop');assert.equal(stop.payTypeId,'repair');
 });
 test('clock-out closes shift and log, including normal nil-transition behavior',async()=>{
  let current=day;const f=fixture(),clock=createTechnicianTime(f.db,()=>current);

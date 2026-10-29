@@ -156,6 +156,13 @@ export const isAcceptedWorkOffer = (offer = {}) => {
   return ACCEPTED_WORK_OFFER_STATUSES.has(normalizedWorkOfferStatusKey(safeOffer.status));
 };
 
+export const hasAcceptedWorkOffer = (offer = {}) => {
+  const claims = Array.isArray(offer.claims) ? offer.claims : [];
+  return ["Accepted", "Scheduled", "In Progress", "Completed"].includes(offer.status) ||
+    claims.some(claim => ["Accepted", "Scheduled", "In Progress", "Completed"].includes(claim.status)) ||
+    (!!offer.acceptedByUserId && offer.status !== "Acceptance Pending Approval" && !claims.some(claim => claim.status === "Acceptance Pending Approval"));
+};
+
 export const isAcceptedReadyToScheduleWorkOffer = (offer = {}) => {
   const safeOffer = workOfferOrEmpty(offer);
   return isAcceptedWorkOffer(safeOffer) && !(safeOffer.serviceStopId || safeOffer.scheduledServiceStopId);

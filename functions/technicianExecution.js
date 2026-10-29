@@ -1,5 +1,5 @@
 const { HttpsError } = require('firebase-functions/v2/https');
-const { createTechnicianWorkWorkflow, id, date, record, rows, key, done, stable, agreementReference } = require('./technicianWorkWorkflow');
+const { createTechnicianWorkWorkflow, id, date, record, rows, key, done, stable, agreementReference, paySettingsForOffer } = require('./technicianWorkWorkflow');
 const { jobPayFields } = require('./payrollCalculation');
 const fail=(code,message)=>{throw new HttpsError(code,message);};
 function createTechnicianExecution(db,now=()=>new Date()) {
@@ -22,7 +22,7 @@ function createTechnicianExecution(db,now=()=>new Date()) {
      const ctx=await work.context(t,c,target),legacyScope=await work.scopeFor(t,c,offer);
      const quote=work.estimate({companyId,offer,scope:legacyScope.scope,ctx,actor:target});
      if(quote.needsReview) fail('failed-precondition','Management must resolve legacy pay setup before scheduling.');
-     claim={id:'legacy_'+stable(offer.id),workerId:target.uid,workerName:target.name,workerType:targetUser.workerType || '',stopIds:[],taskIds:legacyScope.scope.tasks.map(v=>v.id),status:'Accepted',createdAt:now(),agreement:{offerId:offer.id,revision:offer.revision || 1,workerId:target.uid,workerName:target.name,paySource:offer.paySource || 'Technician Rate',fixedAmountCents:Number(offer.offeredAmountCents || 0),incentive:offer.incentive || {type:'none'},rates:ctx.rates,settings:ctx.settings,workTypes:ctx.workTypes,taskIds:legacyScope.scope.tasks.map(v=>v.id),scopeStopIds:[],baseCents:quote.baseCents,totalCents:quote.totalCents,acceptedAt:now(),legacyAcceptedAt:offer.acceptedAt || null}};
+     claim={id:'legacy_'+stable(offer.id),workerId:target.uid,workerName:target.name,workerType:targetUser.workerType || '',stopIds:[],taskIds:legacyScope.scope.tasks.map(v=>v.id),status:'Accepted',createdAt:now(),agreement:{offerId:offer.id,revision:offer.revision || 1,workerId:target.uid,workerName:target.name,paySource:offer.paySource || 'Technician Rate',fixedAmountCents:Number(offer.offeredAmountCents || 0),incentive:offer.incentive || {type:'none'},rates:ctx.rates,settings:paySettingsForOffer(offer,ctx.settings),workTypes:ctx.workTypes,taskIds:legacyScope.scope.tasks.map(v=>v.id),scopeStopIds:[],baseCents:quote.baseCents,totalCents:quote.totalCents,acceptedAt:now(),legacyAcceptedAt:offer.acceptedAt || null}};
      claims.push(claim);
    }
    if(!claim || !['Accepted','Scheduled'].includes(claim.status)) fail('failed-precondition','Accept and approve this work before scheduling.');

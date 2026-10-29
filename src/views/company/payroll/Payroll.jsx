@@ -1,4 +1,5 @@
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
+import { buildCompanyPayType, defaultStopPayCategories, emptyWorkTypeForm, rateTypeOptions, resolveStopPayCategories, stackBehaviorOptions, workCategoryOptions } from "../../../utils/payroll/payTypeSetup";
 import PayRequestsPanel from './PayRequestsPanel';
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -284,16 +285,16 @@ const emptyRateForm = () => ({
   reason: "",
 });
 
-const rateTypeOptions = ["flatPerStop", "flatPerTask", "hourly", "perBodyOfWater", "perServiceLocation", "percentage", "manual"];
+
 const payBasisOptions = ["serviceStop", "serviceStopTask", "technicianHourly", "manualAdjustment"];
 const payModeOptions = ["productionOnly", "hourlyOnly", "hybrid"];
 const routePaySourceOptions = ["serviceStop", "completedTasks", "serviceStopAndCompletedTasks", "hourlyServiceStopDuration", "hourlyTaskActualTime", "none"];
 const taskPaySourceOptions = ["technicianRate", "taskContractedRate", "technicianRateThenTaskContractedRate", "taskContractedRateThenTechnicianRate", "hourlyActualTime", "hourlyEstimatedTime", "none"];
 const hourlyPaySourceOptions = ["workLogs", "activeRouteDuration", "activeRouteLogs", "serviceStopDuration", "taskActualTime", "none"];
-const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifier"];
+
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
 const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
-const workCategoryOptions = ["route", "maintenance", "serviceCall", "repair", "installation", "cleaning", "commercial", "startup", "drainAndRefill", "estimate", "extra", "custom"];
+
 const payCategoryInfoItems = [
   {
     label: "Route",
@@ -416,58 +417,7 @@ const parseStatementSortOption = (value) => {
   return option ? { key: option.key, direction: option.direction } : defaultStatementSort();
 };
 
-const defaultStopPayCategories = [
-  {
-    id: "route",
-    label: "Routes",
-    category: "Route",
-    sourceId: "system_recurring_service_stop",
-    helper: "Recurring route work and scheduled route visits.",
-    defaultWorkCategory: "route",
-    defaultRateType: "flatPerStop",
-    defaultIconName: "figure.pool.swim",
-  },
-  {
-    id: "job",
-    label: "Jobs",
-    category: "Job",
-    sourceId: "system_job_service_stop",
-    helper: "Actual job work performed by a technician.",
-    defaultWorkCategory: "serviceCall",
-    defaultRateType: "flatPerStop",
-    defaultIconName: "briefcase",
-  },
-  {
-    id: "jobEstimate",
-    label: "Job Estimates",
-    category: "Job Estimate",
-    sourceId: "system_job_estimate_service_stop",
-    helper: "Fact-finding visits for requested job work before quoting.",
-    defaultWorkCategory: "serviceCall",
-    defaultRateType: "flatPerStop",
-    defaultIconName: "doc.text.magnifyingglass",
-  },
-  {
-    id: "serviceAgreementEstimate",
-    label: "Service Agreement Estimates",
-    category: "Service Agreement Estimate",
-    sourceId: "system_service_agreement_estimate_service_stop",
-    helper: "New recurring service surveys, new pools, and agreement inspections.",
-    defaultWorkCategory: "startup",
-    defaultRateType: "flatPerStop",
-    defaultIconName: "list.clipboard",
-  },
-  {
-    id: "customerRelationship",
-    label: "Customer Relationship",
-    category: "Customer Relationship",
-    sourceId: "system_customer_relationship_service_stop",
-    helper: "Open-ended customer visits, follow-ups, corrections, and conversations.",
-    defaultWorkCategory: "serviceCall",
-    defaultRateType: "flatPerStop",
-    defaultIconName: "person.wave.2",
-  },
-];
+
 
 const iosIconOptions = [
   { name: "figure.pool.swim", label: "Pool Service", category: "Pool", Icon: IoWaterOutline },
@@ -644,14 +594,7 @@ const stopPayCategoryForWorkType = (type = {}, categories = defaultStopPayCatego
   return categories.find((category) => category.id === "job") || categories[0] || null;
 };
 
-const emptyWorkTypeForm = () => ({
-  name: "",
-  stopPayCategoryId: "job",
-  category: "serviceCall",
-  iconName: "",
-  defaultRateType: "flatPerStop",
-  defaultStackBehavior: "stackable",
-});
+
 
 const emptyServiceStopTypeForm = () => ({
   name: "",
@@ -1429,45 +1372,7 @@ const Payroll = ({ mode = "payroll" }) => {
     [companyWorkTypes]
   );
 
-  const stopPayCategories = useMemo(() => {
-    const byId = new Map(
-      defaultStopPayCategories.map((bucket, index) => [
-        bucket.id,
-        {
-          ...bucket,
-          isActive: true,
-          isSystemDefault: true,
-          sortOrder: index * 10,
-        },
-      ])
-    );
-
-    companyStopPayBuckets.forEach((bucket, index) => {
-      if (!bucket?.id) return;
-      const base = byId.get(bucket.id) || {};
-      const label = String(bucket.label || bucket.name || base.label || "Stop Bucket").trim();
-      const category = bucket.category || base.category || "Job";
-
-      byId.set(bucket.id, {
-        ...base,
-        ...bucket,
-        label,
-        category,
-        helper: bucket.helper || base.helper || "",
-        defaultWorkCategory: bucket.defaultWorkCategory || base.defaultWorkCategory || "serviceCall",
-        defaultRateType: bucket.defaultRateType || base.defaultRateType || "flatPerStop",
-        defaultIconName: bucket.defaultIconName || bucket.iconName || base.defaultIconName || "briefcase",
-        sourceId: bucket.sourceId || base.sourceId || bucket.id,
-        isActive: bucket.isActive !== false,
-        isSystemDefault: Boolean(base.isSystemDefault),
-        sortOrder: bucket.sortOrder ?? base.sortOrder ?? (defaultStopPayCategories.length + index) * 10,
-      });
-    });
-
-    return [...byId.values()]
-      .filter((bucket) => bucket.isActive !== false)
-      .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0) || String(a.label || "").localeCompare(String(b.label || "")));
-  }, [companyStopPayBuckets]);
+  const stopPayCategories = useMemo(() => resolveStopPayCategories(companyStopPayBuckets), [companyStopPayBuckets]);
 
   const serviceStopTypesByStopPayCategory = useMemo(() => {
     const grouped = Object.fromEntries(stopPayCategories.map((category) => [category.id, []]));
@@ -1991,28 +1896,15 @@ const Payroll = ({ mode = "payroll" }) => {
       const category = stopPayCategories.find((item) => item.id === workTypeForm.stopPayCategoryId) || stopPayCategories[1];
       const existingWorkType = companyWorkTypes.find((workType) => workType.id === editingWorkTypeId);
       const workTypeId = existingWorkType?.id || `comp_work_type_${uuidv4()}`;
-      const payload = {
+      const payload = buildCompanyPayType({
         id: workTypeId,
         companyId: recentlySelectedCompany,
-        name: cleanName,
-        category: workTypeForm.category || category.defaultWorkCategory,
-        iconName: workTypeForm.iconName.trim() || category.defaultIconName,
-        isActive: existingWorkType?.isActive !== false,
-        status: existingWorkType?.status || "Active",
-        defaultRateType: workTypeForm.defaultRateType || category.defaultRateType,
-        defaultStackBehavior: workTypeForm.defaultStackBehavior || "stackable",
-        sortOrder: existingWorkType?.sortOrder ?? nextWorkTypeSortOrder(),
-        bucketId: category.id,
-        bucketLabel: category.label,
-        stopPayBucketId: category.id,
-        stopPayBucketLabel: category.label,
-        serviceStopCategory: category.category,
-        payTypeModelVersion: 1,
-        createdAt: existingWorkType?.createdAt || new Date(),
-        createdByUserId: existingWorkType?.createdByUserId || currentUserId,
-        updatedAt: new Date(),
-        updatedByUserId: currentUserId,
-      };
+        form: { ...workTypeForm, name: cleanName },
+        bucket: category,
+        existing: existingWorkType,
+        sortOrder: nextWorkTypeSortOrder(),
+        userId: currentUserId,
+      });
 
       await setDoc(doc(db, "companies", recentlySelectedCompany, "companyPayTypes", workTypeId), payload, { merge: true });
       setCompanyWorkTypes((workTypes) =>
