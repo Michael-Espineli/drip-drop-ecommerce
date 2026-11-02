@@ -1,3 +1,5 @@
+import { normalizeCustomerTags } from './customerTags';
+
 export const DASHBOARD_SCOPE_IDS = {
   personal: "personal",
   regional: "regional",
@@ -69,5 +71,28 @@ export const getEffectiveDashboardScopeAccess = ({ userAccess, role } = {}) => {
   return {
     scopes: [...DEFAULT_DASHBOARD_SCOPE_ACCESS],
     source: "default",
+  };
+};
+// Keep the stored permission scopes independent from the two dashboard views.
+export const getDashboardViewIds = (scopes = []) => [
+  ...(scopes.includes('personal') ? ['personal'] : []),
+  ...(scopes.includes('regional') || scopes.includes('company') ? ['manager'] : []),
+];
+
+export const getManagerDashboardArea = ({ scopes = [], regionAccess, availableTags = [], selectedTag = '' }) => {
+  const canViewManager = scopes.includes('regional') || scopes.includes('company');
+  const canViewAllAreas = scopes.includes('company');
+  const fullAccess = regionAccess.fullAccess;
+  const grantedTags = normalizeCustomerTags(regionAccess.tags);
+  const tags = normalizeCustomerTags(fullAccess ? availableTags : grantedTags).sort((a, b) => a.localeCompare(b));
+  const matchingTag = tags.find((tag) => tag.toLowerCase() === String(selectedTag).trim().toLowerCase());
+  const effectiveTag = matchingTag || (canViewAllAreas ? '' : tags[0] || '');
+
+  return {
+    tags,
+    selectedTag: effectiveTag,
+    canViewAllAreas,
+    allAreasLabel: fullAccess ? 'Everything' : 'All permitted areas',
+    hasAccess: canViewManager && (fullAccess || grantedTags.length > 0) && (canViewAllAreas || Boolean(effectiveTag)),
   };
 };

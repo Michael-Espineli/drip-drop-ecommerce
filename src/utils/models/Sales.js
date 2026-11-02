@@ -163,6 +163,8 @@ export class SalesCatalogItem {
     billingBehavior = SalesCatalogBillingBehavior.oneTime,
     sourceType = SalesCatalogSourceType.manual,
     sourceId = '',
+    payTypeId,
+    payTypeName = '',
     unitAmountCents = 0,
     unitCostCents = 0,
     defaultQuantity = 1,
@@ -186,6 +188,8 @@ export class SalesCatalogItem {
     this.billingBehavior = billingBehavior;
     this.sourceType = sourceType;
     this.sourceId = sourceId;
+    this.payTypeId = payTypeId ?? ([SalesCatalogSourceType.serviceStopType, SalesCatalogSourceType.workType].includes(sourceType) ? sourceId : '');
+    this.payTypeName = payTypeName;
     this.unitAmountCents = unitAmountCents;
     this.unitCostCents = unitCostCents;
     this.defaultQuantity = defaultQuantity;

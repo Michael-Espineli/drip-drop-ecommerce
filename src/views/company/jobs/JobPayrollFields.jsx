@@ -29,7 +29,7 @@ const payItemDetails = (item) => {
   return { group, category: categoryDetail, rateLabel, label: item.name || item.label || item.id };
 };
 
-export default function JobPayrollFields({ value = {}, onChange, payTypes = [], inheritedPayTypeId = "", showPayType = true, previewData, previewPrice = "", scope = "task" }) {
+export default function JobPayrollFields({ value = {}, onChange, payTypes = [], inheritedPayTypeId = "", showPayType = true, previewData, previewPrice = "", scope = "task", taskCostField }) {
   const payItemDetailsId = useId();
   const mode = value.payrollMode || (value.manualPayOverrideCents !== undefined && value.manualPayOverrideCents !== null ? "custom" : "automatic");
   const isTask = scope === "task";
@@ -138,8 +138,11 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
         : "Service stop pay uses the assigned technician's rate or a custom stop amount. Additional task pay is calculated separately."}</p>
       {isTask && mode === "unpaid" && <p className="text-xs text-slate-600">This saved task is explicitly marked as unpaid work.</p>}
       {mode === "automatic" && !value.payTypeId && !inheritedPayTypeId && <p className="text-xs font-semibold text-amber-800">A pay item is needed to calculate technician pay.</p>}
-      {previewData && <ServicePayrollCostPreview compact data={previewData} tasks={[value]} inheritedPayTypeId={inheritedPayTypeId}
-        priceInput={previewPrice} onUseHighCost={(cents) => onChange("laborCost", (cents / 100).toFixed(2))} />}
+      {(!isTask || payable) && (taskCostField || previewData) && <div role="group" aria-label={isTask ? "Task labor cost" : "Service stop labor cost"}>
+        {taskCostField}
+        {previewData && <ServicePayrollCostPreview compact data={previewData} tasks={[value]} inheritedPayTypeId={inheritedPayTypeId}
+          priceInput={previewPrice} onUseHighCost={(cents) => onChange("laborCost", (cents / 100).toFixed(2))} />}
+      </div>}
     </div>
   );
 }

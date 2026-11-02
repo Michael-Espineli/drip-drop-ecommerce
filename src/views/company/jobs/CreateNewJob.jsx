@@ -5,6 +5,7 @@ import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { loadJobProductCatalog } from "../../../utils/productCatalog";
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
 import { createJobAtomically } from "../../../utils/createJobAtomically";
+import { isActiveJobTemplate } from "../../../utils/jobTemplateAvailability";
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -1306,7 +1307,7 @@ const CreateNewJob = () => {
                         label: data.name || "Job Template",
                         value: id,
                     };
-                });
+                }).filter(isActiveJobTemplate);
 
                 setJobTemplateList(templates);
 
@@ -1321,12 +1322,8 @@ const CreateNewJob = () => {
 
                     if (matched) {
                         setSelectedTemplate(matched);
-                    } else if (startingTemplateFromState?.id) {
-                        setSelectedTemplate({
-                            ...startingTemplateFromState,
-                            label: startingTemplateFromState.name || "Job Template",
-                            value: startingTemplateFromState.id,
-                        });
+                    } else {
+                        appAlert("This job template is inactive or no longer available. Choose an active template or create a custom job.");
                     }
                 }
             } catch (error) {
@@ -2042,6 +2039,14 @@ const CreateNewJob = () => {
             setCreating(true);
 
             await createJobAtomically(db, { companyId: recentlySelectedCompany, jobId, creator: { userId: createdByUserId, userName: createdByUserName } }, async (writer) => {
+                if (selectedTemplate?.id) {
+                    const snapshot = await writer.get(doc(db, "companies", recentlySelectedCompany, "jobTemplates", selectedTemplate.id));
+                    if (!snapshot.exists() || !isActiveJobTemplate(snapshot.data())) {
+                        const error = new Error("This template is inactive or no longer available. Choose an active template.");
+                        error.code = "job-template-unavailable";
+                        throw error;
+                    }
+                }
                 const settingsRef = doc(db, "companies", recentlySelectedCompany, "settings", "workOrders");
                 const settingsSnap = await writer.get(settingsRef);
 
@@ -2495,7 +2500,7 @@ const CreateNewJob = () => {
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating new job:", error);
-            appAlert(error.code === "job-scope-too-large" ? error.message : "Failed to create job. Please try again.");
+            appAlert(["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : "Failed to create job. Please try again.");
         } finally {
             setCreating(false);
         }

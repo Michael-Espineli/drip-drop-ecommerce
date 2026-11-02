@@ -144,6 +144,25 @@ export const normalizeWorkOfferStatus = (status) => {
 export const normalizedWorkOfferStatusKey = (status) =>
   normalizeWorkOfferStatus(status).toLowerCase().replace(/\s+/g, " ");
 
+export const getWorkOfferStatusClasses = (status) => {
+  const normalized = normalizedWorkOfferStatusKey(status);
+
+  if (["sent", "posted", "viewed", "pending", "open", "draft", "offered"].includes(normalized)) {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+
+  if (["pending approval", "acceptance pending approval"].includes(normalized)) {
+    return "border-orange-200 bg-orange-50 text-orange-800";
+  }
+
+  if (normalized === "accepted") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (["scheduled", "in progress", "inprogress"].includes(normalized)) return "border-blue-200 bg-blue-50 text-blue-700";
+  if (normalized === "completed") return "border-slate-200 bg-slate-100 text-slate-700";
+  if (["rejected", "cancelled", "canceled", "expired"].includes(normalized)) return "border-rose-200 bg-rose-50 text-rose-700";
+
+  return "border-slate-200 bg-slate-50 text-slate-700";
+};
+
 export const isOpenWorkOffer = (offer = {}) => {
   const safeOffer = workOfferOrEmpty(offer);
   if (!isWorkOfferRecord(safeOffer)) return false;
@@ -158,8 +177,8 @@ export const isAcceptedWorkOffer = (offer = {}) => {
 
 export const hasAcceptedWorkOffer = (offer = {}) => {
   const claims = Array.isArray(offer.claims) ? offer.claims : [];
-  return ["Accepted", "Scheduled", "In Progress", "Completed"].includes(offer.status) ||
-    claims.some(claim => ["Accepted", "Scheduled", "In Progress", "Completed"].includes(claim.status)) ||
+  return !!offer.withdrawalHistory?.length || ["Accepted", "Scheduled", "In Progress", "Completed"].includes(offer.status) ||
+    claims.some(claim => claim.withdrawnAt || ["Accepted", "Scheduled", "In Progress", "Completed"].includes(claim.status)) ||
     (!!offer.acceptedByUserId && offer.status !== "Acceptance Pending Approval" && !claims.some(claim => claim.status === "Acceptance Pending Approval"));
 };
 

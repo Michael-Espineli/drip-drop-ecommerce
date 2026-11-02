@@ -42,7 +42,7 @@ service cloud.firestore {
     function isCompanyOwner(companyId) {
       return signedIn()
         && companyId is string
-        && exists(companyPath(companyId))
+        && get(companyPath(companyId)) != null
         && get(companyPath(companyId)).data.ownerId == request.auth.uid;
     }
 
@@ -50,7 +50,7 @@ service cloud.firestore {
       return signedIn()
         && companyId is string
         && (
-          exists(userAccessPath(companyId))
+          get(userAccessPath(companyId)) != null
           || isCompanyOwner(companyId)
         );
     }
@@ -61,7 +61,7 @@ service cloud.firestore {
         && (
           isCompanyOwner(companyId)
           || (
-            exists(userAccessPath(companyId))
+            get(userAccessPath(companyId)) != null
             && get(userAccessPath(companyId)).data.get("roleName", "") in ["Owner", "Admin", "Manager"]
           )
         );
@@ -73,10 +73,10 @@ service cloud.firestore {
 
     function hasCompanyRolePermission(companyId, permissionId) {
       return hasCompanyAccess(companyId)
-        && exists(userAccessPath(companyId))
+        && get(userAccessPath(companyId)) != null
         && get(userAccessPath(companyId)).data.get("roleId", "") != ""
         && get(userAccessPath(companyId)).data.roleId is string
-        && exists(companyRolePath(companyId))
+        && get(companyRolePath(companyId)) != null
         && (
           get(companyRolePath(companyId)).data.get("permissionIdList", []) is list
           && permissionId in get(companyRolePath(companyId)).data.get("permissionIdList", [])
@@ -472,6 +472,120 @@ service cloud.firestore {
 
       function canManagePay() { return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "424"); }
       function canReadPay() { return canManagePay() || hasCompanyRolePermission(companyId, "420"); }
+      function jobCreationPermissions() {
+        return isCompanyAdmin(companyId) ? ["22", "23", "27", "29", "31"] : (
+          get(userAccessPath(companyId)) != null && get(companyRolePath(companyId)) != null
+            ? get(companyRolePath(companyId)).data.get("permissionIdList", []) : []
+        );
+      }
+      function canManageJobTemplates() { return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "820"); }
+      function jobPath(jobId) { return /databases/$(database)/documents/companies/$(companyId)/workOrders/$(jobId); }
+      function templatePath(templateId) { return /databases/$(database)/documents/companies/$(companyId)/jobTemplates/$(templateId); }
+      function activeJobTemplate(data) {
+        let templateId = data.get("sourceTemplateId", "");
+        return templateId == "" || templateId == null || (
+          templateId is string && get(templatePath(templateId)) != null
+          && get(templatePath(templateId)).data.get("isActive", true) != false
+          && get(templatePath(templateId)).data.get("active", true) != false
+        );
+      }
+      function canCreateAssignedJob(data, techId, permissions) {
+        let templateId = data.get("sourceTemplateId", "");
+        return "22" in permissions || (
+          techId is string && techId != ""
+          && (techId == request.auth.uid || get(companyPath(companyId)).data.get("ownerId", "") == techId
+            || get(/databases/$(database)/documents/users/$(techId)/userAccess/$(companyId)) != null) && (
+            ((templateId == "" || templateId == null) && (
+              (techId == request.auth.uid && "27" in permissions)
+              || "31" in permissions
+            )) || (templateId is string && templateId != ""
+              && get(templatePath(templateId)).data.get("technicianCanAdd", false) == true && (
+                (techId == request.auth.uid && "23" in permissions)
+                || "29" in permissions
+              ))
+          )
+        );
+      }
+      function validFirstJobVisit(jobId, data, permissions) {
+        let stopId = data.get("scheduledServiceStopId", "");
+        let stopPath = /databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId);
+        return stopId is string && stopId != "" && get(stopPath) == null
+          && data.get("serviceStopIds", []) is list && stopId in data.get("serviceStopIds", [])
+          && getAfter(stopPath).data.get("jobId", "") == jobId
+          && getAfter(stopPath).data.get("customerId", "") == data.get("customerId", "")
+          && getAfter(stopPath).data.get("serviceLocationId", "") == data.get("serviceLocationId", "")
+          && getAfter(stopPath).data.serviceDate is timestamp
+          && canCreateAssignedJob(data, getAfter(stopPath).data.get("techId", ""), permissions);
+      }
+      function validJobCreate(jobId, data) {
+        let permissions = jobCreationPermissions();
+        return hasCompanyAccess(companyId) && activeJobTemplate(data) && (
+          "22" in permissions || (
+            data.get("createdByUserId", "") == request.auth.uid
+            && data.get("operationStatus", "") == "Scheduled"
+            && data.get("billingStatus", "") == "Draft"
+            && validFirstJobVisit(jobId, data, permissions)
+          )
+        );
+      }
+      function validNewJobStop(stopId, data, job) {
+        let firstId = job.get("scheduledServiceStopId", "");
+        let firstPath = /databases/$(database)/documents/companies/$(companyId)/serviceStops/$(firstId);
+        // The parent create rule validates its first visit and its creator's role.
+        return job.get("createdByUserId", "") == request.auth.uid && (
+          firstId == stopId
+          || (firstId != "" && data.get("techId", "") == getAfter(firstPath).data.get("techId", ""))
+          || canCreateAssignedJob(job, data.get("techId", ""), jobCreationPermissions())
+        );
+      }
+      function validInitialJobStop(stopId, data) {
+        let jobId = data.get("jobId", "");
+        return !(jobId is string) || jobId == "" || get(jobPath(jobId)) != null || (
+          getAfter(jobPath(jobId)) != null && validNewJobStop(stopId, data, getAfter(jobPath(jobId)).data)
+        );
+      }
+      function sameTemplateTaskPay(data, source) {
+        return data.get("contractedRate", 0) == source.get("contractedRate", 0)
+          && data.get("manualPayOverrideCents", null) == source.get("manualPayOverrideCents", null)
+          && data.get("payTypeId", "") == source.get("payTypeId", "")
+          && data.get("payrollMode", "automatic") == source.get("payrollMode", "automatic")
+          && data.get("payrollStackBehavior", null) == source.get("payrollStackBehavior", null)
+          && data.get("payQuantity", 1) == source.get("payQuantity", 1);
+      }
+      function validInitialTaskWorker(data, jobId) {
+        let workerId = data.get("workerId", "");
+        let stopId = data.get("serviceStopId", {}).get("id", "");
+        let stop = /databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId);
+        return workerId == "" || (stopId != "" && get(stop) == null
+          && getAfter(stop).data.get("jobId", "") == jobId
+          && getAfter(stop).data.get("techId", "") == workerId);
+      }
+      function validNewJobTask(jobId, job) {
+        let data = request.resource.data;
+        let templateId = job.get("sourceTemplateId", "");
+        let taskTemplateId = data.get("sourceTemplateTaskId", "");
+        let taskSource = /databases/$(database)/documents/companies/$(companyId)/jobTemplates/$(templateId)/tasks/$(taskTemplateId);
+        return job.get("createdByUserId", "") == request.auth.uid
+          && data.get("status", "Draft") in ["Draft", "Scheduled"]
+          && data.get("actualTime", 0) == 0
+          && !data.keys().hasAny(["payrollAgreement", "workOfferId", "workOfferClaimId", "claimedWorkOfferId"])
+          && validInitialTaskWorker(data, jobId)
+          && data.get("sourceTemplateId", "") == templateId
+          && (
+            ((templateId == "" || templateId == null) && data.get("contractedRate", 0) in [0, "0", "", null]
+              && data.get("manualPayOverrideCents", null) == null)
+            || (taskTemplateId is string && taskTemplateId != "" && get(taskSource) != null
+              && sameTemplateTaskPay(data, get(taskSource).data))
+          );
+      }
+      function validInitialJobTask(jobId) {
+        return jobId is string && jobId != "" && get(jobPath(jobId)) == null && getAfter(jobPath(jobId)) != null
+          && validNewJobTask(jobId, getAfter(jobPath(jobId)).data);
+      }
+      function validInitialStopTask(stopId) {
+        let stop = /databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId);
+        return getAfter(stop) != null && validInitialJobTask(getAfter(stop).data.get("jobId", ""));
+      }
       function validTaskPayCreate() {
         return canManagePay() || (
           request.resource.data.get("manualPayOverrideCents", null) == null
@@ -516,9 +630,13 @@ service cloud.firestore {
         allow write: if canManagePay();
       }
       match /settings/{settingsId} {
-        allow read: if hasCompanyAccess(companyId);
-        allow write: if hasCompanyAccess(companyId) && (settingsId != "companyWide" || isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "900"));
-        match /{nested=**} { allow read, write: if hasCompanyAccess(companyId) && settingsId != "companyWide"; }
+        allow read: if hasCompanyAccess(companyId) && (settingsId != "payStatements" || canReadPay());
+        allow write: if hasCompanyAccess(companyId) && (settingsId != "payStatements" || canManagePay())
+          && (settingsId != "companyWide" || isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "900"));
+        match /{nested=**} {
+          allow read: if hasCompanyAccess(companyId) && settingsId != "companyWide" && (settingsId != "payStatements" || canReadPay());
+          allow write: if hasCompanyAccess(companyId) && settingsId != "companyWide" && (settingsId != "payStatements" || canManagePay());
+        }
       }
       match /roles/{roleId} {
         allow read: if hasCompanyAccess(companyId);
@@ -534,31 +652,44 @@ service cloud.firestore {
       }
       match /serviceStops/{stopId} {
         allow read: if hasCompanyAccess(companyId);
-        allow create: if hasCompanyAccess(companyId) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
+        allow create: if hasCompanyAccess(companyId) && validInitialJobStop(stopId, request.resource.data) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
         allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
         allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "246");
-        match /{subcollection}/{nested=**} { allow read, write: if hasCompanyAccess(companyId) && subcollection != "tasks"; }
+        match /{subcollection}/{nested=**} { allow read, write: if subcollection != "tasks" && hasCompanyAccess(companyId); }
         match /tasks/{taskId} {
           allow read: if hasCompanyAccess(companyId);
-          allow create: if hasCompanyAccess(companyId) && validTaskPayCreate();
+          allow create: if (validInitialStopTask(stopId) || (hasCompanyAccess(companyId) && validTaskPayCreate()));
           allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
           allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "244");
         }
       }
       match /workOrders/{jobId} {
         allow read: if hasCompanyAccess(companyId);
-        allow write: if hasCompanyAccess(companyId);
+        allow create: if validJobCreate(jobId, request.resource.data);
+        allow update: if hasCompanyAccess(companyId) && (
+          isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "24")
+          || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["sourceTemplateId", "sourceTemplateName", "assignedTechId", "assignedCompanyUserId", "createdByUserId"])
+        );
+        allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "26");
         match /tasks/{taskId} {
           allow read: if hasCompanyAccess(companyId);
-          allow create: if hasCompanyAccess(companyId) && validTaskPayCreate();
+          allow create: if (validInitialJobTask(jobId) || (hasCompanyAccess(companyId) && validTaskPayCreate()));
           allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
           allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "24");
         }
-        match /{subcollection}/{nested=**} { allow read, write: if hasCompanyAccess(companyId) && subcollection != "tasks"; }
+        match /{subcollection}/{nested=**} { allow read, write: if subcollection != "tasks" && hasCompanyAccess(companyId); }
+      }
+      match /jobTemplates/{templateId} {
+        allow read: if hasCompanyAccess(companyId);
+        allow write: if canManageJobTemplates();
+        match /{scope=**} {
+          allow read: if hasCompanyAccess(companyId);
+          allow write: if canManageJobTemplates();
+        }
       }
       match /{companyCollection}/{document=**} {
-        allow read: if hasCompanyAccess(companyId) && !(companyCollection in ["routeMoveRequests", "workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders"]);
-        allow write: if hasCompanyAccess(companyId) && !(companyCollection in ["routeMoveRequests", "payrollReconcileWork", "workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders"]);
+        allow read: if !(companyCollection in ["routeMoveRequests", "workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders"]) && hasCompanyAccess(companyId);
+        allow write: if !(companyCollection in ["routeMoveRequests", "payrollReconcileWork", "workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders", "jobTemplates"]) && hasCompanyAccess(companyId);
       }
     }
 

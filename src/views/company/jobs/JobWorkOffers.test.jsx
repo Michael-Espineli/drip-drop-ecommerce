@@ -17,7 +17,7 @@ test("job offers render active and previous cards with direct management actions
   expect(active).toHaveTextContent("Pump repair");
   const previous = screen.getByRole("region", { name: "Previous work offers" });
   expect(previous).toHaveTextContent("Old cleaning");
-  expect(within(previous).getByRole("button", { name: "Delete offer" })).toBeDisabled();
+  expect(within(previous).queryByRole("button", { name: "Delete offer" })).not.toBeInTheDocument();
   fireEvent.click(within(active).getByRole("button", { name: "Edit offer" }));
   expect(screen.getByRole("dialog")).toHaveTextContent("Pump repair · edit");
   fireEvent.click(screen.getByRole("button", { name: "Saved offer" }));

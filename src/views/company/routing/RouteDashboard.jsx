@@ -1953,6 +1953,16 @@ const RouteDashboard = () => {
         setSelectedStopIds(unfinishedStopIds);
     };
 
+    const selectAllActiveRouteStops = () => {
+        if (!selectedRoute) return;
+
+        const routeStopIds = selectedRouteStops
+            .filter(isStopMovable)
+            .map(stop => stop.id);
+
+        setSelectedStopIds(currentIds => Array.from(new Set([...currentIds, ...routeStopIds])));
+    };
+
     const moveSelectedStops = async () => {
         if (!recentlySelectedCompany || selectedStopsForMove.length === 0) return;
 
@@ -2318,6 +2328,8 @@ const RouteDashboard = () => {
 
     const moveStopsPanel = showMoveStopsPanel ? (
         <MoveStopsPanel
+            route={selectedRoute}
+            routeStops={selectedRouteStops}
             selectedStops={selectedStopsForMove}
             selectedStopIds={selectedStopIds}
             totalStops={serviceStops.length}
@@ -2333,6 +2345,7 @@ const RouteDashboard = () => {
             onMoveTechChange={setMoveTechId}
             onMoveSelectedStops={moveSelectedStops}
             onSelectAllUnfinished={selectAllUnfinishedStops}
+            onSelectAllRouteStops={selectAllActiveRouteStops}
             onClearSelection={() => setSelectedStopIds([])}
         />
     ) : null;
@@ -2596,6 +2609,7 @@ const RouteDashboard = () => {
                                     onMoveTechChange={setMoveTechId}
                                     onMoveSelectedStops={moveSelectedStops}
                                     onSelectAllUnfinished={selectAllUnfinishedStops}
+                                    onSelectAllRouteStops={selectAllActiveRouteStops}
                                     onClearSelection={() => setSelectedStopIds([])}
                                     onOpenStop={openStopPreview}
                                 />
@@ -3195,11 +3209,11 @@ const RouteProgressBar = ({ finishedCount, inProgressCount, openCount, totalCoun
         </div>
         <div className="mt-2 flex h-3 overflow-hidden rounded-full bg-slate-100">
             <span
-                className="bg-emerald-500"
+                className="bg-emerald-500/50"
                 style={{ width: totalCount ? `${(finishedCount / totalCount) * 100}%` : '0%' }}
             />
             <span
-                className="bg-blue-500"
+                className="bg-blue-500/50"
                 style={{ width: totalCount ? `${(inProgressCount / totalCount) * 100}%` : '0%' }}
             />
         </div>
@@ -3301,6 +3315,7 @@ const RouteWorkloadBoard = ({
     const activeRouteGroups = routeGroups.filter(group => group.route);
     const selectedRouteGroup = routeGroups.find(group => group.route?.id === selectedRouteId) || null;
     const selectedRouteStopCount = selectedRouteGroup?.stops.length || 0;
+    const showRouteStops = selectedRouteStopCount > 0;
     const selectedRouteSelectedCount = selectedRouteGroup
         ? selectedRouteGroup.stops.filter(stop => selectedStopIds.includes(stop.id)).length
         : 0;
@@ -3332,8 +3347,13 @@ const RouteWorkloadBoard = ({
                 </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(440px,0.95fr)_minmax(500px,1.05fr)]">
-                <div className="space-y-3">
+            <div className={`grid gap-4 ${showMoveStopsPanel
+                    ? 'xl:grid-cols-[minmax(440px,0.95fr)_minmax(500px,1.05fr)]'
+                    : showRouteStops
+                        ? 'xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]'
+                        : ''
+                }`}>
+                <div className="min-w-0 space-y-3">
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Active Routes</h3>
@@ -3359,13 +3379,13 @@ const RouteWorkloadBoard = ({
                                 key={group.id}
                                 className={`overflow-hidden rounded-xl border bg-white shadow-sm transition ${isFocused ? 'border-blue-300 ring-2 ring-blue-100' : 'border-gray-200 hover:border-gray-300'}`}
                             >
-                                <div className="h-1.5" style={{ backgroundColor: group.routeColor }} />
+                                <div className="h-1.5 opacity-50" style={{ backgroundColor: group.routeColor }} />
                                 <div className="p-4">
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                         <div className="min-w-0">
                                             <div className="flex min-w-0 items-center gap-2">
                                                 <span
-                                                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                                    className="h-2.5 w-2.5 shrink-0 rounded-full opacity-50"
                                                     style={{ backgroundColor: group.routeColor }}
                                                     aria-hidden="true"
                                                 />
@@ -3427,97 +3447,87 @@ const RouteWorkloadBoard = ({
                     )}
                 </div>
 
-                <div className="space-y-4">
-                    {moveStopsPanel}
+                {(showRouteStops || showMoveStopsPanel) && (
+                    <div className="min-w-0 space-y-4">
+                        {moveStopsPanel}
 
-                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                    <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                            <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Route Stops</h3>
-                            <p className="text-sm font-semibold text-gray-900">
-                                {selectedRouteGroup?.route ? selectedRouteGroup.techName : 'Select an active route'}
-                            </p>
-                            <p className="text-xs text-gray-500">
-                                {selectedRouteGroup?.route
-                                    ? `${selectedRouteStopCount} stop${selectedRouteStopCount === 1 ? '' : 's'} on this route.`
-                                    : 'Choose a route card on the left to show its service stops here.'}
-                            </p>
-                        </div>
-                        {selectedRouteGroup?.route && (
-                            <div className="flex flex-wrap gap-2">
-                                <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(selectedRouteGroup.route.status)}`}>
-                                    {selectedRouteGroup.route.status || 'Did Not Start'}
-                                </span>
-                                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-gray-600 ring-1 ring-gray-200">
-                                    {selectedRouteSelectedCount} selected
-                                </span>
+                        {showRouteStops && (
+                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Route Stops</h3>
+                                        <p className="text-sm font-semibold text-gray-900">{selectedRouteGroup.techName}</p>
+                                        <p className="text-xs text-gray-500">
+                                            {selectedRouteStopCount} stop{selectedRouteStopCount === 1 ? '' : 's'} on this route.
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(selectedRouteGroup.route.status)}`}>
+                                            {selectedRouteGroup.route.status || 'Did Not Start'}
+                                        </span>
+                                        <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-gray-600 ring-1 ring-gray-200">
+                                            {selectedRouteSelectedCount} selected
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="max-h-[560px] divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+                                    {selectedRouteGroup.stops.map((stop, index) => {
+                                        const status = getStopDisplayStatus(stop);
+                                        const routeIndex = stop.routeStopIndex || index + 1;
+                                        const isSelected = selectedStopIds.includes(stop.id);
+                                        const movable = isStopMovable(stop);
+                                        const stopKindMeta = getServiceStopKindMeta(stop);
+
+                                        return (
+                                            <div
+                                                key={stop.id}
+                                                className={`grid grid-cols-[2rem_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-4 px-3 py-2 ${stopKindMeta.rowClassName} ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onToggleStop(stop)}
+                                                    disabled={!movable}
+                                                    className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${isSelected
+                                                            ? 'border-blue-600 bg-blue-600 text-white'
+                                                            : movable
+                                                                ? 'border-blue-100 bg-blue-50 text-blue-700 hover:border-blue-400'
+                                                                : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                                                        }`}
+                                                    title={movable ? 'Select stop to move' : 'Finished stops cannot be moved'}
+                                                >
+                                                    {isSelected ? '✓' : routeIndex}
+                                                </button>
+                                                <span className="min-w-0 flex-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onOpenStop(stop)}
+                                                        className="block min-w-0 text-left"
+                                                    >
+                                                        <span className="block truncate text-sm font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</span>
+                                                        <span className="block truncate text-xs text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
+                                                    </button>
+                                                </span>
+                                                <ServiceStopKindBadge stop={stop} compact />
+                                                <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${status.className}`}>
+                                                    {status.label}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
                             </div>
                         )}
                     </div>
-
-                    {selectedRouteGroup?.route ? (
-                        <div className="max-h-[560px] divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200 bg-white">
-                            {selectedRouteGroup.stops.length ? selectedRouteGroup.stops.map((stop, index) => {
-                                const status = getStopDisplayStatus(stop);
-                                const routeIndex = stop.routeStopIndex || index + 1;
-                                const isSelected = selectedStopIds.includes(stop.id);
-                                const movable = isStopMovable(stop);
-                                const stopKindMeta = getServiceStopKindMeta(stop);
-
-                                return (
-                                    <div
-                                        key={stop.id}
-                                        className={`grid grid-cols-[2rem_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-4 px-3 py-2 ${stopKindMeta.rowClassName} ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
-                                    >
-                                        <button
-                                            type="button"
-                                            onClick={() => onToggleStop(stop)}
-                                            disabled={!movable}
-                                            className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${isSelected
-                                                    ? 'border-blue-600 bg-blue-600 text-white'
-                                                    : movable
-                                                        ? 'border-blue-100 bg-blue-50 text-blue-700 hover:border-blue-400'
-                                                        : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
-                                                }`}
-                                            title={movable ? 'Select stop to move' : 'Finished stops cannot be moved'}
-                                        >
-                                            {isSelected ? '✓' : routeIndex}
-                                        </button>
-                                        <span className="min-w-0 flex-1">
-                                            <button
-                                                type="button"
-                                                onClick={() => onOpenStop(stop)}
-                                                className="block min-w-0 text-left"
-                                            >
-                                                <span className="block truncate text-sm font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</span>
-                                                <span className="block truncate text-xs text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
-                                            </button>
-                                        </span>
-                                        <ServiceStopKindBadge stop={stop} compact />
-                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${status.className}`}>
-                                            {status.label}
-                                        </span>
-                                    </div>
-                                );
-                            }) : (
-                                <div className="px-4 py-6 text-sm text-gray-500">
-                                    No service stops loaded for this route.
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <div className="rounded-lg border border-dashed border-gray-300 bg-white px-4 py-8 text-sm text-gray-500">
-                            Select an active route to see its service stops.
-                        </div>
-                    )}
-                    </div>
-                </div>
+                )}
             </div>
         </section>
     );
 };
 
 const MoveStopsPanel = ({
+    route,
+    routeStops,
     selectedStops,
     selectedStopIds,
     totalStops,
@@ -3533,6 +3543,7 @@ const MoveStopsPanel = ({
     onMoveTechChange,
     onMoveSelectedStops,
     onSelectAllUnfinished,
+    onSelectAllRouteStops,
     onClearSelection,
 }) => {
     const selectedCount = selectedStops.length;
@@ -3613,6 +3624,19 @@ const MoveStopsPanel = ({
 
                     <div>
                         <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Selection</span>
+                        <button
+                            type="button"
+                            onClick={onSelectAllRouteStops}
+                            disabled={!route || !routeStops.some(isStopMovable) || isMovingStops}
+                            className="mt-1 w-full rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Select All Route Stops
+                        </button>
+                        <p className="mt-1 text-xs text-gray-500">
+                            {route
+                                ? `Open stops on ${route.techName || route.name || 'this route'}.`
+                                : 'Choose an active route to select its open stops.'}
+                        </p>
                         <div className="mt-1 grid grid-cols-2 gap-2">
                             <button
                                 type="button"
@@ -3696,6 +3720,7 @@ const ActiveRouteDetailPanel = ({
     onMoveTechChange,
     onMoveSelectedStops,
     onSelectAllUnfinished,
+    onSelectAllRouteStops,
     onClearSelection,
     onOpenStop,
 }) => {
@@ -4080,6 +4105,8 @@ const ActiveRouteDetailPanel = ({
 
                 <div className="space-y-4">
                     <MoveStopsPanel
+                        route={route}
+                        routeStops={stops}
                         selectedStops={selectedStopsForMove}
                         selectedStopIds={selectedStopIds}
                         totalStops={totalStopsForMove}
@@ -4095,6 +4122,7 @@ const ActiveRouteDetailPanel = ({
                         onMoveTechChange={onMoveTechChange}
                         onMoveSelectedStops={onMoveSelectedStops}
                         onSelectAllUnfinished={onSelectAllUnfinished}
+                        onSelectAllRouteStops={onSelectAllRouteStops}
                         onClearSelection={onClearSelection}
                     />
 

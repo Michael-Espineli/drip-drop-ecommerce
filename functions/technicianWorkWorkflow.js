@@ -1,11 +1,13 @@
 const { HttpsError } = require('firebase-functions/v2/https');
 const { createHash, randomUUID } = require('node:crypto');
 const { calculatePayLines, jobPayFields } = require('./payrollCalculation');
+const { loadPayrollBodyOfWaterScope } = require('./payrollBodyOfWaterScope');
 const { started:workStarted, newActiveRoute } = require('./routeState');
 const str = v => String(v ?? '').trim();
 const id = v => str(typeof v === 'object' ? v?.id : v);
 const list = v => Array.isArray(v) ? v : [];
-const hasAcceptedWork = offer => ['Accepted','Scheduled','In Progress','Completed'].includes(offer.status) || list(offer.claims).some(v=>['Accepted','Scheduled','In Progress','Completed'].includes(v.status)) || !!offer.acceptedByUserId && offer.status!=='Acceptance Pending Approval' && !list(offer.claims).some(v=>v.status==='Acceptance Pending Approval');
+const hasAcceptedWork = offer => list(offer.withdrawalHistory).length > 0 || ['Accepted','Scheduled','In Progress','Completed'].includes(offer.status) || list(offer.claims).some(v=>v.withdrawnAt || ['Accepted','Scheduled','In Progress','Completed'].includes(v.status)) || !!offer.acceptedByUserId && offer.status!=='Acceptance Pending Approval' && !list(offer.claims).some(v=>v.status==='Acceptance Pending Approval');
+const unavailableStopIds = offer => [...list(offer.transferredStopIds), ...list(offer.withdrawnStopIds)];
 const offerTermsLocked = offer => hasAcceptedWork(offer) || list(offer.claims).length > 0 || ['Rejected','Cancelled','Expired'].includes(offer.status);
 const offerMetadataFields = ['title','description','adminNotes','workerNotes'];
 const offerEditableFields = [...offerMetadataFields,'proposedStartDate','proposedEndDate','completionDeadlineAt','timelineNotes','estimatedMinutes','allowsTechnicianSelfScheduling','paySource','offeredAmountCents','offerType','postedToBoard','offeredToUserId','offeredToUserName','offeredToWorkerType','boardVisibility','boardIds','boardNames','boardName','boardMemberUserIds','jobTaskIds','serviceStopTypeId'];
@@ -71,7 +73,8 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
     }
     if (offer.routeId && !stops.length) fail('failed-precondition','Generate the dated route stops before offering this coverage.');
     const selected = unique(offer.jobTaskIds), diagnostic=offer.workPurpose==='diagnostic' || key(offer.serviceStopTypeUseCaseRawValue).includes('estimate');
-    const taskRows = tasks ? rows(tasks).filter(v => selected.length ? selected.includes(v.id) : diagnostic ? false : !done(v)) : [];
+    const taskRows = tasks ? rows(tasks).filter(v => selected.length ? selected.includes(v.id) : diagnostic ? false : !done(v))
+      .map(v => ({ ...v, serviceLocationId: v.serviceLocationId || job?.data()?.serviceLocationId || "" })) : [];
     if (selected.length !== taskRows.length && selected.length) fail('failed-precondition','Some selected tasks no longer exist. Refresh the scope.');
     const serviceRows = services ? rows(services).length ? rows(services) : list(job.data().laborLineItems) : [];
     const taskSet = new Set(taskRows.map(v=>v.id));
@@ -85,8 +88,9 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
 
     return { job:job?.exists ? record(job) : null, scope };
   }
-  function estimate({companyId, offer, scope, ctx, actor}) {
+  async function estimate({t, c, companyId, offer, scope, ctx, actor}) {
     if(ctx.settings.payrollEnabled===false || ctx.settings.companyPayrollEnabled===false || ctx.settings.payrollDisabled===true)return {lines:[],baseCents:0,incentiveCents:0,totalCents:0,needsReview:offer.paySource!=='Unpaid' || Number(offer.incentive?.amountCents || 0)>0 || Number(offer.incentive?.percentage || 0)>0};
+    ctx = { ...ctx, bodyOfWaterIdsByServiceLocation: await loadPayrollBodyOfWaterScope(t, c, [...scope.stops, ...scope.tasks], ctx.rates) };
     const selectedIds = unique(scope.stops.map(v=>v.id));
     ctx={...ctx,settings:paySettingsForOffer(offer,ctx.settings)};
     const allIds = selectedIds.length ? selectedIds : ['job'];
@@ -219,7 +223,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const targetUser=targetId===uid?actor.user:rows(await t.get(c.collection('companyUsers').where('userId','==',targetId)))[0];
         if(!targetUser) fail('not-found','Select an active company technician.');
         const target={...actor,uid:targetId,user:targetUser,name:targetUser.userName || targetId};
-        const quote=estimate({companyId,offer:draft,scope,ctx:targetId===uid?ctx:await context(t,c,target),actor:target});
+        const quote=await estimate({t,c,companyId,offer:draft,scope,ctx:targetId===uid?ctx:await context(t,c,target),actor:target});
         return {...quote,personal:true,lines:quote.lines.map(v=>({...v,title:v.taskName || v.workTypeName || 'Work Pay',sourceTaskId:v.jobTaskId || v.serviceStopTaskId || null}))};
       }
       if (action === 'save' || action === 'update') {
@@ -276,7 +280,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
           if (!str(offer.title) || !Number.isFinite(Number(offer.estimatedMinutes || 0)) || Number(offer.estimatedMinutes || 0)<0) fail('invalid-argument','Enter a title and a valid estimated duration.');
           if (offer.offerType==='Direct User' && !offer.offeredToUserId) fail('invalid-argument','Select the technician receiving this offer.');
           for (const field of ['proposedStartDate','proposedEndDate','completionDeadlineAt']) if (offer[field] && !Number.isFinite(date(offer[field]).getTime())) fail('invalid-argument','Enter valid offer dates.');
-          const base=offer.paySource==='Offered Amount' ? cents(offer.offeredAmountCents) : offer.paySource==='Unpaid' ? 0 : offer.paySource==='Task Contracted Rates' ? estimate({companyId,offer,scope,ctx,actor}).baseCents : null;
+          const base=offer.paySource==='Offered Amount' ? cents(offer.offeredAmountCents) : offer.paySource==='Unpaid' ? 0 : offer.paySource==='Task Contracted Rates' ? (await estimate({t,c,companyId,offer,scope,ctx,actor})).baseCents : null;
           const bonus=offer.incentive?.type==='flat' ? cents(offer.incentive.amountCents) : base!==null && offer.incentive?.type==='percentage' ? Math.round(base*Number(offer.incentive.percentage || 0)/100) : 0;
           Object.assign(offer,{estimatedBasePayCents:base,basePayCents:base,estimatedPayCents:base,estimatedPayTotalCents:base===null?null:base+bonus,estimatedPayWithIncentiveCents:base===null?null:base+bonus,totalPayWithIncentiveCents:base===null?null:base+bonus,estimatedLaborCents:base || 0,updatedByUserId:uid,updatedByUserName:actor.name});
         }
@@ -288,7 +292,78 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
       if (!offerId || offerId.includes('/')) fail('invalid-argument','Choose a work offer.');
       const ref = c.collection('workOffers').doc(offerId);
       const offer = record(await t.get(ref)); if (!offer) fail('not-found','Work offer not found.');
-      const claims = list(offer.claims), management = can(actor,'330');
+      let claims = list(offer.claims);
+      const management = can(actor,'330');
+      if (action === 'withdraw') {
+        const reason = str(data.reason);
+        if (!reason) fail('invalid-argument','Explain why you need to return this work.');
+        if (!claims.length && ['Accepted','Scheduled'].includes(offer.status) && offer.acceptedByUserId) {
+          claims=[{id:'legacy_'+stable(offerId),legacy:true,workerId:offer.acceptedByUserId,workerName:offer.acceptedByUserName || offer.offeredToUserName || '',status:offer.status,taskIds:list(offer.jobTaskIds),stopIds:list(offer.routeServiceStopIds),serviceStopId:offer.serviceStopId || null,agreement:offer.acceptedTerms || {workerId:offer.acceptedByUserId,workerName:offer.acceptedByUserName || '',paySource:offer.paySource || 'Technician Rate',legacy:true}}];
+        }
+        const candidates = claims.filter(v=>data.claimId ? v.id===id(data.claimId) : v.workerId===uid && ['Accepted','Scheduled','Rejected'].includes(v.status));
+        const claim = candidates.find(v=>['Accepted','Scheduled'].includes(v.status)) || candidates[candidates.length-1];
+        if (!claim || claim.workerId!==uid && !can(actor,'324')) fail('permission-denied','Only the accepted technician or an offer manager can return this claim.');
+        if (claim.withdrawnAt) return {offerId,claimId:claim.id,status:'Rejected',alreadyWithdrawn:true};
+        if (!['Accepted','Scheduled'].includes(claim.status)) fail('failed-precondition','Started or completed work needs management review before reassignment.');
+        const taskDocs = offer.jobId ? await Promise.all(list(claim.taskIds).map(value=>t.get(c.collection('workOrders').doc(id(offer.jobId)).collection('tasks').doc(value)))) : [];
+        const releasedStopIds = unique([...list(claim.stopIds), claim.serviceStopId]);
+        const stopDocs = await Promise.all(releasedStopIds.map(value=>t.get(c.collection('serviceStops').doc(value))));
+        const stopTasks = await Promise.all(releasedStopIds.map(value=>t.get(c.collection('serviceStops').doc(value).collection('tasks'))));
+        const linkedTasks = [];
+        for (let index=0; index<stopTasks.length; index++) {
+          for (const task of rows(stopTasks[index])) {
+            const jobId=id(stopDocs[index].data()?.jobId), taskId=id(task.jobTaskId || task.workOrderTaskId);
+            if (jobId && taskId) linkedTasks.push(await t.get(c.collection('workOrders').doc(jobId).collection('tasks').doc(taskId)));
+          }
+        }
+        const [payroll, legacyPayroll, logs, shifts, products] = await Promise.all([
+          t.get(c.collection('technicianPayLineItems').where('workOfferId','==',offerId)),
+          t.get(c.collection('payLineItems').where('workOfferId','==',offerId)),
+          t.get(c.collection('workLogs').where('workOfferId','==',offerId)),
+          t.get(c.collection('shifts').where('workOfferId','==',offerId)),
+          t.get(c.collection('shoppingList').where('jobId','==',offer.jobId || '__no_job__')),
+        ]);
+        const belongs = v => v.workOfferClaimId===claim.id || v.claimId===claim.id || !v.workOfferClaimId && !v.claimId && (!v.technicianId || v.technicianId===claim.workerId);
+        if ([...rows(payroll),...rows(legacyPayroll),...rows(logs),...rows(shifts)].some(belongs)) fail('failed-precondition','Recorded work time or payroll needs management review before this work can be returned.');
+        const changedTasks = [...new Map([...taskDocs,...linkedTasks].map(doc=>[doc.ref.path,doc])).values()];
+        if (taskDocs.some(v=>!v.exists) || stopDocs.some(v=>!v.exists) || [...changedTasks,...stopDocs,...stopTasks.flatMap(v=>v.docs)].some(v=>v.exists && workStarted(v.data()))) fail('failed-precondition','Work has started or changed. Ask management to review the work and pay before reassignment.');
+        if (changedTasks.some(v=>v.exists && (v.data().workerId!==claim.workerId || v.data().claimedWorkOfferId!==offerId && v.data().payrollAgreement?.offerId!==offerId && !(claim.legacy && !v.data().claimedWorkOfferId && !v.data().payrollAgreement))) || stopDocs.some(v=>v.data().techId!==claim.workerId || v.data().workOfferId!==offerId || v.data().workOfferClaimId && v.data().workOfferClaimId!==claim.id)) fail('failed-precondition','The assignment changed. Refresh this offer before returning it.');
+        const materialDocs = new Map(products.docs.filter(doc=>releasedStopIds.includes(id(doc.data().serviceStopId)) || list(offer.scopeSnapshot?.products).some(item=>item.id===doc.id)).map(doc=>[doc.ref.path,doc]));
+        for (const stopId of releasedStopIds) {
+          const linked = await t.get(c.collection('shoppingList').where('serviceStopId','==',stopId));
+          linked.docs.forEach(doc=>materialDocs.set(doc.ref.path,doc));
+        }
+        if ([...materialDocs.values()].some(doc=>key(doc.data().status)==='installed' || doc.data().installedAt)) fail('failed-precondition','Installed products need management review before returning this work.');
+        // Read affected route memberships before making any writes. Dated stops
+        // stay on the schedule, unassigned, for the office to arrange replacement.
+        const routeDocs = new Map();
+        for (const stopId of releasedStopIds) {
+          for (const field of ['serviceStopsIds','serviceStopIds']) {
+            const snap = await t.get(c.collection('activeRoutes').where(field,'array-contains',stopId));
+            snap.docs.forEach(doc=>routeDocs.set(doc.ref.path,doc));
+          }
+        }
+        if (changedTasks.length + stopDocs.length + stopTasks.reduce((n,v)=>n+v.docs.length,0) + materialDocs.size + routeDocs.size > 400) fail('resource-exhausted','Ask management to return this work in smaller scopes.');
+        const cleared = {workerId:'',workerName:'',workerType:'Not Assigned',claimedWorkOfferId:null,payrollAgreement:null};
+        changedTasks.filter(v=>v.exists).forEach(doc=>t.set(doc.ref,cleared,{merge:true}));
+        stopTasks.forEach(snap=>snap.docs.filter(doc=>doc.data().workerId===claim.workerId).forEach(doc=>t.set(doc.ref,cleared,{merge:true})));
+        stopDocs.forEach(doc=>t.set(doc.ref,{techId:'',tech:'',workOfferId:null,workOfferClaimId:null,payrollAgreement:null,assignedFromWorkOffer:false,pendingWorkOfferId:null,payrollMode:'automatic',manualPayOverrideCents:null,manualPayOverrideNotes:null,estimatedPayCents:0,assignmentRevision:Number(doc.data().assignmentRevision || 0)+1,updatedAt:now()},{merge:true}));
+        materialDocs.forEach(doc=>{ if (doc.data().assignedTechId===claim.workerId) t.set(doc.ref,{assignedTechId:'',assignedTechName:''},{merge:true}); });
+        routeDocs.forEach(doc=>{
+          const route=doc.data(), remaining=routeIds(route).filter(value=>!releasedStopIds.includes(value));
+          t.set(doc.ref,{serviceStopsIds:remaining,...(route.serviceStopIds?{serviceStopIds:remaining}:{}),order:list(route.order).filter(v=>!releasedStopIds.includes(id(v.serviceStopId))).map((v,index)=>({...v,order:index+1})),totalStops:remaining.length,updatedAt:now()},{merge:true});
+        });
+        const audit={claimId:claim.id,workerId:claim.workerId,byUserId:uid,byUserName:actor.name,reason,at:now(),stopIds:releasedStopIds};
+        const next=claims.map(v=>v.id===claim.id?{...v,status:'Rejected',withdrawnAt:now(),withdrawnByUserId:uid,withdrawalReason:reason}:v);
+        const active=next.filter(v=>!['Rejected','Cancelled','Transferred'].includes(v.status));
+        const remaining=list(offer.remainingStopIds).filter(value=>!releasedStopIds.includes(value));
+        const status=remaining.length?'Posted':active.length?offer.status:'Rejected';
+        t.set(ref,{claims:next,status,remainingStopIds:remaining,withdrawnStopIds:unique([...list(offer.withdrawnStopIds),...releasedStopIds]),withdrawalHistory:[...list(offer.withdrawalHistory),audit],...(!active.length?{rejectionReason:reason,rejectedAt:now(),rejectedByUserId:uid}:{}),updatedAt:now()},{merge:true});
+        const target=offer.createdByUserId || actor.company.ownerId;
+        if (target && target!==uid) t.set(db.collection('users').doc(target).collection('alerts').doc('offer_return_'+stable(offerId+'_'+claim.id)),{source:'workOffer',title:'Accepted work returned',message:claim.workerName+' returned '+(offer.title || 'offered work')+': '+reason,recipientUserId:target,companyId,status:'Unread',read:false,createdAt:now(),date:now(),route:'/company/offered-work'});
+        t.set(c.collection('alerts').doc('offer_return_'+stable(offerId+'_'+claim.id)),{source:'workOffer',title:'Accepted work returned',message:claim.workerName+' returned '+(offer.title || 'offered work')+': '+reason,relatedEntity:{type:'workOffer',id:offerId},managementOnly:true,status:'Unread',read:false,createdAt:now(),date:now(),route:'/company/offered-work'});
+        return {offerId,claimId:claim.id,status:'Rejected'};
+      }
       if (action === 'delete') {
         if (!can(actor,'324') && !(can(actor,'322') && offer.createdByUserId===uid)) fail('permission-denied','You cannot delete this offer.');
         if (data.revision!==undefined && Number(data.revision)!==(offer.revision || 1)) fail('failed-precondition','This offer changed. Refresh it before deleting.');
@@ -327,14 +402,14 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const finance=can(actor,'420') || can(actor,'424');
         const terms=a=>a?{workerId:a.workerId,workerName:a.workerName,paySource:a.paySource,revision:a.revision,...(a.workerId===uid || finance?{baseCents:a.baseCents,totalCents:a.totalCents,fixedAmountCents:a.fixedAmountCents}:{})}:null;
         const canEdit=can(actor,'324') || can(actor,'322') && offer.createdByUserId===uid;
-        return {pay,scope:presentScope(display),scopeChanged:scopeUnavailable || !!offer.scopeSignature && offer.scopeSignature!==scopeSignature(scope),offer:{...offer,adminNotes:can(actor,'324') || can(actor,'332')?offer.adminNotes:'',scopeSnapshot:presentScope(stored),acceptedTerms:terms(offer.acceptedTerms),claims:claims.map(v=>({...v,agreement:terms(v.agreement)}))},management:{canEdit,canDelete:canEdit && !hasAcceptedWork(offer),termsLocked:offerTermsLocked(offer),canIncentivize:can(actor,'328') && ctx.wide.workOfferIncentivesCreatePayrollLines!==false,incentiveLocked:(hasAcceptedWork(offer) || claims.length>0) && !list(offer.remainingStopIds).length}};
+        return {pay,scope:presentScope(display),scopeChanged:scopeUnavailable || !!offer.scopeSignature && offer.scopeSignature!==scopeSignature(scope),offer:{...offer,adminNotes:can(actor,'324') || can(actor,'332')?offer.adminNotes:'',scopeSnapshot:presentScope(stored),acceptedTerms:terms(offer.acceptedTerms),claims:claims.map(v=>({...v,agreement:terms(v.agreement)}))},management:{returnableClaimIds:claims.filter(v=>['Accepted','Scheduled'].includes(v.status) && (v.workerId===uid || can(actor,'324'))).map(v=>v.id),canEdit,canDelete:canEdit && !hasAcceptedWork(offer),termsLocked:offerTermsLocked(offer),canIncentivize:can(actor,'328') && ctx.wide.workOfferIncentivesCreatePayrollLines!==false,incentiveLocked:(hasAcceptedWork(offer) || claims.length>0) && !list(offer.remainingStopIds).length}};
       }
       if (action === 'preview') {
         await checkEligibility(t,c,actor,offer);
         const {scope} = await scopeFor(t,c,offer);
-        const all=scope.stops.map(v=>v.id), reserved=new Set([...(offer.transferredStopIds || []),...claims.filter(v=>!['Rejected','Cancelled','Transferred'].includes(v.status)).flatMap(v=>v.stopIds || [])]), available=all.filter(v=>!reserved.has(v)), selected=data.stopIds ? unique(data.stopIds).filter(v=>available.includes(v)) : available;
+        const all=scope.stops.map(v=>v.id), reserved=new Set([...unavailableStopIds(offer),...claims.filter(v=>!['Rejected','Cancelled','Transferred'].includes(v.status)).flatMap(v=>v.stopIds || [])]), available=all.filter(v=>!reserved.has(v)), selected=data.stopIds ? unique(data.stopIds).filter(v=>available.includes(v)) : available;
         const quotedOffer=all.length ? {...offer,offeredAmountCents:allocation(cents(offer.offeredAmountCents),all,selected),incentive:offer.incentive?.type==='flat'?{...offer.incentive,amountCents:allocation(cents(offer.incentive.amountCents),all,selected)}:offer.incentive} : offer;
-        const preview = estimate({companyId,offer:quotedOffer,scope:{...scope,stops:scope.stops.filter(v=>selected.includes(v.id))},ctx,actor});
+        const preview = await estimate({t,c,companyId,offer:quotedOffer,scope:{...scope,stops:scope.stops.filter(v=>selected.includes(v.id))},ctx,actor});
         const availableScope={...scope,stops:scope.stops.filter(v=>available.includes(v.id)),tasks:scope.tasks.filter(v=>!v.sourceStopId || selected.includes(v.sourceStopId)),products:scope.products.filter(v=>!v.sourceStopId || selected.includes(v.sourceStopId))};
         return { ...preview, hourlyPaySource:ctx.settings.hourlyPaySource || null,scope:presentScope(availableScope), revision:offer.revision || 1 };
       }
@@ -349,15 +424,15 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
 
         if (!['posted','sent','viewed','accepted'].includes(key(offer.status))) fail('failed-precondition','This offer is no longer open.');
         const {scope} = await scopeFor(t,c,offer);
-        if (offer.scopeSignature && offer.scopeSignature!==scopeSignature({...scope,stops:scope.stops.map(stop=>(offer.transferredStopIds || []).includes(stop.id) || claims.some(claim=>!['Rejected','Cancelled','Transferred'].includes(claim.status)&&(claim.stopIds || []).includes(stop.id)) ? offer.scopeSnapshot?.stops?.find(original=>original.id===stop.id) || stop : stop)})) fail('failed-precondition','The job scope changed. Ask management to refresh this offer before accepting it.');
-        const all = scope.stops.map(v=>v.id), reserved = new Set([...(offer.transferredStopIds || []),...claims.filter(v=>!['Rejected','Cancelled','Transferred'].includes(v.status)).flatMap(v=>v.stopIds)]);
+        if (offer.scopeSignature && offer.scopeSignature!==scopeSignature({...scope,stops:scope.stops.map(stop=>unavailableStopIds(offer).includes(stop.id) || claims.some(claim=>!['Rejected','Cancelled','Transferred'].includes(claim.status)&&(claim.stopIds || []).includes(stop.id)) ? offer.scopeSnapshot?.stops?.find(original=>original.id===stop.id) || stop : stop)})) fail('failed-precondition','The job scope changed. Ask management to refresh this offer before accepting it.');
+        const all = scope.stops.map(v=>v.id), reserved = new Set([...unavailableStopIds(offer),...claims.filter(v=>!['Rejected','Cancelled','Transferred'].includes(v.status)).flatMap(v=>v.stopIds)]);
         if (!all.length && claims.some(v=>!['Rejected','Cancelled'].includes(v.status)) || !all.length && offer.acceptedByUserId) fail('already-exists','Another technician already claimed this work.');
         const requested = unique(data.stopIds ? data.stopIds : all.filter(v=>!reserved.has(v)));
         if (requested.some(v=>!all.includes(v) || reserved.has(v)) || all.length && !requested.length) fail('already-exists','Some stops have already been claimed.');
         if (all.length && offer.routeSplitAllowed !== true && (requested.length!==all.length || reserved.size)) fail('failed-precondition','This route must stay together.');
         const scoped = { ...scope, stops:scope.stops.filter(v=>requested.includes(v.id)) };
         const mode = all.length ? coverageMode(ctx.wide) : ctx.wide.workOffersRequireApprovalBeforeAssignment || ctx.wide.workOffersAutoAssignOnAcceptance === false ? 'review' : 'automatic';
-        const preview = estimate({companyId,offer:{...offer,offeredAmountCents:all.length ? allocation(cents(offer.offeredAmountCents),all,requested) : offer.offeredAmountCents,incentive:all.length && offer.incentive?.type==='flat'?{...offer.incentive,amountCents:allocation(cents(offer.incentive.amountCents),all,requested)}:offer.incentive},scope:scoped,ctx,actor});
+        const preview = await estimate({t,c,companyId,offer:{...offer,offeredAmountCents:all.length ? allocation(cents(offer.offeredAmountCents),all,requested) : offer.offeredAmountCents,incentive:all.length && offer.incentive?.type==='flat'?{...offer.incentive,amountCents:allocation(cents(offer.incentive.amountCents),all,requested)}:offer.incentive},scope:scoped,ctx,actor});
         if (preview.needsReview && (ctx.settings.payrollEnabled===false || ctx.settings.companyPayrollEnabled===false || ctx.settings.payrollDisabled===true))fail('failed-precondition','Enable company payroll before accepting paid work.');
         if (!['Offered Amount','Unpaid'].includes(offer.paySource) && preview.needsReview) fail('failed-precondition','A manager must resolve missing pay setup before this work can be accepted.');
         const selectedTypes = new Set([...scope.tasks.map(v=>jobPayFields(v).payTypeId),...scope.stops.flatMap(v=>[v.payTypeId || v.typeId,...(v.defaultWorkTypeIds || [])]),offer.serviceStopTypeId].filter(Boolean));
@@ -370,7 +445,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
           claim.taskIds.forEach(taskId=>t.set(c.collection('workOrders').doc(id(offer.jobId)).collection('tasks').doc(taskId),{claimedWorkOfferId:offer.id},{merge:true}));
           claim.stopIds.forEach(stopId=>t.set(c.collection('serviceStops').doc(stopId),{pendingWorkOfferId:offer.id},{merge:true}));
         }
-        const next = [...claims,claim], remaining = all.filter(v=>!(offer.transferredStopIds || []).includes(v) && !new Set(next.filter(c=>!['Rejected','Cancelled','Transferred'].includes(c.status)).flatMap(c=>c.stopIds)).has(v));
+        const next = [...claims,claim], remaining = all.filter(v=>!unavailableStopIds(offer).includes(v) && !new Set(next.filter(c=>!['Rejected','Cancelled','Transferred'].includes(c.status)).flatMap(c=>c.stopIds)).has(v));
         const status = remaining.length ? 'Posted' : mode==='review' ? 'Acceptance Pending Approval' : 'Accepted';
         t.set(ref,{claims:next,claimedByUserIds:unique(next.map(v=>v.workerId)),remainingStopIds:remaining,status,acceptedByUserId:uid,acceptedByUserName:actor.name,acceptedAt:now(),updatedAt:now(),...(!all.length ? { acceptedTerms:agreement } : {})},{merge:true});
         if (mode !== 'review') await notify(t,c,offer,claim,mode,actor.company.ownerId);
@@ -383,7 +458,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (pending.length) {
           const {scope}=await scopeFor(t,c,offer);
           const unchangedClaims=claims.filter(claim=>!pending.some(p=>p.id===claim.id) && !['Rejected','Cancelled','Transferred'].includes(claim.status));
-          const checked={...scope,stops:scope.stops.map(stop=>(offer.transferredStopIds || []).includes(stop.id) || unchangedClaims.some(claim=>(claim.stopIds || []).includes(stop.id)) ? offer.scopeSnapshot?.stops?.find(original=>original.id===stop.id) || stop : stop)};
+          const checked={...scope,stops:scope.stops.map(stop=>unavailableStopIds(offer).includes(stop.id) || unchangedClaims.some(claim=>(claim.stopIds || []).includes(stop.id)) ? offer.scopeSnapshot?.stops?.find(original=>original.id===stop.id) || stop : stop)};
           if (offer.scopeSignature && offer.scopeSignature!==scopeSignature(checked)) fail('failed-precondition','The job scope changed. Refresh this offer before approving it.');
         }
         const applies = []; for (const claim of pending) applies.push(await prepareAssignment(t,c,offer,claim));

@@ -2126,7 +2126,7 @@ const CompanyUserDetails = () => {
             toast.success("Basic job admin assignment updated.");
         } catch (error) {
             console.error("Error updating work order admin assignment:", error);
-            toast.error("Failed to update basic job admin assignment.");
+            toast.error("Failed to update scheduled job admin assignment.");
         } finally {
             setIsSavingWorkOrderAdmin(false);
         }
@@ -3245,8 +3245,8 @@ const CompanyUserDetails = () => {
 
     const renderWorkOrderAdminSection = () => (
         <Section
-            title="Basic Job Admin"
-            description="Choose the admin automatically assigned when this user creates or receives a basic job."
+            title="Scheduled Job Admin"
+            description="Choose the admin automatically assigned when this user creates or receives a scheduled job."
             action={(
                 <Badge className={selectedWorkOrderAdminOption ? "bg-blue-50 text-blue-700 ring-blue-200" : "bg-amber-50 text-amber-700 ring-amber-200"}>
                     {selectedWorkOrderAdminOption ? "Assigned" : "Not assigned"}
@@ -3278,7 +3278,7 @@ const CompanyUserDetails = () => {
 
                 {assignedRegionalTags.length > 0 && (
                     <p className="text-sm text-slate-500">
-                        This user is limited to customer tags {assignedRegionalTags.join(", ")}. The basic job form also uses regional admin fallback when no direct admin is set.
+                        This user is limited to customer tags {assignedRegionalTags.join(", ")}. The job scheduling form also uses regional admin fallback when no direct admin is set.
                     </p>
                 )}
 
@@ -3290,7 +3290,7 @@ const CompanyUserDetails = () => {
                             disabled={isSavingWorkOrderAdmin}
                             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            {isSavingWorkOrderAdmin ? "Saving..." : "Save Basic Job Admin"}
+                            {isSavingWorkOrderAdmin ? "Saving..." : "Save Scheduled Job Admin"}
                         </button>
                     </div>
                 )}

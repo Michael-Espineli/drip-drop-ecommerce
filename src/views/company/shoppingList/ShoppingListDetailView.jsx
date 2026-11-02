@@ -105,6 +105,7 @@ const ShoppingListDetailView = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
     const [edit, setEdit] = useState(false);
+    const [quickStatus, setQuickStatus] = useState("");
     const [sourceCollection, setSourceCollection] = useState("shoppingList");
     const [jobDetails, setJobDetails] = useState(null);
     const [serviceLocationDetails, setServiceLocationDetails] = useState(null);
@@ -437,6 +438,10 @@ const ShoppingListDetailView = () => {
     }, [fetchItem]);
 
     useEffect(() => {
+        setQuickStatus(item.id ? canonicalShoppingListStatus(item.status) : "");
+    }, [item.id, item.status]);
+
+    useEffect(() => {
         const fetchConnectedJobDetails = async () => {
             if (!recentlySelectedCompany || !item.id || (!item.jobId && !item.serviceLocationId)) {
                 setJobDetails(null);
@@ -675,6 +680,105 @@ const ShoppingListDetailView = () => {
         setPhotoPreviewUrl("");
         setPhotoError("");
         setEdit(false);
+    };
+
+    const saveQuickStatus = async (event) => {
+        event.preventDefault();
+        if (!recentlySelectedCompany || !item.id || isLoading || updating || edit ||
+            !statusOptions.includes(quickStatus) || quickStatus === item.status) return;
+
+        let statusSaved = false;
+
+        try {
+            setUpdating(true);
+            const nextInvoiced = quickStatus === SHOPPING_LIST_INVOICED_STATUS;
+            const payload = {
+                status: quickStatus,
+                invoiced: nextInvoiced,
+                invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                manualInvoiceNote: nextInvoiced ? item.manualInvoiceNote || "" : "",
+                autoInvoiceOnInstall: nextInvoiced ? false : item.autoInvoiceOnInstall === true,
+                needsAction: shoppingItemNeedsAction(quickStatus),
+                updatedAt: Timestamp.now(),
+            };
+
+            await updateDoc(
+                doc(db, "companies", recentlySelectedCompany, sourceCollection, item.id),
+                payload
+            );
+            statusSaved = true;
+
+            let updatedItem = { ...item, ...payload };
+            setItem(updatedItem);
+            setEditForm(updatedItem);
+
+            if (item.purchasedItem) {
+                const { shoppingPayload } = await syncLinkedShoppingPurchase({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    shoppingItemId: item.id,
+                    purchasedItemId: item.purchasedItem,
+                    shoppingCollectionName: sourceCollection,
+                    shoppingItemData: updatedItem,
+                    invoiced: nextInvoiced,
+                });
+                updatedItem = { ...updatedItem, ...shoppingPayload };
+                setItem(updatedItem);
+                setEditForm(updatedItem);
+            }
+
+            if (nextInvoiced) {
+                await updateLinkedPartApprovalForManualShoppingInvoice({
+                    db,
+                    shoppingItem: updatedItem,
+                    note: updatedItem.manualInvoiceNote,
+                    user,
+                });
+            } else if (updatedItem.status === SHOPPING_LIST_STATUS.installed && updatedItem.autoInvoiceOnInstall) {
+                const invoiceResult = await createAndSendShoppingItemInstallInvoice({
+                    db,
+                    functions,
+                    companyId: recentlySelectedCompany,
+                    shoppingCollectionName: sourceCollection,
+                    shoppingItem: updatedItem,
+                    user,
+                    getCallableAuthPayload,
+                });
+                updatedItem = { ...updatedItem, ...invoiceResult.shoppingPayload };
+                setItem(updatedItem);
+                setEditForm(updatedItem);
+
+                if (invoiceResult.status === "sent") {
+                    toast.success("Status updated. Invoice created and sent.");
+                    return;
+                }
+                if (invoiceResult.status === "created_email_failed") {
+                    toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
+                    return;
+                }
+                if (invoiceResult.status === "skipped") {
+                    const reason = invoiceResult.reason === "missing_billable_amount"
+                        ? "it has no billable amount"
+                        : invoiceResult.reason === "missing_customer_email"
+                            ? "the customer is missing an email"
+                            : "automatic invoicing could not be completed";
+                    toast.error(`Status updated, but no invoice was created because ${reason}.`);
+                    return;
+                }
+            }
+
+            toast.success("Status updated.");
+        } catch (error) {
+            console.error("Error updating shopping item status", error);
+            if (statusSaved) {
+                await fetchItem();
+                toast.error("Status saved, but a linked update could not be completed.");
+            } else {
+                toast.error("Could not update status. Please try again.");
+            }
+        } finally {
+            setUpdating(false);
+        }
     };
 
     const saveEditChanges = async () => {
@@ -1001,13 +1105,15 @@ const ShoppingListDetailView = () => {
                             />
                             <button
                                 onClick={editJob}
-                                className="rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition hover:bg-blue-700"
+                                disabled={isLoading || updating || !item.id}
+                                className="rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 Edit
                             </button>
                             <button
                                 onClick={deleteJob}
-                                className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+                                disabled={isLoading || updating || !item.id}
+                                className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 Delete
                             </button>
@@ -1630,6 +1736,40 @@ const ShoppingListDetailView = () => {
                     </div>
 
                     <div className="space-y-6">
+                        {!edit && (
+                            <section aria-labelledby="quick-status-heading" className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                                <h3 id="quick-status-heading" className="text-xl font-bold text-gray-800">Quick Status</h3>
+                                <form onSubmit={saveQuickStatus} className="mt-4 space-y-4" aria-busy={updating}>
+                                    <div>
+                                        <label htmlFor="shopping-item-quick-status" className="mb-1 block text-sm font-semibold text-gray-500">Status</label>
+                                        <select
+                                            id="shopping-item-quick-status"
+                                            value={quickStatus}
+                                            onChange={(event) => setQuickStatus(event.target.value)}
+                                            disabled={isLoading || updating || !item.id}
+                                            className="w-full rounded-md border border-slate-300 bg-white p-3 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            <option value="" disabled>Select status</option>
+                                            {statusOptions.map((status) => (
+                                                <option key={status} value={status}>{status}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    {quickStatus === SHOPPING_LIST_STATUS.installed && item.autoInvoiceOnInstall && (
+                                        <p className="rounded-md bg-blue-50 p-3 text-sm text-blue-800">
+                                            Auto invoicing is enabled. Marking this item installed will create and send its invoice.
+                                        </p>
+                                    )}
+                                    <button
+                                        type="submit"
+                                        disabled={isLoading || updating || !item.id || !quickStatus || quickStatus === item.status}
+                                        className="w-full rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {updating ? "Updating..." : "Update Status"}
+                                    </button>
+                                </form>
+                            </section>
+                        )}
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Summary</h3>
                             <div className="space-y-3 text-gray-700">

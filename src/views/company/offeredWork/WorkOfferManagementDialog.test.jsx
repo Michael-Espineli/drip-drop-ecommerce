@@ -38,6 +38,23 @@ test("opens unclaimed offer details, complete scope, and management actions with
   expect(manageTechnicianWork).toHaveBeenCalledWith("company", "details", { offerId: "offer" });
 });
 
+test("details and editing share the same sections and retain attribution; cancelling edits sends no mutation", async () => {
+  manageTechnicianWork.mockResolvedValue(details({ offer: { ...offer, createdByUserName: "Office manager" } }));
+  open();
+  await screen.findByText("Replace pump");
+  const titles = () => screen.getAllByRole("heading", { level: 3 }).map(heading => heading.textContent);
+  const detailsSections = titles();
+  expect(detailsSections).toEqual(["Offer details", "Recipient & location", "Work scope", "Notes", "Timeline & scheduling", "Pay & incentive"]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit offer" }));
+  expect(titles()).toEqual(detailsSections);
+  expect(screen.getByText("Office manager")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Offer title"), { target: { value: "Unsaved title" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel editing" }));
+  expect(screen.queryByLabelText("Offer title")).not.toBeInTheDocument();
+  expect(screen.queryByText("Unsaved title")).not.toBeInTheDocument();
+  expect(manageTechnicianWork.mock.calls.every(([, action]) => action === "details")).toBe(true);
+});
+
 test("saves revised pay, assignment, timing and task scope against the loaded revision", async () => {
   const { onChanged } = open({ initialTab: "edit" });
   const title = await screen.findByLabelText("Offer title");
@@ -107,4 +124,19 @@ test("removing a private board clears its old membership restriction", async () 
   fireEvent.click(screen.getByRole("button", { name: "Save offer" }));
   await waitFor(() => expect(manageTechnicianWork).toHaveBeenCalledWith("company", "update", expect.objectContaining({ changes: expect.objectContaining({ boardIds: [], boardNames: [], boardMemberUserIds: [] }) })));
   await screen.findByText("Replace pump");
+});
+
+test("accepted work exposes only server-authorized return actions and retains the management view after returning", async () => {
+  const claim = { id: "claim", workerId: "tech", workerName: "Alex", status: "Accepted" };
+  const accepted = { ...offer, status: "Accepted", claims: [claim], createdByUserName: "Office" };
+  manageTechnicianWork.mockImplementation((company, action) => Promise.resolve(action === "details" ? details({ offer: accepted, management: { ...management, canDelete: false, returnableClaimIds: ["claim"] } }) : { offerId: "offer", claimId: "claim", status: "Rejected" }));
+  const { onChanged } = open({ offer: accepted });
+  fireEvent.click(await screen.findByRole("button", { name: "Return Alex's work" }));
+  const dialog = screen.getByRole("dialog", { name: "Return accepted work" });
+  fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Schedule conflict" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Return work" }));
+  await waitFor(() => expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ type: "returned", claimId: "claim" })));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Return accepted work" })).not.toBeInTheDocument());
+  expect(screen.getByRole("button", { name: "Close work offer" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Delete offer" })).not.toBeInTheDocument();
 });

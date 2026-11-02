@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { collection, doc, onSnapshot } from "firebase/firestore";
 import { db } from "../utils/config";
 
-const empty = { companyUsers: [], payTypes: [], rates: [], settings: {}, loading: true, error: "" };
+const empty = { companyUsers: [], payTypes: [], rates: [], settings: {}, companySettings: {}, companySettingsLoading: true, companySettingsError: "", loading: true, error: "" };
 
 export default function useServicePayrollData(companyId, enabled = true) {
   const [state, setState] = useState({ ...empty, companyId: "" });
@@ -15,7 +15,7 @@ export default function useServicePayrollData(companyId, enabled = true) {
     const publish = () => {
       if (canceled) return;
       const company = data.companySettings;
-      setState({ ...data, settings: { ...data.settings, ...((company.payrollEnabled === false || company.companyPayrollEnabled === false || company.payrollDisabled === true) ? { payrollEnabled: false } : {}) }, loading: pending.size > 0 });
+      setState({ ...data, settings: { ...data.settings, ...((company.payrollEnabled === false || company.companyPayrollEnabled === false || company.payrollDisabled === true) ? { payrollEnabled: false } : {}) }, companySettingsLoading: pending.has("companySettings"), loading: pending.size > 0 });
     };
     const sources = [
       ["companyUsers", collection(db, "companies", companyId, "companyUsers")],
@@ -27,11 +27,13 @@ export default function useServicePayrollData(companyId, enabled = true) {
     const subscriptions = sources.map(([key, ref]) => onSnapshot(ref, (snapshot) => {
       if (canceled) return;
       data = { ...data, [key]: snapshot.docs ? snapshot.docs.map((snap) => ({ ...snap.data(), id: snap.id })) : snapshot.exists() ? snapshot.data() : {} };
+      if (key === "companySettings") data.companySettingsError = "";
       pending.delete(key);
       publish();
     }, () => {
       if (canceled) return;
       data = { ...data, error: "Technician pay setup could not be loaded. Check payroll access or try again." };
+      if (key === "companySettings") data.companySettingsError = "Company settings could not be loaded.";
       pending.delete(key);
       publish();
     }));

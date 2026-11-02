@@ -3,6 +3,7 @@ import path from "path";
 import { parse } from "@babel/parser";
 import { completeJobLaborLines, taskCustomerPriceCents } from "./jobScopePricing";
 import { SalesCatalogItemType, SalesCatalogBillingBehavior, SalesCatalogSourceType } from "./models/Sales";
+import { jobPayFields } from "./payroll/payCalculation";
 
 // Execute the actual screen builders so a lost tax flag in any creation path is
 // caught without mounting screens that would connect to Firebase.
@@ -50,4 +51,21 @@ test.each(cases)("%s preserves taxable services and adds uncovered work in estim
   expect(result.map((line) => [line.totalAmountCents, line.taxable])).toEqual([[10000, true], [5000, false]]);
   expect(result[0]).toEqual(expect.objectContaining({ stripeProductId: "prod", stripePriceId: "price" }));
   expect(result.reduce((sum, line) => sum + line.totalAmountCents, 0)).toBe(15000);
+});
+
+test("creating a job from a template retains its service pay link and explicitly applied internal budget", () => {
+  const normalize = screenBuilder('jobs/BasicWorkOrderCreate.jsx', 'normalizeTemplateLaborLineForJob', {
+    ...context, jobPayFields, recentlySelectedCompany: 'company', selectedTemplate: { id: 'template' },
+    laborLineTotalPriceCents: (line) => line.totalPriceCents,
+    laborLineUnitPriceCents: (line) => line.unitPriceCents,
+    laborLineInternalCostCents: (line) => line.internalCostCents,
+    uuidv4: () => 'new', uniqueStringList: (values) => [...new Set(values)].filter(Boolean),
+    selectedEquipmentId: '', selectedServiceLocation: { id: 'site' }, resolvedJobBodyOfWaterId: '',
+    Timestamp: { now: () => 'now' }, createdByUserId: 'creator',
+  });
+  const line = normalize({ id: 'source', payTypeId: 'service-pay', payTypeName: 'Service pay', sourceType: 'databaseItem', sourceId: 'product',
+    internalCostMode: 'fixed', internalCostCents: 8000, unitPriceCents: 15000, totalPriceCents: 15000 }, 'job', 'plan', {}, {}, 0);
+  expect(line).toEqual(expect.objectContaining({ payTypeId: 'service-pay', payTypeName: 'Service pay', sourceId: 'product', internalCostMode: 'fixed', internalCostCents: 8000, totalPriceCents: 15000 }));
+  const priced = completeJobLaborLines({ laborLineItems: [{ ...line, taskIds: ['task'] }], tasks: [{ id: 'task' }], taskCost: () => 1000 });
+  expect(priced[0].internalCostCents).toBe(8000);
 });

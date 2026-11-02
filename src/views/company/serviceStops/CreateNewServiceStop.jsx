@@ -312,12 +312,15 @@ const CreateNewServiceStop = () => {
     const [companyWorkTypes, setCompanyWorkTypes] = useState([]);
     const [workTypeMappings, setWorkTypeMappings] = useState([]);
     const [technicianRates, setTechnicianRates] = useState([]);
+    const [payrollBodyScope, setPayrollBodyScope] = useState(null);
     const [selectedCategory, setSelectedCategory] = useState(() => categoryOptionForParam(queryCategory, Boolean(jobId)));
     const [selectedManualServiceStopType, setSelectedManualServiceStopType] = useState(null);
     const [selectedPayWorkType, setSelectedPayWorkType] = useState(null);
     const [manualPayOverrideEnabled, setManualPayOverrideEnabled] = useState(false);
     const [manualPayOverrideAmount, setManualPayOverrideAmount] = useState("");
     const [manualPayOverrideNotes, setManualPayOverrideNotes] = useState("");
+    const payrollBodiesOfWater = payrollBodyScope && payrollBodyScope.companyId === recentlySelectedCompany && payrollBodyScope.locationId === serviceLocation?.id
+        ? payrollBodyScope.bodies : null;
 
     const moneyFromCents = (value) =>
         new Intl.NumberFormat("en-US", {
@@ -396,6 +399,8 @@ const CreateNewServiceStop = () => {
         return estimateServiceStopPaySummary({
             companyId: recentlySelectedCompany,
             settings: paySettings,
+            serviceStop: { serviceLocationId: serviceLocation?.id || "", estimatedMinutes: estimatedDuration },
+            bodiesOfWater: payrollBodiesOfWater,
             serviceStopType: selectedServiceStopType,
             serviceStopUseCaseSourceId: selectedCategory.sourceId,
             serviceStopWorkTypeIds: selectedPayWorkType?.id ? [selectedPayWorkType.id] : null,
@@ -418,6 +423,9 @@ const CreateNewServiceStop = () => {
         workTypeMappings,
         technicianRates,
         serviceDate,
+        serviceLocation?.id,
+        estimatedDuration,
+        payrollBodiesOfWater,
     ]);
 
     const manualPayOverrideCents = useMemo(() => {
@@ -431,7 +439,8 @@ const CreateNewServiceStop = () => {
 
         return estimateServiceStopPaySummary({
             companyId: recentlySelectedCompany, settings: paySettings,
-            serviceStop: { payrollMode: "custom", manualPayOverrideCents, manualPayOverrideNotes, estimatedMinutes: estimatedDuration },
+            serviceStop: { payrollMode: "custom", manualPayOverrideCents, manualPayOverrideNotes, estimatedMinutes: estimatedDuration, serviceLocationId: serviceLocation?.id || "" },
+            bodiesOfWater: payrollBodiesOfWater,
             serviceStopType: selectedServiceStopType,
             serviceStopUseCaseSourceId: selectedCategory.sourceId,
             serviceStopWorkTypeIds: selectedPayWorkType?.id ? [selectedPayWorkType.id] : null,
@@ -441,7 +450,7 @@ const CreateNewServiceStop = () => {
     }, [manualPayOverrideCents, manualPayOverrideEnabled, manualPayOverrideNotes,
         selectedPaySummary, recentlySelectedCompany, paySettings, estimatedDuration,
         selectedServiceStopType, selectedCategory.sourceId, selectedPayWorkType,
-        selectedTasks, selectedUser, companyWorkTypes, workTypeMappings, technicianRates, serviceDate]);
+        selectedTasks, selectedUser, companyWorkTypes, workTypeMappings, technicianRates, serviceDate, serviceLocation?.id, payrollBodiesOfWater]);
 
     const selectedPlannedStopPayRange = useMemo(() => {
         if (!selectedPlannedStop) return null;
@@ -454,6 +463,8 @@ const CreateNewServiceStop = () => {
         return estimatePlannedServiceStopPayRange({
             companyId: recentlySelectedCompany,
             settings: paySettings,
+            serviceStop: { serviceLocationId: serviceLocation?.id || "", estimatedMinutes: selectedPlannedStop.estimatedDuration || estimatedDuration },
+            bodiesOfWater: payrollBodiesOfWater,
             serviceStopType: getPlannedStopType(selectedPlannedStop),
             serviceStopUseCaseSourceId: "system_job_service_stop",
             tasks,
@@ -474,7 +485,26 @@ const CreateNewServiceStop = () => {
         workTypeMappings,
         technicianRates,
         serviceDate,
+        serviceLocation?.id,
+        estimatedDuration,
+        payrollBodiesOfWater,
     ]);
+
+    useEffect(() => {
+        const locationId = serviceLocation?.id;
+        if (!recentlySelectedCompany || !locationId || !technicianRates.some(rate => rate.rateType === "perBodyOfWater")) {
+            setPayrollBodyScope(null);
+            return;
+        }
+        let cancelled = false;
+        setPayrollBodyScope(null);
+        getDocs(query(collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"), where("serviceLocationId", "==", locationId)))
+            .then(snapshot => {
+                if (!cancelled) setPayrollBodyScope({ companyId: recentlySelectedCompany, locationId, bodies: snapshot.docs.map(row => ({ ...row.data(), id: row.id })) });
+            })
+            .catch(error => console.warn("Could not load BOWs for the payroll estimate:", error));
+        return () => { cancelled = true; };
+    }, [recentlySelectedCompany, serviceLocation?.id, technicianRates]);
 
     useEffect(() => {
         setSelectedCategory(categoryOptionForParam(queryCategory, Boolean(jobId)));

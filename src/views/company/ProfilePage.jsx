@@ -7,6 +7,9 @@ import { Context } from "../../context/AuthContext";
 import { collection, doc, getDoc, getDocs, limit, orderBy, query, updateDoc, where } from "firebase/firestore";
 import { auth, db, functions, storage } from '../../utils/config';
 import { FaExternalLinkAlt } from "react-icons/fa";
+import { HiOutlineUserCircle, HiOutlineBuildingOffice2, HiOutlineWallet, HiOutlineClock, HiOutlineCog6Tooth, HiOutlineLink } from "react-icons/hi2";
+import { profilePayoutSummary } from "../../utils/profilePayout";
+import "./ProfilePage.css";
 import toast from 'react-hot-toast';
 import { appConfirm } from "../../utils/appDialog";
 import {
@@ -15,12 +18,11 @@ import {
     sendAccountPasswordResetEmail,
 } from "../../utils/passwordReset";
 
-const buttonBaseClass = "inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60";
-const primaryButtonClass = `${buttonBaseClass} bg-blue-600 text-white shadow-sm hover:bg-blue-700 focus:ring-blue-100`;
-const secondaryButtonClass = `${buttonBaseClass} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus:ring-blue-100`;
-const subtleButtonClass = `${buttonBaseClass} border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 focus:ring-blue-100`;
-const dangerButtonClass = `${buttonBaseClass} bg-red-600 text-white shadow-sm hover:bg-red-700 focus:ring-red-100`;
-const dangerSubtleButtonClass = `${buttonBaseClass} border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 focus:ring-red-100`;
+const primaryButtonClass = "profile-button profile-button-primary";
+const secondaryButtonClass = "profile-button profile-button-secondary";
+const subtleButtonClass = "profile-button profile-button-subtle";
+const dangerButtonClass = "profile-button profile-button-danger";
+const dangerSubtleButtonClass = "profile-button profile-button-danger-subtle";
 
 const dateFromValue = (value) => {
     if (!value) return null;
@@ -73,37 +75,35 @@ const initialsForUser = (userData = {}) => {
 const safeFileName = (fileName = "profile-photo") =>
     fileName.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-80) || "profile-photo";
 
-// Helper Components for a cleaner structure
-const ProfileCard = ({ title, children, actions }) => (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-        <div className="p-4 border-b border-gray-200 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
-            <h2 className="text-lg font-bold text-gray-800">{title}</h2>
-            {actions && <div className="shrink-0">{actions}</div>}
-        </div>
-        <div className="p-4 space-y-4">
-            {children}
-        </div>
-    </div>
-);
+const sectionIcons = {
+    "Account Info": HiOutlineUserCircle, "Selected Company": HiOutlineBuildingOffice2,
+    "Payout Snapshot": HiOutlineWallet, "My Work History": HiOutlineClock,
+    "Connected Accounts": HiOutlineLink, "Settings": HiOutlineCog6Tooth,
+};
+const ProfileCard = ({ title, children, actions, className = "", subtitle }) => {
+    const Icon = sectionIcons[title] || HiOutlineUserCircle;
+    return (
+        <section className={`profile-card ${className}`} aria-label={title}>
+            <div className="profile-card-header">
+                <div>
+                    <h2 className="profile-card-title"><Icon className="profile-section-icon" aria-hidden="true" />{title}</h2>
+                    {subtitle && <p className="profile-payout-subtitle">{subtitle}</p>}
+                </div>
+                {actions && <div className="shrink-0">{actions}</div>}
+            </div>
+            <div className="profile-card-body">{children}</div>
+        </section>
+    );
+};
 
 const InfoRow = ({ label, value }) => (
-    <div className="grid grid-cols-3 gap-4 items-center">
-        <p className="text-sm font-semibold text-gray-600 col-span-1">{label}</p>
-        <p className="text-sm text-gray-800 col-span-2">{value || 'Not set'}</p>
-    </div>
+    <div className="profile-info-row"><dt>{label}</dt><dd>{value || 'Not set'}</dd></div>
 );
 
 const FormField = ({ label, name, type = 'text', value, onChange, placeholder }) => (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-4 sm:items-center">
-        <label className="text-sm font-semibold text-gray-700 col-span-1">{label}</label>
-        <input
-            name={name}
-            type={type}
-            value={value}
-            onChange={onChange}
-            placeholder={placeholder}
-            className="col-span-2 bg-gray-50 border-2 border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 w-full p-2.5"
-        />
+    <div className="profile-field">
+        <label htmlFor={`profile-${name}`}>{label}</label>
+        <input id={`profile-${name}`} name={name} type={type} value={value} onChange={onChange} placeholder={placeholder} />
     </div>
 );
 
@@ -134,10 +134,10 @@ const ProfileAvatar = ({ userData, previewUrl, className = "h-24 w-24", textClas
 };
 
 const SummaryTile = ({ label, value, helper }) => (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</p>
-        <p className="mt-1 text-xl font-bold text-gray-900">{value}</p>
-        {helper ? <p className="mt-1 text-xs text-gray-500">{helper}</p> : null}
+    <div className="profile-metric">
+        <p className="profile-metric-label">{label}</p>
+        <p className="profile-metric-value">{value}</p>
+        {helper ? <p className="profile-metric-helper">{helper}</p> : null}
     </div>
 );
 
@@ -152,9 +152,9 @@ const ActionLink = ({ to, children }) => (
 
 const DeleteModal = ({ onConfirm, onCancel }) => (
     <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
-            <h3 className="text-2xl font-bold text-gray-800 mb-4">Are you sure?</h3>
-            <p className="text-gray-600 mb-8">This action is irreversible and will permanently delete your account.</p>
+        <div role="dialog" aria-modal="true" aria-labelledby="delete-profile-title" className="profile-dialog p-8 rounded-2xl shadow-xl max-w-md w-full">
+            <h3 id="delete-profile-title" className="text-2xl font-bold mb-4">Are you sure?</h3>
+            <p className="text-theme-muted mb-8">This action is irreversible and will permanently delete your account.</p>
             <div className="flex justify-end space-x-4">
                 <button type="button" onClick={onCancel} className={secondaryButtonClass}>Cancel</button>
                 <button type="button" onClick={onConfirm} className={dangerButtonClass}>Delete Account</button>
@@ -186,7 +186,7 @@ export default function ProfilePage() {
     const [passwordResetLoading, setPasswordResetLoading] = useState(false);
     const [photoFile, setPhotoFile] = useState(null);
     const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
-    const [companyProfile, setCompanyProfile] = useState({
+    const [companyProfileState, setCompanyProfile] = useState({
         company: null,
         companyUser: null,
         routes: [],
@@ -195,6 +195,11 @@ export default function ProfilePage() {
         loading: false,
         error: "",
     });
+    const profileScope = `${recentlySelectedCompany || ""}:${user?.uid || ""}:${canViewPayrollInformation}`;
+    const companyProfile = companyProfileState.scope === profileScope ? companyProfileState : {
+        company: null, companyUser: null, routes: [], lineItems: [], statements: [],
+        loading: Boolean(recentlySelectedCompany && user?.uid), error: "",
+    };
 
     const [stripeLoading, setStripeLoading] = useState({
         create: false,
@@ -243,10 +248,10 @@ export default function ProfilePage() {
                 return;
             }
 
-            setCompanyProfile((current) => ({ ...current, loading: true, error: "" }));
+            setCompanyProfile({ scope: profileScope, company: null, companyUser: null, routes: [], lineItems: [], statements: [], loading: true, error: "" });
 
             try {
-                const startDate = dateDaysAgo(180);
+                const startDate = dateDaysAgo(365);
                 const endDate = endOfToday();
                 const todayStart = startOfToday();
 
@@ -272,12 +277,13 @@ export default function ProfilePage() {
                     canViewPayrollInformation
                         ? getDocs(query(
                             collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"),
+                            where("technicianId", "==", user.uid),
                             where("completedDate", ">=", startDate),
                             where("completedDate", "<=", endDate)
                         ))
                         : Promise.resolve({ docs: [] }),
                     canViewPayrollInformation
-                        ? getDocs(collection(db, "companies", recentlySelectedCompany, "technicianPayStatements"))
+                        ? getDocs(query(collection(db, "companies", recentlySelectedCompany, "technicianPayStatements"), where("technicianId", "==", user.uid)))
                         : Promise.resolve({ docs: [] }),
                 ]);
 
@@ -315,6 +321,7 @@ export default function ProfilePage() {
                     .sort((a, b) => (dateFromValue(b.startDate)?.getTime() || 0) - (dateFromValue(a.startDate)?.getTime() || 0));
 
                 setCompanyProfile({
+                    scope: profileScope,
                     company,
                     companyUser,
                     routes,
@@ -340,25 +347,20 @@ export default function ProfilePage() {
         return () => {
             cancelled = true;
         };
-    }, [canViewPayrollInformation, recentlySelectedCompany, user?.uid]);
+    }, [canViewPayrollInformation, recentlySelectedCompany, user?.uid, profileScope]);
 
     const workSummary = useMemo(() => {
-        const activeLineItems = companyProfile.lineItems.filter((item) => !item.voidedAt);
+        const activeLineItems = companyProfile.lineItems.filter((item) => !item.voidedAt && dateFromValue(item.completedDate) >= dateDaysAgo(180));
         const totalMiles = companyProfile.routes.reduce((total, route) => total + Number(route.distanceMiles || route.distance || 0), 0);
         const totalStops = companyProfile.routes.reduce((total, route) => total + Number(route.finishedStops || 0), 0);
-        const totalPayCents = activeLineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
-        const unpaidPayCents = activeLineItems
-            .filter((item) => !item.payStatementId && !item.voidedAt)
-            .reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
-
         return {
             totalMiles,
             totalStops,
-            totalPayCents,
-            unpaidPayCents,
             workItems: activeLineItems.length,
         };
     }, [companyProfile.lineItems, companyProfile.routes]);
+
+    const payoutSummary = useMemo(() => profilePayoutSummary(companyProfile.lineItems, companyProfile.statements), [companyProfile.lineItems, companyProfile.statements]);
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
@@ -583,7 +585,7 @@ export default function ProfilePage() {
             return (
                 <div className="space-y-4">
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4 sm:items-start">
-                        <p className="text-sm font-semibold text-gray-700">Profile Photo</p>
+                        <p className="text-sm font-semibold text-theme-muted">Profile Photo</p>
                         <div className="sm:col-span-2 space-y-3">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                                 <ProfileAvatar
@@ -607,9 +609,9 @@ export default function ProfilePage() {
                                         className="sr-only"
                                     />
                                     {photoFile ? (
-                                        <p className="text-xs text-gray-500">{photoFile.name} will upload when you save.</p>
+                                        <p className="text-xs text-theme-subtle">{photoFile.name} will upload when you save.</p>
                                     ) : (
-                                        <p className="text-xs text-gray-500">Select an image or paste a photo URL below.</p>
+                                        <p className="text-xs text-theme-subtle">Select an image or paste a photo URL below.</p>
                                     )}
                                 </div>
                             </div>
@@ -625,20 +627,21 @@ export default function ProfilePage() {
             );
         }
         return (
-            <div className="space-y-3">
+            <dl>
                 <InfoRow label="Name" value={fullName(dataBaseUser)} />
                 <InfoRow label="Email" value={dataBaseUser.email} />
                 <InfoRow label="Phone" value={dataBaseUser.phoneNumber} />
+                {dateFromValue(dataBaseUser.dateCreated) && <InfoRow label="Member Since" value={shortDate(dataBaseUser.dateCreated)} />}
                 <InfoRow label="Bio" value={dataBaseUser.bio} />
-            </div>
+            </dl>
         );
     };
 
     const renderSelectedCompanyInfo = () => {
         if (!recentlySelectedCompany) {
             return (
-                <ProfileCard title="Selected Company">
-                    <p className="text-sm text-gray-500">Select a company to see your company profile, work history, and paysheet.</p>
+                <ProfileCard title="Selected Company" className="profile-company">
+                    <p className="text-sm text-theme-subtle">Select a company to see your company profile, work history, and paysheet.</p>
                     <Link
                         to="/company/selection"
                         className={secondaryButtonClass}
@@ -655,97 +658,69 @@ export default function ProfilePage() {
 
         return (
             <ProfileCard
-                title="Selected Company"
+                title="Selected Company" className="profile-company"
                 actions={<ActionLink to="/company/selection">Change</ActionLink>}
             >
                 {companyProfile.loading ? (
-                    <p className="text-sm text-gray-500">Loading company profile...</p>
+                    <p className="text-sm text-theme-subtle">Loading company profile...</p>
                 ) : (
-                    <div className="space-y-3">
+                    <dl>
                         <InfoRow label="Company" value={selectedCompanyName} />
                         <InfoRow label="Role" value={companyUser.roleName} />
                         <InfoRow label="Worker Type" value={companyUser.workerType} />
                         <InfoRow label="Status" value={companyUser.status} />
                         <InfoRow label="Company Email" value={company.email} />
                         <InfoRow label="Company Phone" value={company.phoneNumber} />
-                    </div>
+                    </dl>
                 )}
                 {companyProfile.error ? <p className="text-sm font-semibold text-red-600">{companyProfile.error}</p> : null}
             </ProfileCard>
         );
     };
 
+    const renderPayout = () => {
+        if (!recentlySelectedCompany || !canViewPayrollInformation) return null;
+        return (
+            <ProfileCard title="Payout Snapshot" className="profile-payout"
+                subtitle={companyProfile.loading ? "Loading payout history..." : companyProfile.error ? "Payout history is unavailable." : payoutSummary.subtitle}>
+                {companyProfile.error ? <p role="alert" className="profile-error">{companyProfile.error}</p> : (
+                    <div className="profile-metrics" aria-busy={companyProfile.loading}>
+                        <SummaryTile label="Owed" value={companyProfile.loading ? "—" : moneyFromCents(payoutSummary.owedCents)} />
+                        <SummaryTile label="Work Done" value={companyProfile.loading ? "—" : payoutSummary.workDone} />
+                        <SummaryTile label="Last Payout" value={companyProfile.loading ? "—" : payoutSummary.lastPayoutLabel} />
+                    </div>
+                )}
+                <div className="profile-payout-actions">
+                    <ActionLink to="/company/payroll?tab=statements">Open Paysheet</ActionLink>
+                    <Link to="/company/payroll?tab=requests" className={secondaryButtonClass}>Pay Requests</Link>
+                </div>
+            </ProfileCard>
+        );
+    };
+
     const renderWorkHistory = () => {
         if (!recentlySelectedCompany) return null;
-
         return (
-            <ProfileCard
-                title="My Work History"
-                actions={canViewPayrollInformation ? <ActionLink to="/company/payroll?tab=statements">Open Paysheet</ActionLink> : null}
-            >
-                {companyProfile.loading ? (
-                    <p className="text-sm text-gray-500">Loading work history...</p>
-                ) : (
-                    <>
-                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                            <SummaryTile
-                                label="Miles"
-                                value={`${workSummary.totalMiles.toLocaleString(undefined, { maximumFractionDigits: 1 })} mi`}
-                            />
-                            <SummaryTile label="Stops" value={workSummary.totalStops.toLocaleString()} />
-                            <SummaryTile label="Work Items" value={workSummary.workItems.toLocaleString()} />
-                            {canViewPayrollInformation ? (
-                                <SummaryTile
-                                    label="Unpaid"
-                                    value={moneyFromCents(workSummary.unpaidPayCents)}
-                                    helper={`${moneyFromCents(workSummary.totalPayCents)} total`}
-                                />
-                            ) : null}
-                        </div>
-
-                        {canViewPayrollInformation ? (
-                            <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                        <p className="font-semibold text-gray-900">Paysheet</p>
-                                        <p className="text-sm text-gray-600">
-                                            {companyProfile.statements.length > 0
-                                                ? `${companyProfile.statements.length} statement(s) in the last 180 days.`
-                                                : "No recent pay statements found."}
-                                        </p>
-                                    </div>
-                                    <ActionLink to="/company/payroll?tab=statements">Review</ActionLink>
+            <ProfileCard title="My Work History" className="profile-history" subtitle="Recent past routes · up to 25 routes">
+                {companyProfile.loading ? <p className="text-theme-subtle" role="status">Loading work history...</p>
+                : companyProfile.error ? <p className="profile-error" role="alert">{companyProfile.error}</p> : <>
+                    <div className="profile-metrics">
+                        <SummaryTile label="Miles" value={`${workSummary.totalMiles.toLocaleString(undefined, { maximumFractionDigits: 1 })} mi`} />
+                        <SummaryTile label="Stops" value={workSummary.totalStops.toLocaleString()} />
+                        {canViewPayrollInformation && <SummaryTile label="Work Items" value={workSummary.workItems.toLocaleString()} helper="Last 180 days" />}
+                    </div>
+                    {companyProfile.routes.length === 0 ? <p className="profile-empty">No past routes found. Completed route activity will appear here.</p> : (
+                        <div>{companyProfile.routes.slice(0, 6).map((route) => (
+                            <div key={route.id} className="profile-route">
+                                <div><p className="profile-route-title">{route.name || "Route"}</p><p className="profile-caption">{shortDate(route.date)} · {route.status || "No status"}</p></div>
+                                <div className="profile-route-badges">
+                                    <span>{Number(route.finishedStops || 0)}/{Number(route.totalStops || 0)} stops</span>
+                                    <span>{Number(route.distanceMiles || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} mi</span>
                                 </div>
                             </div>
-                        ) : null}
-
-                        <div>
-                            <div className="mb-3 flex items-center justify-between">
-                                <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Recent Past Routes</h3>
-                                <span className="text-xs font-semibold text-gray-400">Past dates only</span>
-                            </div>
-
-                            {companyProfile.routes.length === 0 ? (
-                                <p className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">No past routes found.</p>
-                            ) : (
-                                <div className="divide-y divide-gray-100 rounded-xl border border-gray-200">
-                                    {companyProfile.routes.slice(0, 6).map((route) => (
-                                        <div key={route.id} className="grid gap-2 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
-                                            <div>
-                                                <p className="font-semibold text-gray-900">{route.name || "Route"}</p>
-                                                <p className="text-sm text-gray-500">{shortDate(route.date)} · {route.status || "No status"}</p>
-                                            </div>
-                                            <div className="flex flex-wrap gap-2 text-xs font-semibold text-gray-600 sm:justify-end">
-                                                <span className="rounded-full bg-gray-100 px-3 py-1">{Number(route.finishedStops || 0)}/{Number(route.totalStops || 0)} stops</span>
-                                                <span className="rounded-full bg-gray-100 px-3 py-1">{Number(route.distanceMiles || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} mi</span>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </>
-                )}
+                        ))}</div>
+                    )}
+                </>}
             </ProfileCard>
         );
     };
@@ -758,8 +733,8 @@ export default function ProfilePage() {
 
     if (!dataBaseUser) {
         return (
-            <div className='min-h-screen bg-gray-50 p-8'>
-                <div className="mx-auto max-w-3xl rounded-2xl border border-gray-200 bg-white p-8 text-center text-gray-500 shadow-sm">
+            <div className='profile-page'>
+                <div className="profile-card p-8 text-center" role="status">
                     Loading profile...
                 </div>
             </div>
@@ -767,20 +742,23 @@ export default function ProfilePage() {
     }
 
     return (
-        <div className='min-h-screen bg-gray-50 p-3 sm:p-4 lg:p-5'>
-            <div className="w-full">
-                <header className="mb-5 flex items-center gap-4">
+        <div className='profile-page'>
+            <div className="profile-workspace">
+                <header className="profile-hero">
                     <ProfileAvatar userData={dataBaseUser} className="h-20 w-20" textClassName="text-xl" />
-                    <div>
-                        <h1 className="text-2xl font-bold text-gray-800">{fullName(dataBaseUser) || "My Profile"}</h1>
-                        <p className="text-gray-600">{dataBaseUser.email}</p>
+                    <div className="profile-hero-copy">
+                        <p className="profile-eyebrow">My Profile</p>
+                        <h1>{fullName(dataBaseUser) || "My Profile"}</h1>
+                        <p className="profile-hero-email">{dataBaseUser.email}</p>
                     </div>
+                    {recentlySelectedCompany && <span className="profile-company-badge"><HiOutlineBuildingOffice2 aria-hidden="true" />{companyProfile.company?.name || recentlySelectedCompanyName || "Selected company"}</span>}
                 </header>
+                {renderPayout()}
 
-                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
-                    <div className="space-y-5">
+                <div className="profile-grid">
+                    <div className="profile-main">
                         <ProfileCard
-                            title="Account Info"
+                            title="Account Info" className="profile-account"
                             actions={
                                 <div className="flex gap-2">
                                     {editMode ? (
@@ -811,22 +789,24 @@ export default function ProfilePage() {
                             {renderAccountInfo()}
                         </ProfileCard>
 
-                        {renderSelectedCompanyInfo()}
                         {renderWorkHistory()}
 
-                        <ProfileCard title="External Accounts">
+                    </div>
+                    <aside className="profile-aside">
+                        {renderSelectedCompanyInfo()}
+                        <ProfileCard title="Connected Accounts" className="profile-connections">
                             <div className="space-y-4">
-                                <div className="flex items-center justify-between">
+                                <div className="profile-connection">
                                     <div>
-                                        <p className="font-semibold text-gray-800">Stripe</p>
-                                        <p className="text-sm text-gray-500">Connect your Stripe account to process payments.</p>
+                                        <p className="font-semibold text-theme">Stripe</p>
+                                        <p className="text-sm text-theme-subtle">Connect your Stripe account to process payments.</p>
                                     </div>
                                     {!recentlySelectedCompany ? (
-                                        <p className="text-sm font-semibold text-gray-600">Select a company first.</p>
+                                        <p className="text-sm font-semibold text-theme-muted">Select a company first.</p>
                                     ) : companyProfile.loading ? (
-                                        <p className="text-sm font-semibold text-gray-600">Loading company...</p>
+                                        <p className="text-sm font-semibold text-theme-muted">Loading company...</p>
                                     ) : !canManageStripeAccount ? (
-                                        <p className="text-sm font-semibold text-gray-600">Only the company owner can manage Stripe.</p>
+                                        <p className="text-sm font-semibold text-theme-muted">Only the company owner can manage Stripe.</p>
                                     ) : !stripeConnectedAccountId ? (
                                         <button type="button" onClick={() => handleStripeAction('create')} disabled={stripeLoading.create} className={primaryButtonClass}>
                                             {stripeLoading.create ? 'Creating...' : 'Connect Stripe'}
@@ -842,10 +822,7 @@ export default function ProfilePage() {
                                 {/* Add QuickBooks connection here in the future */}
                             </div>
                         </ProfileCard>
-                    </div>
-
-                    <div className="space-y-5">
-                        <ProfileCard title="Settings">
+                        <ProfileCard title="Settings" className="profile-settings">
                             <button
                                 type="button"
                                 onClick={handlePasswordReset}
@@ -862,7 +839,7 @@ export default function ProfilePage() {
                                 Delete My Account
                             </button>
                         </ProfileCard>
-                    </div>
+                    </aside>
                 </div>
             </div>
             {showDeleteModal && <DeleteModal onConfirm={handleDeleteAccount} onCancel={() => setShowDeleteModal(false)} />}

@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { MemoryFirestore } = require('./testSupport/memoryFirestore');
 const { createTechnicianWorkWorkflow } = require('./technicianWorkWorkflow');
+const { createTechnicianExecution } = require('./technicianExecution');
 const company = 'companies/company';
 const now = new Date('2026-10-29T12:00:00Z');
 const fixture = extra => {
@@ -157,4 +158,102 @@ test('historical scope remains viewable when a task has been removed from the jo
   const details = await f.call('details');
   assert.equal(details.scope.tasks[0].name, 'Original repair');
   assert.equal(details.scopeChanged, true);
+});
+
+test('returning accepted unscheduled work retains agreed pay and audit, releases assignment, and is retry safe', async () => {
+  const f = fixture();
+  await f.call('accept', { claimId: 'claim' }, 'tech');
+  const agreement = structuredClone(f.offer().claims[0].agreement);
+  await f.call('withdraw', { claimId: 'claim', reason: 'Schedule conflict' }, 'tech');
+  assert.equal(f.offer().status, 'Rejected');
+  assert.equal(f.offer().claims[0].withdrawalReason, 'Schedule conflict');
+  assert.deepEqual(f.offer().claims[0].agreement, agreement);
+  assert.equal(f.db.records.get(company + '/workOrders/job/tasks/task').workerId, '');
+  assert.equal(f.db.records.get(company + '/workOrders/job/tasks/task').payrollAgreement, null);
+  assert.equal(f.offer().withdrawalHistory[0].byUserId, 'tech');
+  assert.equal((await f.call('withdraw', { claimId: 'claim', reason: 'Retry' }, 'tech')).alreadyWithdrawn, true);
+  assert.equal(f.offer().withdrawalHistory.length, 1);
+  assert.equal(f.offer().withdrawalHistory[0].reason, 'Schedule conflict');
+  assert.equal((await f.call('details')).management.canDelete, false);
+  await assert.rejects(f.call('delete'), /cannot be deleted/);
+  assert.ok([...f.db.records.keys()].some(path => path.startsWith('users/owner/alerts/offer_return_')));
+});
+
+test('returns require a reason, claim ownership, and accepted status', async () => {
+  const f = fixture();
+  await f.call('accept', { claimId: 'claim' }, 'tech');
+  assert.deepEqual((await f.call('details', {}, 'viewer')).management.returnableClaimIds, []);
+  assert.deepEqual((await f.call('details', {}, 'tech')).management.returnableClaimIds, ['claim']);
+  assert.deepEqual((await f.call('details')).management.returnableClaimIds, ['claim']);
+  const before = new Map(f.db.records);
+  await assert.rejects(f.call('withdraw', { claimId: 'claim', reason: ' ' }, 'tech'), { code: 'invalid-argument' });
+  await assert.rejects(f.call('withdraw', { claimId: 'claim', reason: 'No' }, 'viewer'), { code: 'permission-denied' });
+  assert.deepEqual(f.db.records, before);
+  f.offer().claims[0].status = 'In Progress';
+  await assert.rejects(f.call('withdraw', { claimId: 'claim', reason: 'No' }, 'tech'), /management review/);
+});
+
+test('returning a scheduled visit keeps the dated work available and removes only its route membership', async () => {
+  const f = fixture();
+  f.offer().allowsTechnicianSelfScheduling = true;
+  await f.call('accept', { claimId: 'claim' }, 'tech');
+  const scheduled = await createTechnicianExecution(f.db, () => now).schedule({ auth: { uid: 'tech' }, data: { companyId: 'company', offerId: 'offer', serviceDateMillis: now.getTime() } });
+  const stopId = scheduled.serviceStopId;
+  f.db.set(company + '/activeRoutes/route', { techId: 'tech', serviceStopsIds: [stopId, 'other'], order: [{ serviceStopId: stopId, order: 1 }, { serviceStopId: 'other', order: 2 }], totalStops: 2, startTime: now });
+  f.db.set(company + '/shoppingList/part', { jobId: 'job', serviceStopId: stopId, assignedTechId: 'tech', status: 'Purchased' });
+  await f.call('withdraw', { claimId: 'claim', reason: 'Unavailable' }, 'tech');
+  const stop = f.db.records.get(company + '/serviceStops/' + stopId);
+  assert.equal(stop.techId, '');
+  assert.equal(stop.operationStatus, 'Not Finished');
+  assert.deepEqual(stop.serviceDate, now);
+  assert.equal(stop.payrollAgreement, null);
+  assert.equal(stop.manualPayOverrideCents, null);
+  assert.equal(f.db.records.get(company + '/shoppingList/part').assignedTechId, '');
+  const route = f.db.records.get(company + '/activeRoutes/route');
+  assert.deepEqual(route.serviceStopsIds, ['other']);
+  assert.deepEqual(route.order, [{ serviceStopId: 'other', order: 1 }]);
+  assert.deepEqual(route.startTime, now);
+  assert.ok(f.db.records.get(company + '/workOrders/job').serviceStopIds.includes(stopId));
+});
+
+test('performed work, recorded time, payroll, and assignment changes prevent returning work without partial writes', async () => {
+  for (const change of ['started', 'payroll', 'legacyPayroll', 'clock', 'shift', 'worker', 'installed']) {
+    const f = fixture();
+    await f.call('accept', { claimId: 'claim' }, 'tech');
+    if (change === 'started') f.db.set(company + '/workOrders/job/tasks/task', { actualTime: 1 }, { merge: true });
+    if (change === 'worker') f.db.set(company + '/workOrders/job/tasks/task', { workerId: 'other' }, { merge: true });
+    if (change === 'installed') { f.db.set(company + '/shoppingList/part', { jobId: 'job', status: 'Installed' }); f.offer().scopeSnapshot = { products: [{ id: 'part' }] }; }
+    const collections = { payroll: 'technicianPayLineItems', legacyPayroll: 'payLineItems', clock: 'workLogs', shift: 'shifts' };
+    if (collections[change]) f.db.set(company + '/' + collections[change] + '/record', { workOfferId: 'offer', workOfferClaimId: 'claim', technicianId: 'tech' });
+    const before = new Map(f.db.records);
+    await assert.rejects(f.call('withdraw', { claimId: 'claim', reason: 'Unavailable' }, 'tech'), { code: 'failed-precondition' });
+    assert.deepEqual(f.db.records, before, change);
+  }
+});
+
+test('failed and concurrent returns preserve the latest assignment and first audit', async () => {
+  const f = fixture();
+  await f.call('accept', { claimId: 'claim' }, 'tech');
+  const before = new Map(f.db.records);
+  f.db.commitError = Error('offline');
+  await assert.rejects(f.call('withdraw', { claimId: 'claim', reason: 'Unavailable' }, 'tech'), /offline/);
+  assert.deepEqual(f.db.records, before);
+  f.db.commitError = null;
+  f.db.beforeCommit = () => f.db.set(company + '/workOrders/job/tasks/task', { status: 'In Progress' }, { merge: true });
+  await assert.rejects(f.call('withdraw', { claimId: 'claim', reason: 'Unavailable' }, 'tech'), /started/);
+  assert.equal(f.offer().status, 'Accepted');
+  assert.equal(f.offer().withdrawalHistory, undefined);
+});
+
+test('legacy accepted unscheduled work can return without inventing new pay terms', async () => {
+  const f = fixture();
+  Object.assign(f.offer(), { status: 'Accepted', acceptedByUserId: 'tech', acceptedByUserName: 'Alex', acceptedAt: now });
+  f.db.set(company + '/workOrders/job/tasks/task', { workerId: 'tech' }, { merge: true });
+  await f.call('withdraw', { reason: 'Unavailable' }, 'tech');
+  assert.equal(f.offer().claims[0].legacy, true);
+  assert.equal(f.offer().claims[0].agreement.legacy, true);
+  assert.equal(f.offer().status, 'Rejected');
+  assert.equal(f.offer().claims[0].agreement.rates, undefined);
+  assert.equal(f.db.records.get(company + '/workOrders/job/tasks/task').workerId, '');
+  await assert.rejects(f.call('delete'), /cannot be deleted/);
 });

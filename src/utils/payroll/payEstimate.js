@@ -57,7 +57,7 @@ const withWorkOfferIncentiveLines = ({ serviceStop, lines }) => {
 // The browser preview and server completion use the same calculation rules.
 export const estimateServiceStopPay = ({ companyId, settings, serviceStop = {}, serviceStopType,
   serviceStopUseCaseSourceId = "", serviceStopWorkTypeIds = null, tasks = [], worker,
-  workTypes = [], mappings = [], rates = [], date = new Date(), mode = "preview" }) => {
+  workTypes = [], mappings = [], rates = [], bodiesOfWater = null, date = new Date(), mode = "preview" }) => {
   const stop = serviceStop || {};
   // Accepted terms are private server data; use the authoritative projection on the stop.
   if (stop.workOfferId && stop.payrollAgreement && !Array.isArray(stop.payrollAgreement.rates) && Array.isArray(stop.estimatedPayLines)) return stop.estimatedPayLines;
@@ -68,7 +68,12 @@ export const estimateServiceStopPay = ({ companyId, settings, serviceStop = {}, 
       || (workTypes.some((type) => type.id === (serviceStopType?.id || stop.typeId)) ? serviceStopType?.id || stop.typeId : "")
       || serviceStopType?.defaultWorkTypeIds?.[0] || mappedStop || "";
   const selectedWorkerId = userIdForRate(worker);
-  const lines = calculatePayLines({ companyId, settings: settings || {}, mode, date, workTypes, rates,
+  const locationId = value => String(typeof value === "object" ? value?.id || "" : value || "").trim();
+  const locations = [...new Set([stop, ...tasks].map(record => locationId(record.serviceLocationId)).filter(Boolean))];
+  const bodyOfWaterIdsByServiceLocation = Array.isArray(bodiesOfWater) ? Object.fromEntries(locations.map(site => [site,
+    bodiesOfWater.filter(body => locationId(body.serviceLocationId) === site && body.isActive !== false && body.active !== false && body.archived !== true).map(body => body.id),
+  ])) : {};
+  const lines = calculatePayLines({ companyId, settings: settings || {}, mode, date, workTypes, rates, bodyOfWaterIdsByServiceLocation,
     workers: worker ? [{ ...worker, userId: selectedWorkerId, userName: userNameForRate(worker) }] : [],
     serviceStop: { ...stop, id: stop.id || "preview", payTypeId: stopPayId,
       type: stop.type || serviceStopType?.name || "Work pay", techId: selectedWorkerId || stop.techId || "",

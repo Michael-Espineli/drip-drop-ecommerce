@@ -47,7 +47,7 @@ import { getProductDisplayName } from "../../../utils/productCatalog";
 
 const statusOptions = SHOPPING_LIST_STATUS_OPTIONS;
 const recentActiveStatuses = [SHOPPING_LIST_STATUS.needToPurchase, SHOPPING_LIST_STATUS.purchased];
-const defaultVisibleStatuses = recentActiveStatuses;
+const defaultVisibleStatuses = [SHOPPING_LIST_STATUS.needToPurchase];
 const recentShoppingItemLimit = 60;
 const statusQuickFilters = [
     { label: "Need to Purchase", statuses: [SHOPPING_LIST_STATUS.needToPurchase], presetValue: "needToPurchase" },
@@ -279,7 +279,7 @@ const ShoppingListListView = () => {
 
     const [search, setSearch] = useState("");
     const [categoryFilter, setCategoryFilter] = useState("All");
-    const [viewPreset, setViewPreset] = useState("recentActive");
+    const [viewPreset, setViewPreset] = useState("needToPurchase");
     const [selectedStatuses, setSelectedStatuses] = useState(defaultVisibleStatuses);
     const [sortOption, setSortOption] = useState("recentActivityDesc");
 

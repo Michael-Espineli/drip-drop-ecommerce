@@ -48,6 +48,15 @@ test("hourly rate ranges are distinct from the cost of the estimated task minute
   expect(noMinutes.needsReview).toBe(true);
 });
 
+test("service-line quantity scales flat service pay while percentage pay uses the entered line total once", () => {
+  const setup = args({ includeServiceStopPay: true, inheritedPayTypeId: "clean", serviceQuantity: 2, tasks: [],
+    settings: { routePaySource: "serviceStopAndCompletedTasks", taskPaySource: "technicianRate" } });
+  expect(estimateServicePayroll(setup)).toEqual(expect.objectContaining({ minAmountCents: 4000, maxAmountCents: 8000 }));
+  const percentage = estimateServicePayroll({ ...setup, customerPriceCents: 20000,
+    rates: [rate("a", 1000, { rateType: "percentage" }), rate("b", 1500, { rateType: "percentage" })] });
+  expect(percentage).toEqual(expect.objectContaining({ minAmountCents: 2000, maxAmountCents: 3000, usesCustomerPriceBase: true }));
+});
+
 test("missing rates are review cases, and inactive items cannot supply an estimate", () => {
   const missing = estimateServicePayroll(args({ rates: [rate("a", 2000)] }));
   expect(missing).toEqual(expect.objectContaining({ minAmountCents: 2000, maxAmountCents: 2000, completeCount: 1, missingCount: 1, needsReview: true }));

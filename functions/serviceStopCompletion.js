@@ -10,6 +10,8 @@ const { sendServiceReportOnFinishCore } = require("./sendGrid/general");
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 const Timestamp = admin.firestore.Timestamp;
+const payrollApproval = require("./payrollApproval").createPayrollApproval(db);
+const payrollStatements = require("./payrollStatements").createPayrollStatements(db);
 
 const SERVICE_STOP_FINISHED = "Finished";
 const ACTIVE_ROUTE_FINISHED = "Finished";
@@ -376,4 +378,16 @@ exports.processPayrollReconcileWork = onDocumentWritten({ document: "companies/{
 // Both apps can await the same authoritative result during explicit payroll actions.
 exports.refreshServiceStopPayroll = require("firebase-functions/v2/https").onCall(
   { timeoutSeconds: 120 }, (request) => payroll.refreshRequestedStop(request)
+);
+exports.clearZeroDollarPayrollTasks = require("firebase-functions/v2/https").onCall(
+  { timeoutSeconds: 120 }, (request) => payroll.clearZeroDollarTasks(request)
+);
+exports.approvePayrollDateRange = require("firebase-functions/v2/https").onCall(
+  { timeoutSeconds: 120 }, (request) => payrollApproval.approveDateRange(request)
+);
+exports.previewPayrollStatements = require("firebase-functions/v2/https").onCall(
+  { timeoutSeconds: 120 }, request => payrollStatements.preview(request)
+);
+exports.createPayrollStatement = require("firebase-functions/v2/https").onCall(
+  { timeoutSeconds: 120 }, request => payrollStatements.create(request)
 );

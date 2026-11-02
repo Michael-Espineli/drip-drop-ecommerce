@@ -15,6 +15,7 @@ import {
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { isActiveJobTemplate } from "../../../utils/jobTemplateAvailability";
 import {
   CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID,
   CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID,
@@ -227,7 +228,7 @@ const CreateJobFlowLauncher = ({
           ...data,
           id: data.id || docSnap.id,
         };
-      }));
+      }).filter(isActiveJobTemplate));
     } catch (error) {
       console.error("Error fetching job templates:", error);
       appAlert("Failed to load job templates.");
@@ -238,7 +239,7 @@ const CreateJobFlowLauncher = ({
 
   const openCreateOptions = () => {
     if (!canCreateAnyJobs) {
-      appAlert("You do not have permission to create jobs or basic jobs.");
+      appAlert("You do not have permission to create jobs.");
       return;
     }
     setShowCreateOptionsModal(true);
@@ -304,7 +305,7 @@ const CreateJobFlowLauncher = ({
                 <div>
                   <h3 className="text-xl font-bold text-slate-950">Create Job</h3>
                   <p className="mt-1 text-sm text-slate-500">
-                    Start blank or use a reusable job template.
+                    Build a custom job, use a template, or create and schedule the first visit.
                   </p>
                 </div>
 
@@ -332,7 +333,7 @@ const CreateJobFlowLauncher = ({
                     </div>
 
                     <div>
-                      <p className="font-bold text-slate-900">Blank Job</p>
+                      <p className="font-bold text-slate-900">Custom Job</p>
                       <p className="mt-1 text-sm text-slate-500">
                         Build a job manually from scratch.
                       </p>
@@ -353,9 +354,9 @@ const CreateJobFlowLauncher = ({
                     </div>
 
                     <div>
-                      <p className="font-bold text-blue-900">Basic Job</p>
+                      <p className="font-bold text-blue-900">Create and Schedule Job</p>
                       <p className="mt-1 text-sm text-blue-800">
-                        Schedule a technician-safe template or simple custom job with a generated price.
+                        Use an available template or custom scope, assign a technician, and schedule the first visit.
                       </p>
                     </div>
                   </div>

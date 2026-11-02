@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArchiveBoxIcon,
@@ -35,6 +35,7 @@ import {
   shouldCreateBillingSubscriptionOnAgreementAcceptance,
 } from "../../../utils/sales/billingSettings";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { DEFAULT_LABOR_MULTIPLIER, parseLaborMultiplier, suggestedLaborPriceCents } from "../../../utils/laborPricing";
 
 const settingsRef = (companyId) =>
   doc(db, "companies", companyId, "settings", COMPANY_WIDE_SETTINGS_DOC_ID);
@@ -281,7 +282,13 @@ const CompanyWideSettings = () => {
     user,
   } = useContext(Context);
   const { requirePermission } = useCompanyPermissions();
+  const currentCompanyId = useRef(recentlySelectedCompany);
+  currentCompanyId.current = recentlySelectedCompany;
+  const loadedSettings = useRef(DEFAULT_COMPANY_WORK_SETTINGS);
   const [settings, setSettings] = useState(DEFAULT_COMPANY_WORK_SETTINGS);
+  const [laborMultiplierInput, setLaborMultiplierInput] = useState(String(DEFAULT_LABOR_MULTIPLIER));
+  const [settingsCompanyId, setSettingsCompanyId] = useState("");
+  const [settingsLoadError, setSettingsLoadError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState(null);
@@ -289,11 +296,16 @@ const CompanyWideSettings = () => {
   const [overviewLoading, setOverviewLoading] = useState(true);
 
   const normalizedSettings = useMemo(() => normalizeCompanyWorkSettings(settings), [settings]);
+  const laborMultiplier = parseLaborMultiplier(laborMultiplierInput);
+  const examplePrice = laborMultiplier === null ? null : suggestedLaborPriceCents(4000, laborMultiplier);
 
   useEffect(() => {
     let cancelled = false;
 
     const loadSettings = async () => {
+      setSettingsCompanyId("");
+      setSettingsLoadError(false);
+      setLaborMultiplierInput(String(DEFAULT_LABOR_MULTIPLIER));
       if (!recentlySelectedCompany) {
         setSettings(DEFAULT_COMPANY_WORK_SETTINGS);
         setLoading(false);
@@ -324,8 +336,13 @@ const CompanyWideSettings = () => {
             : settingsData.payrollEnabled,
         });
         setSettings(nextSettings);
+        loadedSettings.current = nextSettings;
+        setLaborMultiplierInput(String(nextSettings.laborMultiplier));
+        setSettingsCompanyId(recentlySelectedCompany);
         setLastSavedAt(snap.exists() ? snap.data()?.updatedAt || null : null);
       } catch (error) {
+        if (cancelled) return;
+        setSettingsLoadError(true);
         console.error("Failed to load company-wide settings:", error);
         toast.error("Could not load company-wide settings.");
       } finally {
@@ -440,15 +457,28 @@ const CompanyWideSettings = () => {
       toast.error("Select a company before saving settings.");
       return;
     }
+    if (loading || settingsLoadError || settingsCompanyId !== recentlySelectedCompany) {
+      toast.error("Load this company's settings before saving.");
+      return;
+    }
+    if (laborMultiplier === null) {
+      toast.error("Enter a labor multiplier greater than zero.");
+      return;
+    }
 
     const billingEnabled = normalizedSettings.customerBillingEnabled === true;
     const createSubscriptionOnAcceptanceDefault = billingEnabled &&
       normalizedSettings.salesCreateBillingSubscriptionOnAcceptanceDefault === true;
     const payrollEnabled = isPayrollEnabled(normalizedSettings);
+    const billingChanged = billingEnabled !== loadedSettings.current.customerBillingEnabled ||
+      createSubscriptionOnAcceptanceDefault !== loadedSettings.current.salesCreateBillingSubscriptionOnAcceptanceDefault;
+    const payrollChanged = payrollEnabled !== loadedSettings.current.payrollEnabled;
     const timestamp = serverTimestamp();
     const updatedByName = user?.displayName || user?.email || "Company user";
+    const nextSettings = { ...normalizedSettings, laborMultiplier };
     const payload = {
-      ...normalizedSettings,
+      ...Object.fromEntries(Object.entries(nextSettings).filter(([key, value]) => value !== loadedSettings.current[key])),
+      laborMultiplier,
       updatedAt: timestamp,
       updatedByUserId: user?.uid || "",
       updatedByName,
@@ -481,15 +511,19 @@ const CompanyWideSettings = () => {
     try {
       const batch = writeBatch(db);
       batch.set(settingsRef(recentlySelectedCompany), payload, { merge: true });
-      batch.set(companyDocRef(recentlySelectedCompany), companyBillingPayload, { merge: true });
-      batch.set(paySettingsRef(recentlySelectedCompany), paySettingsPayload, { merge: true });
+      if (billingChanged || payrollChanged) batch.set(companyDocRef(recentlySelectedCompany), companyBillingPayload, { merge: true });
+      if (payrollChanged) batch.set(paySettingsRef(recentlySelectedCompany), paySettingsPayload, { merge: true });
       await batch.commit();
-      setSettings(normalizeCompanyWorkSettings(payload));
-      setCustomerBillingEnabled(billingEnabled);
-      setPayrollEnabled(payrollEnabled);
-      setSalesBillingAutomationEnabled(createSubscriptionOnAcceptanceDefault);
+      if (currentCompanyId.current !== recentlySelectedCompany) return;
+      setSettings(nextSettings);
+      loadedSettings.current = nextSettings;
+      if (billingChanged) {
+        setCustomerBillingEnabled(billingEnabled);
+        setSalesBillingAutomationEnabled(createSubscriptionOnAcceptanceDefault);
+      }
+      if (payrollChanged) setPayrollEnabled(payrollEnabled);
       const savedAt = new Date();
-      setOverview((current) => ({
+      if (billingChanged || payrollChanged) setOverview((current) => ({
         ...current,
         company: {
           ...(current.company || {}),
@@ -508,13 +542,13 @@ const CompanyWideSettings = () => {
           payrollSettingsUpdatedByUserId: user?.uid || "",
           payrollSettingsUpdatedByUserName: updatedByName,
         },
-        paySettings: {
+        paySettings: payrollChanged ? {
           ...(current.paySettings || {}),
           [PAYROLL_ENABLED_FIELD]: payrollEnabled,
           updatedAt: savedAt,
           updatedByUserId: user?.uid || "",
           updatedByName,
-        },
+        } : current.paySettings,
       }));
       setLastSavedAt(savedAt);
       toast.success("Company settings saved.");
@@ -528,6 +562,7 @@ const CompanyWideSettings = () => {
 
   const resetDefaults = () => {
     setSettings(DEFAULT_COMPANY_WORK_SETTINGS);
+    setLaborMultiplierInput(String(DEFAULT_LABOR_MULTIPLIER));
   };
 
   const formatSavedAt = (value) => {
@@ -564,7 +599,7 @@ const CompanyWideSettings = () => {
                   <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company configuration</p>
                   <h1 className="mt-1 text-3xl font-bold text-slate-950">Company Settings</h1>
                   <p className="mt-1 text-sm text-slate-500">
-                    Company-wide switches for billing, offered work, route coverage, assignment, and payroll incentives.
+                    Company-wide settings for labor pricing, billing, offered work, route coverage, assignment, and payroll incentives.
                   </p>
                 </div>
               </div>
@@ -583,7 +618,7 @@ const CompanyWideSettings = () => {
               <button
                 type="button"
                 onClick={saveSettings}
-                disabled={saving || loading}
+                disabled={saving || loading || settingsLoadError || settingsCompanyId !== recentlySelectedCompany}
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <CheckCircleIcon className="h-4 w-4" />
@@ -593,6 +628,7 @@ const CompanyWideSettings = () => {
           </div>
 
           <p className="mt-4 text-xs font-semibold text-slate-500">Last saved: {formatSavedAt(lastSavedAt)}</p>
+          {settingsLoadError && <p role="alert" className="mt-3 text-sm text-red-700">Company settings could not be loaded. Reload this page before saving.</p>}
         </header>
 
         {overviewLoading ? (
@@ -607,6 +643,17 @@ const CompanyWideSettings = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+            <section aria-label="Labor pricing" className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-950">Labor Pricing</h2>
+              <p className="mt-1 text-sm text-slate-500">Suggest customer prices from service internal labor costs. The default multiplier is 2×; apply each suggestion when you are ready to set the price.</p>
+              <label className="mt-4 block text-sm font-semibold text-slate-700">Labor multiplier
+                <input type="number" min="0" step="any" value={laborMultiplierInput} disabled={saving || settingsLoadError}
+                  aria-invalid={laborMultiplier === null} aria-describedby="labor-multiplier-help"
+                  onChange={(event) => setLaborMultiplierInput(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" />
+              </label>
+              <p id="labor-multiplier-help" className="mt-2 text-xs text-slate-600">{laborMultiplier === null ? "Enter a number greater than zero." : examplePrice !== null ? `$40.00 internal labor cost × ${laborMultiplier} = ${new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(examplePrice / 100)} suggested customer price.` : "Customer price suggestions use internal labor cost × labor multiplier."}</p>
+            </section>
             <section className="rounded-xl border border-theme bg-surface p-5"><h2 className="text-lg font-bold">Route coverage approval</h2><p className="mt-1 text-sm text-theme-subtle">Choose how management handles a technician covering another route. Posting review settings still apply.</p><select aria-label="Route coverage approval" value={normalizedSettings.routeCoverageMode} onChange={e=>updateSetting("routeCoverageMode", e.target.value)} disabled={loading || saving} className="mt-3 w-full rounded-md border border-theme bg-surface p-3"><option value="review">Require management review before reassignment</option><option value="notify">Assign automatically and inform management</option><option value="automatic">Assign automatically</option></select></section>
             {settingSections.map((section) => {
               const Icon = section.icon;

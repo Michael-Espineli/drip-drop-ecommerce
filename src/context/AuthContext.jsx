@@ -88,6 +88,7 @@ export function AuthContext({ children }) {
     // Company Information
     const [recentlySelectedCompany, setRecentlySelectedCompany] = useState(null);
     const [recentlySelectedCompanyName, setRecentlySelectedCompanyName] = useState(null);
+    const [companyOwnerId, setCompanyOwnerId] = useState(null);
     const [stripeConnectedAccountId, setStripeConnectedAccountId] = useState(null);
     const [customerBillingEnabled, setCustomerBillingEnabled] = useState(false);
     const [salesBillingAutomationEnabled, setSalesBillingAutomationEnabled] = useState(false);
@@ -301,6 +302,7 @@ export function AuthContext({ children }) {
         let cancelled = false;
 
         const resetCompanyContext = () => {
+            setCompanyOwnerId(null);
             setRecentlySelectedCompanyName(null);
             setStripeConnectedAccountId(null);
             setCustomerBillingEnabled(false);
@@ -314,6 +316,7 @@ export function AuthContext({ children }) {
         };
 
         const clearSelectedCompanyAccess = () => {
+            setCompanyOwnerId(null);
             setRecentlySelectedCompany(null);
             setRecentlySelectedCompanyName(null);
             setStripeConnectedAccountId(null);
@@ -333,6 +336,7 @@ export function AuthContext({ children }) {
 
             setCompanyRoleLoading(true);
             setCompanyRoleLoaded(false);
+            setCompanyOwnerId(null);
 
             try {
                 const companyDocRef = doc(db, "companies", recentlySelectedCompany);
@@ -347,6 +351,7 @@ export function AuthContext({ children }) {
 
                 if (companyDoc.exists()) {
                     const companyData = companyDoc.data();
+                    setCompanyOwnerId(companyData.ownerId || null);
                     setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
                     setStripeConnectedAccountId(getStripeConnectedAccountId(companyData));
                     setCustomerBillingEnabled(isCustomerBillingEnabled(companyData));
@@ -355,6 +360,7 @@ export function AuthContext({ children }) {
                     setPayrollEnabled(isPayrollEnabled(companyData));
                     setStripeId(getStripeCustomerId(dataBaseUser) || getStripeCustomerId(companyData));
                 } else {
+                    setCompanyOwnerId(null);
                     setRecentlySelectedCompanyName(null);
                     setStripeConnectedAccountId(null);
                     setCustomerBillingEnabled(false);
@@ -388,6 +394,7 @@ export function AuthContext({ children }) {
             } catch (error) {
                 if (!cancelled) {
                     console.error("Error loading selected company role context:", error);
+                    setCompanyOwnerId(null);
                     setCompanyUserAccess(null);
                     setCompanyRole(null);
                 }
@@ -479,6 +486,7 @@ export function AuthContext({ children }) {
         role,
         setRole,
         companyUserAccess,
+        companyOwnerId,
         setCompanyUserAccess,
         companyRole,
         setCompanyRole,

@@ -1,7 +1,14 @@
+import "./JobTemplateTheme.css";
+import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
+import { DocumentDuplicateIcon, EllipsisVerticalIcon, ChevronDownIcon, PencilSquareIcon, TrashIcon } from "@heroicons/react/24/outline";
+import { isActiveJobTemplate } from "../../../utils/jobTemplateAvailability";
+import JobTemplateDialog from "./JobTemplateDialog";
+import { emptyJobTemplateScope, prepareJobTemplateScope } from "../../../utils/jobTemplateDraft";
 import { getJobMaterialVendorItemId, loadJobProductCatalog, buildJobProductCatalog, buildProductFromVendorItem, buildVendorItemProductPatch, productCatalogDocRef } from "../../../utils/productCatalog";
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import ServicePayrollTaskEditor from "../sales/ServicePayrollTaskEditor";
-import ServicePayrollCostPreview from "../sales/ServicePayrollCostPreview";
+import ServicePayrollCostEditor from "../sales/ServicePayrollCostEditor";
+import ServicePayTypeField from "../sales/ServicePayTypeField";
 import useServicePayrollData from "../../../hooks/useServicePayrollData";
 import { serializeServiceTasks } from "../../../utils/payroll/servicePayrollPreview";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -31,7 +38,6 @@ import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import JobPayrollFields from "../jobs/JobPayrollFields";
 import {
   DEFAULT_ISSUE_PRIORITY,
-  ISSUE_PRIORITY_OPTIONS,
   getIssuePriorityLabel,
   normalizeIssuePriority,
 } from "../../../utils/models/JobPlan";
@@ -97,6 +103,7 @@ const emptyShoppingForm = () => ({
 });
 
 const emptyLaborLineForm = () => ({
+  payTypeId: "",
   selectedSalesCatalogItemId: "",
   name: "",
   description: "",
@@ -109,6 +116,8 @@ const emptyLaborLineForm = () => ({
 });
 
 const emptyServiceCatalogForm = () => ({
+  payTypeId: "",
+  taskTemplates: [],
   name: "",
   description: "",
   type: SalesCatalogItemType.service,
@@ -231,6 +240,30 @@ const catalogTaskType = (template = {}) => (
     template.taskTypeName ||
     "Basic"
   )
+);
+
+// Catalog tasks are per service unit. Use the same scope for the unsaved preview and saved tasks.
+const catalogTasksForLaborLine = (catalogItem, payTypeId, quantity) => (
+  (catalogServiceTaskTemplates(catalogItem).length ? catalogServiceTaskTemplates(catalogItem) : [{ name: serviceCatalogItemLabel(catalogItem), type: "Basic", payrollMode: "included" }])
+    .map((template, index) => {
+      const pay = jobPayFields(template, { payTypeId });
+      return {
+        ...pay,
+        id: template.id || template.templateId || `catalog-task-${index}`,
+        name: String(template.name || template.title || template.description || `Task ${index + 1}`).trim(),
+        type: catalogTaskType(template),
+        description: template.description || "",
+        contractedRate: catalogCents(template.laborCostCents, template.contractRateCents, template.contractedRateCents, template.contractedRate, template.costCents),
+        billingLaborPriceCents: catalogCents(template.billingLaborPriceCents, template.unitAmountCents, template.priceCents, template.rateCents),
+        estimatedTime: catalogTaskMinutes(template) * quantity,
+        payQuantity: pay.payQuantity * quantity,
+        manualPayOverrideCents: pay.manualPayOverrideCents === null ? null : Math.round(pay.manualPayOverrideCents * quantity),
+        customerApproval: Boolean(template.customerApproval || template.customerApprovalRequired),
+        genericItemId: template.genericItemId || "",
+        dataBaseItemId: template.dataBaseItemId || "",
+        productQuantity: Number(template.productQuantity || 1),
+      };
+    }).filter((task) => task.name)
 );
 
 const serviceCatalogItemLabel = (item = {}) => (
@@ -372,7 +405,7 @@ const JobTemplates = () => {
   const [templateModal, setTemplateModal] = useState(null);
   const [templateForm, setTemplateForm] = useState(emptyTemplateForm);
   const [detailTemplate, setDetailTemplate] = useState(null);
-  const [detailTab, setDetailTab] = useState("tasks");
+  const [detailTab, setDetailTab] = useState("overview");
   const [detailLoading, setDetailLoading] = useState(false);
   const [details, setDetails] = useState({ tasks: [], plannedServiceStops: [], laborLineItems: [], shoppingItems: [] });
   const [itemModal, setItemModal] = useState(null);
@@ -625,15 +658,19 @@ const JobTemplates = () => {
   const templateProfitCents = templatePriceCents - templateCostCents;
 
   const templateDetailSections = useMemo(() => ([
-    { id: "overview", label: "Overview", helper: "Template summary and reusable plan", count: "Summary" },
-    { id: "laborLineItems", label: "Service Lines", helper: "Billing services with linked template tasks", count: details.laborLineItems.length },
-    { id: "shoppingItems", label: "Products", helper: "Products needed for purchasing and billing", count: details.shoppingItems.length },
-    { id: "plannedServiceStops", label: "Planned Stops", helper: "Operations visits with assigned template tasks", count: details.plannedServiceStops.length },
-    { id: "tasks", label: "Tasks", helper: "Technician work steps included in the template", count: details.tasks.length },
+    { id: "overview", label: "Overview", helper: "Template summary and reusable plan", count: "1" },
+    { id: "create-plans", label: "Create Plans", helper: "Create estimates based on services and products", count: String(details.laborLineItems.length + details.shoppingItems.length + details.plannedServiceStops.length + details.tasks.length) },
     { id: "actual", label: "Actual", helper: "Service stops, payroll, and purchased products live on created jobs", count: "Job only", disabled: true },
     { id: "billing", label: "Billing", helper: "Invoices, payments, and Stripe status start after job creation", count: "Job only", disabled: true },
     { id: "history", label: "History", helper: "Audit trail begins when this template becomes a job", count: "Job only", disabled: true },
   ]), [details.laborLineItems.length, details.plannedServiceStops.length, details.shoppingItems.length, details.tasks.length]);
+
+  const templatePlanSections = [
+    { id: "laborLineItems", label: "Service Lines", helper: "Billing services with linked template tasks", region: "Template service lines" },
+    { id: "shoppingItems", label: "Products", helper: "Products needed for purchasing and billing", region: "Template products" },
+    { id: "plannedServiceStops", label: "Planned Stops", helper: "Operations visits with assigned template tasks", region: "Template planned stops" },
+    { id: "tasks", label: "Tasks", helper: "Technician work steps included in the template", region: "Template tasks" },
+  ];
 
   const saveDefaultAdmin = async () => {
     if (!recentlySelectedCompany) return;
@@ -659,7 +696,7 @@ const JobTemplates = () => {
 
   const openCreateModal = () => {
     setTemplateForm(emptyTemplateForm());
-    setTemplateModal({ mode: "create", template: null });
+    setTemplateModal({ mode: "create", template: null, id: `comp_job_template_${uuidv4()}` });
     setActionError("");
     setActionMessage("");
   };
@@ -671,7 +708,7 @@ const JobTemplates = () => {
       defaultIssuePriorityLevel: templateDefaultPriorityLevel(template),
       defaultRate: dollarsFromCents(template.defaultRateCents || template.rate || 0),
       defaultLaborCost: dollarsFromCents(template.defaultLaborCostCents || 0),
-      isActive: template.isActive !== false,
+      isActive: isActiveJobTemplate(template),
       locked: Boolean(template.locked),
       technicianCanAdd: Boolean(template.technicianCanAdd),
     });
@@ -760,6 +797,7 @@ const JobTemplates = () => {
 	      const taskIds = item?.taskTemplateIds?.length ? item.taskTemplateIds : item?.taskIds || item?.laborLineTaskIds || [];
 	      setItemForm(item ? {
 	        selectedSalesCatalogItemId: item.catalogItemId || item.salesCatalogItemId || "",
+            payTypeId: jobPayFields(item).payTypeId,
 	        name: item.name || "",
 	        description: item.description || "",
 	        quantity: String(item.quantity || 1),
@@ -852,12 +890,13 @@ const JobTemplates = () => {
       return {
         ...form,
         selectedSalesCatalogItemId: catalogItem.id,
+        payTypeId: jobPayFields(catalogItem).payTypeId,
         name: catalogItem.name || form.name || "",
         description: catalogItem.description || form.description || "",
         quantity: String(quantity),
         unitPrice: dollarsFromCents(unitPriceCents),
         totalPrice: dollarsFromCents(totalPriceCents),
-        internalCost: dollarsFromCents(cents(catalogItem.unitCostCents)),
+        internalCost: dollarsFromCents(Math.round(cents(catalogItem.unitCostCents) * quantity)),
       };
     });
   };
@@ -890,8 +929,9 @@ const JobTemplates = () => {
       ...emptyServiceCatalogForm(),
       name: itemForm.name || "",
       description: itemForm.description || "",
+      payTypeId: itemForm.payTypeId || "",
       unitAmount: itemForm.unitPrice || "0.00",
-      unitCost: itemForm.internalCost || "0.00",
+      unitCost: dollarsFromCents(centsFromMoney(itemForm.internalCost) / Math.max(Number(itemForm.quantity || 1), 1)),
       defaultQuantity: itemForm.quantity || "1",
     });
     setShowServiceCatalogCreator(true);
@@ -932,6 +972,8 @@ const JobTemplates = () => {
         billingBehavior: serviceCatalogForm.billingBehavior || SalesCatalogBillingBehavior.oneTime,
         sourceType: serviceCatalogForm.payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual,
         sourceId: serviceCatalogForm.payTypeId || "",
+        payTypeId: serviceCatalogForm.payTypeId || "",
+        payTypeName: payTypes.find((type) => type.id === serviceCatalogForm.payTypeId)?.name || "",
         unitAmountCents: centsFromMoney(serviceCatalogForm.unitAmount),
         unitCostCents: centsFromMoney(serviceCatalogForm.unitCost),
         defaultQuantity: Math.max(Number(serviceCatalogForm.defaultQuantity || 1) || 1, 1),
@@ -1071,6 +1113,8 @@ const JobTemplates = () => {
 	      const totalPriceCents = enteredTotalPriceCents || Math.round(enteredUnitPriceCents * quantity);
 	      const unitPriceCents = enteredUnitPriceCents || Math.round(totalPriceCents / quantity);
 	      const taskTemplateIds = uniqueIdList(itemForm.taskTemplateIds);
+          const sourceType = selectedCatalogItem?.sourceType || itemModal?.item?.sourceType || SalesCatalogSourceType.manual;
+          const usesPaySource = [SalesCatalogSourceType.manual, SalesCatalogSourceType.serviceStopType, SalesCatalogSourceType.workType].includes(sourceType);
 
 	      return {
 	        id,
@@ -1083,6 +1127,9 @@ const JobTemplates = () => {
         unitPriceCents,
         totalPriceCents,
         internalCostCents: centsFromMoney(itemForm.internalCost),
+        internalCostMode: "fixed",
+        payTypeId: itemForm.payTypeId || "",
+        payTypeName: payTypes.find((type) => type.id === itemForm.payTypeId)?.name || "",
         taskTemplateIds,
         taskIds: taskTemplateIds,
         laborLineTaskIds: taskTemplateIds,
@@ -1091,8 +1138,8 @@ const JobTemplates = () => {
 	        laborLinePlannedServiceStopIds: [],
 	        salesItemType: selectedCatalogItem?.type || itemModal?.item?.salesItemType || SalesCatalogItemType.labor,
 	        billingBehavior: selectedCatalogItem?.billingBehavior || itemModal?.item?.billingBehavior || SalesCatalogBillingBehavior.oneTime,
-	        sourceType: selectedCatalogItem?.sourceType || itemModal?.item?.sourceType || SalesCatalogSourceType.manual,
-	        sourceId: selectedCatalogItem?.sourceId || itemModal?.item?.sourceId || "",
+	        sourceType: usesPaySource ? (itemForm.payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual) : sourceType,
+	        sourceId: usesPaySource ? itemForm.payTypeId || "" : selectedCatalogItem?.sourceId || itemModal?.item?.sourceId || "",
 	        catalogItemId: selectedCatalogItemId || itemModal?.item?.catalogItemId || "",
 	        salesCatalogItemId: selectedCatalogItemId || itemModal?.item?.salesCatalogItemId || "",
 	        catalogItemName: selectedCatalogItem?.name || itemModal?.item?.catalogItemName || "",
@@ -1135,55 +1182,22 @@ const JobTemplates = () => {
 	  };
 
   const buildTaskPayloadsFromCatalogItem = (catalogItem, laborLineId) => (
-    (catalogServiceTaskTemplates(catalogItem).length ? catalogServiceTaskTemplates(catalogItem) : [{ name: serviceCatalogItemLabel(catalogItem), type: "Basic" }])
-      .map((template, index) => {
-        const name = String(
-          template.name ||
-          template.title ||
-          template.description ||
-          `Task ${index + 1}`
-        ).trim();
-        if (!name) return null;
-
-        const taskId = `comp_job_template_task_${uuidv4()}`;
-        const laborCostCents = catalogCents(
-          template.laborCostCents,
-          template.contractRateCents,
-          template.contractedRateCents,
-          template.contractedRate,
-          template.costCents
-        );
-        const billingLaborPriceCents = catalogCents(
-          template.billingLaborPriceCents,
-          template.unitAmountCents,
-          template.priceCents,
-          template.rateCents
-        );
-
-        return {
-          id: taskId,
-          companyId: recentlySelectedCompany,
-          templateId: detailTemplate.id,
-          name,
-          type: catalogTaskType(template),
-          description: template.description || "",
-          contractedRate: laborCostCents,
-          ...jobPayFields(template, catalogItem),
-          payQuantity: Number(template.payQuantity || 1) * Math.max(Number(catalogItem.defaultQuantity || 1), 1),
-          billingLaborPriceCents,
-          estimatedTime: catalogTaskMinutes(template),
-          customerApproval: Boolean(template.customerApproval || template.customerApprovalRequired),
-          customerApprovalRequired: Boolean(template.customerApproval || template.customerApprovalRequired),
-          sourceType: "serviceCatalog",
-          sourceCatalogItemId: catalogItem.id,
-          sourceCatalogItemName: serviceCatalogItemLabel(catalogItem),
-          sourceCatalogTaskTemplateId: template.id || template.templateId || "",
-          laborLineId,
-          laborLineIds: [laborLineId],
-          sortOrder: details.tasks.length + index,
-        };
-      })
-      .filter(Boolean)
+    catalogTasksForLaborLine(catalogItem, itemForm.payTypeId || "", Math.max(Number(itemForm.quantity || 1), 1))
+      .map((task, index) => ({
+        ...task,
+        id: `comp_job_template_task_${uuidv4()}`,
+        companyId: recentlySelectedCompany,
+        templateId: detailTemplate.id,
+        customerApproval: Boolean(task.customerApproval || task.customerApprovalRequired),
+        customerApprovalRequired: Boolean(task.customerApproval || task.customerApprovalRequired),
+        sourceType: "serviceCatalog",
+        sourceCatalogItemId: catalogItem.id,
+        sourceCatalogItemName: serviceCatalogItemLabel(catalogItem),
+        sourceCatalogTaskTemplateId: task.id,
+        laborLineId,
+        laborLineIds: [laborLineId],
+        sortOrder: details.tasks.length + index,
+      }))
   );
 
 	  const saveTemplateItem = async (event) => {
@@ -1342,9 +1356,13 @@ const JobTemplates = () => {
     }
   };
 
-  const saveTemplate = async (event) => {
+  const saveTemplate = async (event, draftScope = null) => {
     event.preventDefault();
-    if (!recentlySelectedCompany || !templateForm.name.trim()) return;
+    if (!recentlySelectedCompany) return;
+    if (!templateForm.name.trim()) { setActionError("Enter a name for this template."); return; }
+    if ([templateForm.defaultRate, templateForm.defaultLaborCost].some((value) => !Number.isFinite(Number(value)) || Number(value) < 0)) {
+      setActionError("Enter valid prices and costs of zero or more."); return;
+    }
 
     setSaving(true);
     setActionError("");
@@ -1353,7 +1371,7 @@ const JobTemplates = () => {
     try {
       const now = new Date();
       const isCreate = templateModal?.mode === "create";
-      const templateId = isCreate ? `comp_job_template_${uuidv4()}` : templateModal.template.id;
+      const templateId = isCreate ? templateModal.id : templateModal.template.id;
       const templateRef = doc(db, "companies", recentlySelectedCompany, "jobTemplates", templateId);
       const defaultIssuePriorityLevel = normalizeIssuePriority(templateForm.defaultIssuePriorityLevel);
       const defaultIssuePriorityLabel = getIssuePriorityLabel(defaultIssuePriorityLevel);
@@ -1373,6 +1391,7 @@ const JobTemplates = () => {
         defaultRateCents: centsFromMoney(templateForm.defaultRate),
         defaultLaborCostCents: centsFromMoney(templateForm.defaultLaborCost),
         isActive: templateForm.isActive,
+        active: templateForm.isActive,
         locked: templateForm.locked,
         technicianCanAdd: Boolean(templateForm.technicianCanAdd),
         updatedAt: now,
@@ -1381,12 +1400,21 @@ const JobTemplates = () => {
       if (isCreate) {
         payload.createdAt = now;
         payload.createdByUserId = user?.uid || "";
-        await setDoc(templateRef, payload);
+        const scope = prepareJobTemplateScope(draftScope || emptyJobTemplateScope(), recentlySelectedCompany, templateId);
+        const rows = Object.entries(scope).flatMap(([type, items]) => items.map((item) => ({ type, item })));
+        if (rows.length > 499) throw new Error("This template has too many items to save together. Remove some items and try again.");
+        Object.assign(payload, { taskCount: scope.tasks.length, plannedStopCount: scope.plannedServiceStops.length,
+          laborLineCount: scope.laborLineItems.length, shoppingItemCount: scope.shoppingItems.length });
+        const batch = writeBatch(db);
+        batch.set(templateRef, payload);
+        rows.forEach(({ type, item }) => batch.set(doc(templateRef, type, item.id), item));
+        await batch.commit();
         setTemplates((items) =>
-          [...items, { ...payload, taskCount: 0, plannedStopCount: 0, laborLineCount: 0, shoppingItemCount: 0 }]
+          [...items, payload]
             .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
         );
-        setActionMessage("Job template created.");
+        setActionMessage("Job template and scope created.");
+        navigate(`/company/settings/job-templates/detail/${templateId}`);
       } else {
         await updateDoc(templateRef, payload);
         setTemplates((items) =>
@@ -1400,7 +1428,7 @@ const JobTemplates = () => {
       setTemplateForm(emptyTemplateForm());
     } catch (err) {
       console.error("Error saving job template:", err);
-      setActionError("Could not save job template.");
+      setActionError(err.code === "permission-denied" ? "You do not have permission to manage job templates." : err.message || "Could not save job template. Your changes are still here; try again.");
     } finally {
       setSaving(false);
     }
@@ -1469,7 +1497,7 @@ const JobTemplates = () => {
   };
 
   const renderServiceCatalogCreator = () => (
-    <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-3">
+    <div role="region" aria-label="Create catalog service" className="rounded-lg border border-blue-200 bg-blue-50/70 p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-bold text-slate-900">New Sales Catalog Item</p>
@@ -1534,17 +1562,6 @@ const JobTemplates = () => {
           />
         </label>
         <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
-          Internal Cost
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={serviceCatalogForm.unitCost}
-            onChange={(event) => updateServiceCatalogForm("unitCost", event.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-900"
-          />
-        </label>
-        <label className="text-xs font-bold uppercase tracking-wide text-slate-600">
           Default Qty
           <input
             type="number"
@@ -1574,7 +1591,7 @@ const JobTemplates = () => {
         </label>
       </div>
 
-      <div className="mt-3"><ServicePayrollTaskEditor companyId={recentlySelectedCompany} form={serviceCatalogForm} setForm={setServiceCatalogForm} /></div>
+      <div className="mt-3"><ServicePayrollTaskEditor companyId={recentlySelectedCompany} form={serviceCatalogForm} setForm={setServiceCatalogForm} showInternalCost /></div>
       <div className="mt-3 flex justify-end">
         <button
           type="button"
@@ -1899,7 +1916,7 @@ const JobTemplates = () => {
 	          <button
 	            type="button"
 	            onClick={startDatabaseProductCreator}
-	            className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+	            className="template-secondary-action rounded-md px-3 py-2 text-xs font-semibold"
 	          >
 	            New Product
 	          </button>
@@ -2024,11 +2041,11 @@ const JobTemplates = () => {
 
 	  const renderTemplateStatusPills = () => (
     <div className="mt-3 flex flex-wrap gap-2">
-      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${detailTemplate?.isActive === false ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
-        {detailTemplate?.isActive === false ? "Inactive" : "Active"}
+      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${!isActiveJobTemplate(detailTemplate) ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
+        {!isActiveJobTemplate(detailTemplate) ? "Inactive" : "Active"}
       </span>
       {detailTemplate?.technicianCanAdd ? (
-        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Tech-enabled</span>
+        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Available to Technicians</span>
       ) : null}
       {detailTemplate?.locked ? (
         <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">Locked</span>
@@ -2179,83 +2196,72 @@ const JobTemplates = () => {
 
   const renderTemplateOverview = () => (
     <div className="space-y-4">
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <TemplateStatCard
-            title="Template Price"
-            value={moneyFromCents(templatePriceCents)}
-            subtitle={calculatedPriceCents ? "Services + products" : "Default price"}
-            tone="blue"
-          />
-          <TemplateStatCard
-            title="Services"
-            value={moneyFromCents(servicePriceCents)}
-            subtitle={`${details.laborLineItems.length} service line${details.laborLineItems.length === 1 ? "" : "s"}`}
-          />
-          <TemplateStatCard
-            title="Products"
-            value={moneyFromCents(productPriceCents)}
-            subtitle={`${details.shoppingItems.length} product line${details.shoppingItems.length === 1 ? "" : "s"}`}
-          />
-          <TemplateStatCard
-            title="Projected Cost"
-            value={moneyFromCents(templateCostCents)}
-            subtitle="Services + products"
-          />
-          <TemplateStatCard
-            title="Projected Profit"
-            value={moneyFromCents(templateProfitCents)}
-            subtitle="Before real job changes"
-            tone={templateProfitCents < 0 ? "rose" : "emerald"}
-          />
-          <TemplateStatCard
-            title="Work Steps"
-            value={details.tasks.length + details.plannedServiceStops.length}
-            subtitle={`${details.tasks.length} tasks, ${details.plannedServiceStops.length} stops`}
-          />
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+      <section aria-labelledby="template-summary-title" className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Template Brief</h3>
-            <p className="mt-1 text-sm text-slate-600">
-              {detailTemplate?.description || "Add a description that explains when this prebuilt job should be used."}
-            </p>
+            <h2 id="template-summary-title" className="text-sm font-bold text-slate-900">Summary</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Reusable defaults and pricing for future jobs</p>
           </div>
-          {renderTemplateStatusPills()}
+          <span className="template-kind-label"><DocumentDuplicateIcon className="h-4 w-4" aria-hidden="true" />Job Template</span>
         </div>
-      </div>
+        <div className="p-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <dl className="divide-y divide-slate-200 border-y border-slate-200">
+              <SnapshotRow label="Customer" value="Chosen for each job" muted />
+              <SnapshotRow label="Site" value="Chosen for each job" muted />
+            </dl>
+            <dl className="divide-y divide-slate-200 border-y border-slate-200">
+              <SnapshotRow label="Default Admin" value={selectedDefaultAdmin?.userName || "Not set"} muted={!selectedDefaultAdmin} />
+              <SnapshotRow label="Default Priority" value={templateDefaultPriorityDisplay(detailTemplate)} />
+            </dl>
+            <dl className="divide-y divide-slate-200 border-y border-slate-200">
+              <SnapshotRow label="Template Price" value={moneyFromCents(templatePriceCents)} />
+              <SnapshotRow label="Projected Profit" value={moneyFromCents(templateProfitCents)} tone={templateProfitCents < 0 ? "negative" : "positive"} />
+            </dl>
+          </div>
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">Job setup when used</h3>
+            <p className="mt-2 text-sm font-semibold text-slate-900">Choose the customer and site, then assign a technician and schedule the first visit.</p>
+            <p className="mt-1 text-xs text-slate-500">This template includes {details.laborLineItems.length} services, {details.tasks.length} tasks, {details.plannedServiceStops.length} planned visits, and {details.shoppingItems.length} products.</p>
+          </div>
+          <div className="mt-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Description</h3>
+              <button type="button" onClick={() => openEditModal(detailTemplate)} className="template-secondary-action rounded-md px-2.5 py-1 text-xs font-semibold">Edit description</button>
+            </div>
+            <p className="mt-2 min-h-[88px] whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700">{detailTemplate?.description || "Add a description of when to use this template and the work it includes."}</p>
+          </div>
+        </div>
+      </section>
 
       <div className="overflow-hidden rounded-lg border border-blue-200 bg-white shadow-sm">
         <div className="grid gap-4 border-b border-slate-200 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,auto)]">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Template Plan Invoice</p>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Reusable Scope</p>
             <h3 className="mt-1 text-2xl font-bold text-slate-950">{moneyFromCents(templatePriceCents)}</h3>
             <p className="mt-1 max-w-2xl text-xs text-slate-500">
               {details.laborLineItems.length || details.shoppingItems.length
                 ? `${details.laborLineItems.length} service line${details.laborLineItems.length === 1 ? "" : "s"} and ${details.shoppingItems.length} product line${details.shoppingItems.length === 1 ? "" : "s"}`
-                : "No template invoice line items yet"}
+                : "No services or products added yet"}
             </p>
           </div>
 
           <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm lg:text-right">
             <div>
-              <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Billed To</dt>
+              <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Customer</dt>
               <dd className="mt-1 flex justify-start lg:justify-end">
-                <SkeletonLine width="w-28" />
+                <span className="text-xs text-slate-500">Chosen for each job</span>
               </dd>
             </div>
             <div>
-              <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Job</dt>
+              <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Template</dt>
               <dd className="mt-1 flex justify-start lg:justify-end">
-                <SkeletonLine width="w-32" />
+                <span className="text-xs font-semibold text-slate-700">Reusable template</span>
               </dd>
             </div>
             <div>
-              <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Saved Plan</dt>
-              <dd className="mt-0.5 font-semibold text-slate-900">Template</dd>
+              <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Applies To</dt>
+              <dd className="mt-0.5 font-semibold text-slate-900">New jobs</dd>
             </div>
             <div>
               <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Profit</dt>
@@ -2338,7 +2344,7 @@ const JobTemplates = () => {
                 <button
                   type="button"
                   onClick={() => openItemModal("shoppingItems")}
-                  className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                  className="template-secondary-action rounded-md px-3 py-2 text-xs font-semibold"
                 >
                   Product Line
                 </button>
@@ -2348,23 +2354,22 @@ const JobTemplates = () => {
           </section>
         </div>
 
-        <div className="grid gap-3 border-t border-slate-300 bg-slate-950 px-4 py-4 text-white md:grid-cols-3">
+        <div className="template-pricing-total grid gap-3 px-4 py-4 md:grid-cols-3">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-300">Template Price</p>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Template Price</p>
             <p className="mt-1 text-xl font-bold">{moneyFromCents(templatePriceCents)}</p>
           </div>
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-300">Planned Cost</p>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Planned Cost</p>
             <p className="mt-1 text-xl font-bold">{moneyFromCents(templateCostCents)}</p>
           </div>
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-300">Projected Profit</p>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Projected Profit</p>
             <p className="mt-1 text-xl font-bold">{moneyFromCents(templateProfitCents)}</p>
           </div>
         </div>
       </div>
 
-      <TemplateDisabledPanels />
     </div>
   );
 
@@ -2383,13 +2388,6 @@ const JobTemplates = () => {
       return (
         <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
           <p className="text-sm font-semibold text-slate-700">No {detailTabLabel(type).toLowerCase()} records yet.</p>
-          <button
-            type="button"
-            onClick={() => openItemModal(type)}
-            className="mt-3 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-          >
-            Add {detailTabLabel(type)}
-          </button>
         </div>
       );
     }
@@ -2473,8 +2471,6 @@ const JobTemplates = () => {
   };
 
   const renderTemplateDetailPage = () => {
-    const selectedMeta = templateDetailSections.find((section) => section.id === detailTab) || templateDetailSections[0];
-
     if (detailLoading && !detailTemplate) {
       return (
         <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">
@@ -2484,175 +2480,110 @@ const JobTemplates = () => {
     }
 
     return (
-      <section className="grid gap-6 lg:grid-cols-[450px_minmax(0,1fr)]">
-        <aside className="space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <section className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <aside aria-label="Template navigation" className="space-y-4 lg:order-2">
+          <nav aria-label="Template sections" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
             <div className="mt-3 space-y-2">
               {templateDetailSections.map((sectionOption) => {
                 const active = sectionOption.id === detailTab;
                 const disabled = Boolean(sectionOption.disabled);
                 return (
-                  <button
-                    key={sectionOption.id}
-                    type="button"
-                    onClick={() => {
-                      if (!disabled) setDetailTab(sectionOption.id);
-                    }}
-                    disabled={disabled}
-                    className={[
-                      "w-full rounded-md border px-3 py-2 text-left transition",
-                      disabled
-                        ? "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
-                        : active
-                        ? "border-blue-200 bg-blue-50 text-blue-800"
-                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-                    ].join(" ")}
-                  >
+                  <button key={sectionOption.id} type="button"
+                    onClick={() => { if (!disabled) setDetailTab(sectionOption.id); }}
+                    disabled={disabled} aria-current={active ? "page" : undefined}
+                    className={`template-section-link w-full rounded-md px-3 py-2 text-left transition ${active ? "template-section-link--active" : ""}`}>
                     <span className="flex items-center justify-between gap-3">
                       <span className="text-sm font-semibold">{sectionOption.label}</span>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${disabled ? "bg-slate-100 text-slate-400" : "bg-white text-slate-500"}`}>
-                        {sectionOption.count}
-                      </span>
+                      <span className="template-section-count rounded-full px-2 py-0.5 text-xs font-semibold">{sectionOption.count}</span>
                     </span>
-                    <span className={`mt-1 block text-xs ${disabled ? "text-slate-400" : "text-slate-500"}`}>{sectionOption.helper}</span>
+                    <span className="template-section-helper mt-1 block text-xs">{sectionOption.helper}</span>
                   </button>
                 );
               })}
             </div>
-          </div>
-
-          <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
-            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Template Snapshot</h2>
-            <dl className="mt-3 space-y-3">
-              <SnapshotSkeletonRow label="Customer" width="w-44" />
-              <SnapshotRow label="Default Admin" value={selectedDefaultAdmin?.userName || "Not set"} muted={!selectedDefaultAdmin} />
-              <SnapshotSkeletonRow label="Site" width="w-52" />
-              <SnapshotSkeletonRow label="Scheduled Date" width="w-32" />
-              <SnapshotRow label="Default Priority" value={templateDefaultPriorityDisplay(detailTemplate)} />
-              <SnapshotRow label="Template Price" value={moneyFromCents(templatePriceCents)} strong />
-              <SnapshotRow
-                label="Projected Profit"
-                value={moneyFromCents(templateProfitCents)}
-                strong
-                tone={templateProfitCents < 0 ? "negative" : "positive"}
-              />
-            </dl>
-          </div>
-
-          <div className="pointer-events-none rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm opacity-80 shadow-sm">
-            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-400">Comments</h2>
-            <div className="mt-3 space-y-2">
-              <SkeletonLine width="w-3/4" />
-              <SkeletonLine width="w-11/12" />
-              <SkeletonBlock height="h-14" />
-            </div>
-          </div>
+          </nav>
+          <section aria-label="Template context" className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
+            <h2 className="flex items-center gap-2 font-bold text-slate-900"><DocumentDuplicateIcon className="h-5 w-5" aria-hidden="true" />Reusable template</h2>
+            <p className="mt-2 text-sm text-slate-600">Edit the scope that will be copied into future jobs.</p>
+            <p className="mt-2 text-xs text-slate-500">Actual work, comments, billing, and job history become available after a job is created.</p>
+          </section>
         </aside>
 
-        <div className="min-w-0 space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-sm font-bold text-slate-900">{selectedMeta?.label || "Overview"}</h2>
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
-                    Template
-                  </span>
+        <div className="min-w-0 space-y-4 lg:order-1">
+          {detailLoading ? <div role="status" className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading template scope…</div> : detailTab === "overview" ? renderTemplateOverview() : (
+            <section aria-label="Template plan editor" className="space-y-4">
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">Plan Editor</h2>
+                    <p className="mt-0.5 text-xs text-slate-500">Build the reusable services, products, visits, and tasks for future jobs.</p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">Template</span>
                 </div>
-                <p className="mt-0.5 text-xs text-slate-500">{selectedMeta?.helper}</p>
               </div>
-              {detailTab !== "overview" ? (
-                <button
-                  type="button"
-                  onClick={() => openItemModal(detailTab)}
-                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  Add {detailTabLabel(detailTab)}
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          {detailTab === "overview" ? renderTemplateOverview() : renderTemplateChildSection(detailTab)}
+              {templatePlanSections.map((planSection) => (
+                <section key={planSection.id} aria-label={planSection.region} className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">{planSection.label} <span className="ml-1 text-xs font-normal text-slate-500">({details[planSection.id].length})</span></h3>
+                      <p className="mt-0.5 text-xs text-slate-500">{planSection.helper}</p>
+                    </div>
+                    <button type="button" onClick={() => openItemModal(planSection.id)} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Add {detailTabLabel(planSection.id)}</button>
+                  </div>
+                  {renderTemplateChildSection(planSection.id)}
+                </section>
+              ))}
+            </section>
+          )}
         </div>
       </section>
     );
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+    <div className="job-template-theme job-template-page min-h-screen px-2 py-6 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="template-header rounded-lg border p-5 shadow-sm" aria-label={isDetailRoute ? "Editing a job template" : "Job template library"}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <Link to={isDetailRoute ? "/company/settings/job-templates" : "/company/settings"} className="app-back-link">
-                &larr; {isDetailRoute ? "Back to Job Templates" : "Back to Settings"}
-              </Link>
-              <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Prebuilt Jobs</p>
-              <h1 className="mt-1 break-words text-3xl font-bold text-slate-950">
-                {isDetailRoute ? detailTemplate?.name || "Job Template" : "Job Templates"}
-              </h1>
-              <p className="mt-1 max-w-3xl text-sm text-slate-500">
-                {isDetailRoute
-                  ? "Define the reusable tasks, planned stops, service lines, and products this prebuilt job should create."
-                  : "Create and manage reusable prebuilt jobs for common work orders."}
-              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <Link to={isDetailRoute ? "/company/settings/job-templates" : "/company/settings"} className="template-back-link">&larr; {isDetailRoute ? "Back to Job Templates" : "Back to Settings"}</Link>
+                <span className="template-kind-label"><DocumentDuplicateIcon className="h-4 w-4" aria-hidden="true" />{isDetailRoute ? "Editing a Job Template" : "Template Library"}</span>
+              </div>
+              <h1 className="template-header-title mt-3 break-words text-3xl font-bold">{isDetailRoute ? detailTemplate?.name || "Job Template" : "Job Templates"}</h1>
+              <p className="template-header-muted mt-2 max-w-3xl text-sm">{isDetailRoute ? "Reusable services, tasks, planned visits, and products for future jobs." : "Build reusable scope for common work, then create jobs from it."}</p>
+              {isDetailRoute && detailTemplate && renderTemplateStatusPills()}
             </div>
-            <div className="flex flex-wrap gap-2">
-              {isDetailRoute && detailTemplate ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => openEditModal(detailTemplate)}
-                    disabled={deletingTemplate}
-                    className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Edit Template
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteTemplate(detailTemplate)}
-                    disabled={deletingTemplate}
-                    className="inline-flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-bold text-red-700 shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {deletingTemplate ? "Deleting..." : "Delete Template"}
-                  </button>
-                  <Link
-                    to={`/company/jobs/basic-create?templateId=${encodeURIComponent(detailTemplate.id)}`}
-                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-                  >
-                    Create Job
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={openCreateModal}
-                    className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800"
-                  >
-                    New Template
-                  </button>
-                  <Link
-                    to="/company/jobs/basic-create"
-                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-                  >
-                    Create Job From Template
-                  </Link>
-                </>
-              )}
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              {isDetailRoute && detailTemplate ? <>
+                <Menu as="div" className="relative inline-block text-left">
+                  <MenuButton disabled={deletingTemplate} className="template-header-action rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-50"><EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />Actions<ChevronDownIcon className="h-4 w-4" aria-hidden="true" /></MenuButton>
+                  <MenuItems anchor="bottom end" className="job-template-theme template-menu z-50 mt-2 w-56 overflow-hidden rounded-md p-1 shadow-lg focus:outline-none">
+                    <MenuItem><button type="button" onClick={() => openEditModal(detailTemplate)} className="template-menu-item flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-semibold"><PencilSquareIcon className="h-4 w-4" aria-hidden="true" />Edit Template</button></MenuItem>
+                    <MenuItem><button type="button" onClick={() => deleteTemplate(detailTemplate)} disabled={deletingTemplate} className="template-menu-item flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-semibold text-red-700"><TrashIcon className="h-4 w-4" aria-hidden="true" />{deletingTemplate ? "Deleting…" : "Delete Template"}</button></MenuItem>
+                  </MenuItems>
+                </Menu>
+                <Link to={`/company/jobs/basic-create?templateId=${encodeURIComponent(detailTemplate.id)}`} className="template-primary-action rounded-md px-4 py-2 text-sm font-semibold">Create and Schedule Job</Link>
+              </> : <>
+                <button type="button" onClick={openCreateModal} className="template-header-action rounded-md px-4 py-2 text-sm font-semibold">New Template</button>
+                <Link to="/company/jobs/basic-create" className="template-primary-action rounded-md px-4 py-2 text-sm font-semibold">Create and Schedule Job</Link>
+              </>}
             </div>
           </div>
         </section>
+        {isDetailRoute && <div className="template-mode-notice flex items-start gap-3 rounded-lg px-4 py-3">
+          <DocumentDuplicateIcon className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          <div><p className="text-sm font-bold">Template editing</p><p className="mt-0.5 text-sm">Changes here apply to future jobs created from this template. Existing jobs keep their saved scope.</p></div>
+        </div>}
 
         {!isDetailRoute && (
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h2 className="text-sm font-semibold uppercase text-slate-500">Default Admin</h2>
+              <h2 className="text-sm font-semibold uppercase text-slate-500">Default Job Admin</h2>
               <p className="mt-1 text-sm text-slate-600">
-                New iOS technician jobs will use this admin unless a manager changes it.
+                Fallback admin for jobs created through Create and Schedule Job.
               </p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
@@ -2741,11 +2672,11 @@ const JobTemplates = () => {
                       <td className="px-5 py-3 text-sm text-slate-700">{templateDefaultPriorityDisplay(template)}</td>
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap gap-1.5">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${template.isActive === false ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
-                            {template.isActive === false ? "Inactive" : "Active"}
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${!isActiveJobTemplate(template) ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`}>
+                            {!isActiveJobTemplate(template) ? "Inactive" : "Active"}
                           </span>
                           {template.technicianCanAdd ? (
-                            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Tech-enabled</span>
+                            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Available to Technicians</span>
                           ) : null}
                           {template.locked ? (
                             <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">Locked</span>
@@ -2806,10 +2737,10 @@ const JobTemplates = () => {
 
       {itemModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <form onSubmit={saveTemplateItem} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
+          <form aria-label={`${itemModal.mode === "create" ? "Add" : "Edit"} Template ${detailTabLabel(itemModal.type)}`} onSubmit={saveTemplateItem} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <h2 className="text-xl font-bold text-slate-900">
-                {itemModal.mode === "create" ? "Add" : "Edit"} {detailTabLabel(itemModal.type)}
+                {itemModal.mode === "create" ? "Add" : "Edit"} Template {detailTabLabel(itemModal.type)}
               </h2>
 	              <button type="button" onClick={closeItemModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
 	                Close
@@ -2951,13 +2882,19 @@ const JobTemplates = () => {
 	                      Total price
                       <input type="number" min="0" step="0.01" value={itemForm.totalPrice || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, totalPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Internal cost
-	                      <input type="number" min="0" step="0.01" value={itemForm.internalCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, internalCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-	                    </label>
+
 	                  </div>
-	                  <ServicePayrollCostPreview data={servicePayrollData} scopeLabel="For the linked template tasks"
-                        tasks={details.tasks.filter((task) => (itemForm.taskTemplateIds || []).includes(task.id))}
+                      <ServicePayTypeField value={itemForm.payTypeId} payTypes={payTypes}
+                        onChange={(payTypeId) => setItemForm((form) => ({ ...form, payTypeId }))} />
+	                  <ServicePayrollCostEditor data={servicePayrollData} scopeLabel="For this service line, including linked tasks"
+                        costLabel="Internal cost" onCostChange={(internalCost) => setItemForm((form) => ({ ...form, internalCost }))}
+                        onUseSuggestedPrice={(cents) => setItemForm((form) => ({ ...form, totalPrice: dollarsFromCents(cents), unitPrice: dollarsFromCents(cents / Math.max(Number(form.quantity || 1), 1)) }))}
+                        tasks={[
+                          ...details.tasks.filter((task) => (itemForm.taskTemplateIds || []).includes(task.id)),
+                          ...(itemModal.mode === "create" && serviceCatalogItemById.has(itemForm.selectedSalesCatalogItemId)
+                            ? catalogTasksForLaborLine(serviceCatalogItemById.get(itemForm.selectedSalesCatalogItemId), itemForm.payTypeId || "", Math.max(Number(itemForm.quantity || 1), 1)) : []),
+                        ]}
+                        serviceQuantity={Math.max(Number(itemForm.quantity || 1), 1)}
                         inheritedPayTypeId={itemForm.payTypeId || ""} priceInput={itemForm.totalPrice} costInput={itemForm.internalCost}
                         onUseHighCost={(cents) => setItemForm((form) => ({ ...form, internalCost: (cents / 100).toFixed(2) }))} />
 	                  <div className="grid gap-4">
@@ -3020,213 +2957,22 @@ const JobTemplates = () => {
         </div>
       ) : null}
 
-      {templateModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-          <form onSubmit={saveTemplate} className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">{templateModal.mode === "create" ? "New Job Template" : "Edit Job Template"}</h2>
-                <p className="mt-1 text-sm text-slate-500">Save the reusable setup for a prebuilt job.</p>
-              </div>
-              <button type="button" onClick={closeTemplateModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
-                Close
-              </button>
-            </div>
+      {templateModal && <JobTemplateDialog key={templateModal.id || templateModal.template.id}
+        mode={templateModal.mode} form={templateForm} setForm={setTemplateForm}
+        services={serviceCatalogItems} products={databaseProducts} payTypes={payTypes}
+        loadingCatalogs={loadingServiceCatalogItems || loadingDatabaseProducts}
+        saving={saving} deleting={deletingTemplate} error={actionError}
+        onSave={saveTemplate} onClose={closeTemplateModal}
+        onDelete={() => deleteTemplate(templateModal.template)} />}
 
-            <div className="mt-5 grid gap-4">
-              <label className="text-sm font-semibold text-slate-700">
-                Name
-                <input
-                  type="text"
-                  required
-                  value={templateForm.name}
-                  onChange={(event) => setTemplateForm((form) => ({ ...form, name: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                />
-              </label>
-
-              <label className="text-sm font-semibold text-slate-700">
-                Description
-                <textarea
-                  rows={3}
-                  value={templateForm.description}
-                  onChange={(event) => setTemplateForm((form) => ({ ...form, description: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                />
-              </label>
-
-              <div className="grid gap-4 md:grid-cols-3">
-                <label className="text-sm font-semibold text-slate-700">
-                  Default job priority
-                  <select
-                    value={templateForm.defaultIssuePriorityLevel}
-                    onChange={(event) => setTemplateForm((form) => ({
-                      ...form,
-                      defaultIssuePriorityLevel: normalizeIssuePriority(event.target.value),
-                    }))}
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                  >
-                    {ISSUE_PRIORITY_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.value} - {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm font-semibold text-slate-700">
-                  Default price
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={templateForm.defaultRate}
-                    onChange={(event) => setTemplateForm((form) => ({ ...form, defaultRate: event.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="text-sm font-semibold text-slate-700">
-                  Default service cost
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={templateForm.defaultLaborCost}
-                    onChange={(event) => setTemplateForm((form) => ({ ...form, defaultLaborCost: event.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
-                </label>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={templateForm.isActive}
-                    onChange={(event) => setTemplateForm((form) => ({ ...form, isActive: event.target.checked }))}
-                  />
-                  Active
-                </label>
-                <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={templateForm.locked}
-                    onChange={(event) => setTemplateForm((form) => ({ ...form, locked: event.target.checked }))}
-                  />
-                  Locked
-                </label>
-                <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={templateForm.technicianCanAdd}
-                    onChange={(event) => setTemplateForm((form) => ({ ...form, technicianCanAdd: event.target.checked }))}
-                  />
-                  Technicians Can Add
-                </label>
-              </div>
-            </div>
-
-            <div className="mt-6 flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                {templateModal.mode === "edit" ? (
-                  <button
-                    type="button"
-                    onClick={() => deleteTemplate(templateModal.template)}
-                    disabled={saving || deletingTemplate}
-                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {deletingTemplate ? "Deleting..." : "Delete Template"}
-                  </button>
-                ) : null}
-              </div>
-              <div className="flex justify-end gap-2">
-                <button type="button" onClick={closeTemplateModal} disabled={saving || deletingTemplate} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || deletingTemplate}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {saving ? "Saving" : "Save Template"}
-                </button>
-              </div>
-            </div>
-          </form>
-        </div>
-      ) : null}
     </div>
   );
 };
 
-const statToneClasses = {
-  default: "border-slate-200 bg-slate-50 text-slate-900",
-  blue: "border-blue-200 bg-blue-50 text-blue-900",
-  emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
-  rose: "border-rose-200 bg-rose-50 text-rose-900",
-};
-
-const TemplateStatCard = ({ title, value, subtitle, tone = "default" }) => (
-  <div className={`rounded-md border px-3 py-2 ${statToneClasses[tone] || statToneClasses.default}`}>
-    <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">{title}</p>
-    <p className="mt-1 text-lg font-bold">{value}</p>
-    {subtitle ? <p className="mt-0.5 text-xs opacity-80">{subtitle}</p> : null}
-  </div>
-);
-
-const SnapshotRow = ({ label, value, muted = false, strong = false, tone = "default" }) => {
-  const valueClass = [
-    "mt-1",
-    strong ? "text-lg font-bold" : "font-semibold",
-    muted ? "text-slate-500" : "text-slate-900",
-    tone === "positive" ? "text-emerald-700" : "",
-    tone === "negative" ? "text-rose-700" : "",
-  ].filter(Boolean).join(" ");
-
-  return (
-    <div>
-      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className={valueClass}>{value}</dd>
-    </div>
-  );
-};
-
-const SkeletonLine = ({ width = "w-full" }) => (
-  <span className={`block h-3 rounded bg-slate-200 ${width}`} aria-hidden="true" />
-);
-
-const SkeletonBlock = ({ height = "h-20" }) => (
-  <div className={`rounded-md bg-slate-200 ${height}`} aria-hidden="true" />
-);
-
-const SnapshotSkeletonRow = ({ label, width = "w-40" }) => (
-  <div className="pointer-events-none">
-    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
-    <dd className="mt-2">
-      <SkeletonLine width={width} />
-    </dd>
-  </div>
-);
-
-const TemplateDisabledPanels = () => (
-  <div className="grid gap-3 md:grid-cols-3">
-    {[
-      { title: "Actual", rows: ["w-2/3", "w-11/12", "w-1/2"] },
-      { title: "Billing", rows: ["w-1/2", "w-4/5", "w-2/3"] },
-      { title: "History", rows: ["w-3/4", "w-full", "w-1/2"] },
-    ].map((panel) => (
-      <div key={panel.title} className="pointer-events-none rounded-lg border border-slate-200 bg-slate-50 p-4 opacity-80 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">{panel.title}</h3>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400">Job only</span>
-        </div>
-        <div className="mt-4 space-y-3">
-          {panel.rows.map((width, index) => (
-            <SkeletonLine key={`${panel.title}-${width}-${index}`} width={width} />
-          ))}
-          <SkeletonBlock height="h-16" />
-        </div>
-      </div>
-    ))}
+const SnapshotRow = ({ label, value, muted = false, tone = "default" }) => (
+  <div className="flex items-start justify-between gap-3 py-2">
+    <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+    <dd className={`min-w-0 text-right text-sm font-bold ${tone === "positive" ? "text-emerald-700" : tone === "negative" ? "text-rose-700" : muted ? "text-slate-500" : "text-slate-950"}`}>{value}</dd>
   </div>
 );
 

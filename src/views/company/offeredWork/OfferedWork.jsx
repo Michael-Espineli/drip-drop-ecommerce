@@ -1,8 +1,10 @@
 import WorkOfferReview from './WorkOfferReview';
+import WorkOfferActionsMenu from './WorkOfferActionsMenu';
+import WorkOfferReturnDialog from './WorkOfferReturnDialog';
 import WorkOfferManagementDialog from './WorkOfferManagementDialog';
 import WorkOfferSchedule from './WorkOfferSchedule';
 import { manageTechnicianWork } from '../../../utils/technicianWorkflow';
-import React, { useContext, useEffect, useMemo, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   collection,
@@ -28,6 +30,9 @@ import {
   FiClipboard,
   FiDollarSign,
   FiEdit2,
+  FiEye,
+  FiCornerUpLeft,
+  FiTrash2,
   FiFilter,
   FiFlag,
   FiGift,
@@ -72,6 +77,7 @@ import {
   getWorkOfferIncentiveCents,
   getWorkOfferIncentiveText,
   getWorkOfferTargetText,
+  getWorkOfferStatusClasses,
   getWorkOfferTaskCount,
   hasAcceptedWorkOffer,
   getWorkOfferTypeText,
@@ -205,24 +211,6 @@ const deadlineClasses = (tone) => {
 const dayNameFromDate = (dateValue) =>
   new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(dateAtStartOfDay(dateValue));
 
-const statusClasses = (status) => {
-  const normalized = normalizedWorkOfferStatusKey(status);
-
-  if (["sent", "posted", "viewed", "pending", "open", "draft", "offered"].includes(normalized)) {
-    return "border-amber-200 bg-amber-50 text-amber-800";
-  }
-
-  if (["pending approval", "acceptance pending approval"].includes(normalized)) {
-    return "border-orange-200 bg-orange-50 text-orange-800";
-  }
-
-  if (normalized === "accepted") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (["scheduled", "in progress", "inprogress"].includes(normalized)) return "border-blue-200 bg-blue-50 text-blue-700";
-  if (normalized === "completed") return "border-slate-200 bg-slate-100 text-slate-700";
-  if (["rejected", "cancelled", "canceled", "expired"].includes(normalized)) return "border-rose-200 bg-rose-50 text-rose-700";
-
-  return "border-slate-200 bg-slate-50 text-slate-700";
-};
 
 const makeId = (prefix) => `${prefix}_${uuidv4()}`;
 
@@ -460,6 +448,7 @@ const OfferedWork = () => {
   const [offers, setOffers] = useState([]);
   const [reviewOffer, setReviewOffer] = useState(null);
   const [scheduleOffer, setScheduleOffer] = useState(null);
+  const [returnOffer, setReturnOffer] = useState(null);
   const [offerDetails, setOfferDetails] = useState(null);
   const [offerActionId, setOfferActionId] = useState("");
   const [boards, setBoards] = useState([]);
@@ -484,6 +473,22 @@ const OfferedWork = () => {
   const [boardModalOpen, setBoardModalOpen] = useState(false);
   const [boardForm, setBoardForm] = useState({ id: "", name: "", memberUserIds: [] });
   const [savingBoard, setSavingBoard] = useState(false);
+  const [boardMemberSearch, setBoardMemberSearch] = useState("");
+  const boardMemberListRef = useRef(null);
+  const filteredBoardMembers = useMemo(() => {
+    const search = boardMemberSearch.trim().toLowerCase();
+    if (!search) return companyUsers;
+    return companyUsers.filter((member) => [
+      getCompanyUserName(member),
+      member.firstName,
+      member.lastName,
+      member.email,
+      getCompanyUserWorkerType(member),
+    ].filter(Boolean).join(" ").toLowerCase().includes(search));
+  }, [boardMemberSearch, companyUsers]);
+  useEffect(() => {
+    if (boardMemberListRef.current) boardMemberListRef.current.scrollTop = 0;
+  }, [boardMemberSearch, boardForm.id, boardModalOpen]);
   const currentUserIds = useMemo(
     () => currentUserIdsFor({ user, dataBaseUser, companyUserAccess }),
     [user, dataBaseUser, companyUserAccess]
@@ -551,6 +556,9 @@ const OfferedWork = () => {
 
   useEffect(() => {
     setOfferDetails(null);
+    setReviewOffer(null);
+    setScheduleOffer(null);
+    setReturnOffer(null);
     loadOffers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentlySelectedCompany]);
@@ -1134,10 +1142,12 @@ const OfferedWork = () => {
   const openBoardModal = () => {
     if (!requirePermission(UPDATE_OFFERED_WORK_PERMISSION_ID, "manage work offer boards")) return;
     setBoardForm({ id: "", name: "", memberUserIds: [] });
+    setBoardMemberSearch("");
     setBoardModalOpen(true);
   };
 
   const editBoard = (board) => {
+    setBoardMemberSearch("");
     setBoardForm({
       id: board.id,
       name: board.name || "",
@@ -1190,6 +1200,7 @@ const OfferedWork = () => {
         return nextBoards.sort((a, b) => a.name.localeCompare(b.name));
       });
       setBoardForm({ id: "", name: "", memberUserIds: [] });
+      setBoardMemberSearch("");
       toast.success("Work offer board saved.");
     } catch (error) {
       console.error("Failed to save work offer board:", error);
@@ -1211,8 +1222,9 @@ const OfferedWork = () => {
   return (
     <div className="min-h-screen bg-page px-2 py-6 text-theme sm:px-3 lg:px-4">
       {offerDetails && <WorkOfferManagementDialog key={`${recentlySelectedCompany}:${offerDetails.offer.id}:${offerDetails.tab}`} companyId={recentlySelectedCompany} offer={offerDetails.offer} initialTab={offerDetails.tab} workers={companyUsers} boards={boards} onClose={() => setOfferDetails(null)} onChanged={refreshOffer} />}
+      {returnOffer && <WorkOfferReturnDialog companyId={recentlySelectedCompany} offer={returnOffer.offer} claim={returnOffer.claim} onClose={() => setReturnOffer(null)} onReturned={async result => { try { await refreshOffer(result.offerId); } catch { toast.error("Work returned. Refresh the list to see the change."); } toast.success("Work returned to the office."); }} />}
       {scheduleOffer && <WorkOfferSchedule companyId={recentlySelectedCompany} offer={scheduleOffer} onClose={()=>setScheduleOffer(null)} onScheduled={async()=>{await refreshOffer(scheduleOffer.id);toast.success("Work scheduled.");}}/>}
-      {reviewOffer && <WorkOfferReview companyId={recentlySelectedCompany} offer={reviewOffer} onClose={()=>setReviewOffer(null)} onAccepted={async result=>{ await refreshOffer(result.offerId); toast.success(result.status === "Accepted" ? "Work accepted." : "Acceptance sent for approval."); }} />}
+      {reviewOffer && <WorkOfferReview companyId={recentlySelectedCompany} offer={reviewOffer} onClose={()=>setReviewOffer(null)} onAccepted={async result=>{ try { await refreshOffer(result.offerId); } catch { toast.error("Acceptance saved. Refresh the list to see the change."); } toast.success(result.status === "Accepted" ? "Work accepted." : "Acceptance sent for approval."); if (result.status === "Accepted" && reviewOffer.allowsTechnicianSelfScheduling && reviewOffer.jobId && !reviewOffer.routeId) setScheduleOffer({ ...reviewOffer, status: "Accepted" }); }} />}
       <div className="w-full space-y-6">
         <section className="rounded-lg border border-theme bg-surface p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1475,7 +1487,7 @@ const OfferedWork = () => {
                           </div>
                         </td>
                         <td className="px-5 py-3">
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${statusClasses(status)}`}>
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${getWorkOfferStatusClasses(status)}`}>
                             {status}
                           </span>
                           {isAcceptedReadyToScheduleWorkOffer(offer) && (
@@ -1530,52 +1542,28 @@ const OfferedWork = () => {
                         </td>
                         <td className="px-5 py-3 text-sm text-theme-muted">{formatDate(offer.createdAt)}</td>
                         <td className="px-5 py-3 text-right">
-                          <div className="flex flex-col items-end gap-2">
-                            <button type="button" onClick={() => openOfferManagement(offer)} className="rounded-md border border-theme px-3 py-2 text-sm font-semibold">Open offer</button>
-                            {(can(UPDATE_OFFERED_WORK_PERMISSION_ID) || (canCreateOffers && currentUserIds.includes(offer.createdByUserId))) && <>
-                              <button type="button" onClick={() => openOfferManagement(offer, "edit")} className="inline-flex items-center gap-2 rounded-md border border-theme px-3 py-2 text-sm font-semibold">Edit offer <FiEdit2 /></button>
-                              <button type="button" disabled={hasAcceptedWorkOffer(offer)} title="Accepted work and agreed pay must be preserved" onClick={() => openOfferManagement(offer, "delete")} className="rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 disabled:opacity-50">Delete offer</button>
-                            </>}
-                            {showApprove && (
-                              <button
-                                type="button"
-                                disabled={offerActionId === offer.id} onClick={() => approveOffer(offer)}
-                                className="inline-flex items-center justify-end gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                              >
-                                Approve
-                                <FiCheckCircle className="h-4 w-4" />
-                              </button>
-                            )}
-                            {canApproveOffers && offer.claims?.filter(claim=>claim.status === "Acceptance Pending Approval").map(claim=><div key={claim.id} className="flex flex-wrap items-center justify-end gap-2 text-xs"><span>{claim.workerName} · pending review</span><button disabled={offerActionId === offer.id} onClick={()=>rejectPendingClaim(offer,claim)} className="rounded border border-red-200 px-2 py-1 text-red-700">Reject claim</button></div>)}
-                            {isAcceptedReadyToScheduleWorkOffer(offer) && !offer.routeId && (can('324') || (currentUserIds.includes(offer.acceptedByUserId) && offer.allowsTechnicianSelfScheduling)) && <button onClick={()=>setScheduleOffer(offer)} className="rounded bg-blue-700 px-3 py-2 text-sm font-semibold text-white">Schedule Work</button>}
-                            {showAccept && (
-                              <button
-                                type="button"
-                                onClick={() => acceptOffer(offer)}
-                                className="inline-flex items-center justify-end gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-                              >
-                                Accept
-                                <FiCheckCircle className="h-4 w-4" />
-                              </button>
-                            )}
-                            {canAddIncentives && (
-                              <button
-                                type="button"
-                                onClick={() => openOfferManagement(offer, "incentive")}
-                                className="inline-flex items-center justify-end gap-2 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted transition hover:bg-surface-soft"
-                              >
-                                Incentive
-                                <FiGift className="h-4 w-4" />
-                              </button>
-                            )}
-                            <Link
-                              to={jobPath}
-                              className="inline-flex items-center justify-end gap-2 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted transition hover:bg-surface-soft"
-                            >
-                              Open job
-                              <FiArrowUpRight className="h-4 w-4" />
-                            </Link>
-                          </div>
+                          <WorkOfferActionsMenu
+                            title={offer.title}
+                            disabled={offerActionId === offer.id}
+                            items={[
+                              { label: "Open offer", icon: FiEye, onClick: () => openOfferManagement(offer) },
+                              ...((can(UPDATE_OFFERED_WORK_PERMISSION_ID) || (canCreateOffers && currentUserIds.includes(offer.createdByUserId))) ? [
+                                { label: "Edit offer", icon: FiEdit2, onClick: () => openOfferManagement(offer, "edit") },
+                              ] : []),
+                              ...(canAddIncentives ? [{ label: "Incentive", icon: FiGift, onClick: () => openOfferManagement(offer, "incentive") }] : []),
+                              ...(showApprove ? [{ label: "Approve", icon: FiCheckCircle, onClick: () => approveOffer(offer) }] : []),
+                              ...(canApproveOffers ? (offer.claims || []).filter(claim => claim.status === "Acceptance Pending Approval").map(claim => ({
+                                id: `reject-${claim.id}`, label: `Reject ${claim.workerName || "technician"}'s claim`, icon: FiX, destructive: true, onClick: () => rejectPendingClaim(offer, claim),
+                              })) : []),
+                              ...(isAcceptedReadyToScheduleWorkOffer(offer) && !offer.routeId && (can('324') || (currentUserIds.includes(offer.acceptedByUserId) && offer.allowsTechnicianSelfScheduling)) ? [{ label: "Schedule Work", icon: FiCalendar, onClick: () => setScheduleOffer(offer) }] : []),
+                              ...(offer.claims || []).filter(claim => currentUserIds.includes(claim.workerId) && ["Accepted", "Scheduled"].includes(claim.status)).map(claim => ({
+                                id: `return-${claim.id}`, label: "Return work", icon: FiCornerUpLeft, destructive: true, onClick: () => setReturnOffer({ offer, claim }),
+                              })),
+                              ...(showAccept ? [{ label: "Accept", icon: FiCheckCircle, onClick: () => acceptOffer(offer) }] : []),
+                              { label: "Open job", icon: FiArrowUpRight, href: jobPath },
+                              ...(!hasAcceptedWorkOffer(offer) && (can(UPDATE_OFFERED_WORK_PERMISSION_ID) || (canCreateOffers && currentUserIds.includes(offer.createdByUserId))) ? [{ label: "Delete offer", icon: FiTrash2, destructive: true, onClick: () => openOfferManagement(offer, "delete") }] : []),
+                            ]}
+                          />
                         </td>
                       </tr>
                     );
@@ -2019,40 +2007,44 @@ const OfferedWork = () => {
       )}
 
       {boardModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border border-theme bg-surface shadow-xl">
-            <div className="flex items-start justify-between gap-4 border-b border-theme px-5 py-4">
-              <div>
-                <h2 className="text-xl font-bold text-theme">Work Offer Boards</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="work-offer-boards-title"
+            className="relative grid h-[min(52rem,92dvh)] w-full max-w-5xl grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-lg border border-theme bg-surface shadow-xl md:grid-cols-2 md:grid-rows-1"
+          >
+            <button
+              type="button"
+              onClick={() => setBoardModalOpen(false)}
+              className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-md text-theme-subtle transition hover:bg-surface-soft"
+              aria-label="Close board manager"
+            >
+              <FiX className="h-5 w-5" />
+            </button>
+
+            <section aria-labelledby="work-offer-boards-title" className="flex min-h-0 min-w-0 flex-col">
+              <div className="shrink-0 px-5 py-4 pr-14 md:pr-5">
+                <h2 id="work-offer-boards-title" className="text-xl font-bold text-theme">Work Offer Boards</h2>
                 <p className="mt-1 text-sm text-theme-subtle">Manage board membership and the internal posts available to each group.</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setBoardModalOpen(false)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-theme-subtle transition hover:bg-surface-soft"
-                aria-label="Close board manager"
-              >
-                <FiX className="h-5 w-5" />
-              </button>
-            </div>
 
-            <div className="grid grid-cols-1 gap-3 border-b border-theme bg-surface-soft px-5 py-4 sm:grid-cols-3">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Boards</p>
-                <p className="mt-1 text-xl font-bold text-theme">{boards.length}</p>
+              <div className="grid shrink-0 grid-cols-3 gap-3 border-y border-theme bg-surface-soft px-5 py-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Boards</p>
+                  <p className="mt-1 text-xl font-bold text-theme">{boards.length}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Members</p>
+                  <p className="mt-1 text-xl font-bold text-theme">{boardMemberCount}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Open Posts</p>
+                  <p className="mt-1 text-xl font-bold text-theme">{summary.openBoard}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Members</p>
-                <p className="mt-1 text-xl font-bold text-theme">{boardMemberCount}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-theme-subtle">Open Posts</p>
-                <p className="mt-1 text-xl font-bold text-theme">{summary.openBoard}</p>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-[1fr_320px]">
-              <div className="space-y-3">
+              <div aria-label="Work offer board list" className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-5">
                 {boards.length === 0 ? (
                   <div className="rounded-md border border-dashed border-theme p-4 text-sm text-theme-subtle">
                     No work offer boards yet.
@@ -2062,75 +2054,102 @@ const OfferedWork = () => {
                     key={board.id}
                     type="button"
                     onClick={() => editBoard(board)}
-                    className="flex w-full items-start justify-between gap-3 rounded-md border border-theme bg-surface p-4 text-left transition hover:bg-surface-soft"
+                    aria-pressed={boardForm.id === board.id}
+                    className={`flex w-full items-start justify-between gap-3 rounded-md border p-4 text-left transition hover:bg-surface-soft ${boardForm.id === board.id ? "border-blue-500 bg-surface-soft" : "border-theme bg-surface"}`}
                   >
-                      <span>
-                        <span className="block font-semibold text-theme">{board.name}</span>
-                        <span className="mt-1 block text-xs text-theme-subtle">
-                          {board.memberNames.length ? board.memberNames.join(", ") : "No members"}
-                        </span>
-                        <span className="mt-2 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">
-                          {boardOfferCountsById[board.id] || 0} open post{(boardOfferCountsById[board.id] || 0) === 1 ? "" : "s"}
-                        </span>
+                    <span className="min-w-0 break-words">
+                      <span className="block font-semibold text-theme">{board.name}</span>
+                      <span className="mt-1 block text-xs text-theme-subtle">
+                        {board.memberNames.length ? board.memberNames.join(", ") : "No members"}
                       </span>
-                    <FiEdit2 className="mt-1 h-4 w-4 text-theme-subtle" />
+                      <span className="mt-2 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">
+                        {boardOfferCountsById[board.id] || 0} open post{(boardOfferCountsById[board.id] || 0) === 1 ? "" : "s"}
+                      </span>
+                    </span>
+                    <FiEdit2 className="mt-1 h-4 w-4 shrink-0 text-theme-subtle" />
                   </button>
                 ))}
               </div>
+            </section>
 
-              <div className="rounded-lg border border-theme bg-surface-soft p-4">
-                <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">Board Name</span>
+            <section aria-labelledby="board-editor-title" className="flex min-h-0 min-w-0 flex-col border-t border-theme bg-surface-soft md:border-l md:border-t-0">
+              <div className="shrink-0 px-5 pb-4 pt-4">
+                <h3 id="board-editor-title" className="text-lg font-bold text-theme md:pr-10">{boardForm.id ? "Edit Board" : "Create New Board"}</h3>
+                <label className="mt-4 block">
+                  <span className="text-sm font-semibold text-theme-muted">Board Name</span>
                   <input
                     value={boardForm.name}
                     onChange={(event) => setBoardForm((current) => ({ ...current, name: event.target.value }))}
-                    className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm"
+                    className="mt-1 h-10 w-full rounded-md border border-theme bg-surface px-3 text-sm text-theme"
                   />
                 </label>
+              </div>
 
-                <div className="mt-4">
-                  <p className="text-sm font-semibold text-slate-700">Members</p>
-                  <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
-                    {companyUsers.map((member) => {
-                      const memberId = getCompanyUserId(member);
-                      const checked = boardForm.memberUserIds.includes(memberId);
-                      return (
-                        <label key={memberId} className="flex cursor-pointer items-start gap-3 rounded-md border border-theme bg-surface p-3 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleBoardMember(memberId)}
-                            className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
-                          />
-                          <span>
-                            <span className="block font-semibold text-theme-muted">{getCompanyUserName(member)}</span>
-                            <span className="mt-1 block text-xs text-theme-subtle">{getCompanyUserWorkerType(member)}</span>
-                          </span>
-                        </label>
-                      );
-                    })}
+              <div className="flex min-h-0 flex-1 flex-col px-5">
+                <div className="shrink-0 pb-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p id="board-members-label" className="text-sm font-semibold text-theme-muted">Members</p>
+                    <span className="text-xs text-theme-subtle">{boardForm.memberUserIds.length} selected</span>
                   </div>
+                  <label className="relative mt-2 block">
+                    <span className="sr-only">Search board members</span>
+                    <FiSearch aria-hidden="true" className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-theme-subtle" />
+                    <input
+                      type="search"
+                      value={boardMemberSearch}
+                      onChange={(event) => setBoardMemberSearch(event.target.value)}
+                      placeholder="Search by name, email, or worker type"
+                      className="h-10 w-full rounded-md border border-theme bg-surface pl-9 pr-3 text-sm text-theme"
+                    />
+                  </label>
                 </div>
-
-                <div className="mt-4 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBoardForm({ id: "", name: "", memberUserIds: [] })}
-                    className="flex-1 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted hover:bg-surface-soft"
-                  >
-                    New
-                  </button>
-                  <button
-                    type="button"
-                    onClick={saveBoard}
-                    disabled={savingBoard}
-                    className="flex-1 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-                  >
-                    {savingBoard ? "Saving..." : "Save"}
-                  </button>
+                <div ref={boardMemberListRef} role="group" aria-labelledby="board-members-label" className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pb-3">
+                  {filteredBoardMembers.length === 0 ? (
+                    <p role="status" className="rounded-md border border-dashed border-theme p-4 text-sm text-theme-subtle">
+                      {companyUsers.length === 0 ? "No company members available." : "No members match your search."}
+                    </p>
+                  ) : filteredBoardMembers.map((member) => {
+                    const memberId = getCompanyUserId(member);
+                    const checked = boardForm.memberUserIds.includes(memberId);
+                    return (
+                      <label key={memberId} className="flex cursor-pointer items-start gap-3 rounded-md border border-theme bg-surface p-3 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleBoardMember(memberId)}
+                          className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600"
+                        />
+                        <span className="min-w-0 break-words">
+                          <span className="block font-semibold text-theme-muted">{getCompanyUserName(member)}</span>
+                          <span className="mt-1 block text-xs text-theme-subtle">{getCompanyUserWorkerType(member)}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
-            </div>
+
+              <div className="flex shrink-0 gap-2 border-t border-theme p-5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBoardForm({ id: "", name: "", memberUserIds: [] });
+                    setBoardMemberSearch("");
+                  }}
+                  className="flex-1 rounded-md border border-theme bg-surface px-3 py-2 text-sm font-semibold text-theme-muted hover:bg-surface-soft"
+                >
+                  New
+                </button>
+                <button
+                  type="button"
+                  onClick={saveBoard}
+                  disabled={savingBoard}
+                  className="flex-1 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {savingBoard ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </section>
           </div>
         </div>
       )}

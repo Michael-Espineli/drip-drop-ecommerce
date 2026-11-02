@@ -1,17 +1,23 @@
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
 import { buildCompanyPayType, defaultStopPayCategories, emptyWorkTypeForm, rateTypeOptions, resolveStopPayCategories, stackBehaviorOptions, workCategoryOptions } from "../../../utils/payroll/payTypeSetup";
 import PayRequestsPanel from './PayRequestsPanel';
-import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import PayStatementDailySummary from "./PayStatementDailySummary";
+import { buildStatementCandidateGroups, statementPreviewSummary, statementPreviewSummaryState } from "../../../utils/payroll/statementCandidates";
+import { canClearZeroTask } from "../../../utils/payroll/payCalculation";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import usePayrollNotifications from "../../../hooks/usePayrollNotifications";
+import React, { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Dialog, DialogPanel, DialogTitle, Description } from "@headlessui/react";
 import {
   collection,
   doc,
   documentId,
   getDoc,
   getDocs,
+  getCountFromServer,
   limit as firestoreLimit,
   orderBy,
   query,
-  runTransaction,
   setDoc,
   startAfter,
   updateDoc,
@@ -20,8 +26,7 @@ import {
 } from "firebase/firestore";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
-import { db, functions } from "../../../utils/config";
-import { httpsCallable } from "firebase/functions";
+import { db } from "../../../utils/config";
 import {
   COMPANY_WIDE_SETTINGS_DOC_ID,
   PAYROLL_ENABLED_FIELD,
@@ -73,6 +78,16 @@ const SERVICE_STOP_BACKFILL_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f7
 const BASE_TECHNICIAN_RATE_ID = "base_technician_default";
 const BASE_TECHNICIAN_RATE_PLAN_ID = "base_technician_rate_template";
 const LINE_ITEMS_PAGE_SIZE = 100;
+const lineItemScopeConstraints = (start, end, technicianId, status) => {
+  const constraints = [where("completedDate", ">=", start), where("completedDate", "<", end)];
+  if (technicianId) constraints.push(where("technicianId", "==", technicianId));
+  if (status === "active") {
+    constraints.push(where("calculationStatus", "in", ["pending", "calculated", "needsReview", "approved", "paid", "adjusted"]));
+  } else if (status && status !== "all") {
+    constraints.push(where("calculationStatus", "==", status));
+  }
+  return constraints;
+};
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -127,6 +142,7 @@ const isoDateTime = (value) => {
 };
 
 const debugDateTime = (value) => isoDateTime(value) || "-";
+const readableDateTime = value => dateFromValue(value)?.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) || "No date recorded";
 
 const serializeForDebug = (value) => {
   if (value?.toDate) return value.toDate().toISOString();
@@ -395,7 +411,7 @@ const statementSortOptions = [
 
 const defaultLineItemFilters = () => ({
   technicianId: "",
-  status: "active",
+  status: "needsReview",
   search: "",
 });
 
@@ -844,11 +860,46 @@ const serviceStopStreetAddress = (stop = {}) =>
 
 
 
-const payStatementReference = (statementNumber) => `PS-${String(statementNumber).padStart(6, "0")}`;
+
+const PayrollActionButton = ({ disabledReason = "", className = "", ...props }) => {
+  const reasonId = useId();
+  const disabled = Boolean(disabledReason);
+
+  // Disabled buttons do not reliably receive hover events. The wrapper owns
+  // the browser tooltip and is keyboard-focusable so the reason is accessible.
+  return (
+    <span className={`inline-flex${disabled ? " cursor-not-allowed" : ""}`} title={disabledReason || undefined}
+      tabIndex={disabled ? 0 : undefined} aria-describedby={disabled ? reasonId : undefined}>
+      <button {...props} disabled={disabled} aria-describedby={disabled ? reasonId : undefined}
+        className={`${className} w-full${disabled ? " pointer-events-none" : ""}`} />
+      {disabled ? <span id={reasonId} className="sr-only">{disabledReason}</span> : null}
+    </span>
+  );
+};
+
+const PayrollProgressDialog = ({ progress }) => {
+  const panelRef = useRef(null);
+
+  return (
+    <Dialog open={Boolean(progress)} onClose={() => {}} initialFocus={panelRef} className="relative z-[1100]">
+      <div className="fixed inset-0 bg-slate-950/60" aria-hidden="true" />
+      <div className="fixed inset-0 flex items-center justify-center p-4">
+        <DialogPanel ref={panelRef} tabIndex={-1} aria-busy="true"
+          className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 text-center text-slate-900 shadow-2xl focus:outline-none">
+          <span aria-hidden="true" className="mx-auto mb-4 block h-10 w-10 animate-spin rounded-full border-4 border-blue-100 border-t-blue-600 motion-reduce:animate-none" />
+          <DialogTitle className="text-lg font-bold">{progress?.title}</DialogTitle>
+          <Description role="status" aria-live="polite" className="mt-2 text-sm text-slate-600">{progress?.description}</Description>
+        </DialogPanel>
+      </div>
+    </Dialog>
+  );
+};
 
 const Payroll = ({ mode = "payroll" }) => {
   const isSetupMode = mode === "setup";
-  const { recentlySelectedCompany, setPayrollEnabled, user } = useContext(Context);
+  const { recentlySelectedCompany, setPayrollEnabled, user, companyOwnerId, companyUserAccess } = useContext(Context);
+  const { can, permissionsReady } = useCompanyPermissions();
+  const notifyPayroll = usePayrollNotifications(recentlySelectedCompany);
   const location = useLocation();
   const navigate = useNavigate();
   const [startDate, setStartDate] = useState(() => {
@@ -858,9 +909,19 @@ const Payroll = ({ mode = "payroll" }) => {
   const [lineItems, setLineItems] = useState([]);
   const [lineItemPage, setLineItemPage] = useState(0);
   const [lineItemHasNextPage, setLineItemHasNextPage] = useState(false);
+  const [lineItemTotalCount, setLineItemTotalCount] = useState(null);
+  const [lineItemCountError, setLineItemCountError] = useState(false);
+  const [lineItemCountVersion, setLineItemCountVersion] = useState(0);
   const [lineItemFilters, setLineItemFilters] = useState(defaultLineItemFilters);
   const lineItemPageCursorsRef = useRef([]);
   const [statements, setStatements] = useState([]);
+  const [statementPreview, setStatementPreview] = useState(null);
+  const [previewTechnicianId, setPreviewTechnicianId] = useState("");
+  const [statementGenerationInfo, setStatementGenerationInfo] = useState({});
+  const [previewProgress, setPreviewProgress] = useState(0);
+  const statementActionRef = useRef(false);
+  const payrollCatalogCache = useRef(new Map());
+  const appliedCatalogKey = useRef(null);
   const [statementFilters, setStatementFilters] = useState(defaultStatementFilters);
   const [statementSort, setStatementSort] = useState(defaultStatementSort);
   const [settingsForm, setSettingsForm] = useState(() => defaultPaySettings(""));
@@ -884,11 +945,31 @@ const Payroll = ({ mode = "payroll" }) => {
       ? setupTabs.includes(requestedTab) ? requestedTab : "overview"
       : payrollTabs.includes(requestedTab) ? requestedTab : "statements";
   });
+  const lineItemQueryStatus = !isSetupMode && activeTab === "lineItems" ? lineItemFilters.status : null;
+  const generationTechnicianId = activeTab === "lineItems" ? lineItemFilters.technicianId : previewTechnicianId;
+  const previewScopeKey = JSON.stringify([recentlySelectedCompany, startDate, endDate, generationTechnicianId]);
+  const previewScopeRef = useRef(previewScopeKey);
+  previewScopeRef.current = previewScopeKey;
+  const activeStatementPreview = statementPreview?.scopeKey === previewScopeKey ? statementPreview : null;
+  const statementCandidateGroups = activeStatementPreview?.groups || [];
   const [loading, setLoading] = useState(false);
+  const [payrollReloadVersion, setPayrollReloadVersion] = useState(0);
   const [error, setError] = useState("");
-  const [actionError, setActionError] = useState("");
-  const [actionMessage, setActionMessage] = useState("");
   const [savingAction, setSavingAction] = useState("");
+  const [approvalProgress, setApprovalProgress] = useState(null);
+  const payrollActionProgress = savingAction === "generate-statement-previews"
+    ? { title: "Generating statement previews", description: `Checked ${previewProgress} approved pay item(s) across the selected date range. Please wait for all previews.` }
+    : savingAction.startsWith("create-statement")
+      ? { title: "Creating pay statements", description: "Please wait while the reviewed pay items are checked and saved to statements." }
+      : savingAction === "clear-zero-tasks"
+    ? { title: "Clearing $0 tasks", description: "Please wait while the $0 task pay lines are cleared." }
+    : savingAction === "approve-all-lines" || savingAction.startsWith("approve-line-")
+      ? { title: "Approving payroll", description: savingAction === "approve-all-lines" && approvalProgress
+        ? approvalProgress.processedCount
+          ? `Checked ${approvalProgress.processedCount} line(s). Approved ${approvalProgress.approvedCount}; cleared ${approvalProgress.clearedCount} $0 task(s). Please wait while the date range finishes.`
+          : "Checking all payroll line items in the selected date range."
+        : "Please wait while payroll approval finishes." }
+      : null;
   const [paymentModal, setPaymentModal] = useState(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
   const [detailLineItem, setDetailLineItem] = useState(null);
@@ -904,6 +985,52 @@ const Payroll = ({ mode = "payroll" }) => {
   const [hiddenRateMatrixBucketIds, setHiddenRateMatrixBucketIds] = useState([]);
   const [rateMatrixTechnicianFilterIds, setRateMatrixTechnicianFilterIds] = useState([]);
   const [rateMatrixWorkTypeFilterIds, setRateMatrixWorkTypeFilterIds] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLineItemTotalCount(null);
+    setLineItemCountError(false);
+    if (!recentlySelectedCompany || !lineItemQueryStatus) return;
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T00:00:00`);
+    end.setDate(end.getDate() + 1);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) return;
+    const scopedQuery = query(collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"),
+      ...lineItemScopeConstraints(start, end, lineItemFilters.technicianId, lineItemQueryStatus));
+    getCountFromServer(scopedQuery).then(snapshot => {
+      if (cancelled) return;
+      const count = snapshot.data().count;
+      setLineItemTotalCount(count);
+      setLineItemPage(page => Math.min(page, Math.max(0, Math.ceil(count / LINE_ITEMS_PAGE_SIZE) - 1)));
+    }).catch(err => {
+      if (cancelled) return;
+      console.error("Error counting payroll line items:", err);
+      setLineItemCountError(true);
+    });
+    return () => { cancelled = true; };
+  }, [recentlySelectedCompany, startDate, endDate, lineItemFilters.technicianId, lineItemQueryStatus, payrollReloadVersion, lineItemCountVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatementPreview(null);
+    setPreviewTechnicianId("");
+    setStatementGenerationInfo({});
+    payrollCatalogCache.current.clear();
+    appliedCatalogKey.current = null;
+    setDetailStatement(null);
+    lineItemPageCursorsRef.current = [];
+    setLineItemPage(0);
+    if (recentlySelectedCompany && !isSetupMode) {
+      getDoc(doc(db, "companies", recentlySelectedCompany, "settings", "payStatements"))
+        .then(snapshot => { if (!cancelled) setStatementGenerationInfo(info => ({ ...(snapshot.exists() ? snapshot.data() : {}), ...info })); })
+        .catch(err => { if (!cancelled) setStatementGenerationInfo({ loadError: true }); console.error("Error loading statement generation dates:", err); });
+    }
+    return () => { cancelled = true; };
+  }, [recentlySelectedCompany, isSetupMode]);
+
+  useEffect(() => {
+    setDetailStatement(current => current?.type === "candidate" ? null : current);
+  }, [previewScopeKey]);
 
   useEffect(() => {
     setActiveTab(() => {
@@ -968,27 +1095,18 @@ const Payroll = ({ mode = "payroll" }) => {
       return;
     }
 
+    let cancelled = false;
     const loadPayroll = async () => {
       setLoading(true);
       setError("");
 
       try {
         const start = new Date(`${startDate}T00:00:00`);
-        const end = new Date(`${endDate}T23:59:59`);
+        const end = new Date(`${endDate}T00:00:00`);
+        end.setDate(end.getDate() + 1);
 
         const lineItemsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems");
-        const lineItemQueryConstraints = [
-          where("completedDate", ">=", start),
-          where("completedDate", "<=", end),
-        ];
-
-        if (lineItemFilters.technicianId) {
-          lineItemQueryConstraints.push(where("technicianId", "==", lineItemFilters.technicianId));
-        }
-
-        if (!["", "active", "all"].includes(lineItemFilters.status)) {
-          lineItemQueryConstraints.push(where("calculationStatus", "==", lineItemFilters.status));
-        }
+        const lineItemQueryConstraints = lineItemScopeConstraints(start, end, lineItemFilters.technicianId, lineItemQueryStatus);
 
         lineItemQueryConstraints.push(orderBy("completedDate", "desc"));
 
@@ -1009,25 +1127,31 @@ const Payroll = ({ mode = "payroll" }) => {
         const companyUsersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
         const technicianRatesRef = collection(db, "companies", recentlySelectedCompany, "technicianRates");
 
+        const emptyCollection = { docs: [] };
+        const emptyDocument = { exists: () => false };
+        const catalogKey = `${recentlySelectedCompany}:${isSetupMode ? "setup" : activeTab === "requests" ? "requests" : "payroll"}`;
+        if (!payrollCatalogCache.current.has(catalogKey)) {
+          const catalogs = Promise.all([
+            isSetupMode ? getDoc(settingsRef) : Promise.resolve(emptyDocument),
+            isSetupMode ? getDoc(companyWideSettingsRef) : Promise.resolve(emptyDocument),
+            isSetupMode ? getDocs(stopPayBucketsRef) : Promise.resolve(emptyCollection),
+            isSetupMode || activeTab === "requests" ? getDocs(payTypesRef) : Promise.resolve(emptyCollection),
+            getDocs(companyUsersRef),
+            isSetupMode ? getDocs(technicianRatesRef) : Promise.resolve(emptyCollection),
+          ]).catch(err => { payrollCatalogCache.current.delete(catalogKey); throw err; });
+          payrollCatalogCache.current.set(catalogKey, catalogs);
+        }
         const [
           lineItemsSnap,
           statementsSnap,
-          settingsSnap,
-          companyWideSettingsSnap,
-          stopPayBucketsSnap,
-          payTypesSnap,
-          companyUsersSnap,
-          technicianRatesSnap,
+          [settingsSnap, companyWideSettingsSnap, stopPayBucketsSnap, payTypesSnap, companyUsersSnap, technicianRatesSnap],
         ] = await Promise.all([
-          getDocs(lineItemsQuery),
-          getDocs(statementsRef),
-          getDoc(settingsRef),
-          getDoc(companyWideSettingsRef),
-          getDocs(stopPayBucketsRef),
-          getDocs(payTypesRef),
-          getDocs(companyUsersRef),
-          getDocs(technicianRatesRef),
+          lineItemQueryStatus ? getDocs(lineItemsQuery) : Promise.resolve(emptyCollection),
+          !isSetupMode && activeTab === "statements" ? getDocs(query(statementsRef,
+            where("startDate", "<", end), where("endDate", ">=", start), orderBy("startDate", "asc"), orderBy("endDate", "asc"))) : Promise.resolve(emptyCollection),
+          payrollCatalogCache.current.get(catalogKey),
         ]);
+        if (cancelled) return;
 
         const visibleLineItemDocs = lineItemsSnap.docs.slice(0, LINE_ITEMS_PAGE_SIZE);
         const hasNextLineItemPage = lineItemsSnap.docs.length > LINE_ITEMS_PAGE_SIZE;
@@ -1055,71 +1179,77 @@ const Payroll = ({ mode = "payroll" }) => {
             const statementStart = dateFromValue(statement.startDate);
             const statementEnd = dateFromValue(statement.endDate);
             if (!statementStart || !statementEnd) return true;
-            return statementStart <= end && statementEnd >= start;
+            return statementStart < end && statementEnd >= start;
           })
           .sort((a, b) => (dateFromValue(b.startDate)?.getTime() || 0) - (dateFromValue(a.startDate)?.getTime() || 0));
 
         setLineItems(nextLineItems);
         setStatements(nextStatements);
-        const savedPaySettings = settingsSnap.exists() ? settingsSnap.data() : {};
-        const companyWideSettings = companyWideSettingsSnap.exists() ? companyWideSettingsSnap.data() : {};
-        const nextPaySettings = normalizePaySettingsForIos(
-          {
-            ...savedPaySettings,
-            payrollEnabled: companyWideSettingsSnap.exists()
-              ? isPayrollEnabled(companyWideSettings)
-              : savedPaySettings.payrollEnabled,
-          },
-          recentlySelectedCompany
-        );
-        setSettingsForm(nextPaySettings);
-        setCompanyStopPayBuckets(
-          stopPayBucketsSnap.docs
-            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.label || a.name || "").localeCompare(String(b.label || b.name || "")))
-        );
-        const nextPayTypes = payTypesSnap.docs
-          .map((docSnap) => {
-            const data = { id: docSnap.id, ...docSnap.data() };
-            return {
-              ...data,
-              imageName: data.imageName || data.iconName || "",
-              iconName: data.iconName || data.imageName || "",
-              stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
-              stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
-              defaultWorkTypeIds: [docSnap.id],
-            };
-          })
-          .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")));
-        setCompanyServiceStopTypes(nextPayTypes);
-        setCompanyWorkTypes(nextPayTypes);
-        setWorkTypeMappings([]);
-        setCompanyUsers(
-          sortCompanyUsersByName(
-            companyUsersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-          )
-        );
-        setTechnicianRates(
-          technicianRatesSnap.docs
+        if (appliedCatalogKey.current !== catalogKey) {
+          const savedPaySettings = settingsSnap.exists() ? settingsSnap.data() : {};
+          const companyWideSettings = companyWideSettingsSnap.exists() ? companyWideSettingsSnap.data() : {};
+          const nextPaySettings = normalizePaySettingsForIos(
+            {
+              ...savedPaySettings,
+              payrollEnabled: companyWideSettingsSnap.exists()
+                ? isPayrollEnabled(companyWideSettings)
+                : savedPaySettings.payrollEnabled,
+            },
+            recentlySelectedCompany
+          );
+          setSettingsForm(nextPaySettings);
+          setCompanyStopPayBuckets(
+            stopPayBucketsSnap.docs
+              .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+              .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.label || a.name || "").localeCompare(String(b.label || b.name || "")))
+          );
+          const nextPayTypes = payTypesSnap.docs
             .map((docSnap) => {
               const data = { id: docSnap.id, ...docSnap.data() };
               return {
                 ...data,
-                workTypeId: data.workTypeId || data.payTypeId || "",
+                imageName: data.imageName || data.iconName || "",
+                iconName: data.iconName || data.imageName || "",
+                stopPayBucketId: data.stopPayBucketId || data.bucketId || "",
+                stopPayBucketLabel: data.stopPayBucketLabel || data.bucketLabel || "",
+                defaultWorkTypeIds: [docSnap.id],
               };
             })
-            .sort((a, b) => (dateFromValue(b.effectiveStartDate)?.getTime() || 0) - (dateFromValue(a.effectiveStartDate)?.getTime() || 0))
-        );
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")));
+          setCompanyServiceStopTypes(nextPayTypes);
+          setCompanyWorkTypes(nextPayTypes);
+          setWorkTypeMappings([]);
+          setCompanyUsers(
+            sortCompanyUsersByName(
+              companyUsersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+            )
+          );
+          setTechnicianRates(
+            technicianRatesSnap.docs
+              .map((docSnap) => {
+                const data = { id: docSnap.id, ...docSnap.data() };
+                return {
+                  ...data,
+                  workTypeId: data.workTypeId || data.payTypeId || "",
+                };
+              })
+              .sort((a, b) => (dateFromValue(b.effectiveStartDate)?.getTime() || 0) - (dateFromValue(a.effectiveStartDate)?.getTime() || 0))
+          );
+          appliedCatalogKey.current = catalogKey;
+        }
       } catch (err) {
+        if (cancelled) return;
         console.error("Error loading payroll:", err);
         setError("Could not load payroll data.");
+        notifyPayroll("error", "Could not load payroll data. Please try again.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadPayroll();
-  }, [recentlySelectedCompany, startDate, endDate, lineItemPage, lineItemFilters.technicianId, lineItemFilters.status]);
+    return () => { cancelled = true; };
+  }, [recentlySelectedCompany, startDate, endDate, lineItemPage, lineItemFilters.technicianId, lineItemQueryStatus, payrollReloadVersion, isSetupMode, activeTab, notifyPayroll]);
 
   const summary = useMemo(() => {
     const activeItems = lineItems.filter((item) => !isLineItemVoided(item));
@@ -1138,40 +1268,19 @@ const Payroll = ({ mode = "payroll" }) => {
     return { activeItems, totalCents, needsReview, approved, paid, statementCandidateItems, statementCandidateCents };
   }, [lineItems]);
 
-  const statementCandidateGroups = useMemo(() => {
-    const groupsByTechnician = new Map();
-
-    summary.statementCandidateItems.forEach((item) => {
-      const technicianId = item.technicianId || "unknown";
-      const existing = groupsByTechnician.get(technicianId) || {
-        technicianId,
-        technicianName: item.technicianName || "Unknown",
-        workerType: item.workerType || "notAssigned",
-        lineItems: [],
-        subtotalCents: 0,
-      };
-
-      existing.lineItems.push(item);
-      existing.subtotalCents += Number(item.totalAmountCents || 0);
-      groupsByTechnician.set(technicianId, existing);
-    });
-
-    return [...groupsByTechnician.values()]
-      .map((group) => ({
-        ...group,
-        lineItems: group.lineItems.sort(
-          (a, b) => (dateFromValue(a.completedDate)?.getTime() || 0) - (dateFromValue(b.completedDate)?.getTime() || 0)
-        ),
-      }))
-      .sort((a, b) => String(a.technicianName || "").localeCompare(String(b.technicianName || "")));
-  }, [summary.statementCandidateItems]);
-
-  const approvableLineItems = useMemo(
-    () => summary.activeItems.filter((item) => !isLineItemApproved(item) && item.calculationStatus !== "needsReview"),
-    [summary.activeItems]
-  );
-
   const currentUserId = user?.uid || user?.id || "";
+  const payrollAdministrator = Boolean(currentUserId && companyOwnerId === currentUserId) ||
+    ["owner", "admin", "manager"].includes(String(companyUserAccess?.roleName || "").trim().toLowerCase());
+  // Match the clearance callable's existing owner/admin/manager or 424 policy.
+  const canManagePayroll = permissionsReady && (payrollAdministrator || can("424"));
+  const zeroTaskPermissionReason = !permissionsReady
+    ? "Payroll permissions are still loading. Please wait."
+    : !canManagePayroll ? "Your account cannot clear payroll tasks. Ask the company owner to enable Manage Payroll for your role." : "";
+  const zeroTaskDisabledReason = savingAction ? "Wait for the current payroll action to finish." : zeroTaskPermissionReason;
+  const approveAllDisabledReason = savingAction ? "Wait for the current payroll action to finish."
+    : !permissionsReady ? "Payroll permissions are still loading. Please wait."
+    : !canManagePayroll ? "You need Manage Payroll access to approve all payroll line items."
+    : !startDate || !endDate || endDate < startDate ? "Choose a valid payroll date range first." : "";
 
   const visibleLineItems = useMemo(() => {
     const trimmedSearch = lineItemFilters.search.trim().toLowerCase();
@@ -1197,6 +1306,41 @@ const Payroll = ({ mode = "payroll" }) => {
         .some((value) => String(value).toLowerCase().includes(trimmedSearch))
     );
   }, [lineItems, lineItemFilters.search, lineItemFilters.status]);
+
+  const clearableZeroTasks = visibleLineItems.filter(canClearZeroTask);
+
+  const clearZeroTaskLines = async (items) => {
+    const result = await technicianWorkflow("clearZeroDollarPayrollTasks", {
+      companyId: recentlySelectedCompany, lineItemIds: items.map(item => item.id),
+    });
+    const updates = new Map((result.updates || []).map(({ voidedAtMillis, ...item }) => [item.id, { ...item, voidedAt: new Date(voidedAtMillis) }]));
+    // Retried requests can return already-cleared IDs without a new audit timestamp.
+    const clearedIds = new Set(result.clearedLineItemIds);
+    const patch = item => clearedIds.has(item.id) ? { ...item, calculationStatus: "voided", ...updates.get(item.id) } : item;
+    setLineItems(current => current.map(patch));
+    setDetailLineItem(current => current ? patch(current) : current);
+    setLineItemCountVersion(version => version + 1);
+    return clearedIds.size;
+  };
+
+  const clearZeroTasks = async (items) => {
+    if (!recentlySelectedCompany || !items.length) return;
+    if (!canManagePayroll) return setActionFailure(zeroTaskPermissionReason);
+    const confirmed = await appConfirm({
+      title: "Clear $0 tasks",
+      message: `Clear ${items.length} selected $0 task line(s) as no additional task pay? Any missing-setup items in this selection will also be cleared. The tasks and payroll audit history will remain stored.`,
+      confirmText: "Clear $0 tasks",
+    });
+    if (!confirmed) return;
+    setSavingAction("clear-zero-tasks");
+    setActionNotice();
+    try {
+      const count = await clearZeroTaskLines(items);
+      setActionNotice(`Cleared ${count} $0 task line(s). No payment is required.`);
+    } catch (err) {
+      setActionFailure(err.message || "Could not clear these tasks. Reload and review their current amounts.");
+    } finally { setSavingAction(""); }
+  };
 
   const resetLineItemPaging = () => {
     lineItemPageCursorsRef.current = [];
@@ -1324,16 +1468,16 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const setActionNotice = (message = "") => {
-    setActionError("");
-    setActionMessage(message);
+    notifyPayroll("success", message);
   };
 
   const setActionFailure = (message) => {
-    setActionMessage("");
-    setActionError(message);
+    notifyPayroll("error", message);
   };
 
   const updateLocalLineItem = (id, payload) => {
+    setStatementPreview(null);
+    setLineItemCountVersion(version => version + 1);
     setLineItems((items) => items.map((item) => (item.id === id ? { ...item, ...payload } : item)));
   };
 
@@ -2326,7 +2470,7 @@ const Payroll = ({ mode = "payroll" }) => {
         .sort((a, b) => (dateFromValue(a.serviceDate)?.getTime() || 0) - (dateFromValue(b.serviceDate)?.getTime() || 0));
 
       if (unfinishedStops.length === 0) {
-        setBackfillResult({ finishedStops: 0, generatedLines: 0, preservedLines: 0, finishedTasks: 0 });
+        setBackfillResult({ finishedStops: 0, finishedTasks: 0 });
         setBackfillProgress(null);
         setActionNotice("No unfinished service stops were found in that date range.");
         return;
@@ -2340,9 +2484,6 @@ const Payroll = ({ mode = "payroll" }) => {
         detail: `0/${totalUnfinishedStops} service stops ready`,
       });
 
-      const generatedLineItems = [];
-      let generatedLines = 0;
-      let preservedLines = 0;
       let finishedTasks = 0;
 
       for (let index = 0; index < unfinishedStops.length; index += 1) {
@@ -2396,6 +2537,7 @@ const Payroll = ({ mode = "payroll" }) => {
         newlyFinishedTasks.forEach((task) => {
           batch.update(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks", task.id), {
             status: "Finished",
+            manualFinishSource: "payroll_setup_bulk_finish",
             workerId: task.workerId,
             workerName: task.workerName,
             completedAt,
@@ -2404,37 +2546,22 @@ const Payroll = ({ mode = "payroll" }) => {
         });
 
         await batch.commit();
-        const result = await httpsCallable(functions, "refreshServiceStopPayroll")({ companyId: recentlySelectedCompany, serviceStopId: stop.id });
-        generatedLines += Number(result.data.generatedLineItemCount || 0);
-        preservedLines += Number(result.data.conflictLineItemIds?.length || 0);
-        const payrollSnap = await getDocs(query(collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"), where("serviceStopId", "==", stop.id)));
-        generatedLineItems.push(...payrollSnap.docs.map((row) => ({ ...row.data(), id: row.id })));
         finishedTasks += newlyFinishedTasks.length;
-      }
-
-      if (generatedLineItems.length) {
-        const generatedIds = new Set(generatedLineItems.map((item) => item.id));
-        setLineItems((items) =>
-          [...generatedLineItems, ...items.filter((item) => !generatedIds.has(item.id))]
-            .sort((a, b) => (dateFromValue(b.completedDate)?.getTime() || 0) - (dateFromValue(a.completedDate)?.getTime() || 0))
-        );
       }
 
       const result = {
         finishedStops: unfinishedStops.length,
-        generatedLines,
-        preservedLines,
         finishedTasks,
       };
       setBackfillProgress({
         action: "Finishing Stops",
         current: totalUnfinishedStops,
         total: totalUnfinishedStops,
-        detail: "Refreshing payroll line items...",
+        detail: "Service stops finished. Payroll is updating...",
       });
       setBackfillResult(result);
       setActionNotice(
-        `Finished ${result.finishedStops} service stop(s), finished ${result.finishedTasks} task(s), and generated ${result.generatedLines} payroll line item(s).`
+        `Finished ${result.finishedStops} service stop(s) and ${result.finishedTasks} task(s). Payroll is updating; reload this page shortly to review it.`
       );
     } catch (err) {
       console.error("Error finishing service stops for payroll:", err);
@@ -2445,141 +2572,186 @@ const Payroll = ({ mode = "payroll" }) => {
     }
   };
 
-  const createStatementForGroup = async (group) => {
-    if (!recentlySelectedCompany || !group?.lineItems?.length) return;
-    const actionKey = `create-statement-${group.technicianId}`;
-    setSavingAction(actionKey);
-    setActionNotice();
+  const statementGenerationDisabledReason = savingAction ? "Wait for the current payroll action to finish."
+    : !recentlySelectedCompany ? "Choose a company first."
+    : !permissionsReady ? "Payroll permissions are still loading. Please wait."
+    : !canManagePayroll ? "You need Manage Payroll access to generate statement previews."
+    : !startDate || !endDate || endDate < startDate ? "Choose a valid payroll date range first." : "";
 
+  const generateStatementPreviews = async () => {
+    if (statementActionRef.current || statementGenerationDisabledReason) return;
+    statementActionRef.current = true;
+    const selectedScopeKey = previewScopeKey;
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T00:00:00`);
+    end.setDate(end.getDate() + 1);
+    const scope = { companyId: recentlySelectedCompany, startDateMillis: start.getTime(), endDateExclusiveMillis: end.getTime(), technicianId: generationTechnicianId || "" };
     try {
-      const createdStatement = await runTransaction(db, async (transaction) => {
-        const now = new Date();
-        const settingsRef = doc(db, "companies", recentlySelectedCompany, "settings", "payStatements");
-        const settingsSnap = await transaction.get(settingsRef);
-        const currentIncrement = settingsSnap.exists() ? Number(settingsSnap.data()?.increment || 0) : 0;
-        const statementNumber = currentIncrement + 1;
-        const statementId = `comp_pay_stmt_${uuidv4()}`;
-        const lineItemIds = group.lineItems.map((item) => item.id);
-        const statementPayload = {
-          id: statementId,
-          companyId: recentlySelectedCompany,
-          technicianId: group.technicianId,
-          technicianName: group.technicianName,
-          workerType: group.workerType || "notAssigned",
-          startDate: new Date(`${startDate}T00:00:00`),
-          endDate: new Date(`${endDate}T23:59:59`),
-          lineItemIds,
-          subtotalCents: group.subtotalCents,
-          adjustmentCents: 0,
-          totalCents: group.subtotalCents,
-          status: "draft",
-          createdAt: now,
-          createdByUserId: currentUserId,
-          approvedAt: null,
-          approvedByUserId: null,
-          paidAt: null,
-          paidByUserId: null,
-          exportedAt: null,
-          exportProvider: null,
-          externalReferenceId: null,
-          notes: null,
-          statementNumber,
-          statementReference: payStatementReference(statementNumber),
-          paymentReference: null,
-          paidNotes: null,
-        };
+      const confirmed = await appConfirm({ title: "Generate statement previews",
+        message: `Check all approved, unpaid payroll items from ${shortDate(start)} through ${shortDate(new Date(end.getTime() - 1))}${generationTechnicianId ? ` for ${workerName(generationTechnicianId)}` : " for all technicians"}? This reads the full selected range and records the generation date. Review the previews before creating statements.`,
+        confirmText: "Generate Previews" });
+      if (!confirmed || previewScopeRef.current !== selectedScopeKey) return;
+      setSavingAction("generate-statement-previews");
+      setStatementPreview(null);
+      setPreviewProgress(0);
+      setActionNotice();
+      if (activeTab === "lineItems") {
+        setPreviewTechnicianId(generationTechnicianId);
+        handleTabChange("statements");
+      }
+      const items = new Map();
+      let cursor = null, processedCount = 0, skippedCount = 0, generatedAtMillis = null;
+      do {
+        const result = await technicianWorkflow("previewPayrollStatements", { ...scope, cursor,
+          ...(cursor ? { summaryBeforePage: statementPreviewSummaryState([...items.values()]) } : {}) });
+        if (previewScopeRef.current !== selectedScopeKey) return;
+        result.lineItems.forEach(item => items.set(item.id, item));
+        processedCount += result.processedCount;
+        skippedCount += result.skippedCount;
+        cursor = result.nextCursor;
+        generatedAtMillis = result.generatedAtMillis;
+        setPreviewProgress(processedCount);
+      } while (cursor);
+      const groups = buildStatementCandidateGroups([...items.values()]).map(group => ({ ...group,
+        requestId: uuidv4(), scope, scopeKey: selectedScopeKey }));
+      const generatedSummary = statementPreviewSummary([...items.values()]);
+      setStatementPreview({ scopeKey: selectedScopeKey, groups, generatedAtMillis, lineCount: items.size, skippedCount });
+      setStatementGenerationInfo(info => ({ ...info, loadError: false, lastPreviewGeneratedAt: generatedAtMillis,
+        lastPreviewSummary: generatedSummary,
+        lastPreviewStartDate: start, lastPreviewEndDateExclusive: end, lastPreviewTechnicianId: scope.technicianId || null }));
+      setActionNotice(`Generated ${groups.length} statement preview(s) from ${items.size} eligible pay item(s) across the selected dates.${skippedCount ? ` Skipped ${skippedCount} item(s) already paid, statemented, exported, zero, or missing a technician.` : ""}`);
+    } catch (err) {
+      console.error("Error generating statement previews:", err);
+      if (previewScopeRef.current === selectedScopeKey) setActionFailure(err.message || "Could not finish generating statement previews. No partial previews are available; try again.");
+    } finally {
+      statementActionRef.current = false;
+      setSavingAction("");
+    }
+  };
 
-        transaction.set(settingsRef, { category: "payStatements", increment: statementNumber }, { merge: true });
-        transaction.set(
-          doc(db, "companies", recentlySelectedCompany, "technicianPayStatements", statementId),
-          statementPayload
-        );
-        lineItemIds.forEach((id) => {
-          transaction.update(doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", id), {
-            payStatementId: statementId,
-          });
-        });
+  const saveStatementGroup = async group => {
+    if (previewScopeRef.current !== group.scopeKey) throw new Error("The payroll dates or technician changed. Generate previews again.");
+    const { statement: createdStatement } = await technicianWorkflow("createPayrollStatement", {
+      ...group.scope, technicianId: group.technicianId, lineItemIds: group.lineItems.map(item => item.id),
+      expectedLineAmountsCents: group.lineItems.map(item => Number(item.totalAmountCents)),
+      expectedTotalCents: group.subtotalCents, requestId: group.requestId,
+    });
+    if (previewScopeRef.current !== group.scopeKey) return createdStatement;
+    setStatements(items => [createdStatement, ...items.filter(statement => statement.id !== createdStatement.id)]
+      .sort((a, b) => (dateFromValue(b.startDate)?.getTime() || 0) - (dateFromValue(a.startDate)?.getTime() || 0)));
+    setStatementPreview(current => current?.scopeKey === group.scopeKey
+      ? { ...current, groups: current.groups.filter(item => item.requestId !== group.requestId) } : current);
+    setStatementGenerationInfo(info => ({ ...info, loadError: false, lastStatementsGeneratedAt: createdStatement.createdAt }));
+    const ids = new Set(createdStatement.lineItemIds);
+    setLineItems(items => items.map(item => ids.has(item.id) ? { ...item, payStatementId: createdStatement.id } : item));
+    setDetailStatement(current => current?.type === "candidate" && current?.group?.requestId === group.requestId
+      ? { type: "statement", statement: createdStatement, lineItems: group.lineItems.map(item => ({ ...item, payStatementId: createdStatement.id })) } : current);
+    setShowZeroAmountStatementLines(false);
+    return createdStatement;
+  };
 
-        return statementPayload;
-      });
-
-      setStatements((items) =>
-        [createdStatement, ...items.filter((statement) => statement.id !== createdStatement.id)].sort(
-          (a, b) => (dateFromValue(b.startDate)?.getTime() || 0) - (dateFromValue(a.startDate)?.getTime() || 0)
-        )
-      );
-      setLineItems((items) =>
-        items.map((item) =>
-          createdStatement.lineItemIds.includes(item.id)
-            ? { ...item, payStatementId: createdStatement.id }
-            : item
-        )
-      );
-      setActionNotice(`Created pay statement ${createdStatement.statementReference} for ${createdStatement.technicianName}.`);
-      setDetailStatement((current) =>
-        current?.type === "candidate" && current?.group?.technicianId === group.technicianId
-          ? { type: "statement", statement: createdStatement }
-          : current
-      );
-      setShowZeroAmountStatementLines(false);
+  const createStatementForGroup = async group => {
+    if (statementActionRef.current || savingAction || !canManagePayroll) return;
+    statementActionRef.current = true;
+    try {
+      const confirmed = await appConfirm({ title: "Create pay statement",
+        message: `Create a draft statement for ${group.technicianName} with ${group.lineItems.length} pay item(s), totaling ${moneyFromCents(group.subtotalCents)}?`, confirmText: "Create Statement" });
+      if (!confirmed) return;
+      setSavingAction(`create-statement-${group.key}`);
+      setActionNotice();
+      const created = await saveStatementGroup(group);
+      if (previewScopeRef.current === group.scopeKey) setActionNotice(`Created pay statement ${created.statementReference} for ${created.technicianName}.`);
     } catch (err) {
       console.error("Error creating pay statement:", err);
-      setActionFailure("Could not create that pay statement.");
+      if (previewScopeRef.current === group.scopeKey) setActionFailure(err.message || "Could not create that pay statement. Retry safely, or regenerate previews if pay items changed.");
     } finally {
+      statementActionRef.current = false;
       setSavingAction("");
     }
   };
 
   const createAllCandidateStatements = async () => {
-    if (statementCandidateGroups.length === 0) {
-      setActionFailure("There are no approved line items ready for statements on this loaded page.");
-      return;
-    }
-
-    for (const group of statementCandidateGroups) {
-      await createStatementForGroup(group);
-    }
-  };
-
-  const approveAllLineItems = async () => {
-    if (!recentlySelectedCompany) return;
-
-    if (approvableLineItems.length === 0) {
-      setActionFailure("There are no line items ready to approve on this page.");
-      return;
-    }
-
-    const actionKey = "approve-all-lines";
-    setSavingAction(actionKey);
-    setActionNotice();
-
+    if (statementActionRef.current || savingAction || !canManagePayroll || !statementCandidateGroups.length) return;
+    statementActionRef.current = true;
+    const groups = [...statementCandidateGroups];
+    const selectedScopeKey = previewScopeKey;
+    let createdCount = 0;
     try {
-      const payload = { ...buildApprovalPayload(), calculationStatus: "approved" };
-      const chunkSize = 450;
-
-      for (let index = 0; index < approvableLineItems.length; index += chunkSize) {
-        const batch = writeBatch(db);
-        approvableLineItems.slice(index, index + chunkSize).forEach((item) => {
-          const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
-          batch.update(lineRef, payload);
-        });
-        await batch.commit();
+      const confirmed = await appConfirm({ title: "Create listed pay statements",
+        message: `Create ${groups.length} draft statement(s) from ${groups.reduce((sum, group) => sum + group.lineItems.length, 0)} reviewed pay item(s), totaling ${moneyFromCents(groups.reduce((sum, group) => sum + group.subtotalCents, 0))}?`, confirmText: "Create Statements" });
+      if (!confirmed || previewScopeRef.current !== selectedScopeKey) return;
+      setSavingAction("create-statements");
+      setActionNotice();
+      for (const group of groups) {
+        await saveStatementGroup(group);
+        createdCount += 1;
       }
-
-      const approvedIds = new Set(approvableLineItems.map((item) => item.id));
-      setLineItems((items) =>
-        items.map((item) => (approvedIds.has(item.id) ? { ...item, ...payload } : item))
-      );
-      setActionNotice(`Approved ${approvableLineItems.length} payroll line item(s) on this page.`);
+      if (previewScopeRef.current === selectedScopeKey) setActionNotice(`Created ${createdCount} pay statement(s).`);
     } catch (err) {
-      console.error("Error approving all payroll line items:", err);
-      setActionFailure("Could not approve all payroll line items.");
+      console.error("Error creating pay statements:", err);
+      if (previewScopeRef.current === selectedScopeKey) setActionFailure(`Created ${createdCount} statement(s) before stopping. Completed statements are saved; remaining previews can be retried. ${err.message || ""}`);
     } finally {
+      statementActionRef.current = false;
       setSavingAction("");
     }
   };
 
+  const approveAllLineItems = async () => {
+    if (!recentlySelectedCompany || savingAction) return;
+    if (approveAllDisabledReason) return setActionFailure(approveAllDisabledReason);
+    const start = new Date(`${startDate}T00:00:00`);
+    const endExclusive = new Date(`${endDate}T00:00:00`);
+    endExclusive.setDate(endExclusive.getDate() + 1);
+    const scope = { companyId: recentlySelectedCompany, startDateMillis: start.getTime(),
+      endDateExclusiveMillis: endExclusive.getTime(), technicianId: generationTechnicianId || "" };
+    const totals = { processedCount: 0, approvedCount: 0, clearedCount: 0, needsReviewCount: 0 };
+    let completedPages = 0;
+    setStatementPreview(null);
+    setSavingAction("approve-all-lines");
+    setApprovalProgress({ ...totals });
+    setActionNotice();
+
+    try {
+      let cursor = null;
+      const seenCursors = new Set();
+      do {
+        const result = await technicianWorkflow("approvePayrollDateRange", { ...scope, cursor });
+        completedPages += 1;
+        totals.processedCount += result.processedCount || 0;
+        totals.approvedCount += result.approvedLineItemIds.length;
+        totals.clearedCount += result.clearedLineItemIds.length;
+        totals.needsReviewCount += result.needsReviewCount || 0;
+        const updates = new Map((result.updates || []).map(({ id, approvedAtMillis, voidedAtMillis, ...fields }) => [id, {
+          ...fields, ...(approvedAtMillis !== undefined ? { approvedAt: new Date(approvedAtMillis) } : {}),
+          ...(voidedAtMillis !== undefined ? { voidedAt: new Date(voidedAtMillis) } : {}),
+        }]));
+        const patch = item => updates.has(item.id) ? { ...item, ...updates.get(item.id) } : item;
+        setLineItems(items => items.map(patch));
+        setDetailLineItem(item => item ? patch(item) : item);
+        setApprovalProgress({ ...totals });
+        cursor = result.nextCursor || null;
+        if (cursor) {
+          const key = JSON.stringify(cursor);
+          if (seenCursors.has(key)) throw new Error("Approval stopped because processing did not advance. Retry to process the remaining items.");
+          seenCursors.add(key);
+        }
+      } while (cursor);
+      setActionNotice(`Approved ${totals.approvedCount} payroll line item(s) across the selected date range. Cleared ${totals.clearedCount} $0 task line(s).${totals.needsReviewCount ? ` ${totals.needsReviewCount} item(s) still need review.` : ""}`);
+    } catch (err) {
+      console.error("Error approving all payroll line items:", err);
+      setActionFailure(`Could not finish all approvals. Confirmed ${totals.approvedCount} approved line(s) and ${totals.clearedCount} cleared $0 task(s). Completed changes are kept; retry processes remaining eligible items. ${err.message || ""}`);
+    } finally {
+      setSavingAction("");
+      setApprovalProgress(null);
+      if (completedPages) {
+        resetLineItemPaging();
+        setPayrollReloadVersion(version => version + 1);
+      }
+    }
+  };
+
   const approveLineItem = async (item) => {
+    if (canClearZeroTask(item)) return clearZeroTasks([item]);
     if (item?.calculationStatus === "needsReview") return setActionFailure("Resolve the missing payroll setup before approving this line.");
     if (!recentlySelectedCompany || !item?.id) return;
     const actionKey = `approve-line-${item.id}`;
@@ -2831,7 +3003,7 @@ const Payroll = ({ mode = "payroll" }) => {
               <td colSpan={5} className="px-4 py-6 text-center text-slate-500">{emptyMessage}</td>
             </tr>
           ) : items.map((item) => (
-            <tr key={item.id}>
+            <tr key={item.id} className="even:bg-slate-50/70">
               <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(item.completedDate)}</td>
               <td className="px-4 py-3 text-slate-700">
                 <div className="font-medium text-slate-900">{displayWorkTitle(item)}</div>
@@ -2839,7 +3011,7 @@ const Payroll = ({ mode = "payroll" }) => {
               </td>
               <td className="px-4 py-3 text-slate-600">{item.customerName || item.serviceLocationAddress || "-"}</td>
               <td className="whitespace-nowrap px-4 py-3"><StatusPill status={isLineItemPaid(item) ? "paid" : item.calculationStatus} /></td>
-              <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</td>
+              <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">{moneyFromCents(item.totalAmountCents)}</td>
             </tr>
           ))}
         </tbody>
@@ -2895,30 +3067,49 @@ const Payroll = ({ mode = "payroll" }) => {
             </label>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
-                Page {lineItemPage + 1}
+                {lineItemCountError ? `Page ${lineItemPage + 1} · total unavailable`
+                  : `Page ${lineItemTotalCount === 0 ? 0 : lineItemPage + 1} of ${lineItemTotalCount === null ? "…" : Math.ceil(lineItemTotalCount / LINE_ITEMS_PAGE_SIZE)}`}
               </span>
               <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
                 {visibleLineItems.length} / {LINE_ITEMS_PAGE_SIZE}
               </span>
-              <button
+              <PayrollActionButton
                 type="button"
                 onClick={goToPreviousLineItemPage}
-                disabled={lineItemPage === 0}
+                disabledReason={lineItemPage === 0 ? "You are already on the first page." : ""}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Previous
-              </button>
-              <button
+              </PayrollActionButton>
+              <PayrollActionButton
                 type="button"
                 onClick={goToNextLineItemPage}
-                disabled={!lineItemHasNextPage}
+                disabledReason={!lineItemHasNextPage ? "There are no more payroll line items for these filters and dates." : ""}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Next
-              </button>
+              </PayrollActionButton>
             </div>
           </div>
+          {lineItemFilters.search.trim() ? <p className="mt-3 text-xs text-slate-500">Search filters this page. Page totals use the selected dates, technician, and status.</p> : null}
         </section>
+
+        {clearableZeroTasks.length > 0 ? (
+          <section aria-label="Clear zero-dollar payroll tasks" className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <h2 className="text-lg font-bold text-slate-900">Clear $0 payroll tasks</h2>
+            <p className="mt-1 font-semibold text-slate-900">{clearableZeroTasks.length} $0 task line(s) on this page</p>
+            <p className="mt-2 text-sm text-slate-700">Click the button below, then confirm, to remove these $0 pay lines from the payroll queue. Completed tasks and payroll history stay saved.</p>
+            <p className="mt-1 text-sm text-slate-700">For Needs Review items, first confirm that the service payment covers the task or that no extra task pay is owed.</p>
+            <div className="mt-4">
+              <PayrollActionButton type="button" onClick={() => clearZeroTasks(clearableZeroTasks)}
+                disabledReason={zeroTaskDisabledReason}
+                className="rounded-md bg-amber-700 px-5 py-3 text-sm font-bold text-white hover:bg-amber-800 disabled:opacity-50">
+                {savingAction === "clear-zero-tasks" ? "Clearing" : "Clear $0 tasks on page"}
+              </PayrollActionButton>
+              {zeroTaskDisabledReason ? <p role="status" className="mt-2 text-sm font-semibold text-amber-900">{zeroTaskDisabledReason}</p> : null}
+            </div>
+          </section>
+        ) : null}
 
         {lineItems.length === 0 ? (
           <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No payroll line items found for this date range.</div>
@@ -2943,6 +3134,19 @@ const Payroll = ({ mode = "payroll" }) => {
                   const isPaid = Boolean(item.paidAt) || item.calculationStatus === "paid";
                   const isApproved = Boolean(item.approvedAt) || item.calculationStatus === "approved" || isPaid;
                   const isVoided = isLineItemVoided(item);
+                  const canClear = canClearZeroTask(item);
+                  const reviewReason = item.notes ? ` ${item.notes}` : "";
+                  const approvalDisabledReason = savingAction ? "Wait for the current payroll action to finish."
+                    : canClear ? zeroTaskPermissionReason
+                    : isPaid ? "This line item has already been paid."
+                    : isVoided ? "This line item has been voided and cannot be approved."
+                    : isApproved ? "This line item has already been approved."
+                    : item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before approving it.${reviewReason}` : "";
+                  const paymentDisabledReason = savingAction ? "Wait for the current payroll action to finish."
+                    : isPaid ? "This line item has already been paid."
+                    : isVoided ? "This line item has been voided and cannot be marked paid."
+                    : canClear ? "$0 tasks do not require payment. Use Clear $0 to remove this task from the queue."
+                    : item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before marking it paid.${reviewReason}` : "";
 
                   return (
                     <tr key={item.id}>
@@ -2965,22 +3169,22 @@ const Payroll = ({ mode = "payroll" }) => {
                           >
                             Inspect
                           </button>
-                          <button
+                          <PayrollActionButton
                             type="button"
                             onClick={() => approveLineItem(item)}
-                            disabled={isApproved || isVoided || savingAction === `approve-line-${item.id}`}
-                            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabledReason={approvalDisabledReason}
+                            className={canClear ? "rounded-md bg-amber-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50" : "rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"}
                           >
-                            {savingAction === `approve-line-${item.id}` ? "Saving" : "Approve"}
-                          </button>
-                          <button
+                            {savingAction === `approve-line-${item.id}` ? "Saving" : canClear ? "Clear $0" : "Approve"}
+                          </PayrollActionButton>
+                          <PayrollActionButton
                             type="button"
                             onClick={() => openPaymentModal("lineItem", item)}
-                            disabled={isPaid || isVoided}
+                            disabledReason={paymentDisabledReason}
                             className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Mark Paid
-                          </button>
+                          </PayrollActionButton>
                         </div>
                       </td>
                     </tr>
@@ -2995,27 +3199,69 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const renderStatements = () => {
+    const previewEnd = dateFromValue(statementGenerationInfo.lastPreviewEndDateExclusive);
     return (
       <div className="grid gap-6">
-        <section>
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Ready to Create</h2>
-              <p className="mt-1 text-sm text-slate-500">Approved, unpaid line items on the loaded payroll page that are not already attached to a statement.</p>
+              <h2 className="text-lg font-bold text-slate-900">Statement Previews</h2>
+              <p className="mt-1 text-sm text-slate-500">Generate previews to collect all approved, unpaid pay items across the selected dates and technician. Review them before creating statements.</p>
             </div>
-            <button
+            {statementCandidateGroups.length > 0 ? <button
               type="button"
               onClick={createAllCandidateStatements}
-              disabled={statementCandidateGroups.length === 0 || Boolean(savingAction)}
+              disabled={!canManagePayroll || Boolean(savingAction)}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {savingAction.startsWith("create-statement") ? "Creating" : "Create Listed Statements"}
-            </button>
+            </button> : null}
           </div>
 
+          <label className="mb-4 block max-w-sm text-sm font-semibold text-slate-700">
+            Preview technician
+            <select value={previewTechnicianId} onChange={event => setPreviewTechnicianId(event.target.value)}
+              disabled={Boolean(savingAction)} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-50">
+              <option value="">All Technicians</option>
+              {companyUsers.map(worker => {
+                const id = worker.userId || worker.id || worker.docId;
+                return id ? <option key={id} value={id}>{worker.userName || worker.name || worker.displayName || id}</option> : null;
+              })}
+            </select>
+          </label>
+          <dl className="mb-4 grid gap-4 rounded-lg bg-slate-50 p-4 text-sm sm:grid-cols-2">
+            <div role="group" aria-label="Last previews generated"><dt className="font-semibold text-slate-600">Last previews generated</dt>
+              <dd className="mt-1 text-slate-900">{statementGenerationInfo.loadError ? "Could not load generation dates" : readableDateTime(statementGenerationInfo.lastPreviewGeneratedAt)}</dd>
+              {statementGenerationInfo.lastPreviewStartDate && previewEnd ? <dd className="mt-1 text-xs text-slate-500">{shortDate(statementGenerationInfo.lastPreviewStartDate)} – {shortDate(new Date(previewEnd.getTime() - 1))} · {statementGenerationInfo.lastPreviewTechnicianId ? workerName(statementGenerationInfo.lastPreviewTechnicianId) : "All technicians"}</dd> : null}
+              {statementGenerationInfo.lastPreviewSummary ? (
+                <dd className="mt-3">
+                  <dl className="grid grid-cols-3 gap-3">
+                    <div><dt className="text-xs text-slate-500">Technicians</dt><dd className="mt-1 text-base font-bold tabular-nums text-slate-900">{statementGenerationInfo.lastPreviewSummary.technicianCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">Total pay</dt><dd className="mt-1 break-words text-base font-bold tabular-nums text-slate-900">{moneyFromCents(statementGenerationInfo.lastPreviewSummary.totalAmountCents)}</dd></div>
+                    <div><dt title="Unique service stops linked to the generated pay items." className="text-xs text-slate-500">Stops</dt><dd className="mt-1 text-base font-bold tabular-nums text-slate-900">{statementGenerationInfo.lastPreviewSummary.stopCount}</dd></div>
+                  </dl>
+                </dd>
+              ) : statementGenerationInfo.lastPreviewGeneratedAt ? <dd className="mt-2 text-xs text-slate-500">Generate previews again to record a summary.</dd> : null}
+            </div>
+            <div><dt className="font-semibold text-slate-600">Last statement created</dt>
+              <dd className="mt-1 text-slate-900">{statementGenerationInfo.loadError ? "Could not load generation dates" : readableDateTime(statementGenerationInfo.lastStatementsGeneratedAt)}</dd>
+            </div>
+          </dl>
+          <div className="mb-4">
+            <PayrollActionButton
+              type="button"
+              onClick={approveAllLineItems}
+              disabledReason={approveAllDisabledReason}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {savingAction === "approve-all-lines" ? "Approving" : "Approve All"}
+            </PayrollActionButton>
+          </div>
           {statementCandidateGroups.length === 0 ? (
-            <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">
-              No approved line items are ready for statements.
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-slate-600">
+              {!activeStatementPreview ? "Previews have not been generated for this selection. Click Generate Previews and confirm to begin."
+                : activeStatementPreview.lineCount > 0 ? "All generated previews have been created. Generate previews again to check for newly approved pay."
+                  : "No eligible approved, unpaid pay items were found for this selection."}
             </div>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
@@ -3031,10 +3277,11 @@ const Payroll = ({ mode = "payroll" }) => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {statementCandidateGroups.map((group) => (
-                    <tr key={group.technicianId}>
+                    <tr key={group.key}>
                       <td className="px-4 py-3">
                         <div className="font-semibold text-slate-900">{group.technicianName}</div>
                         <div className="text-xs text-slate-500">{statusLabel(group.workerType)}</div>
+                        {group.partCount > 1 ? <div className="mt-1 text-xs text-slate-500">Part {group.part} of {group.partCount}</div> : null}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(startDate)} - {shortDate(endDate)}</td>
                       <td className="px-4 py-3 text-slate-600">{group.lineItems.length} approved unpaid line item(s)</td>
@@ -3051,10 +3298,10 @@ const Payroll = ({ mode = "payroll" }) => {
                           <button
                             type="button"
                             onClick={() => createStatementForGroup(group)}
-                            disabled={savingAction === `create-statement-${group.technicianId}` || Boolean(savingAction)}
+                            disabled={!canManagePayroll || Boolean(savingAction)}
                             className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {savingAction === `create-statement-${group.technicianId}` ? "Creating" : "Create"}
+                            {savingAction === `create-statement-${group.key}` ? "Creating" : "Create"}
                           </button>
                         </div>
                       </td>
@@ -3238,17 +3485,17 @@ const Payroll = ({ mode = "payroll" }) => {
     const group = detail.group || {};
     const isPaid = !isCandidate && (Boolean(statement.paidAt) || statement.status === "paid");
     const isApproved = !isCandidate && (Boolean(statement.approvedAt) || statement.status === "approved" || isPaid);
-    const createActionKey = `create-statement-${group.technicianId}`;
+    const createActionKey = `create-statement-${group.key}`;
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-        <div className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-lg bg-white shadow-xl">
+      <Dialog open onClose={closeStatementDetail} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+        <DialogPanel className="max-h-[90vh] w-full max-w-7xl overflow-y-auto rounded-xl bg-white shadow-xl">
           <div className="sticky top-0 z-10 flex flex-col gap-4 border-b border-slate-200 bg-white p-5 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
                 {isCandidate ? "Statement Preview" : "Statement Detail"}
               </p>
-              <h2 className="mt-1 text-xl font-bold text-slate-900">{summary.title}</h2>
+              <DialogTitle as="h2" className="mt-1 text-xl font-bold text-slate-900">{summary.title}</DialogTitle>
               <p className="mt-1 text-sm text-slate-500">
                 {summary.technicianName} · {shortDate(summary.startDate)} - {shortDate(summary.endDate)}
               </p>
@@ -3258,7 +3505,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 <button
                   type="button"
                   onClick={() => createStatementForGroup(group)}
-                  disabled={savingAction === createActionKey || Boolean(savingAction)}
+                  disabled={!canManagePayroll || Boolean(savingAction)}
                   className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingAction === createActionKey ? "Creating" : "Create Statement"}
@@ -3298,38 +3545,45 @@ const Payroll = ({ mode = "payroll" }) => {
           </div>
 
           <div className="p-5">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="grid gap-3 sm:grid-cols-2">
               <DetailField label="Status" value={summary.status} accent />
               <DetailField label="Line Items" value={lineItemCountLabel} />
-              <DetailField label="Subtotal" value={moneyFromCents(summary.subtotalCents)} />
-              <DetailField label="Adjustments" value={moneyFromCents(summary.adjustmentCents)} />
-              <DetailField label="Total" value={moneyFromCents(summary.totalCents)} accent />
             </div>
 
-            <div className="mt-5">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">Line Items</h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Review each payroll line before {isCandidate ? "creating" : "approving"} this statement.
-                  </p>
+            <div className="mt-5 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_19rem]">
+              <PayStatementDailySummary
+                lines={summary.lines}
+                subtotalCents={summary.subtotalCents}
+                adjustmentCents={summary.adjustmentCents}
+                totalCents={summary.totalCents}
+                loading={detail.loadingLineItems}
+                expectedLineCount={statement.lineItemIds?.length || 0}
+              />
+              <div className="min-w-0">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">Line Items</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Review each payroll line before {isCandidate ? "creating" : "approving"} this statement.
+                    </p>
+                  </div>
+                  {zeroAmountLines.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowZeroAmountStatementLines((value) => !value)}
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      {showZeroAmountStatementLines ? "Hide 0 Amount Line Items" : "Show 0 Amount Line Items"}
+                    </button>
+                  ) : null}
                 </div>
-                {zeroAmountLines.length > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowZeroAmountStatementLines((value) => !value)}
-                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    {showZeroAmountStatementLines ? "Hide 0 Amount Line Items" : "Show 0 Amount Line Items"}
-                  </button>
+                {detail.loadingLineItems ? (
+                  <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">
+                    Loading statement line items...
+                  </div>
                 ) : null}
+                {renderStatementLineItemsTable(visibleStatementLines, lineItemsEmptyMessage)}
               </div>
-              {detail.loadingLineItems ? (
-                <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">
-                  Loading statement line items...
-                </div>
-              ) : null}
-              {renderStatementLineItemsTable(visibleStatementLines, lineItemsEmptyMessage)}
             </div>
 
             {!isCandidate ? (
@@ -3352,8 +3606,8 @@ const Payroll = ({ mode = "payroll" }) => {
               </div>
             ) : null}
           </div>
-        </div>
-      </div>
+        </DialogPanel>
+      </Dialog>
     );
   };
 
@@ -4385,6 +4639,7 @@ const Payroll = ({ mode = "payroll" }) => {
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto_auto]">
                 <input
                   type="date"
+                  aria-label="Payroll start date"
                   value={startDate}
                   onChange={(event) => {
                     resetLineItemPaging();
@@ -4394,6 +4649,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 />
                 <input
                   type="date"
+                  aria-label="Payroll end date"
                   value={endDate}
                   onChange={(event) => {
                     resetLineItemPaging();
@@ -4407,22 +4663,23 @@ const Payroll = ({ mode = "payroll" }) => {
                 >
                   Payroll Setup
                 </Link>
-                <button
+                <PayrollActionButton
                   type="button"
                   onClick={approveAllLineItems}
-                  disabled={approvableLineItems.length === 0 || Boolean(savingAction)}
+                  disabledReason={approveAllDisabledReason}
                   className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingAction === "approve-all-lines" ? "Approving" : "Approve Page"}
-                </button>
-                <button
+                  {savingAction === "approve-all-lines" ? "Approving" : "Approve All"}
+                </PayrollActionButton>
+                <PayrollActionButton
                   type="button"
-                  onClick={createAllCandidateStatements}
-                  disabled={statementCandidateGroups.length === 0 || Boolean(savingAction)}
+                  onClick={generateStatementPreviews}
+                  disabledReason={statementGenerationDisabledReason}
                   className="rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingAction.startsWith("create-statement") ? "Generating" : "Generate Statements"}
-                </button>
+                  {savingAction === "generate-statement-previews" ? "Generating Previews" : "Generate Previews"}
+                </PayrollActionButton>
+                <p className="col-span-full text-xs text-slate-600">Approve All covers the selected dates and technician across every page. Items that need review stay unapproved.</p>
               </div>
             )}
           </div>
@@ -4457,28 +4714,27 @@ const Payroll = ({ mode = "payroll" }) => {
                   }}
                   className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm"
                 />
-                <button
+                <PayrollActionButton
                   type="button"
                   onClick={finishUnfinishedServiceStopsForRange}
-                  disabled={savingAction === "finish-service-stop-range" || Boolean(savingAction && savingAction !== "finish-service-stop-range")}
+                  disabledReason={savingAction ? "Wait for the current payroll action to finish." : ""}
                   className="rounded-md bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingAction === "finish-service-stop-range" ? "Finishing" : "Finish Stops"}
-                </button>
+                </PayrollActionButton>
               </div>
             </div>
             {backfillResult ? (
               <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-amber-800">
                 <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.finishedStops} stop(s)</span>
                 <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.finishedTasks} task(s)</span>
-                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.generatedLines} line item(s)</span>
-                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.preservedLines} preserved</span>
+                <span className="rounded-full bg-white px-2.5 py-1">Payroll updates automatically</span>
               </div>
             ) : null}
           </section>
         ) : null}
 
-        {!isSetupMode ? (
+        {!isSetupMode && activeTab === "lineItems" ? (
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <StatCard title="Payroll total" value={moneyFromCents(summary.totalCents)} subtitle={`${summary.activeItems.length} active line item(s)`} />
             <StatCard title="Needs review" value={summary.needsReview} subtitle="Line items requiring attention" />
@@ -4501,10 +4757,11 @@ const Payroll = ({ mode = "payroll" }) => {
           ))}
         </div>
 
-        {actionMessage ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">{actionMessage}</div> : null}
-        {actionError ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{actionError}</div> : null}
         {loading ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">Loading payroll...</div> : null}
-        {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div> : null}
+        {error ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-center">
+          <button type="button" onClick={() => { setActionNotice(); setPayrollReloadVersion(version => version + 1); }}
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Retry loading payroll</button>
+        </div> : null}
         {!loading && !error && !isSetupMode && activeTab === "requests" && <PayRequestsPanel companyId={recentlySelectedCompany} companyUsers={companyUsers} workTypes={companyWorkTypes} />}
         {!loading && !error && !isSetupMode && activeTab === "lineItems" ? renderLineItems() : null}
         {!loading && !error && !isSetupMode && activeTab === "statements" ? renderStatements() : null}
@@ -4515,6 +4772,7 @@ const Payroll = ({ mode = "payroll" }) => {
       </div>
       {renderStopPayEditorModal()}
       {renderStatementDetailModal()}
+      <PayrollProgressDialog progress={payrollActionProgress} />
       {backfillProgress ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 px-4">
           <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-2xl">

@@ -3330,6 +3330,7 @@ const buildPayrollReport = ({ payrollLines, mode, groupBy }) => {
 
 const buildFuturePayrollReport = ({
   companyId = "",
+  bodiesOfWater = [],
   payrollLines = [],
   serviceStops = [],
   paySettings = null,
@@ -3511,6 +3512,7 @@ const buildFuturePayrollReport = ({
 
     const estimatedPay = estimateServiceStopPaySummary({
       companyId,
+      bodiesOfWater,
       settings: paySettings,
       serviceStop,
       serviceStopType: serviceStopTypeFor(serviceStop),
@@ -4617,6 +4619,7 @@ const buildPnlPerPoolReport = ({
 
     const estimatedPay = estimateServiceStopPaySummary({
       companyId,
+      bodiesOfWater,
       settings: paySettings,
       serviceStop,
       serviceStopType: serviceStopTypeFor(serviceStop),
@@ -6213,7 +6216,7 @@ const Reports = () => {
       const needsPayrollFallback = canViewPayrollInformation && ["futurePayroll", "pnlPerPool"].includes(reportType);
       const needsUsers = reportType === "users" || needsPayrollFallback || reportType === "readingPerformance";
       const needsFleet = reportType === "vehicle";
-      const needsBodiesOfWater = ["readingHealth", "readingPerformance", "pnlPerPool"].includes(reportType);
+      const needsBodiesOfWater = ["readingHealth", "readingPerformance", "pnlPerPool", "futurePayroll"].includes(reportType);
       const needsServiceStops = ["users", "readingPerformance", "futurePayroll", "pnlPerPool"].includes(reportType);
       const needsRecurringServiceStops = ["readingPerformance", "pnlPerPool"].includes(reportType);
       const needsServiceAgreements = ["pnl", "pnlPerPool"].includes(reportType);

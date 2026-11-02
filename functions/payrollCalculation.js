@@ -14,6 +14,14 @@ const present = (value) => value !== undefined && value !== null && value !== ""
 const payId = (record = {}) => text(record.payTypeId || record.payWorkTypeId || record.workTypeId);
 const hasCustomPay = (record) => record.payrollMode !== "automatic" && present(record.manualPayOverrideCents);
 
+const isTaskPayLine = (line = {}) => line.payrollSource !== "workOfferIncentive" &&
+  (line.source === "serviceStopTask" || line.payrollSource === "jobTask" || Boolean(line.serviceStopTaskId || line.jobTaskId));
+const canClearZeroTask = (line = {}) => isTaskPayLine(line) &&
+  ["number", "string"].includes(typeof line.totalAmountCents) && text(line.totalAmountCents) !== "" &&
+  Number.isFinite(Number(line.totalAmountCents)) && Number(line.totalAmountCents) === 0 &&
+  !line.paidAt && !line.payStatementId && !line.exportBatchId &&
+  ["pending", "calculated", "needsReview", "approved"].includes(line.calculationStatus);
+
 const jobPayFields = (record = {}, parent = {}) => {
   const parentPayId = payId(parent) || (["serviceStopType", "workType"].includes(parent.sourceType) ? text(parent.sourceId) : "");
   const selectedId = payId(record) || (["serviceStopType", "workType"].includes(record.sourceType) ? text(record.sourceId) : "") || parentPayId;
@@ -50,8 +58,19 @@ const selectPayRate = ({ companyId, technicianId, workTypeId, basis, rates = [],
 const suggestedBasis = (type = {}) => type.defaultRateType === "hourly" ? "technicianHourly"
   : ["route", "maintenance", "serviceCall", "commercial", "startup", "estimate"].includes(type.category) ? "serviceStop" : "serviceStopTask";
 
+// A task's own scope wins before inheriting the visit's scope. In particular,
+// one pool task must not multiply its pay by every pool/spa at the location.
+const explicitUnitQuantity = (record, body) => {
+  const count = record[body ? "bodyOfWaterCount" : "serviceLocationCount"];
+  if (present(count)) return Number(count);
+  const ids = unique(Array.isArray(record[body ? "bodyOfWaterIds" : "serviceLocationIds"])
+    ? record[body ? "bodyOfWaterIds" : "serviceLocationIds"] : []);
+  if (ids.length) return ids.length;
+  return id(record[body ? "bodyOfWaterId" : "serviceLocationId"]) ? 1 : null;
+};
+
 const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks = [], workTypes = [], rates = [], workers = [],
-  mode = "actual", date = new Date(), jobTaskSource = false, payHistory = [] } = {}) => {
+  mode = "actual", date = new Date(), jobTaskSource = false, payHistory = [], bodyOfWaterIdsByServiceLocation = {} } = {}) => {
   if (settings.payrollEnabled === false || settings.companyPayrollEnabled === false || settings.payrollDisabled === true) return [];
   const visitAgreement = Array.isArray(serviceStop.payrollAgreement?.rates) ? serviceStop.payrollAgreement : null;
   if (visitAgreement) {
@@ -82,7 +101,7 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
     || (serviceStop.defaultWorkTypeIds || [])[0] || "";
   const allTasks = mode === "preview" ? tasks : tasks.filter(finished);
   const lines = [];
-  const build = (record, source, selectedPayId, sourceSetting) => {
+  const build = (record, source, selectedPayId, sourceSetting, allowZeroLine = false) => {
     const task = source !== "serviceStop" && source !== "manualAdjustment" ? record : null;
     const workerId = text(task?.workerId || serviceStop.techId || serviceStop.technicianId);
     const worker = workersById.get(workerId) || {};
@@ -91,6 +110,8 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
     const agreedTaskId = id(task?.jobTaskId || task?.workOrderTaskId || task?.id);
     const agreedTaskIds = agreement?.taskIds || [];
     const acceptedTask = !task || agreedTaskIds.includes(agreedTaskId) || (agreement?.stopTasks || []).some(v=>v.taskId===task.id);
+    const fixedAgreement = agreement && acceptedTask && ["Offered Amount", "Unpaid"].includes(agreement.paySource);
+    if (!allowZeroLine && !fixedAgreement && hasCustomPay(record) && Number(record.manualPayOverrideCents) === 0) return null;
     const type = agreement?.workTypes?.find(type => type.id === selectedPayId) || types.get(selectedPayId);
     const jobId = id(serviceStop.jobId || task?.jobId);
     const jobTaskId = jobTaskSource ? id(task?.id) : id(task?.jobTaskId || task?.workOrderTaskId);
@@ -113,7 +134,7 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
       customerId: serviceStop.customerId || null, customerName: serviceStop.customerName || null,
       serviceLocationId: serviceStop.serviceLocationId || null, serviceLocationAddress: serviceStop.address?.streetAddress || null,
       serviceStopTypeName: serviceStop.type || null, serviceStopCategory: serviceStop.category || (jobId ? "Job" : "Route"),
-      completedDate: dateValue(record.completedAt || record.finishedAt) || on, calculatedAt: now,
+      completedDate: dateValue(record.completedAt || record.finishedAt || record.endTime) || on, calculatedAt: now,
       rateId: null, rateAmountCents: 0, rateType: "manual", payBasis: task ? "serviceStopTask" : "serviceStop",
       quantity: 1, quantityUnit: "each", totalAmountCents: 0, calculationStatus: "calculated", notes: null,
       approvedAt: null, approvedByUserId: null, paidAt: null, paidByUserId: null, voidedAt: null, voidedByUserId: null,
@@ -131,12 +152,14 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
       const count = task ? Math.max(agreedTaskIds.length, 1) : 1;
       const fixed = agreement.paySource === "Unpaid" ? 0 : amount(agreement.fixedAmountCents);
       const value = Math.floor(fixed / count) + (index < fixed % count ? 1 : 0);
+      if (!allowZeroLine && value === 0) return null;
       return { ...line, payrollMode: "custom", rateAmountCents: value, totalAmountCents: value,
         workOfferId: agreement.offerId, workOfferRevision: agreement.revision,
         notes: "Fixed pay accepted for this work offer." };
     }
     if (hasCustomPay(record)) {
       if (!Number.isFinite(Number(record.manualPayOverrideCents)) || Number(record.manualPayOverrideCents) < 0) return review("Custom pay must be a non-negative amount.");
+      if (!allowZeroLine && amount(record.manualPayOverrideCents) === 0) return null;
       return { ...line, payrollMode: "custom", rateAmountCents: amount(record.manualPayOverrideCents), totalAmountCents: amount(record.manualPayOverrideCents),
         payBasis: "manualAdjustment", notes: record.manualPayOverrideNotes || "Custom pay replaces automatic pay for this work." };
     }
@@ -152,13 +175,17 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
     const useContract = task && (sourceSetting === "taskContractedRate" || sourceSetting === "taskContractedRateThenTechnicianRate" && contracted > 0
       || sourceSetting === "technicianRateThenTaskContractedRate" && !rate && contracted > 0);
     if (useContract) {
+      if (present(record.contractedRate) && Number(record.contractedRate) === 0) return null;
       if (contracted <= 0) return review("Enter a custom task amount or explicitly mark this work unpaid.");
       const quantity = Number(record.payQuantity ?? 1);
       if (!Number.isFinite(quantity) || quantity <= 0) return review("Specify a positive payroll quantity.");
-      return { ...line, rateType: "flatPerTask", rateAmountCents: contracted, totalAmountCents: Math.round(contracted * quantity),
+      const totalAmountCents = Math.round(contracted * quantity);
+      if (totalAmountCents === 0) return null;
+      return { ...line, rateType: "flatPerTask", rateAmountCents: contracted, totalAmountCents,
         quantity, notes: "Used the task contracted amount selected by company pay rules." };
     }
     if (!rate) return review("No active technician rate matches this pay item and pay basis on the work date.");
+    if (present(rate.amountCents) && Number(rate.amountCents) === 0) return null;
     if (amount(rate.amountCents) <= 0) return review("The technician rate has no positive amount. Use explicit unpaid work for no pay.");
     line.rateId = rate.id; line.rateAmountCents = amount(rate.amountCents); line.rateType = rate.rateType; line.payBasis = rate.payBasis;
     if (rate.rateType === "hourly") {
@@ -170,12 +197,21 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
       line.totalAmountCents = Math.round(line.rateAmountCents * line.quantity / 60);
     } else if (rate.rateType === "perBodyOfWater" || rate.rateType === "perServiceLocation") {
       const body = rate.rateType === "perBodyOfWater";
-      const knownIds = record[body ? "bodyOfWaterIds" : "serviceLocationIds"] || serviceStop[body ? "bodyOfWaterIds" : "serviceLocationIds"] || [];
-      const ids = unique([...knownIds, ...(task ? [] : allTasks.map((work) => work[body ? "bodyOfWaterId" : "serviceLocationId"]))]);
-      const count = record[body ? "bodyOfWaterCount" : "serviceLocationCount"] ?? serviceStop[body ? "bodyOfWaterCount" : "serviceLocationCount"];
-      line.quantity = present(count) ? Number(count) : ids.length || (id(record[body ? "bodyOfWaterId" : "serviceLocationId"] || serviceStop[body ? "bodyOfWaterId" : "serviceLocationId"]) ? 1 : 0);
+      const locationId = id(record.serviceLocationId || serviceStop.serviceLocationId);
+      const inheritsVisitScope = !task || !id(record.serviceLocationId) || locationId === id(serviceStop.serviceLocationId);
+      let quantity = explicitUnitQuantity(record, body);
+      if (quantity === null && task && inheritsVisitScope) quantity = explicitUnitQuantity(serviceStop, body);
+      if (quantity === null && body && Object.prototype.hasOwnProperty.call(bodyOfWaterIdsByServiceLocation, locationId)) {
+        quantity = unique(bodyOfWaterIdsByServiceLocation[locationId]).length;
+      }
+      // Compatibility for legacy work with BOW links but no resolvable location.
+      if (quantity === null && !task) quantity = unique(allTasks.flatMap(work => [
+        ...(Array.isArray(work[body ? "bodyOfWaterIds" : "serviceLocationIds"]) ? work[body ? "bodyOfWaterIds" : "serviceLocationIds"] : []),
+        work[body ? "bodyOfWaterId" : "serviceLocationId"],
+      ])).length;
+      line.quantity = quantity ?? 0;
       line.quantityUnit = body ? "bodyOfWater" : "serviceLocation";
-      if (!Number.isFinite(line.quantity) || line.quantity <= 0) return review("Specify the number of payable bodies of water or locations.");
+      if (!Number.isInteger(line.quantity) || line.quantity <= 0) return review("Specify a positive whole number of payable bodies of water or locations.");
       line.totalAmountCents = Math.round(line.rateAmountCents * line.quantity);
     } else if (rate.rateType === "percentage") {
       const base = record.payrollBaseAmountCents ?? serviceStop.payrollBaseAmountCents;
@@ -187,7 +223,7 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
       if (!Number.isFinite(line.quantity) || line.quantity <= 0) return review("Specify a positive payroll quantity.");
       line.totalAmountCents = Math.round(line.rateAmountCents * line.quantity);
     }
-    return line;
+    return !allowZeroLine && line.totalAmountCents === 0 ? null : line;
   };
   const customVisit = !jobTaskSource && (hasCustomPay(serviceStop) || serviceStop.payrollMode === "custom");
   if (customVisit) {
@@ -210,14 +246,29 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
   });
   if (settings.payMode === "hourlyOnly" && ["workLogs", "activeRouteDuration", "activeRouteLogs"].includes(settings.hourlyPaySource) && (visitAgreement || tasks.some(task=>Array.isArray(task.payrollAgreement?.rates))) && !lines.length) {
     for (const task of allTasks) {
-      const line = build({ ...task, payrollMode: "custom", manualPayOverrideCents: 0 }, "serviceStopTask", payId(task), "custom");
+      const line = build({ ...task, payrollMode: "custom", manualPayOverrideCents: 0 }, "serviceStopTask", payId(task), "custom", true);
       if (line) lines.push({ ...line, clockIncentiveOnly: true });
     }
     if (!allTasks.length && !(visitAgreement?.taskIds || []).length && stopFinished) {
-      const line = build({ ...serviceStop, payrollMode: "custom", manualPayOverrideCents: 0 }, "manualAdjustment", stopPayId, "custom");
+      const line = build({ ...serviceStop, payrollMode: "custom", manualPayOverrideCents: 0 }, "manualAdjustment", stopPayId, "custom", true);
       if (line) lines.push({ ...line, clockIncentiveOnly: true });
     }
   }
+  // Old scheduling paths can leave two copies of the same job task on a
+  // visit. Identical earnings for that work count once, including for bonuses.
+  const taskComponents = new Map();
+  const recordedIds = new Set(payHistory.filter(line => line.calculationStatus !== "voided").map(line => line.id));
+  for (const line of lines) {
+    const key = line.jobId && line.jobTaskId
+      ? JSON.stringify([line.payrollComponentId, line.technicianId, line.payTypeId, line.payrollMode,
+        line.rateId, line.rateAmountCents, line.rateType, line.payBasis, line.quantity, line.quantityUnit,
+        line.totalAmountCents, line.calculationStatus, line.notes, line.payrollStackBehavior, line.additionalPayExplicit])
+      : line.id;
+    const previous = taskComponents.get(key);
+    if (!previous || (recordedIds.has(line.id) && !recordedIds.has(previous.id))
+      || ((recordedIds.has(line.id) === recordedIds.has(previous.id)) && line.id < previous.id)) taskComponents.set(key, line);
+  }
+  lines.splice(0, lines.length, ...taskComponents.values());
   // Task-priced work performed during a visit is the same payment, unless an
   // additional task payment is explicitly selected. Different technicians retain their pay.
   let selected = lines.filter((line) => {
@@ -249,11 +300,14 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
     const value = agreement.incentive?.type === "percentage" ? Math.round(base * Number(agreement.incentive.percentage || 0) / 100)
       : agreement.incentive?.type === "flat" ? amount(agreement.flatIncentiveClaimCents ?? agreement.incentive.amountCents) : 0;
     if (value <= 0) return;
-    const template = selected.find(line=>line.technicianId===agreement.workerId) || build({payrollMode:"custom",manualPayOverrideCents:0,workerId:agreement.workerId,workerName:agreement.workerName},"serviceStopTask",stopPayId,"custom");
+    const template = selected.find(line=>line.technicianId===agreement.workerId) || build({payrollMode:"custom",manualPayOverrideCents:0,workerId:agreement.workerId,workerName:agreement.workerName},"serviceStopTask",stopPayId,"custom",true);
     if (!template) return;
     bonusLines.push({...template,id:"comp_pay_offer_incentive_"+agreement.offerId+"_"+(agreement.claimId || agreement.workerId),payrollComponentId:"offer:"+agreement.offerId+":claim:"+(agreement.claimId || agreement.workerId)+":incentive",source:"manualAdjustment",payrollSource:"workOfferIncentive",payrollMode:"incentive",workOfferId:agreement.offerId,workOfferClaimId:agreement.claimId || null,jobTaskId:null,serviceStopTaskId:null,rateType:"manual",rateAmountCents:value,quantity:1,quantityUnit:"each",totalAmountCents:value,calculationStatus:"calculated",additionalPayExplicit:true,payrollStackBehavior:"stackable",notes:agreement.incentive.notes || "Accepted work offer incentive."});
   });
-  return [...selected.filter(line => !line.clockIncentiveOnly), ...bonusLines];
+  // Zero-valued templates only support incentive calculation. Persist actual pay
+  // or unresolved review records, never a calculated $0 pay item.
+  return [...selected.filter(line => !line.clockIncentiveOnly), ...bonusLines]
+    .filter(line => line.calculationStatus === "needsReview" || line.totalAmountCents !== 0);
 };
 
 const reconcilePayLines = ({ generated = [], existing = [], now = new Date(), voidReason = "serviceStopReopened", preserveCalculated = false } = {}) => {
@@ -290,4 +344,4 @@ const reconcilePayLines = ({ generated = [], existing = [], now = new Date(), vo
   return { writes, conflicts: unique(conflicts) };
 };
 
-module.exports = { jobPayFields, selectPayRate, calculatePayLines, reconcilePayLines };
+module.exports = { jobPayFields, selectPayRate, calculatePayLines, reconcilePayLines, isTaskPayLine, canClearZeroTask };

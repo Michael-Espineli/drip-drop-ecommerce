@@ -17,13 +17,25 @@ const seeded=(async()=>{const docs={
  [p+'technicianPayLineItems/own']:{technicianId:'tech',totalAmountCents:5000},[p+'technicianPayLineItems/other']:{technicianId:'other',totalAmountCents:8000},
  [p+'workOffers/offer']:{postedToBoard:true,status:'Posted',createdByUserId:'tech',claims:[]},[p+'payChangeRequests/own']:{technicianId:'tech'},[p+'payChangeRequests/other']:{technicianId:'other'},
  [p+'workLogs/own']:{userId:'tech',current:true},[p+'workLogs/other']:{userId:'other',current:true},[p+'shifts/own']:{techId:'tech',isCurrent:true},[p+'settings/companyWide']:{routeCoverageMode:'review'},[p+'paySettings/main']:{payrollEnabled:true},
- [p+'workOrders/job/tasks/task']:{workerId:'tech',payTypeId:'repair',status:'Scheduled'},[p+'serviceStops/stop']:{techId:'tech',payTypeId:'repair',operationStatus:'Not Finished'}
+ [p+'workOrders/job/tasks/task']:{workerId:'tech',payTypeId:'repair',status:'Scheduled'},[p+'serviceStops/stop']:{techId:'tech',payTypeId:'repair',operationStatus:'Not Finished'},
+ [p+'settings/payStatements']:{category:'payStatements',increment:4,lastPreviewSummary:{technicianCount:2,totalAmountCents:10000,stopCount:3}},
+ [p+'settings/payStatements/history/previous']:{totalAmountCents:10000}
  };const batch=db.batch();Object.entries(docs).forEach(([path,value])=>batch.set(db.doc(path),value));await batch.commit();})();
 const denied=fn=>assert.rejects(fn,error=>error.code==='permission-denied');
 test('technicians read their own pay and cannot list or read another technician pay',async()=>{await seeded;await getDoc(doc(tech,p+'technicianPayLineItems/own'));await getDocs(query(collection(tech,p+'technicianPayLineItems'),where('technicianId','==','tech')));await denied(()=>getDocs(collection(tech,p+'technicianPayLineItems')));await denied(()=>getDoc(doc(tech,p+'technicianPayLineItems/other')));await denied(()=>getDoc(doc(tech,p+'technicianRates/other')));});
 test('clients cannot forge pay, rates, decisions, work claims, clock records, or company approval policy',async()=>{await seeded;for(const [path,value] of [['technicianPayLineItems/own',{totalAmountCents:999999}],['technicianRates/own',{amountCents:999999}],['payChangeRequests/own',{status:'Approved'}],['workOffers/offer',{acceptedByUserId:'tech',status:'Accepted'}],['workLogs/own',{current:false}],['shifts/own',{isCurrent:false}],['settings/companyWide',{routeCoverageMode:'automatic'}],['paySettings/main',{payrollEnabled:false}],['roles/tech',{permissionIdList:['424']}]] ) await denied(()=>updateDoc(doc(tech,p+path),value));});
 test('clock and request history is private and offered-work snapshots use the server list',async()=>{await seeded;await getDoc(doc(tech,p+'workLogs/own'));await getDoc(doc(tech,p+'payChangeRequests/own'));await denied(()=>getDoc(doc(tech,p+'workLogs/other')));await denied(()=>getDoc(doc(tech,p+'payChangeRequests/other')));await denied(()=>getDoc(doc(tech,p+'workOffers/offer')));await denied(()=>getDoc(doc(outsider,p+'paySettings/main')));});
 test('pay readers and pay managers have distinct financial capabilities',async()=>{await seeded;await getDocs(collection(viewer,p+'technicianPayLineItems'));await denied(()=>updateDoc(doc(viewer,p+'technicianRates/own'),{amountCents:6000}));await updateDoc(doc(manager,p+'technicianRates/own'),{amountCents:6000});await denied(()=>updateDoc(doc(manager,p+'workOffers/offer'),{status:'Accepted'}));});
+test('company payroll generation summaries follow payroll reader and manager permissions',async()=>{
+ await seeded;
+ for(const path of ['settings/payStatements','settings/payStatements/history/previous']){
+  await denied(()=>getDoc(doc(tech,p+path)));await denied(()=>getDoc(doc(outsider,p+path)));
+  await denied(()=>updateDoc(doc(tech,p+path),{totalAmountCents:999999}));
+  await getDoc(doc(viewer,p+path));await denied(()=>updateDoc(doc(viewer,p+path),{totalAmountCents:999999}));
+  await getDoc(doc(manager,p+path));
+ }
+ await updateDoc(doc(manager,p+'settings/payStatements'),{increment:5});
+});
 test('normal task completion cannot smuggle a pay-term or assignment change',async()=>{await seeded;await updateDoc(doc(tech,p+'workOrders/job/tasks/task'),{status:'Finished'});await denied(()=>updateDoc(doc(tech,p+'workOrders/job/tasks/task'),{contractedRate:999999}));await denied(()=>updateDoc(doc(tech,p+'workOrders/job/tasks/task'),{workerId:'other'}));await denied(()=>updateDoc(doc(tech,p+'serviceStops/stop'),{manualPayOverrideCents:999999}));});
 test('operational moves use the command and client writes cannot forge its journal or revision',async()=>{
  await seeded;await getDoc(doc(operator,p+'routeMoveRequests/move'));

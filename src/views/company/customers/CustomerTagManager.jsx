@@ -4,7 +4,9 @@ import { collection, doc, getDocs, writeBatch } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { ArrowLeftIcon, ArrowPathIcon, TagIcon } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
+import Select from "react-select";
 
+import CompanyUserSelect from "../../../components/CompanyUserSelect";
 import { Context } from "../../../context/AuthContext";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { db, functions } from "../../../utils/config";
@@ -108,6 +110,16 @@ const chunkArray = (items, size = 450) => {
   return chunks;
 };
 
+const pickerStyles = {
+  menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+};
+
+const customerStatusOptions = [
+  { value: "active", label: "Active Customers" },
+  { value: "all", label: "All Customers" },
+  { value: "inactive", label: "Inactive Customers" },
+];
+
 const CustomerTagManager = () => {
   const {
     recentlySelectedCompany,
@@ -132,6 +144,9 @@ const CustomerTagManager = () => {
   const [statusFilter, setStatusFilter] = useState("active");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const tagRemovalScopeLabel = statusFilter === "all"
+    ? "All Customers"
+    : statusFilter === "inactive" ? "All Inactive Customers" : "All Active Customers";
 
   const regionVisibleCustomers = useMemo(
     () => filterCustomersByRegionalAccess(customers, {
@@ -161,7 +176,14 @@ const CustomerTagManager = () => {
     () => getCustomerRegionAccessTags({ userAccess: companyUserAccess, role: companyRole }),
     [companyUserAccess, companyRole]
   );
-  const customerTagOptions = useMemo(() => getCustomerTagOptions(visibleCustomers), [visibleCustomers]);
+  const customerTagOptions = useMemo(
+    () => getCustomerTagOptions(visibleCustomers).map((tag) => ({ value: tag, label: tag })),
+    [visibleCustomers]
+  );
+  const routeOptions = useMemo(
+    () => routes.map((route) => ({ value: route.id, label: routeLabel(route) })),
+    [routes]
+  );
   const activeTag = normalizeCustomerTag(tagInput) || normalizeCustomerTag(selectedTag);
   const recurringStopsById = useMemo(
     () => new Map(recurringStops.map((stop) => [stop.id, stop])),
@@ -432,9 +454,9 @@ const CustomerTagManager = () => {
     }
 
     const confirmed = await appConfirm({
-      title: "Delete Customer Tag",
-      message: `Remove ${activeTag} from every customer in this company?`,
-      confirmLabel: "Delete Tag",
+      title: `Remove Tag from ${tagRemovalScopeLabel}`,
+      message: `Remove ${activeTag} from all ${statusFilter === "all" ? "active and inactive" : statusFilter} customers in your current area scope, including customers hidden by the search?`,
+      confirmLabel: "Remove Tag from Customers",
       variant: "danger",
     });
     if (!confirmed) return;
@@ -471,7 +493,7 @@ const CustomerTagManager = () => {
               className="mb-3 inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
             >
               <ArrowLeftIcon className="h-4 w-4" />
-              Customers
+              Back to Customers
             </Link>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">Customer Tag Helper</h1>
             <p className="mt-1 text-sm text-slate-500">Manage regional customer tags for filtering and user access.</p>
@@ -490,30 +512,36 @@ const CustomerTagManager = () => {
             className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <ArrowPathIcon className="h-4 w-4" />
-            Refresh
+            Reload Customer Data
           </button>
         </header>
 
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-4 lg:grid-cols-[minmax(260px,360px)_1fr]">
-            <div>
+          <div className="space-y-4">
+            <div className="max-w-2xl">
               <label className="block text-sm font-semibold text-slate-700" htmlFor="customer-tag-manager-tag">
                 Tag
               </label>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
-                <select
-                  value={selectedTag}
-                  onChange={(event) => {
-                    setSelectedTag(event.target.value);
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <Select
+                  inputId="customer-tag-manager-existing-tag"
+                  aria-label="Existing tag"
+                  options={customerTagOptions}
+                  value={customerTagOptions.find((option) => option.value === selectedTag) || null}
+                  onChange={(option) => {
+                    setSelectedTag(option?.value || "");
                     setTagInput("");
                   }}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                >
-                  <option value="">Select existing tag</option>
-                  {customerTagOptions.map((tag) => (
-                    <option key={tag} value={tag}>{tag}</option>
-                  ))}
-                </select>
+                  placeholder="Search existing tags"
+                  noOptionsMessage={() => "No matching tags"}
+                  isSearchable
+                  isClearable
+                  className="min-w-0 text-sm"
+                  classNamePrefix="react-select"
+                  menuPosition="fixed"
+                  menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+                  styles={pickerStyles}
+                />
                 <input
                   id="customer-tag-manager-tag"
                   value={tagInput}
@@ -528,30 +556,30 @@ const CustomerTagManager = () => {
               <p className="mt-2 text-xs font-medium text-slate-500">Active tag: {activeTag || "None selected"}</p>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => addTagToCustomers(selectedCustomerIds)}
                 disabled={isSaving || selectedCustomerIds.length === 0}
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Add to Selected
+                Add Tag to Selected Customers
               </button>
               <button
                 type="button"
                 onClick={() => removeTagFromCustomers(selectedCustomerIds)}
                 disabled={isSaving || selectedCustomerIds.length === 0}
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Remove from Selected
+                Remove Tag from Selected Customers
               </button>
               <button
                 type="button"
                 onClick={deleteTagFromAllCustomers}
                 disabled={isSaving || !activeTag}
-                className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Delete Tag From All
+                Remove Tag from {tagRemovalScopeLabel}
               </button>
             </div>
           </div>
@@ -561,7 +589,7 @@ const CustomerTagManager = () => {
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-950">Tag By ZIP Codes</h2>
+                <h2 className="text-base font-semibold text-slate-950">Select By ZIP Codes</h2>
                 <p className="mt-1 text-sm text-slate-500">Matches billing ZIPs and service-location ZIPs.</p>
               </div>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
@@ -582,7 +610,7 @@ const CustomerTagManager = () => {
                 disabled={isSaving || zipMatchedCustomerIds.length === 0}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Add Tag to ZIP Matches
+                Add Tag to ZIP-Matched Customers
               </button>
               <button
                 type="button"
@@ -590,7 +618,7 @@ const CustomerTagManager = () => {
                 disabled={zipMatchedCustomerIds.length === 0}
                 className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Select Matches
+                Select ZIP-Matched Customers
               </button>
             </div>
           </div>
@@ -598,23 +626,29 @@ const CustomerTagManager = () => {
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-950">Tag By Route</h2>
+                <h2 className="text-base font-semibold text-slate-950">Select By Route</h2>
                 <p className="mt-1 text-sm text-slate-500">Uses customer IDs from recurring route order stops.</p>
               </div>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
                 {selectedRouteCustomerIds.length} customer{selectedRouteCustomerIds.length === 1 ? "" : "s"}
               </span>
             </div>
-            <select
-              value={routeId}
-              onChange={(event) => setRouteId(event.target.value)}
-              className="mt-4 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-            >
-              <option value="">Choose recurring route</option>
-              {routes.map((route) => (
-                <option key={route.id} value={route.id}>{routeLabel(route)}</option>
-              ))}
-            </select>
+            <Select
+              inputId="customer-tag-manager-route"
+              aria-label="Recurring route"
+              options={routeOptions}
+              value={routeOptions.find((option) => option.value === routeId) || null}
+              onChange={(option) => setRouteId(option?.value || "")}
+              placeholder="Search recurring routes"
+              noOptionsMessage={() => "No matching routes"}
+              isSearchable
+              isClearable
+              className="mt-4 min-w-0 text-sm"
+              classNamePrefix="react-select"
+              menuPosition="fixed"
+              menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+              styles={pickerStyles}
+            />
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -622,7 +656,7 @@ const CustomerTagManager = () => {
                 disabled={isSaving || selectedRouteCustomerIds.length === 0}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Add Tag to Route
+                Add Tag to Route Customers
               </button>
               <button
                 type="button"
@@ -638,28 +672,25 @@ const CustomerTagManager = () => {
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-950">Tag By Technician</h2>
+                <h2 className="text-base font-semibold text-slate-950">Select By Technician</h2>
                 <p className="mt-1 text-sm text-slate-500">Uses recurring routes and assigned recurring stops.</p>
               </div>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
                 {selectedTechnicianCustomerIds.length} customer{selectedTechnicianCustomerIds.length === 1 ? "" : "s"}
               </span>
             </div>
-            <select
-              value={technicianId}
-              onChange={(event) => setTechnicianId(event.target.value)}
-              className="mt-4 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-            >
-              <option value="">Choose technician</option>
-              {companyUsers.map((companyUser) => {
-                const optionValue = companyUserOptionValue(companyUser);
-                return (
-                  <option key={optionValue || companyUser.id} value={optionValue}>
-                    {getCompanyUserDisplayName(companyUser)}
-                  </option>
-                );
-              })}
-            </select>
+            <CompanyUserSelect
+              inputId="customer-tag-manager-technician"
+              aria-label="Technician"
+              options={companyUsers}
+              getOptionValue={companyUserOptionValue}
+              value={selectedTechnician}
+              onChange={(companyUser) => setTechnicianId(companyUser ? companyUserOptionValue(companyUser) : "")}
+              placeholder="Search technicians"
+              noOptionsMessage={() => "No matching technicians"}
+              isClearable
+              className="mt-4 min-w-0 text-sm"
+            />
             <p className="mt-2 text-xs font-medium text-slate-500">
               {technicianRoutes.length} recurring route{technicianRoutes.length === 1 ? "" : "s"} found.
             </p>
@@ -670,7 +701,7 @@ const CustomerTagManager = () => {
                 disabled={isSaving || selectedTechnicianCustomerIds.length === 0}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Add Tag to Technician
+                Add Tag to Technician’s Customers
               </button>
               <button
                 type="button"
@@ -678,7 +709,7 @@ const CustomerTagManager = () => {
                 disabled={selectedTechnicianCustomerIds.length === 0}
                 className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Select Technician Customers
+                Select Technician’s Customers
               </button>
               <button
                 type="button"
@@ -686,9 +717,12 @@ const CustomerTagManager = () => {
                 disabled={isSaving || !activeTag || !technicianId}
                 className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Assign Tag Access
+                Assign Tag to Technician Access
               </button>
             </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Assigning tag access limits this technician to their assigned tags, including the active tag.
+            </p>
           </div>
         </section>
 
@@ -704,22 +738,28 @@ const CustomerTagManager = () => {
                 </p>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <select
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-                >
-                  <option value="active">Active Customers</option>
-                  <option value="all">All Customers</option>
-                  <option value="inactive">Inactive Customers</option>
-                </select>
+                <Select
+                  inputId="customer-tag-manager-status"
+                  aria-label="Customer status"
+                  options={customerStatusOptions}
+                  value={customerStatusOptions.find((option) => option.value === statusFilter)}
+                  onChange={(option) => setStatusFilter(option?.value || "active")}
+                  placeholder="Search customer status"
+                  noOptionsMessage={() => "No matching statuses"}
+                  isSearchable
+                  className="min-w-0 text-sm sm:min-w-[190px]"
+                  classNamePrefix="react-select"
+                  menuPosition="fixed"
+                  menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+                  styles={pickerStyles}
+                />
                 <button
                   type="button"
                   onClick={selectVisibleCustomers}
                   disabled={filteredCustomers.length === 0}
                   className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Select Visible
+                  Select All Shown Customers
                 </button>
                 <button
                   type="button"
@@ -727,7 +767,7 @@ const CustomerTagManager = () => {
                   disabled={selectedCustomerIds.length === 0}
                   className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Clear
+                  Clear Customer Selection
                 </button>
               </div>
             </div>

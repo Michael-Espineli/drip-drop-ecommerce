@@ -1,5 +1,5 @@
 import useCompanyRepairRequests from '../../hooks/useCompanyRepairRequests';
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
     collection,
@@ -14,7 +14,6 @@ import {
     FaClipboardCheck,
     FaExclamationTriangle,
     FaFileContract,
-    FaMapMarkedAlt,
     FaTasks,
     FaTools,
     FaUser,
@@ -35,14 +34,13 @@ import {
     getCustomerTagAccessList,
     getCustomerTagOptions,
     getEffectiveCustomerRegionAccess,
-    normalizeCustomerTag,
     normalizeCustomerTags,
 } from '../../utils/customerTags';
 import {
-    DASHBOARD_SCOPE_ACCESS_OPTIONS,
+    getDashboardViewIds,
     getEffectiveDashboardScopeAccess,
+    getManagerDashboardArea,
 } from '../../utils/dashboardAccess';
-import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from '../../utils/models/FeatureFlag';
 import RecentChatsWidget from '../dashboard/components/RecentChatsWidget';
 import {
     TODO_LIST_FEATURE_FLAG_ID,
@@ -93,36 +91,20 @@ const serviceAgreementSurveyBuckets = new Set([
     'systemserviceagreementestimateservicestop',
 ].map(normalizeServiceStopTypeBucket));
 
-const dashboardScopeIcons = {
-    personal: FaUser,
-    regional: FaMapMarkedAlt,
-    company: FaUsers,
-};
-
-const DASHBOARD_SCOPE_OPTIONS = DASHBOARD_SCOPE_ACCESS_OPTIONS.map((scope) => ({
-    ...scope,
-    icon: dashboardScopeIcons[scope.id] || FaUser,
-}));
-
-const DASHBOARD_SCOPE_COPY = {
-    personal: {
+const DASHBOARD_VIEW_OPTIONS = [
+    {
+        id: 'personal',
         label: "Personal",
         description: "My assigned routes, jobs, tasks, purchases, and alerts.",
+        icon: FaUser,
     },
-    regional: {
-        label: "Tag / Regional",
-        description: "Customer-tag rollup for the selected region.",
+    {
+        id: 'manager',
+        label: "Manager",
+        description: "Company work and financial activity, filtered by customer area.",
+        icon: FaUsers,
     },
-    company: {
-        label: "Whole Company",
-        description: "All company work and financial activity.",
-    },
-};
-
-const DASHBOARD_SCOPE_VIEW_OPTIONS = DASHBOARD_SCOPE_OPTIONS.map((scope) => ({
-    ...scope,
-    ...(DASHBOARD_SCOPE_COPY[scope.id] || {}),
-}));
+];
 
 const REGIONAL_COMPANY_TOP_STAT_IDS = [
     'pendingLeads',
@@ -818,6 +800,7 @@ const ScopeButton = ({ scope, isActive, onClick }) => {
             type="button"
             onClick={onClick}
             title={scope.description}
+            aria-pressed={isActive}
             className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-bold transition ${
                 isActive
                     ? 'border-blue-500 bg-blue-50 text-blue-950 ring-2 ring-blue-100'
@@ -873,7 +856,7 @@ const MoneyMetric = ({ label, value, helper, tone = 'slate' }) => {
     };
 
     return (
-        <div className={`rounded-lg border p-3 ${tones[tone] || tones.slate}`}>
+        <div role="group" aria-label={label} className={`rounded-lg border p-3 ${tones[tone] || tones.slate}`}>
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
             <p className="mt-1 text-2xl font-bold">{value}</p>
             {helper && <p className="mt-1 truncate text-xs font-semibold text-slate-500">{helper}</p>}
@@ -1418,7 +1401,7 @@ const Dashboard = () => {
         isFeatureEnabled,
     } = useContext(Context);
     const [loading, setLoading] = useState(true);
-    const [dashboardScope, setDashboardScope] = useState('personal');
+    const [selectedDashboardView, setSelectedDashboardView] = useState('personal');
     const [customers, setCustomers] = useState([]);
     const [jobs, setJobs] = useState([]);
     const [leads, setLeads] = useState([]);
@@ -1439,19 +1422,16 @@ const Dashboard = () => {
 
     const todoListEnabled = featureFlagsLoaded && isFeatureEnabled(TODO_LIST_FEATURE_FLAG_ID);
     const alertsEnabled = featureFlagsLoaded && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
-    const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
     const dashboardScopeAccess = useMemo(
         () => getEffectiveDashboardScopeAccess({ userAccess: companyUserAccess, role: companyRole }),
         [companyRole, companyUserAccess]
     );
-    const allowedDashboardScopes = useMemo(
-        () => new Set(dashboardScopeAccess.scopes),
+    const availableDashboardViews = useMemo(
+        () => DASHBOARD_VIEW_OPTIONS.filter((view) => getDashboardViewIds(dashboardScopeAccess.scopes).includes(view.id)),
         [dashboardScopeAccess.scopes]
     );
-    const availableDashboardScopeOptions = useMemo(
-        () => DASHBOARD_SCOPE_VIEW_OPTIONS.filter((scope) => allowedDashboardScopes.has(scope.id)),
-        [allowedDashboardScopes]
-    );
+    const dashboardView = availableDashboardViews.some((view) => view.id === selectedDashboardView)
+        ? selectedDashboardView : availableDashboardViews[0]?.id || '';
     const currentUserIds = useMemo(() => normalizeCustomerTags([
         user?.uid,
         dataBaseUser?.uid,
@@ -1473,12 +1453,6 @@ const Dashboard = () => {
     const currentUserTagAliases = useMemo(() => (
         buildCurrentUserTagAliases({ user, dataBaseUser, companyUserAccess })
     ), [companyUserAccess, dataBaseUser, user]);
-
-    useEffect(() => {
-        if (allowedDashboardScopes.has(dashboardScope)) return;
-
-        setDashboardScope(availableDashboardScopeOptions[0]?.id || 'personal');
-    }, [allowedDashboardScopes, availableDashboardScopeOptions, dashboardScope]);
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
@@ -1628,50 +1602,27 @@ const Dashboard = () => {
         [companyRole, companyUserAccess]
     );
     const availableCustomerTags = useMemo(() => getCustomerTagOptions(customers), [customers]);
-    const accessibleRegionalTags = useMemo(() => (
-        customerRegionAccess.fullAccess ? availableCustomerTags : customerRegionAccess.tags
-    ), [availableCustomerTags, customerRegionAccess.fullAccess, customerRegionAccess.tags]);
-    const regionalScopeTag = useMemo(() => {
-        const selectedTag = normalizeCustomerTag(selectedCustomerRegionTag);
-        if (selectedTag) return selectedTag;
-        return normalizeCustomerTags(accessibleRegionalTags)[0] || '';
-    }, [accessibleRegionalTags, selectedCustomerRegionTag]);
-    const scopeLabel = dashboardScope === 'personal'
+    const managerArea = useMemo(() => getManagerDashboardArea({
+        scopes: dashboardScopeAccess.scopes,
+        regionAccess: customerRegionAccess,
+        availableTags: availableCustomerTags,
+        selectedTag: selectedCustomerRegionTag,
+    }), [availableCustomerTags, customerRegionAccess, dashboardScopeAccess.scopes, selectedCustomerRegionTag]);
+    const matchesManagerArea = useCallback((record) => (
+        managerArea.hasAccess &&
+        (customerRegionAccess.fullAccess || recordMatchesCustomerTags(record, customersById, customerRegionAccess.tags)) &&
+        (!managerArea.selectedTag || recordMatchesCustomerTags(record, customersById, [managerArea.selectedTag]))
+    ), [customerRegionAccess, customersById, managerArea]);
+    const scopeLabel = dashboardView === 'personal'
         ? 'Personal'
-        : dashboardScope === 'regional'
-            ? (regionalScopeTag ? `Regional: ${regionalScopeTag}` : 'Regional')
-            : 'Whole Company';
+        : `Manager: ${managerArea.selectedTag || managerArea.allAreasLabel}`;
 
     const scopedData = useMemo(() => {
-        if (dashboardScope === 'company') {
-            return {
-                customers,
-                jobs,
-                leads,
-                repairRequests,
-                shoppingItems,
-                purchasedItems,
-                activeRoutes,
-                invoices,
-                payments,
-                subscriptions,
-                serviceAgreements,
-                recurringServiceStops,
-                routes,
-                serviceStops,
-                equipment: equipmentList,
-            };
-        }
-
-        if (dashboardScope === 'regional') {
-            const tags = regionalScopeTag ? [regionalScopeTag] : [];
-            const filterByRegion = (records) => records.filter((record) => recordMatchesCustomerTags(record, customersById, tags));
-            const regionalCustomers = tags.length > 0
-                ? customers.filter((customer) => customerHasAnyTag(customer, tags))
-                : customers;
+        if (dashboardView === 'manager') {
+            const filterByRegion = (records) => records.filter(matchesManagerArea);
 
             return {
-                customers: regionalCustomers,
+                customers: filterByRegion(customers),
                 jobs: filterByRegion(jobs),
                 leads: filterByRegion(leads),
                 repairRequests: filterByRegion(repairRequests),
@@ -1722,7 +1673,7 @@ const Dashboard = () => {
         currentUserTagAliases,
         customers,
         customersById,
-        dashboardScope,
+        dashboardView,
         equipmentList,
         invoices,
         jobs,
@@ -1732,7 +1683,7 @@ const Dashboard = () => {
         personalCustomerIdSet,
         purchasedItems,
         recurringServiceStops,
-        regionalScopeTag,
+        matchesManagerArea,
         repairRequests,
         routes,
         serviceAgreements,
@@ -1742,34 +1693,30 @@ const Dashboard = () => {
     ]);
 
     const scopedTodoItems = useMemo(() => (
-        dashboardScope === 'company'
-            ? visibleTodoItems
-            : dashboardScope === 'regional'
-                ? visibleTodoItems.filter((todo) => recordMatchesCustomerTags(todo, customersById, regionalScopeTag ? [regionalScopeTag] : []))
-                : visibleTodoItems.filter((todo) => recordMatchesPersonalAssignment(
-                    todo,
+        dashboardView === 'manager'
+            ? visibleTodoItems.filter(matchesManagerArea)
+            : visibleTodoItems.filter((todo) => recordMatchesPersonalAssignment(
+                todo,
+                customersById,
+                currentUserIds,
+                personalCustomerIdSet,
+                currentUserTagAliases
+            ))
+    ), [currentUserIds, currentUserTagAliases, customersById, dashboardView, personalCustomerIdSet, matchesManagerArea, visibleTodoItems]);
+
+    const scopedAlertNotifications = useMemo(() => (
+        dashboardView === 'manager'
+            ? alertNotifications.filter(matchesManagerArea)
+            : alertNotifications.filter((alert) => (
+                recordMatchesPersonalAssignment(
+                    alert,
                     customersById,
                     currentUserIds,
                     personalCustomerIdSet,
                     currentUserTagAliases
-                ))
-    ), [currentUserIds, currentUserTagAliases, customersById, dashboardScope, personalCustomerIdSet, regionalScopeTag, visibleTodoItems]);
-
-    const scopedAlertNotifications = useMemo(() => (
-        dashboardScope === 'company'
-            ? alertNotifications
-            : dashboardScope === 'regional'
-                ? alertNotifications.filter((alert) => recordMatchesCustomerTags(alert, customersById, regionalScopeTag ? [regionalScopeTag] : []))
-                : alertNotifications.filter((alert) => (
-                    recordMatchesPersonalAssignment(
-                        alert,
-                        customersById,
-                        currentUserIds,
-                        personalCustomerIdSet,
-                        currentUserTagAliases
-                    ) || (!getRecordUserIds(alert).length && !getRecordCustomerIds(alert).length)
-                ))
-    ), [alertNotifications, currentUserIds, currentUserTagAliases, customersById, dashboardScope, personalCustomerIdSet, regionalScopeTag]);
+                ) || (!getRecordUserIds(alert).length && !getRecordCustomerIds(alert).length)
+            ))
+    ), [alertNotifications, currentUserIds, currentUserTagAliases, customersById, dashboardView, personalCustomerIdSet, matchesManagerArea]);
 
     const summary = useMemo(() => {
         const now = new Date();
@@ -2087,6 +2034,10 @@ const Dashboard = () => {
         return <div className="min-h-screen bg-slate-50 p-8 text-sm text-slate-500">Loading dashboard...</div>;
     }
 
+    if (!availableDashboardViews.length) {
+        return <div className="min-h-screen bg-slate-50 p-8 text-sm text-slate-500">No dashboard access. Ask your company administrator to enable a dashboard scope for your role.</div>;
+    }
+
     return (
         <div className="min-h-screen bg-slate-100 px-3 py-3 text-slate-900 sm:px-4 lg:px-5">
             <div className="w-full space-y-3">
@@ -2099,12 +2050,12 @@ const Dashboard = () => {
                             </span>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                            {availableDashboardScopeOptions.map((scope) => (
+                            {availableDashboardViews.map((scope) => (
                                 <ScopeButton
                                     key={scope.id}
                                     scope={scope}
-                                    isActive={dashboardScope === scope.id}
-                                    onClick={() => setDashboardScope(scope.id)}
+                                    isActive={dashboardView === scope.id}
+                                    onClick={() => setSelectedDashboardView(scope.id)}
                                 />
                             ))}
                             <Link to="/company/operations-dashboard" className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50">
@@ -2117,23 +2068,25 @@ const Dashboard = () => {
                     </div>
                 </section>
 
-                {dashboardScope === 'regional' && (
+                {dashboardView === 'manager' && (
                     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div>
-                                <h2 className="text-sm font-bold text-slate-950">Regional Tag</h2>
+                                <label htmlFor="manager-dashboard-area" className="text-sm font-bold text-slate-950">Customer area</label>
                                 <p className="mt-1 text-xs text-slate-500">
-                                    Pick the customer tag used for this dashboard scope.
+                                    View all permitted company work or filter this dashboard by a customer tag.
                                 </p>
                             </div>
                             <select
-                                value={selectedCustomerRegionTag || regionalScopeTag || ''}
+                                id="manager-dashboard-area"
+                                value={managerArea.selectedTag}
                                 onChange={(event) => setSelectedCustomerRegionTag(event.target.value)}
-                                disabled={!customerAreaFilteringEnabled && availableCustomerTags.length === 0}
+                                disabled={!managerArea.hasAccess}
                                 className="h-10 min-w-[220px] rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                             >
-                                <option value="">All available tags</option>
-                                {normalizeCustomerTags(accessibleRegionalTags).map((tag) => (
+                                {managerArea.canViewAllAreas && <option value="">{managerArea.allAreasLabel}</option>}
+                                {!managerArea.hasAccess && !managerArea.canViewAllAreas && <option value="">No areas available</option>}
+                                {managerArea.tags.map((tag) => (
                                     <option key={tag} value={tag}>{tag}</option>
                                 ))}
                             </select>
@@ -2141,7 +2094,9 @@ const Dashboard = () => {
                     </section>
                 )}
 
-                {dashboardScope === 'personal' ? (
+                {dashboardView === 'manager' && !managerArea.hasAccess ? (
+                    <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">No areas available. Ask your company administrator to assign customer areas to your role.</div>
+                ) : dashboardView === 'personal' ? (
                     <PersonalDashboardView
                         personalDashboard={personalDashboard}
                         openTodos={openTodos}

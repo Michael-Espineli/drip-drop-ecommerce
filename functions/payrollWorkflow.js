@@ -1,4 +1,6 @@
-const { calculatePayLines, reconcilePayLines } = require("./payrollCalculation");
+const { calculatePayLines, reconcilePayLines, canClearZeroTask } = require("./payrollCalculation");
+const { createPayrollRefreshQueue, rateScopes, matchesScopes } = require("./payrollRefreshQueue");
+const { loadPayrollBodyOfWaterScope } = require("./payrollBodyOfWaterScope");
 
 const data = (snap) => snap.exists ? { ...snap.data(), id: snap.id } : null;
 const rows = (snap) => snap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
@@ -11,8 +13,67 @@ const payKeys = ["status", "operationStatus", "techId", "tech", "workerId", "wor
 const signature = (record) => JSON.stringify(payKeys.map((key) => record?.[key] ?? null));
 const changed = (before, after) => signature(before) !== signature(after);
 
-function createPayrollWorkflow(db) {
+// Compare generated values with stored Firestore values without treating a new
+// calculation timestamp (including one inside a preview) as a payroll change.
+const comparable = value => {
+  if (value?.toMillis) return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (Array.isArray(value)) return value.map(comparable);
+  if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).filter(key => key !== "calculatedAt").sort().map(key => [key, comparable(value[key])]));
+  return value ?? null;
+};
+const equal = (a, b) => JSON.stringify(comparable(a)) === JSON.stringify(comparable(b));
+const BULK_FINISH_SOURCE = "payroll_setup_bulk_finish";
+
+function createPayrollWorkflow(db, options = {}) {
   const company = (companyId) => db.collection("companies").doc(companyId);
+  const refreshQueue = createPayrollRefreshQueue(db, { reconcileStop, reconcileJob,
+    loadContext: companyId => context({ get: ref => ref.get() }, company(companyId)) }, options);
+  const currentLines = (existing, writes) => [...new Map([...existing, ...writes].map(line => [line.id, line])).values()];
+  const component = line => line.payrollComponentId || (line.jobId && line.jobTaskId ? `job:${id(line.jobId)}:task:${line.jobTaskId}`
+    : line.serviceStopTaskId ? `stop:${line.serviceStopId}:task:${line.serviceStopTaskId}` : `stop:${line.serviceStopId}:base`);
+  const removeClearedZeroTasks = (generated, existing) => generated.filter(line => !(line.totalAmountCents === 0 &&
+    existing.some(old => old.zeroDollarTaskCleared && old.calculationStatus === "voided" &&
+      (old.id === line.id || component(old) === component(line)))));
+
+  async function clearZeroDollarTasks(request) {
+    const { HttpsError } = require("firebase-functions/v2/https");
+    const fail = (code, message) => { throw new HttpsError(code, message); };
+    const uid = request.auth?.uid;
+    if (!uid) fail("unauthenticated", "Sign in to clear payroll tasks.");
+    const { companyId, lineItemIds } = request.data || {};
+    const validId = value => typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= 1500 && ![".", ".."].includes(value) && !value.includes("/");
+    if (!validId(companyId) || !Array.isArray(lineItemIds) || !lineItemIds.length || lineItemIds.length > 200 || !lineItemIds.every(validId)) {
+      fail("invalid-argument", "Choose a company and up to 200 zero-dollar task lines.");
+    }
+    return db.runTransaction(async transaction => {
+      const companyRef = company(companyId);
+      const [owner, access] = await Promise.all([transaction.get(companyRef),
+        transaction.get(db.collection("users").doc(uid).collection("userAccess").doc(companyId))]);
+      const membership = access.data() || {};
+      const active = access.exists && membership.active !== false && membership.isActive !== false && membership.revoked !== true &&
+        !["inactive", "revoked", "past", "deleted", "declined", "pending", "invited", "rejected", "cancelled", "canceled", "expired"].includes(String(membership.status || membership.userStatus || membership.companyUserStatus || "").trim().toLowerCase());
+      if (!owner.exists || owner.data().ownerId !== uid && !active) fail("permission-denied", "Active company payroll access is required.");
+      const role = active && validId(membership.roleId) ? await transaction.get(companyRef.collection("roles").doc(membership.roleId)) : null;
+      const administrator = owner.data().ownerId === uid || ["owner", "admin", "manager"].includes(String(membership.roleName || "").trim().toLowerCase());
+      if (!administrator && !(role?.data()?.permissionIdList || []).map(String).includes("424")) fail("permission-denied", "Manage Payroll permission is required to clear tasks.");
+      const ids = [...new Set(lineItemIds)];
+      const snapshots = await Promise.all(ids.map(value => transaction.get(companyRef.collection("technicianPayLineItems").doc(value))));
+      const now = new Date();
+      const updates = [];
+      snapshots.forEach(snap => {
+        const line = snap.data();
+        if (!snap.exists || line.companyId && line.companyId !== companyId) fail("failed-precondition", "A selected payroll task is no longer available. Reload the page.");
+        if (line.calculationStatus === "voided" && line.zeroDollarTaskCleared) return;
+        if (!canClearZeroTask(line)) fail("failed-precondition", "Only unpaid $0 task lines outside statements and exports can be cleared. Reload and review the selected tasks.");
+        updates.push({ id: snap.id, calculationStatus: "voided", voidReason: "adminVoided", autoReconciled: false,
+          zeroDollarTaskCleared: true, voidedAt: now, voidedByUserId: uid,
+          adminReviewNotes: [line.adminReviewNotes, "Reviewed $0 task: no additional task pay. Cleared from payroll."].filter(Boolean).join("\n") });
+      });
+      updates.forEach(({ id: lineId, ...payload }) => transaction.set(companyRef.collection("technicianPayLineItems").doc(lineId), payload, { merge: true }));
+      return { clearedLineItemIds: ids, updates: updates.map(({ voidedAt, ...line }) => ({ ...line, voidedAtMillis: voidedAt.getTime() })) };
+    });
+  }
   async function acceptedAgreement(transaction, companyRef, record, cache, source = "stop", jobId = "", parentStopId = "") {
     if (!record) return record;
     const reference = record.payrollAgreement;
@@ -43,7 +104,16 @@ function createPayrollWorkflow(db) {
     }
     return { ...record, payrollAgreement: terms };
   }
-  async function context(transaction, companyRef) {
+  async function context(transaction, companyRef, cached) {
+    // Flags stay inside each transaction so disabling payroll takes effect even
+    // while a batch is running. The much larger catalogs are reused per page.
+    if (cached) {
+      const [settings, wide] = await Promise.all([transaction.get(companyRef.collection("paySettings").doc("main")),
+        transaction.get(companyRef.collection("settings").doc("companyWide"))]);
+      const paySettings = settings.data() || {};
+      if (wide.exists && (wide.data().payrollEnabled === false || wide.data().companyPayrollEnabled === false || wide.data().payrollDisabled === true)) paySettings.payrollEnabled = false;
+      return { ...cached, settings: paySettings };
+    }
     const [settings, wide, canonical, legacyWork, legacyStops, rates, users] = await Promise.all([
       transaction.get(companyRef.collection("paySettings").doc("main")),
       transaction.get(companyRef.collection("settings").doc("companyWide")),
@@ -60,24 +130,35 @@ function createPayrollWorkflow(db) {
     if (wide.exists && (wide.data().payrollEnabled === false || wide.data().companyPayrollEnabled === false || wide.data().payrollDisabled === true)) paySettings.payrollEnabled = false;
     return { settings: paySettings, workTypes: [...types.values()], rates: rows(rates), workers: rows(users), stopTypes };
   }
-  function apply(transaction, companyRef, result) {
+  function apply(transaction, companyRef, result, existing) {
+    const previous = new Map(existing.map(line => [line.id, line]));
+    result.writes = result.writes.filter(line => {
+      const old = previous.get(line.id);
+      return !old || Object.entries(line).some(([key, value]) => key !== "calculatedAt" && !equal(old[key], value));
+    });
     if (result.writes.length > 450) throw new Error("Payroll scope exceeds the atomic reconciliation limit. Split this work into visits.");
     result.writes.forEach((line) => transaction.set(companyRef.collection("technicianPayLineItems").doc(line.id), line, { merge: true }));
   }
-  async function reconcileStop(companyId, stopId, { ratesChanged = false } = {}) {
+  function saveSummary(transaction, ref, previous, summary) {
+    if (!previous.payrollLastProcessedAt || Object.entries(summary).some(([key, value]) => !equal(previous[key], value))) {
+      transaction.set(ref, { ...summary, payrollLastProcessedAt: new Date() }, { merge: true });
+    }
+  }
+  async function reconcileStop(companyId, stopId, { ratesChanged = false, scopes, loadBatchContext } = {}) {
     const companyRef = company(companyId);
     const stopRef = companyRef.collection("serviceStops").doc(stopId);
     return db.runTransaction(async (transaction) => {
-      const [stopSnap, tasksSnap, paySnap, ctx] = await Promise.all([
-        transaction.get(stopRef), transaction.get(stopRef.collection("tasks")),
-        transaction.get(companyRef.collection("technicianPayLineItems").where("serviceStopId", "==", stopId)), context(transaction, companyRef),
-      ]);
+      const stopSnap = await transaction.get(stopRef);
       let stop = data(stopSnap);
+      const paySnap = await transaction.get(companyRef.collection("technicianPayLineItems").where("serviceStopId", "==", stopId));
       if (ratesChanged && stop && ["finished", "completed", "complete", "done"].includes(String(stop.status || stop.operationStatus || "").toLowerCase()) && !stop.payrollLastProcessedAt && paySnap.empty) {
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], skippedHistoricalWork: true };
       }
+      const tasksSnap = await transaction.get(stopRef.collection("tasks"));
+      if (!matchesScopes(stop, rows(tasksSnap), scopes)) return { skippedUnchangedScope: true };
+      const ctx = await context(transaction, companyRef, loadBatchContext ? await loadBatchContext() : null);
       if (ctx.settings.payrollEnabled === false || ctx.settings.companyPayrollEnabled === false || ctx.settings.payrollDisabled === true) {
-        if (stop) transaction.set(stopRef, { estimatedPayCents: 0, estimatedPayLines: [], estimatedPayNeedsReview: false, payrollReconcileStatus: "disabled", payrollLastProcessedAt: new Date() }, { merge: true });
+        if (stop) saveSummary(transaction, stopRef, stop, { estimatedPayCents: 0, estimatedPayLines: [], estimatedPayNeedsReview: false, payrollReconcileStatus: "disabled" });
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], payrollDisabled: true };
       }
       const agreementCache = new Map();
@@ -89,54 +170,57 @@ function createPayrollWorkflow(db) {
         const legacyType = ctx.stopTypes.get(stop.typeId);
         if (!stop.payTypeId && !ctx.workTypes.some((type) => type.id === stop.typeId)) stop.defaultWorkTypeIds = legacyType?.defaultWorkTypeIds || [];
       }
-      const input = { ...ctx, companyId, serviceStop: stop || { id: stopId, operationStatus: "Deleted" }, tasks: stop ? tasks : [] };
+      const bodyOfWaterIdsByServiceLocation = await loadPayrollBodyOfWaterScope(transaction, companyRef, [stop, ...tasks], ctx.rates);
+      const input = { ...ctx, companyId, bodyOfWaterIdsByServiceLocation, serviceStop: stop || { id: stopId, operationStatus: "Deleted" }, tasks: stop ? tasks : [] };
       const offerPaySnaps = await Promise.all([...agreementCache.keys()].map(value=>transaction.get(companyRef.collection("technicianPayLineItems").where("workOfferId","==",value))));
       const generated = calculatePayLines({...input, payHistory:offerPaySnaps.flatMap(rows)});
       const components = new Set(generated.map((line) => line.payrollComponentId));
       const existing = new Map(rows(paySnap).map((line) => [line.id, line]));
       if (jobPaySnap) rows(jobPaySnap).filter((line) => components.has(line.payrollComponentId)).forEach((line) => existing.set(line.id, line));
       const result = reconcilePayLines({ generated, existing: [...existing.values()], preserveCalculated: ratesChanged && ctx.settings.recalculateUnapprovedPayWhenRatesChange === false });
-      apply(transaction, companyRef, result);
-      const preview = stop ? calculatePayLines({ ...input, mode: "preview" }) : [];
-      const needsReview = generated.filter((line) => line.calculationStatus === "needsReview").length;
-      if (stop) transaction.set(stopRef, {
+      apply(transaction, companyRef, result, [...existing.values()]);
+      const preview = stop ? removeClearedZeroTasks(calculatePayLines({ ...input, mode: "preview" }), [...existing.values()]) : [];
+      const needsReview = currentLines([...existing.values()], result.writes).filter((line) => line.calculationStatus === "needsReview").length;
+      if (stop) saveSummary(transaction, stopRef, stop, {
         estimatedPayCents: preview.reduce((sum, line) => sum + line.totalAmountCents, 0),
         estimatedPayLines: preview, estimatedPayNeedsReview: preview.some((line) => line.calculationStatus === "needsReview"),
         payrollReconcileStatus: result.conflicts.length ? "adjustmentRequired" : needsReview ? "needsReview" : "current",
-        payrollReconcileConflictIds: result.conflicts, payrollNeedsReviewCount: needsReview, payrollLastProcessedAt: new Date(),
-      }, { merge: true });
+        payrollReconcileConflictIds: result.conflicts, payrollNeedsReviewCount: needsReview,
+      });
       return { generatedLineItemCount: generated.length, savedLineItemCount: result.writes.length,
         needsReviewCount: needsReview, conflictLineItemIds: result.conflicts };
     });
   }
-  async function reconcileJob(companyId, jobId, { ratesChanged = false } = {}) {
+  async function reconcileJob(companyId, jobId, { ratesChanged = false, scopes, loadBatchContext } = {}) {
     const companyRef = company(companyId);
     const jobRef = companyRef.collection("workOrders").doc(jobId);
     return db.runTransaction(async (transaction) => {
-      const [jobSnap, tasksSnap, paySnap, ctx] = await Promise.all([
-        transaction.get(jobRef), transaction.get(jobRef.collection("tasks")),
-        transaction.get(companyRef.collection("technicianPayLineItems").where("jobId", "==", jobId)), context(transaction, companyRef),
-      ]);
+      const [jobSnap, paySnap] = await Promise.all([transaction.get(jobRef),
+        transaction.get(companyRef.collection("technicianPayLineItems").where("jobId", "==", jobId))]);
       const job = data(jobSnap);
       if (ratesChanged && job && !job.payrollLastProcessedAt && paySnap.empty) {
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], skippedHistoricalWork: true };
       }
+      const tasksSnap = await transaction.get(jobRef.collection("tasks"));
+      if (!matchesScopes(job, rows(tasksSnap), scopes)) return { skippedUnchangedScope: true };
+      const ctx = await context(transaction, companyRef, loadBatchContext ? await loadBatchContext() : null);
       if (ctx.settings.payrollEnabled === false || ctx.settings.companyPayrollEnabled === false || ctx.settings.payrollDisabled === true) {
-        if (job) transaction.set(jobRef, { payrollReconcileStatus: "disabled", payrollLastProcessedAt: new Date() }, { merge: true });
+        if (job) saveSummary(transaction, jobRef, job, { payrollReconcileStatus: "disabled" });
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], payrollDisabled: true };
       }
       const agreementCache = new Map();
       const tasks = await Promise.all(rows(tasksSnap).filter(task => !id(task.serviceStopId)).map(task => acceptedAgreement(transaction, companyRef, task, agreementCache, "job", jobId)));
+      const bodyOfWaterIdsByServiceLocation = await loadPayrollBodyOfWaterScope(transaction, companyRef, [job, ...tasks], ctx.rates);
       const offerPaySnaps = await Promise.all([...agreementCache.keys()].map(value=>transaction.get(companyRef.collection("technicianPayLineItems").where("workOfferId","==",value))));
-      const generated = job ? calculatePayLines({ ...ctx, companyId, jobTaskSource: true, payHistory:offerPaySnaps.flatMap(rows),
+      const generated = job ? calculatePayLines({ ...ctx, companyId, bodyOfWaterIdsByServiceLocation, jobTaskSource: true, payHistory:offerPaySnaps.flatMap(rows),
         serviceStop: { ...job, id: `job_${jobId}`, jobId, jobName: job.internalId, type: "Job task", techId: "" }, tasks }) : [];
       const components = new Set(generated.map((line) => line.payrollComponentId));
       const existing = rows(paySnap).filter((line) => line.payrollSource === "jobTask" || line.payrollSource === "workOfferIncentive" && !line.serviceStopId || components.has(line.payrollComponentId));
       const result = reconcilePayLines({ generated, existing, voidReason: "taskReopened", preserveCalculated: ratesChanged && ctx.settings.recalculateUnapprovedPayWhenRatesChange === false });
-      apply(transaction, companyRef, result);
-      const needsReview = generated.filter((line) => line.calculationStatus === "needsReview").length;
-      if (job) transaction.set(jobRef, { payrollReconcileStatus: result.conflicts.length ? "adjustmentRequired" : needsReview ? "needsReview" : "current",
-        payrollReconcileConflictIds: result.conflicts, payrollNeedsReviewCount: needsReview, payrollLastProcessedAt: new Date() }, { merge: true });
+      apply(transaction, companyRef, result, existing);
+      const needsReview = currentLines(existing, result.writes).filter((line) => line.calculationStatus === "needsReview").length;
+      if (job) saveSummary(transaction, jobRef, job, { payrollReconcileStatus: result.conflicts.length ? "adjustmentRequired" : needsReview ? "needsReview" : "current",
+        payrollReconcileConflictIds: result.conflicts, payrollNeedsReviewCount: needsReview });
       return { generatedLineItemCount: generated.length, savedLineItemCount: result.writes.length, needsReviewCount: needsReview, conflictLineItemIds: result.conflicts };
     });
   }
@@ -189,12 +273,18 @@ function createPayrollWorkflow(db) {
     const after = event.data?.after?.exists ? event.data.after.data() : null;
     if (!changed(before, after)) return;
     await syncStopAssignment(event.params.companyId, event.params.serviceStopId, before, after);
+    if (after?.manualFinishSource === BULK_FINISH_SOURCE) {
+      return refreshQueue.enqueue(event.params.companyId, event.id, [{ kind: "stop", stopId: event.params.serviceStopId }]);
+    }
     await reconcileStop(event.params.companyId, event.params.serviceStopId);
   }
   async function onStopTaskWrite(event) {
     const before = event.data?.before?.exists ? event.data.before.data() : null;
     const after = event.data?.after?.exists ? event.data.after.data() : null;
     if (!changed(before, after)) return;
+    if (after?.manualFinishSource === BULK_FINISH_SOURCE) {
+      return refreshQueue.enqueue(event.params.companyId, event.id, [{ kind: "stop", stopId: event.params.serviceStopId }]);
+    }
     await reconcileStop(event.params.companyId, event.params.serviceStopId);
   }
   async function onJobTaskWrite(event) {
@@ -207,53 +297,13 @@ function createPayrollWorkflow(db) {
     await reconcileJob(companyId, jobId);
     for (const stopId of new Set([id(before?.serviceStopId), id(after?.serviceStopId)].filter(Boolean))) await reconcileStop(companyId, stopId);
   }
-  async function enqueueRefresh(event, ratesChanged) {
-    const requestId = String(event.id || `${Date.now()}_${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, "_");
-    const ref = company(event.params.companyId).collection("payrollReconcileWork").doc(`${requestId}_0`);
-    await db.runTransaction(async (transaction) => {
-      const existing = await transaction.get(ref);
-      if (!existing.exists) transaction.set(ref, { requestId, page: 0, companyId: event.params.companyId,
-        phase: "serviceStops", cursor: "", ratesChanged, status: "queued", createdAt: new Date() });
-    });
-  }
-  async function processRefresh(event) {
-    if (!event.data?.after?.exists || event.data.after.data().status !== "queued") return;
-    const ref = event.data.after.ref;
-    // Leave work queued until the final commit. A process crash or duplicate delivery
-    // can retry the same idempotent page without stranding a processing lease.
-    const fresh = await ref.get();
-    const work = fresh.exists && fresh.data().status === "queued" ? fresh.data() : null;
-    if (!work) return;
-    try {
-      const companyRef = company(event.params.companyId);
-      let query = companyRef.collection(work.phase).orderBy("__name__").limit(40);
-      if (work.cursor) query = query.startAfter(work.cursor);
-      const page = await query.get();
-      for (const doc of page.docs) {
-        if (work.phase === "serviceStops") await reconcileStop(event.params.companyId, doc.id, work);
-        else await reconcileJob(event.params.companyId, doc.id, work);
-      }
-      const more = page.docs.length === 40;
-      const nextPhase = more ? work.phase : work.phase === "serviceStops" ? "workOrders" : null;
-      await db.runTransaction(async (transaction) => {
-        const current = await transaction.get(ref);
-        if (!current.exists || current.data().status !== "queued") return;
-        if (nextPhase) transaction.set(companyRef.collection("payrollReconcileWork").doc(`${work.requestId}_${work.page + 1}`), {
-          ...work, phase: nextPhase, page: work.page + 1, cursor: more ? page.docs[page.docs.length - 1].id : "", status: "queued", createdAt: new Date(),
-        });
-        transaction.set(ref, { status: "completed", finishedAt: new Date(), processedCount: page.docs.length }, { merge: true });
-      });
-    } catch (error) {
-      throw error;
-    }
-  }
+  const processRefresh = refreshQueue.process;
   async function onRateWrite(event) {
     const before = event.data?.before?.exists ? event.data.before.data() : null;
     const after = event.data?.after?.exists ? event.data.after.data() : null;
     const keys = ["technicianId", "payTypeId", "workTypeId", "amountCents", "rateType", "payBasis", "status", "effectiveStartDate", "effectiveEndDate"];
     if (JSON.stringify(keys.map((key) => before?.[key] ?? null)) === JSON.stringify(keys.map((key) => after?.[key] ?? null))) return;
-    const technicians = new Set([before?.technicianId, after?.technicianId].filter((value) => value && value !== "base_technician_default"));
-    if (technicians.size) await enqueueRefresh(event, true);
+    await refreshQueue.enqueue(event.params.companyId, event.id, rateScopes(before, after));
   }
   async function onSettingsWrite(event) {
     const before = event.data?.before?.exists ? event.data.before.data() : null;
@@ -262,7 +312,7 @@ function createPayrollWorkflow(db) {
     const keys = wide ? ["payrollEnabled", "companyPayrollEnabled", "payrollDisabled"] : event.params.payTypeId
       ? ["name", "isActive", "active", "archived", "category", "defaultRateType", "defaultStackBehavior"]
       : ["payrollEnabled", "payMode", "routePaySource", "taskPaySource", "hourlyPaySource", "defaultStackBehavior", "recalculateUnapprovedPayWhenRatesChange"];
-    if (JSON.stringify(keys.map((key) => before?.[key] ?? null)) !== JSON.stringify(keys.map((key) => after?.[key] ?? null))) await enqueueRefresh(event, true);
+    if (JSON.stringify(keys.map((key) => before?.[key] ?? null)) !== JSON.stringify(keys.map((key) => after?.[key] ?? null))) await refreshQueue.enqueue(event.params.companyId, event.id, [{ kind: "company" }]);
   }
   async function refreshRequestedStop(request) {
     const { HttpsError } = require("firebase-functions/v2/https");
@@ -299,12 +349,16 @@ function createPayrollWorkflow(db) {
   }
   async function onPayLineWrite(event) {
     const before=event.data?.before?.data(),after=event.data?.after?.data();
+    if (after?.zeroDollarTaskCleared && !before?.zeroDollarTaskCleared) {
+      if (after.serviceStopId) await reconcileStop(event.params.companyId, after.serviceStopId);
+      if (after.jobId) await reconcileJob(event.params.companyId, id(after.jobId));
+    }
     if ((after || before)?.payrollSource === "workOfferIncentive") return;
     const sig=v=>JSON.stringify([v?.workOfferId,v?.workOfferClaimId,v?.technicianId,v?.totalAmountCents,v?.calculationStatus]);
     if (sig(before)===sig(after)) return;
     for(const offerId of new Set([before?.workOfferId,after?.workOfferId].filter(Boolean))) await reconcileOffer(event.params.companyId,offerId);
   }
-  return { reconcileOffer, onOfferWrite, onPayLineWrite, refreshRequestedStop, reconcileStop, reconcileJob, onStopWrite, onStopTaskWrite, onJobTaskWrite, onRateWrite, onSettingsWrite, processRefresh };
+  return { clearZeroDollarTasks, reconcileOffer, onOfferWrite, onPayLineWrite, refreshRequestedStop, reconcileStop, reconcileJob, onStopWrite, onStopTaskWrite, onJobTaskWrite, onRateWrite, onSettingsWrite, processRefresh };
 }
 
 module.exports = { createPayrollWorkflow };

@@ -1,7 +1,10 @@
+import { DEFAULT_LABOR_MULTIPLIER, normalizeLaborMultiplier } from "./laborPricing";
+
 export const COMPANY_WIDE_SETTINGS_DOC_ID = "companyWide";
 export const PAYROLL_ENABLED_FIELD = "payrollEnabled";
 
 export const DEFAULT_COMPANY_WORK_SETTINGS = {
+  laborMultiplier: DEFAULT_LABOR_MULTIPLIER,
   customerBillingEnabled: false,
   salesCreateBillingSubscriptionOnAcceptanceDefault: true,
   payrollEnabled: true,
@@ -42,6 +45,7 @@ export const normalizeCompanyWorkSettings = (settings = {}) => {
   );
 
   return {
+    laborMultiplier: normalizeLaborMultiplier(data.laborMultiplier),
     customerBillingEnabled,
     salesCreateBillingSubscriptionOnAcceptanceDefault: customerBillingEnabled && boolWithDefault(
       data.salesCreateBillingSubscriptionOnAcceptanceDefault,

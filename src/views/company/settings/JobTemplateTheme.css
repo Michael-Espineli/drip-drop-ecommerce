@@ -1,0 +1,122 @@
+/* Template workspaces use neutral grays; live job and finance themes keep their
+   existing colors. Local tokens also follow dialogs mounted in a portal. */
+.job-template-theme {
+  --color-app-bg: #ededed;
+  --color-page-bg: #f1f1f1;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f5f5f5;
+  --color-surface-strong: #e5e5e5;
+  --color-border: #d4d4d4;
+  --color-border-strong: #a3a3a3;
+  --color-text: #262626;
+  --color-text-muted: #525252;
+  --color-text-subtle: #626262;
+  --color-primary: #404040;
+  --color-primary-hover: #262626;
+  --color-primary-soft: #e5e5e5;
+  --color-primary-text: #ffffff;
+  --color-shadow: 0 3px 12px rgb(0 0 0 / 5%);
+  --template-header: #3b3b3b;
+  --template-header-muted: #e5e5e5;
+  color: var(--color-text);
+  accent-color: var(--color-primary);
+}
+
+.theme-dark .job-template-theme {
+  --color-app-bg: #202020;
+  --color-page-bg: #202020;
+  --color-surface: #292929;
+  --color-surface-soft: #333333;
+  --color-surface-strong: #404040;
+  --color-border: #525252;
+  --color-border-strong: #737373;
+  --color-text: #fafafa;
+  --color-text-muted: #e5e5e5;
+  --color-text-subtle: #c4c4c4;
+  --color-primary: #e5e5e5;
+  --color-primary-hover: #ffffff;
+  --color-primary-soft: #404040;
+  --color-primary-text: #262626;
+  --color-shadow: 0 3px 12px rgb(0 0 0 / 18%);
+  --template-header: #383838;
+}
+
+.job-template-page {
+  background-color: var(--color-page-bg) !important;
+}
+
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="bg-white"]) { background-color: var(--color-surface) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="bg-slate-50"], [class~="bg-gray-50"], [class~="bg-blue-50"], [class~="bg-blue-50/60"]) { background-color: var(--color-surface-soft) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="bg-slate-100"], [class~="bg-slate-200"], [class~="bg-blue-100"]) { background-color: var(--color-surface-strong) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="border-slate-200"], [class~="border-slate-300"], [class~="border-blue-100"], [class~="border-blue-200"]) { border-color: var(--color-border) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="text-slate-900"], [class~="text-slate-950"], [class~="text-blue-700"], [class~="text-blue-800"], [class~="text-blue-900"]) { color: var(--color-text) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="text-slate-600"], [class~="text-slate-700"]) { color: var(--color-text-muted) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="text-slate-400"], [class~="text-slate-500"]) { color: var(--color-text-subtle) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="hover:bg-blue-50"], [class~="hover:bg-blue-100"], [class~="hover:bg-slate-50"], [class~="hover:bg-slate-100"]):hover { background-color: var(--color-surface-soft) !important; }
+:is(.job-template-theme, .company-theme .app-main-content .job-template-theme) :is([class~="hover:text-blue-700"], [class~="hover:text-blue-900"]):hover { color: var(--color-primary) !important; }
+
+/* Override the shared workspace's legacy blue/gray button normalization only
+   inside templates. Warning, deletion, and financial status colors stay semantic. */
+.job-template-theme :is(button, a[href])[class~="bg-blue-600"],
+.company-theme .app-main-content .job-template-theme :is(button, a[href])[class~="bg-blue-600"],
+.job-template-theme :is(button, a[href])[class~="bg-slate-900"],
+.company-theme .app-main-content .job-template-theme :is(button, a[href])[class~="bg-slate-900"] {
+  background-color: var(--color-primary) !important;
+  border: 1px solid var(--color-primary) !important;
+  color: var(--color-primary-text) !important;
+}
+.job-template-theme :is(button, a[href])[class~="bg-blue-600"]:hover:not(:disabled),
+.company-theme .app-main-content .job-template-theme :is(button, a[href])[class~="bg-blue-600"]:hover:not(:disabled),
+.job-template-theme :is(button, a[href])[class~="bg-slate-900"]:hover:not(:disabled),
+.company-theme .app-main-content .job-template-theme :is(button, a[href])[class~="bg-slate-900"]:hover:not(:disabled) {
+  background-color: var(--color-primary-hover) !important;
+  color: var(--color-primary-text) !important;
+}
+.job-template-theme :is(input, select, textarea, button, a):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.job-template-theme [class*="focus:ring-blue-"]:focus {
+  --tw-ring-color: var(--color-border-strong) !important;
+  border-color: var(--color-border-strong) !important;
+}
+
+.job-template-theme .template-header {
+  background: var(--template-header);
+  border-color: var(--template-header);
+  color: #ffffff;
+}
+.template-header-title { color: #ffffff; }
+.template-header-muted { color: var(--template-header-muted); }
+.template-back-link { display: inline-flex; align-items: center; color: var(--template-header-muted); font-size: 0.875rem; font-weight: 600; }
+.template-back-link:hover { color: #ffffff; text-decoration: underline; }
+.template-kind-label { display: inline-flex; align-items: center; gap: 0.375rem; border: 1px solid #a3a3a3; border-radius: 999px; padding: 0.25rem 0.625rem; background: #525252; color: #ffffff; font-size: 0.75rem; font-weight: 700; }
+.template-header-action { display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid #a3a3a3; background: #525252; color: #ffffff; }
+.template-header-action:hover { background: #626262; }
+.template-header :is(button, a):focus-visible { outline-color: #ffffff; }
+.template-primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; border: 1px solid var(--color-primary); background: var(--color-primary); color: var(--color-primary-text); }
+.template-primary-action:hover { background: var(--color-primary-hover); }
+.template-header .template-primary-action { border-color: #fafafa; background: #fafafa; color: #262626; }
+.template-header .template-primary-action:hover { background: #e5e5e5; }
+.template-secondary-action { border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); }
+.template-secondary-action:hover { background: var(--color-surface-soft); }
+.template-menu { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
+.template-menu-item[data-focus] { background: var(--color-surface-soft); }
+.template-mode-notice { border: 1px solid var(--color-border); border-left: 4px solid var(--color-primary); background: var(--color-surface-strong); color: var(--color-text); }
+.template-section-link { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
+.template-section-link:hover:not(:disabled) { background: var(--color-surface-soft); }
+.template-section-helper { color: var(--color-text-subtle); }
+.template-section-count { background: var(--color-surface); color: var(--color-text-subtle); }
+.template-section-link--active { border-color: var(--color-border-strong); background: var(--color-surface-soft); color: var(--color-text); }
+.template-section-link--active:hover:not(:disabled) { background: var(--color-surface-strong); }
+.template-section-link:disabled { background: var(--color-surface); opacity: 0.6; cursor: not-allowed; }
+.template-pricing-total { border-top: 1px solid var(--color-border); background: var(--color-surface-strong); color: var(--color-text); }
+.job-template-theme .template-select__control { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text); }
+.job-template-theme .template-select__control--is-focused { border-color: var(--color-primary); box-shadow: 0 0 0 1px var(--color-primary); }
+.job-template-theme .template-select__menu { z-index: 70; background: var(--color-surface); }
+.job-template-theme .template-select__option { background: var(--color-surface); color: var(--color-text); }
+.job-template-theme .template-select__option--is-focused { background: var(--color-surface-soft); }
+.job-template-theme .template-select__option--is-selected { background: var(--color-primary); color: var(--color-primary-text); }
+.job-template-theme .template-select__input-container,
+.job-template-theme .template-select__single-value { color: var(--color-text); }
+.job-template-theme .template-select__placeholder { color: var(--color-text-subtle); }

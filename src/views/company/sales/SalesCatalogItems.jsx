@@ -37,7 +37,8 @@ import JobPayrollFields from '../jobs/JobPayrollFields';
 import useServicePayrollData from '../../../hooks/useServicePayrollData';
 import useJobProductCatalog from '../../../hooks/useJobProductCatalog';
 import ServiceTaskProductFields from '../jobs/ServiceTaskProductFields';
-import ServicePayrollCostPreview from './ServicePayrollCostPreview';
+import ServicePayrollCostEditor from './ServicePayrollCostEditor';
+import ServicePayTypeField from './ServicePayTypeField';
 import { taskDefaultsFromPayItem, updateServiceTaskPayrollField } from '../../../utils/payroll/servicePayrollPreview';
 import {
   fetchRecurringTaskGroupOptions,
@@ -250,6 +251,7 @@ const initialForm = {
   billingBehavior: SalesCatalogBillingBehavior.oneTime,
   sourceType: SalesCatalogSourceType.manual,
   sourceId: '',
+  payTypeId: '',
   unitAmount: '',
   unitCost: '',
   defaultQuantity: '1',
@@ -575,15 +577,30 @@ const SalesCatalogItems = () => {
     setForm((current) => ({
       ...current,
       sourceType: value,
-      sourceId: '',
+      sourceId: value === SalesCatalogSourceType.serviceStopType ? current.payTypeId || '' : '',
     }));
+  };
+
+  const handleServicePayTypeChange = (payTypeId) => {
+    setForm((current) => {
+      const item = servicePayrollData.payTypes.find((type) => type.id === payTypeId);
+      const previous = servicePayrollData.payTypes.find((type) => type.id === current.payTypeId);
+      const usesPaySource = [SalesCatalogSourceType.manual, SalesCatalogSourceType.serviceStopType, SalesCatalogSourceType.workType].includes(current.sourceType);
+      return {
+        ...current,
+        payTypeId,
+        ...(usesPaySource ? { sourceType: payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual, sourceId: payTypeId } : {}),
+        name: current.name || item?.name || '',
+        taskTemplates: (current.taskTemplates || []).map((task) => task.payTypeId ? task : taskDefaultsFromPayItem(task, item, previous)),
+      };
+    });
   };
 
   const updateTaskTemplate = (templateId, field, value) => {
     setForm((current) => ({
       ...current,
       taskTemplates: (current.taskTemplates || []).map((template) => (
-        template.id === templateId ? updateServiceTaskPayrollField(template, field, value, servicePayrollData.payTypes, current.sourceType === SalesCatalogSourceType.serviceStopType ? current.sourceId : '') : template
+        template.id === templateId ? updateServiceTaskPayrollField(template, field, value, servicePayrollData.payTypes, current.payTypeId) : template
       )),
     }));
   };
@@ -591,7 +608,7 @@ const SalesCatalogItems = () => {
   const addTaskTemplate = () => {
     setForm((current) => ({
       ...current,
-      taskTemplates: [...(current.taskTemplates || []), taskDefaultsFromPayItem(emptyTaskTemplate(), servicePayrollData.payTypes.find((type) => type.id === current.sourceId))],
+      taskTemplates: [...(current.taskTemplates || []), taskDefaultsFromPayItem(emptyTaskTemplate(), servicePayrollData.payTypes.find((type) => type.id === current.payTypeId))],
     }));
   };
 
@@ -661,6 +678,10 @@ const SalesCatalogItems = () => {
   };
 
   const handleSourceSelection = (sourceId) => {
+    if (form.sourceType === SalesCatalogSourceType.serviceStopType) {
+      handleServicePayTypeChange(sourceId);
+      return;
+    }
     const source = currentSourceOptions.find((item) => item.id === sourceId);
 
     setForm((current) => {
@@ -711,6 +732,7 @@ const SalesCatalogItems = () => {
           ? SalesCatalogSourceType.serviceStopType
           : item.sourceType || SalesCatalogSourceType.manual,
       sourceId: item.sourceId || '',
+      payTypeId: jobPayFields(item).payTypeId,
       unitAmount: centsToDollarsInput(item.unitAmountCents),
       unitCost: centsToDollarsInput(item.unitCostCents),
       defaultQuantity: String(item.defaultQuantity || 1),
@@ -736,6 +758,8 @@ const SalesCatalogItems = () => {
       type: form.type,
       billingBehavior: form.billingBehavior,
       sourceType: form.sourceType,
+      payTypeId: form.payTypeId || '',
+      payTypeName: servicePayrollData.payTypes.find((type) => type.id === form.payTypeId)?.name || '',
       sourceId:
         form.sourceType === SalesCatalogSourceType.stripeProductPrice
           ? form.stripePriceId.trim() || form.stripeProductId.trim()
@@ -984,9 +1008,6 @@ const SalesCatalogItems = () => {
         <div className="mt-3 space-y-3">
           {form.taskTemplates.map((template, index) => (
             <div key={template.id} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
-              <JobPayrollFields value={template} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={form.unitAmount}
-                inheritedPayTypeId={form.sourceType === SalesCatalogSourceType.serviceStopType ? form.sourceId : ""}
-                onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</span>
@@ -1040,7 +1061,7 @@ const SalesCatalogItems = () => {
                   placeholder="Spray grids, check grids, reassemble filter"
                 />
               </label>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 xl:items-end">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:items-end">
                 <label className="block text-sm font-semibold text-slate-700">
                   Estimated Minutes
                   <input
@@ -1049,17 +1070,6 @@ const SalesCatalogItems = () => {
                     step="1"
                     value={template.estimatedMinutes}
                     onChange={(event) => updateTaskTemplate(template.id, 'estimatedMinutes', event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
-                <label className="block text-sm font-semibold text-slate-700">
-                  Tech Labor Cost
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={template.laborCost}
-                    onChange={(event) => updateTaskTemplate(template.id, 'laborCost', event.target.value)}
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   />
                 </label>
@@ -1085,6 +1095,20 @@ const SalesCatalogItems = () => {
                   Customer approval
                 </label>
               </div>
+              <JobPayrollFields value={template} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={form.unitAmount}
+                inheritedPayTypeId={form.payTypeId}
+                taskCostField={<label className="block text-sm font-semibold text-slate-700">
+                  Tech Labor Cost
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={template.laborCost}
+                    onChange={(event) => updateTaskTemplate(template.id, 'laborCost', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>}
+                onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
             </div>
           ))}
         </div>
@@ -1165,6 +1189,7 @@ const SalesCatalogItems = () => {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
         <form
+          aria-label={editingItemId ? 'Edit Service' : 'Create Service'}
           onSubmit={handleSubmit}
           className="flex max-h-[92vh] w-full max-w-[96rem] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
         >
@@ -1254,7 +1279,7 @@ const SalesCatalogItems = () => {
                   </div>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label htmlFor="unitAmount" className="block text-sm font-semibold text-slate-700">
                       Customer Price
@@ -1266,21 +1291,6 @@ const SalesCatalogItems = () => {
                       step="0.01"
                       value={form.unitAmount}
                       onChange={(event) => handleFieldChange('unitAmount', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="unitCost" className="block text-sm font-semibold text-slate-700">
-                      Internal Cost
-                    </label>
-                    <input
-                      id="unitCost"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.unitCost}
-                      onChange={(event) => handleFieldChange('unitCost', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     />
                   </div>
@@ -1314,7 +1324,9 @@ const SalesCatalogItems = () => {
                   Taxable
                 </label>
 
-                <div>
+                <details>
+                  <summary className="cursor-pointer text-sm font-semibold text-slate-700">Catalog source (optional)</summary>
+                <div className="mt-3">
                   <label htmlFor="sourceType" className="block text-sm font-semibold text-slate-700">
                     Source Type
                   </label>
@@ -1330,7 +1342,7 @@ const SalesCatalogItems = () => {
                   </select>
                 </div>
 
-                {currentSourceConfig && (
+                {currentSourceConfig && form.sourceType !== SalesCatalogSourceType.serviceStopType && (
                   <div>
                     <label htmlFor="sourcePicker" className="block text-sm font-semibold text-slate-700">
                       {currentSourceConfig.label}
@@ -1358,10 +1370,10 @@ const SalesCatalogItems = () => {
 
                 {form.sourceType === SalesCatalogSourceType.manual && (
                   <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                    Manual services are not tied to another record. Use this for custom services, package pricing,
-                    recurring offerings, fees, and descriptions that only live in billing.
+                    Use a manual source for custom services and package pricing. Technician pay is configured separately below.
                   </p>
                 )}
+                </details>
 
                 {form.billingBehavior === SalesCatalogBillingBehavior.recurring && (
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -1398,8 +1410,12 @@ const SalesCatalogItems = () => {
                   </div>
                 )}
 
-              <ServicePayrollCostPreview data={servicePayrollData} tasks={form.taskTemplates}
-                inheritedPayTypeId={form.sourceType === SalesCatalogSourceType.serviceStopType ? form.sourceId : ""}
+              <ServicePayTypeField value={form.payTypeId} payTypes={servicePayrollData.payTypes} loading={servicePayrollData.loading}
+                onChange={handleServicePayTypeChange} />
+              <ServicePayrollCostEditor data={servicePayrollData} tasks={form.taskTemplates}
+                onCostChange={(unitCost) => handleFieldChange('unitCost', unitCost)}
+                onUseSuggestedPrice={(cents) => handleFieldChange('unitAmount', (cents / 100).toFixed(2))}
+                inheritedPayTypeId={form.payTypeId}
                 priceInput={form.unitAmount} costInput={form.unitCost}
                 onUseHighCost={(cents) => handleFieldChange('unitCost', (cents / 100).toFixed(2))} />
                 {renderStripeReferencePanel(editingItem)}

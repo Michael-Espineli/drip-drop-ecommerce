@@ -186,7 +186,7 @@ const EQUIPMENT_TABLE_SORT_COLUMNS = [
   { field: "activeJobs", label: "Active Jobs" },
   { field: "recurringServiceStops", label: "RSS" },
 ];
-const EQUIPMENT_TABLE_COLUMN_COUNT = EQUIPMENT_TABLE_SORT_COLUMNS.length + 2;
+const EQUIPMENT_TABLE_COLUMN_COUNT = EQUIPMENT_TABLE_SORT_COLUMNS.length + 3;
 const inputBase =
   "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 const modalSecondaryButton =
@@ -761,7 +761,7 @@ const RecurringStopsCell = ({ stops = [], loading = false }) => {
   const remainingCount = Math.max(0, stops.length - visibleStops.length);
 
   return (
-    <div className="min-w-[170px] max-w-[230px] space-y-1.5">
+    <div className="space-y-1">
       <div className="space-y-1">
         {visibleStops.map((stop) => (
           <Link
@@ -772,12 +772,12 @@ const RecurringStopsCell = ({ stops = [], loading = false }) => {
               recurringStopDayLabel(stop),
               recurringStopFrequencyLabel(stop),
             ].filter(Boolean).join(" - ")}
-            className="block rounded-md border border-emerald-100 bg-emerald-50 px-2 py-1.5 text-xs transition hover:border-emerald-300 hover:bg-emerald-100"
+            className="block rounded-md border border-emerald-100 bg-emerald-50 px-1 py-1 text-xs transition hover:border-emerald-300 hover:bg-emerald-100"
           >
-            <span className="block truncate font-bold text-emerald-800">
+            <span className="block whitespace-nowrap font-bold text-emerald-800">
               {recurringStopTechnicianLabel(stop)}
             </span>
-            <span className="mt-0.5 block truncate text-[11px] font-semibold text-slate-600">
+            <span className="block whitespace-nowrap text-[11px] font-semibold text-slate-600">
               {recurringStopDayLabel(stop)} · {recurringStopFrequencyLabel(stop)}
             </span>
           </Link>
@@ -841,6 +841,32 @@ const TopFilterButton = ({ label, count, active, onClick }) => (
       {count}
     </span>
   </button>
+);
+
+const QuickActionsHeader = () => (
+  <th scope="col" className="w-px border-b border-slate-200 px-2 py-3 text-center text-xs font-semibold text-slate-500">
+    <span className="sr-only">Quick Actions</span>
+    <EllipsisVerticalIcon aria-hidden="true" className="mx-auto h-5 w-5" />
+  </th>
+);
+
+const QuickActionsCell = ({ disabled, expanded, onClick }) => (
+  <td className="relative w-px whitespace-nowrap px-2 py-2 text-center">
+    <div className="relative inline-flex">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        aria-haspopup="menu"
+        aria-expanded={expanded}
+        aria-label="Open quick actions"
+        title="Quick actions"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+      >
+        <EllipsisVerticalIcon aria-hidden="true" className="h-5 w-5" />
+      </button>
+    </div>
+  </td>
 );
 
 const QuickActionMenuItem = ({ label, icon: Icon, tone = "black", onClick }) => {
@@ -2758,7 +2784,7 @@ export default function EquipmentList() {
     }
 
     if (!canScheduleTemplateForOthers && selectedScheduleTechnician?.userId !== currentCompanyUser?.userId) {
-      toast.error("You can only assign this basic job to yourself.");
+      toast.error("You can only assign this job to yourself.");
       setScheduleTechnicianId(currentCompanyUser?.userId || currentCompanyUser?.id || "");
       return;
     }
@@ -4067,10 +4093,11 @@ export default function EquipmentList() {
             <table className="min-w-full bg-white">
               <thead className="bg-slate-50">
                 <tr>
+                  <QuickActionsHeader />
                   {EQUIPMENT_TABLE_SORT_COLUMNS.map(({ field, label }) => (
                     <th
                       key={field}
-                      className="cursor-pointer select-none border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                      className={`cursor-pointer select-none border-b border-slate-200 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 ${["recurringServiceStops", "status"].includes(field) ? "w-px whitespace-nowrap px-2" : "px-5"}`}
                       onClick={() => handleSort(field)}
                     >
                       {label}
@@ -4078,7 +4105,7 @@ export default function EquipmentList() {
                     </th>
                   ))}
                   <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</th>
-                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Quick Actions</th>
+                  <QuickActionsHeader />
                 </tr>
               </thead>
 
@@ -4093,6 +4120,7 @@ export default function EquipmentList() {
 
                 {!loadingEquipment && filteredEquipmentList.map((equipment) => {
                   const maintenanceFlag = isNeedsMaintenance(equipment);
+                  const statusLabel = maintenanceFlag ? "Needs Maintenance" : displayEquipmentStatus(equipment.status);
                   const actionMenuOpen = openActionMenuId === equipment.id;
                   const hasQuickActions = can("64") || canScheduleTemplateSelf;
                   const serviceLocation = getEquipmentServiceLocation(equipment);
@@ -4106,13 +4134,18 @@ export default function EquipmentList() {
 
                   return (
                     <tr key={equipment.id} className="transition hover:bg-slate-50">
-                      <td className="whitespace-nowrap px-5 py-3 text-sm">
+                      <QuickActionsCell
+                        disabled={!hasQuickActions}
+                        expanded={actionMenuOpen}
+                        onClick={(event) => toggleQuickActions(equipment.id, event)}
+                      />
+                      <td className="whitespace-nowrap px-5 py-2 text-sm">
                         <EquipmentDetailLink equipment={equipment}>
                           {equipment.customerName}
                         </EquipmentDetailLink>
                       </td>
 
-                      <td className="min-w-[240px] px-5 py-3 text-sm text-slate-700">
+                      <td className="min-w-[240px] px-5 py-2 text-sm text-slate-700">
                         {equipment.serviceLocationId ? (
                           <Link
                             to={`/company/serviceLocations/detail/${equipment.serviceLocationId}`}
@@ -4126,49 +4159,50 @@ export default function EquipmentList() {
                         )}
                       </td>
 
-                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
+                      <td className="whitespace-nowrap px-5 py-2 text-sm text-slate-700">
                         <EquipmentDetailLink equipment={equipment}>
                           {equipment.make}
                         </EquipmentDetailLink>
                       </td>
 
-                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
+                      <td className="whitespace-nowrap px-5 py-2 text-sm text-slate-700">
                         <EquipmentDetailLink equipment={equipment}>
                           {equipment.model}
                         </EquipmentDetailLink>
                       </td>
 
-                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
+                      <td className="whitespace-nowrap px-5 py-2 text-sm text-slate-700">
                         {equipment.type}
                       </td>
 
                       <td
-                        className={`whitespace-nowrap px-5 py-3 text-sm ${equipment.needsService && dateIsDue(equipment.nextServiceDate) ? "font-semibold text-red-600" : "text-slate-700"
+                        className={`whitespace-nowrap px-5 py-2 text-sm ${equipment.needsService && dateIsDue(equipment.nextServiceDate) ? "font-semibold text-red-600" : "text-slate-700"
                           }`}
                       >
                         {equipment.needsService && equipment.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "—"}
                       </td>
 
-                      <td className="whitespace-nowrap px-5 py-3">
+                      <td className="w-px px-2 py-2">
                         <span
-                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(
+                          title={statusLabel}
+                          className={`block w-28 max-w-full whitespace-normal rounded-xl px-2 py-1 text-center text-xs font-semibold leading-4 ${getStatusClass(
                             equipment.status,
                             maintenanceFlag
                           )}`}
                         >
-                          {maintenanceFlag ? "Needs Maintenance" : displayEquipmentStatus(equipment.status)}
+                          <span className="line-clamp-2 break-words">{statusLabel}</span>
                         </span>
                       </td>
 
-                      <td className="px-5 py-3 text-sm text-slate-700">
+                      <td className="px-5 py-2 text-sm text-slate-700">
                         <ActiveJobsCell jobs={activeJobs} loading={loadingActiveJobs} />
                       </td>
 
-                      <td className="px-5 py-3 text-sm text-slate-700">
+                      <td className="w-px whitespace-nowrap px-2 py-2 text-sm text-slate-700">
                         <RecurringStopsCell stops={recurringStops} loading={loadingRecurringStops} />
                       </td>
 
-                      <td className="min-w-[260px] px-5 py-3 text-sm text-slate-700">
+                      <td className="min-w-[260px] px-5 py-2 text-sm text-slate-700">
                         <textarea
                           value={noteDraft}
                           disabled={!can("64") || noteSaving}
@@ -4188,40 +4222,31 @@ export default function EquipmentList() {
                             }
                           }}
                           className={[
-                            "min-h-[72px] w-full resize-y rounded-md border bg-white px-3 py-2 text-sm text-slate-800 shadow-sm",
+                            "block w-full resize-y rounded-md border bg-white px-3 py-1 text-sm text-slate-800 shadow-sm",
                             "focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100",
                             "disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500",
                             noteError ? "border-red-300" : noteDirty ? "border-blue-300" : "border-slate-300",
                           ].join(" ")}
                           placeholder="Add equipment notes"
                         />
-                        <div className="mt-1 min-h-[16px] text-xs">
-                          {noteSaving ? (
-                            <span className="font-semibold text-blue-600">Saving...</span>
-                          ) : noteError ? (
-                            <span className="font-semibold text-red-600">{noteError}</span>
-                          ) : noteDirty ? (
-                            <span className="font-semibold text-blue-600">Unsaved changes</span>
-                          ) : null}
-                        </div>
+                        {(noteSaving || noteError || noteDirty) && (
+                          <div className="mt-1 text-xs" role="status">
+                            {noteSaving ? (
+                              <span className="font-semibold text-blue-600">Saving...</span>
+                            ) : noteError ? (
+                              <span className="font-semibold text-red-600">{noteError}</span>
+                            ) : (
+                              <span className="font-semibold text-blue-600">Unsaved changes</span>
+                            )}
+                          </div>
+                        )}
                       </td>
 
-                      <td className="relative min-w-[140px] px-5 py-3">
-                        <div className="relative inline-flex">
-                          <button
-                            type="button"
-                            disabled={!hasQuickActions}
-                            onClick={(event) => toggleQuickActions(equipment.id, event)}
-                            aria-haspopup="menu"
-                            aria-expanded={actionMenuOpen}
-                            aria-label="Open quick actions"
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                          >
-                            <EllipsisVerticalIcon className="h-5 w-5" />
-                            <span>Actions</span>
-                          </button>
-                        </div>
-                      </td>
+                      <QuickActionsCell
+                        disabled={!hasQuickActions}
+                        expanded={actionMenuOpen}
+                        onClick={(event) => toggleQuickActions(equipment.id, event)}
+                      />
                     </tr>
                   );
                 })}

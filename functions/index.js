@@ -648,6 +648,10 @@ exports.reconcileCompanyPayrollSwitch = serviceStopCompletion.reconcileCompanyPa
 exports.reconcileCompanyPayType = serviceStopCompletion.reconcileCompanyPayType;
 exports.processPayrollReconcileWork = serviceStopCompletion.processPayrollReconcileWork;
 exports.refreshServiceStopPayroll = serviceStopCompletion.refreshServiceStopPayroll;
+exports.clearZeroDollarPayrollTasks = serviceStopCompletion.clearZeroDollarPayrollTasks;
+exports.approvePayrollDateRange = serviceStopCompletion.approvePayrollDateRange;
+exports.previewPayrollStatements = serviceStopCompletion.previewPayrollStatements;
+exports.createPayrollStatement = serviceStopCompletion.createPayrollStatement;
 
 
 

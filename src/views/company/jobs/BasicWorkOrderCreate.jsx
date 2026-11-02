@@ -1,6 +1,7 @@
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
+import { canUseJobTemplate } from "../../../utils/jobTemplateAvailability";
 import { createJobAtomically } from "../../../utils/createJobAtomically";
 import React, { useContext, useEffect, useMemo, useState, useRef } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -433,13 +434,16 @@ const BasicWorkOrderCreate = () => {
 
     const templateOptions = useMemo(() => (
         templates
-            .filter((template) => template.isActive !== false && template.active !== false && template.technicianCanAdd === true)
+            .filter((template) => canUseJobTemplate(template, { technicianOnly: !canUseFullCreate }))
             .map((template) => ({
                 ...template,
                 value: template.id,
                 label: template.name || "Job Template",
             }))
-    ), [templates]);
+    ), [templates, canUseFullCreate]);
+
+    const requestedTemplateUnavailable = !loading && !selectedTemplate && searchParams.get("templateId") &&
+        !templateOptions.some((template) => template.id === searchParams.get("templateId"));
 
     const assigneeOptions = useMemo(() => (
         companyUsers
@@ -777,7 +781,7 @@ const BasicWorkOrderCreate = () => {
                 })));
             } catch (error) {
                 console.error("Error loading basic job data:", error);
-                toast.error("Could not load basic job form data.");
+                toast.error("Could not load job scheduling form data.");
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -1238,6 +1242,9 @@ const BasicWorkOrderCreate = () => {
             totalPriceCents,
             taxable: Boolean(line.taxable),
             internalCostCents: laborLineInternalCostCents(line),
+            internalCostMode: line.internalCostMode || "fixed",
+            payTypeId: jobPayFields(line).payTypeId,
+            payTypeName: line.payTypeName || "",
             taskIds,
             laborLineTaskIds: taskIds,
             plannedServiceStopIds,
@@ -1465,7 +1472,7 @@ const BasicWorkOrderCreate = () => {
         const planTierLabel = getJobPlanRecommendationLabel(planTier);
         const issuePriorityLevel = newJobIssuePriority;
         const issuePriorityLabel = getIssuePriorityLabel(issuePriorityLevel);
-        const planName = selectedTemplate?.name ? `${selectedTemplate.name} Plan` : "Basic Job Plan";
+        const planName = selectedTemplate?.name ? `${selectedTemplate.name} Plan` : "Job Plan";
 
         return {
             id: planId,
@@ -1785,17 +1792,17 @@ const BasicWorkOrderCreate = () => {
 
     const handleCreate = async () => {
         if (!hasAnyBasicPermission) {
-            await appAlert("You do not have permission to create basic jobs.");
+            await appAlert("You do not have permission to create and schedule jobs.");
             return;
         }
 
         if (!selectedModeAllowed) {
-            await appAlert("You do not have permission for this basic job type.");
+            await appAlert("You do not have permission for this job type.");
             return;
         }
 
         if (mode === "template" && selectedTemplate?.id && !templateDetailsReady) {
-            await appAlert("Template details are still loading. Please wait for the template scope to finish loading before creating the basic job.");
+            await appAlert("Template details are still loading. Please wait for the template scope to finish loading before creating the job.");
             return;
         }
 
@@ -1805,27 +1812,27 @@ const BasicWorkOrderCreate = () => {
         }
 
         if (mode === "template" && missingEquipmentAssignments.length > 0) {
-            await appAlert(`Assign equipment for ${missingEquipmentAssignments.length} service/task item${missingEquipmentAssignments.length === 1 ? "" : "s"} before creating this basic job.`);
+            await appAlert(`Assign equipment for ${missingEquipmentAssignments.length} service/task item${missingEquipmentAssignments.length === 1 ? "" : "s"} before creating this job.`);
             return;
         }
 
         if (mode === "template" && selectedTemplateRequiresEquipment && assignedEquipmentIds.length === 0) {
-            await appAlert("Select equipment before creating this template basic job.");
+            await appAlert("Select equipment before creating this template job.");
             return;
         }
 
         if (mode === "template" && selectedTemplateRequiresBodyOfWater && !resolvedJobBodyOfWaterId) {
-            await appAlert("Select a body of water before creating this template basic job.");
+            await appAlert("Select a body of water before creating this template job.");
             return;
         }
 
         if (!canCreate) {
-            await appAlert("Pick a template or custom basic job, customer, service location, technician, scheduled time, and assigned admin.");
+            await appAlert("Pick a template or custom job, customer, service location, technician, scheduled time, and assigned admin.");
             return;
         }
 
         if (!canAssignForSelectedMode && selectedAssignee?.userId !== currentCompanyUser?.userId) {
-            await appAlert("You can only assign this basic job to yourself.");
+            await appAlert("You can only assign this job to yourself.");
             setSelectedAssignee(currentCompanyUser);
             return;
         }
@@ -1841,6 +1848,14 @@ const BasicWorkOrderCreate = () => {
         try {
             const jobId = pendingCreationId.current || (pendingCreationId.current = `comp_wo_${uuidv4()}`);
             await createJobAtomically(db, { companyId: recentlySelectedCompany, jobId, creator: { userId: createdByUserId, userName: createdByUserName } }, async (writer) => {
+                if (mode === "template") {
+                    const snapshot = await writer.get(doc(db, "companies", recentlySelectedCompany, "jobTemplates", selectedTemplate.id));
+                    if (!snapshot.exists() || !canUseJobTemplate(snapshot.data(), { technicianOnly: !canUseFullCreate })) {
+                        const error = new Error("This template is inactive or unavailable to you. Choose an available template.");
+                        error.code = "job-template-unavailable";
+                        throw error;
+                    }
+                }
                 const workOrderCounterRef = doc(db, "companies", recentlySelectedCompany, "settings", "workOrders");
                 const workOrderCounterSnap = await writer.get(workOrderCounterRef);
                 const nextCount = workOrderCounterSnap.exists()
@@ -1934,7 +1949,7 @@ const BasicWorkOrderCreate = () => {
                     dateCreated: nowTimestamp,
                     updatedAt: nowTimestamp,
                     updatedAtMillis: nowMillis,
-                    lastHistoryEventTitle: "Basic job created",
+                    lastHistoryEventTitle: "Job created and scheduled",
                     lastHistoryEventType: "Created",
                     description: description.trim() || selectedTemplate?.description || "",
                     operationStatus: "Scheduled",
@@ -2072,12 +2087,12 @@ const BasicWorkOrderCreate = () => {
                     jobId,
                     jobInternalId: nextInternalId,
                     eventType: "Created",
-                    title: "Basic job created",
+                    title: "Job created and scheduled",
                     description: repairRequest?.id
                         ? `Created from repair request: ${repairRequest.description || repairRequest.id}`
                         : selectedTemplate?.name
                             ? `Created from technician template: ${selectedTemplate.name}`
-                            : "Created from the basic custom job form.",
+                            : "Created from the custom job scheduling form.",
                     changes: [
                         { field: "adminName", label: "Admin", before: "-", after: resolvedAdmin.name || "-" },
                         { field: "assignedTechName", label: "Technician", before: "-", after: selectedAssignee.userName || "-" },
@@ -2130,11 +2145,11 @@ const BasicWorkOrderCreate = () => {
 
             });
             pendingCreationId.current = null;
-            toast.success("Basic job scheduled.");
+            toast.success("Job scheduled.");
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating basic job:", error);
-            toast.error(error.code === "job-scope-too-large" ? error.message : "Failed to create basic job.");
+            toast.error(["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : "Failed to create and schedule job.");
         } finally {
             setCreating(false);
         }
@@ -2144,7 +2159,7 @@ const BasicWorkOrderCreate = () => {
         return (
             <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
                 <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 text-sm font-semibold text-slate-700 shadow-sm">
-                    Loading basic job form...
+                    Loading job scheduling form...
                 </div>
             </div>
         );
@@ -2172,9 +2187,9 @@ const BasicWorkOrderCreate = () => {
                         <Link to="/company/jobs" className="text-sm font-semibold text-blue-700 hover:text-blue-900">
                             Back to Jobs
                         </Link>
-                        <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">Basic Job</h1>
+                        <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">Create and Schedule Job</h1>
                         <p className="mt-1 text-sm text-slate-500">
-                            Schedule technician-safe jobs without the full billing and job setup workflow.
+                            Choose a template or custom scope, assign a technician, and schedule the first visit.
                         </p>
                     </div>
 
@@ -2184,12 +2199,15 @@ const BasicWorkOrderCreate = () => {
                     </div>
                 </div>
 
+                {requestedTemplateUnavailable && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                    The requested template is inactive or unavailable to your role. Choose another available template{canUseCustom ? " or create a custom job" : ""}.
+                </p>}
                 <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
                     <div className="space-y-5">
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div>
-                                <h2 className="text-base font-semibold text-slate-950">Basic Job Type</h2>
-                                <p className="mt-1 text-sm text-slate-500">Choose a technician-enabled template or a small custom job.</p>
+                                <h2 className="text-base font-semibold text-slate-950">Job Setup</h2>
+                                <p className="mt-1 text-sm text-slate-500">Choose a template or custom scope, then schedule the first visit.</p>
                             </div>
 
                             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -2229,7 +2247,7 @@ const BasicWorkOrderCreate = () => {
                                             value={selectedTemplate}
                                             options={templateOptions}
                                             onChange={setSelectedTemplate}
-                                            placeholder="Choose a technician-enabled prebuilt job..."
+                                            placeholder="Choose an available job template..."
                                             styles={selectStyles}
                                             isLoading={loadingTemplateDetails}
                                         />
@@ -2267,7 +2285,7 @@ const BasicWorkOrderCreate = () => {
                                             <div>
                                                 <h3 className="text-sm font-semibold text-slate-950">Equipment Assignments</h3>
                                                 <p className="mt-1 text-sm text-slate-600">
-                                                    Confirm the equipment for each service item or task before scheduling this basic job.
+                                                    Confirm the equipment for each service item or task before scheduling this job.
                                                 </p>
                                             </div>
 
@@ -2367,12 +2385,12 @@ const BasicWorkOrderCreate = () => {
                                     )}
                                     {missingEquipmentAssignments.length > 0 && (
                                         <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                                            Assign equipment for {missingEquipmentAssignments.length} service/task item{missingEquipmentAssignments.length === 1 ? "" : "s"} before creating this basic job.
+                                            Assign equipment for {missingEquipmentAssignments.length} service/task item{missingEquipmentAssignments.length === 1 ? "" : "s"} before creating this job.
                                         </p>
                                     )}
                                     {selectedTemplateRequiresEquipment && assignedEquipmentIds.length === 0 && missingEquipmentAssignments.length === 0 && (
                                         <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                                            Select default equipment before creating this basic job.
+                                            Select default equipment before creating this job.
                                         </p>
                                     )}
 	                                {!selectedTemplate && templateOptions.length === 0 && (

@@ -480,7 +480,7 @@ const CompanySettings = () => {
                 to: '/company/settings/company-wide',
                 icon: <CogIcon className="w-6 h-6" />,
                 title: 'Company Settings',
-                description: 'Manage company-wide workflow switches for offered work, route coverage, assignment, and incentives.',
+                description: 'Manage labor pricing, billing, offered work, route coverage, assignment, and incentives.',
                 permissionId: '900',
             },
             {

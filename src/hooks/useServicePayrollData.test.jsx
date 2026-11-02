@@ -57,3 +57,21 @@ test("closed forms do not subscribe and access errors stay distinct from empty r
   act(() => subscriptions[2].error(new Error("permission-denied")));
   expect(setup().error).toMatch(/payroll access/);
 });
+
+test("company pricing settings load independently of payroll and reset before another company is shown", () => {
+  const view = render(<Preview companyId="first" />);
+  const old = [...subscriptions];
+  expect(setup().companySettingsLoading).toBe(true);
+  emit(old[4], { laborMultiplier: 2.5 }, true);
+  expect(setup()).toEqual(expect.objectContaining({ loading: true, companySettingsLoading: false, companySettings: { laborMultiplier: 2.5 } }));
+  act(() => old[2].error(new Error('permission-denied')));
+  expect(setup().companySettings.laborMultiplier).toBe(2.5);
+  view.rerender(<Preview companyId="second" />);
+  expect(setup().companySettingsLoading).toBe(true);
+  expect(setup().companySettings).toEqual({});
+  emit(old[4], { laborMultiplier: 9 }, true);
+  expect(setup().companySettings).toEqual({});
+  act(() => subscriptions[9].error(new Error('permission-denied')));
+  expect(setup().companySettingsLoading).toBe(false);
+  expect(setup().companySettingsError).toBeTruthy();
+});

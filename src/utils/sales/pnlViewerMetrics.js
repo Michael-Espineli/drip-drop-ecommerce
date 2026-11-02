@@ -1351,6 +1351,7 @@ export const buildPnlViewerMatrix = ({
 
     const estimatedPay = estimateServiceStopPaySummary({
       companyId,
+      bodiesOfWater,
       settings: paySettings,
       serviceStop,
       serviceStopType: serviceStopTypeFor(serviceStop),

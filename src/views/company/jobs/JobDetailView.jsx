@@ -4276,6 +4276,7 @@ const JobDetailView = () => {
     const tasks = getScheduledStopTasks(stop);
     const summary = estimateServiceStopPaySummary({
       companyId: recentlySelectedCompany,
+      bodiesOfWater: taskBodyOfWaterList,
       settings: paySettings,
       serviceStop: stop,
       serviceStopType: getScheduledStopType(stop),
@@ -9222,11 +9223,13 @@ const JobDetailView = () => {
       });
       const paySummary = estimateServiceStopPaySummary({
         companyId: recentlySelectedCompany,
+        bodiesOfWater: taskBodyOfWaterList,
         settings: paySettings,
         serviceStop: {
           ...basePayload,
           id: serviceStopId,
           jobId,
+          serviceLocationId: serviceLocation.id || job.serviceLocationId || "",
         },
         serviceStopType: selectedType || {
           id: basePayload.typeId,
@@ -21832,29 +21835,12 @@ const JobDetailView = () => {
 
             {activeTab === "Actual" && (
               <DetailDisclosure
-                panelId="actual-planned-vs-actual"
-                title="Planned Vs Actual"
-                helper="Compare planned cost against recorded actual cost"
-                count=""
-                collapsible={false}
-                className="order-1"
-              >
-                {sectionLoading.actual ? (
-                  <SectionSkeleton title="Loading planned vs actual" rows={2} />
-                ) : (
-                  renderPlannedVsActualWidget()
-                )}
-              </DetailDisclosure>
-            )}
-
-            {activeTab === "Actual" && (
-              <DetailDisclosure
                 panelId="actual-offers"
                 title="Work Assignments"
                 helper="Offer, accept, board post, and self-schedule counts for execution"
                 count={workOffers.length}
                 collapsible={false}
-                className="order-2"
+                className="order-1"
               >
                 {sectionLoading.workOffers ? (
                   <SectionSkeleton title="Loading work offers" rows={4} />
@@ -21916,7 +21902,7 @@ const JobDetailView = () => {
                 helper="Scheduled and completed visits recorded for this job"
                 count={serviceStops.length}
                 collapsible={false}
-                className="order-3"
+                className="order-2"
               >
                 {sectionLoading.actual ? (
                   <SectionSkeleton title="Loading service stops" rows={3} />
@@ -21989,7 +21975,7 @@ const JobDetailView = () => {
                 helper="Payroll and purchased products recorded after the work is done"
                 count={(actualPayLineItems?.length || 0) + (purchasedItems?.length || 0)}
                 collapsible={false}
-                className="order-4"
+                className="order-3"
               >
                 {sectionLoading.actual ? (
                   <SectionSkeleton title="Loading actual work" rows={4} />
@@ -22265,6 +22251,23 @@ const JobDetailView = () => {
                 )}
               </DetailDisclosure>
             )}
+            {activeTab === "Actual" && (
+              <DetailDisclosure
+                panelId="actual-planned-vs-actual"
+                title="Planned Vs Actual"
+                helper="Compare planned cost against recorded actual cost"
+                count=""
+                collapsible={false}
+                className="order-4"
+              >
+                {sectionLoading.actual ? (
+                  <SectionSkeleton title="Loading planned vs actual" rows={2} />
+                ) : (
+                  renderPlannedVsActualWidget()
+                )}
+              </DetailDisclosure>
+            )}
+
             {activeTab === "History" && (
               <div className="space-y-6">
                 <DetailDisclosure

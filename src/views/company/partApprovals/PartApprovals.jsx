@@ -434,7 +434,7 @@ const CompanyPartApprovals = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('active');
+  const [statusFilter, setStatusFilter] = useState('pending');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [workflowActionId, setWorkflowActionId] = useState('');
   const [detailApproval, setDetailApproval] = useState(null);
@@ -533,9 +533,9 @@ const CompanyPartApprovals = () => {
       pendingCount: pending.length,
       approvedCount: approved.length,
       recentlyDeniedCount: recentlyDenied.length,
-      totalValueCents: approvals.reduce((total, approval) => total + approvalTotalCents(approval), 0),
+      totalValueCents: filteredApprovals.reduce((total, approval) => total + approvalTotalCents(approval), 0),
     };
-  }, [approvals]);
+  }, [approvals, filteredApprovals]);
 
   const openActionApproval = useMemo(
     () => approvals.find((approval) => approval.id === openActionApprovalId) || null,
@@ -1326,7 +1326,7 @@ const CompanyPartApprovals = () => {
             to={recentDeniedHistoryUrl}
             title="Open recently denied approvals in history"
           />
-          <StatTile icon={FaFileInvoiceDollar} label="Requested Value" value={formatCurrency(summary.totalValueCents)} helper="Customer-facing value" />
+          <StatTile icon={FaFileInvoiceDollar} label="Requested Value" value={formatCurrency(summary.totalValueCents)} helper="Total for displayed approvals" />
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">

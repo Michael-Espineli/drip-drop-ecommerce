@@ -53,7 +53,7 @@ export function serializeServiceTasks(tasks = []) {
   }));
 }
 
-export function estimateServicePayroll({ companyId, companyUsers = [], payTypes = [], rates = [], settings = {}, tasks = [], inheritedPayTypeId = "", customerPriceCents = null, date = new Date(), includeServiceStopPay = false }) {
+export function estimateServicePayroll({ companyId, companyUsers = [], payTypes = [], rates = [], settings = {}, tasks = [], inheritedPayTypeId = "", customerPriceCents = null, date = new Date(), includeServiceStopPay = false, serviceQuantity = 1 }) {
   const people = new Map();
   companyUsers.forEach((worker) => {
     const id = workerId(worker);
@@ -79,7 +79,7 @@ export function estimateServicePayroll({ companyId, companyUsers = [], payTypes 
     const lines = calculatePayLines({
       companyId, settings, workTypes: payTypes, rates: activeRates, workers, date, mode: "preview", jobTaskSource: !includeServiceStopPay,
       serviceStop: { id: "service-cost-preview", techId: worker.userId, serviceDate: date,
-        payTypeId: inheritedPayTypeId, payrollBaseAmountCents: customerPriceCents,
+        payTypeId: inheritedPayTypeId, payQuantity: serviceQuantity, payrollBaseAmountCents: customerPriceCents,
         estimatedMinutes: normalizedTasks.reduce((sum, task) => sum + task.estimatedTime, 0) },
       tasks: normalizedTasks.map((task) => ({ ...task, workerId: worker.userId, workerName: worker.userName })),
     });
@@ -112,7 +112,8 @@ export function estimateServicePayroll({ companyId, companyUsers = [], payTypes 
   const hasScope = sourceTasks.length > 0 || Boolean(includeServiceStopPay && inheritedPayTypeId);
   return {
     disabled, hasScope, summaries, configuredRates,
-    usesCustomerPriceBase: normalizedTasks.some((task, index) => !present(sourceTasks[index].payrollBaseAmountCents) && configuredRates.some((rate) => rate.payTypeId === task.payTypeId && rate.rateType === "percentage")),
+    usesCustomerPriceBase: configuredRates.some((rate) => rate.rateType === "percentage" &&
+      ((includeServiceStopPay && rate.payTypeId === inheritedPayTypeId) || normalizedTasks.some((task, index) => !present(sourceTasks[index].payrollBaseAmountCents) && rate.payTypeId === task.payTypeId))),
     minAmountCents: !disabled && hasScope && complete.length ? Math.min(...complete.map((summary) => summary.totalAmountCents)) : null,
     maxAmountCents: !disabled && hasScope && complete.length ? Math.max(...complete.map((summary) => summary.totalAmountCents)) : null,
     stopPayRange: complete.length ? [Math.min(...complete.map((summary) => summary.stopPayCents)), Math.max(...complete.map((summary) => summary.stopPayCents))] : null,
