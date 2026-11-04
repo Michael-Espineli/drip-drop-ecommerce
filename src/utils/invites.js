@@ -65,10 +65,10 @@ export const buildCompanyInviteUrl = (baseUrl, inviteId) => {
     return `${cleanBaseUrl}${buildCompanyInvitePath(cleanInviteId)}`;
 };
 
-export const isCompanyAccessInactive = (invite = {}) => {
-    const accessStatus = normalizeInviteStatus(invite.companyUserStatus || invite.userAccessStatus || invite.accessStatus || invite.status);
-    if (invite.accessActive === false) return true;
-    return ["inactive", "past", "revoked"].includes(accessStatus);
+export const isCompanyAccessInactive = (access = {}) => {
+    const statuses = [access.status, access.userStatus, access.companyUserStatus, access.accessStatus, access.userAccessStatus];
+    return access.active === false || access.isActive === false || access.accessActive === false || access.revoked === true ||
+        statuses.some(status => ["inactive", "past", "revoked", "deleted", "declined", "pending", "invited", "rejected", "canceled", "cancelled", "expired"].includes(normalizeInviteStatus(status)));
 };
 
 /**

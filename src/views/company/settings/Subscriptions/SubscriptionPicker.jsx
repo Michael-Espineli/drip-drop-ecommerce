@@ -161,6 +161,12 @@ const SubscriptionPicker = () => {
                     cancelUrl: cancelUrl,
                 });
 
+                if (['already_active','processing'].includes(result.data?.status)) {
+                    toast.dismiss(toastId);
+                    toast(result.data?.message || 'Billing setup is being confirmed.');
+                    navigate('/company/settings/subscriptions');
+                    return;
+                }
                 if (result.data.url) {
                     toast.dismiss(toastId);
                     window.location.href = result.data.url;

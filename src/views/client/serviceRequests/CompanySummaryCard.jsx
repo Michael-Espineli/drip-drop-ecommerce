@@ -9,7 +9,7 @@ import {
     PhoneIcon,
 } from '@heroicons/react/24/outline';
 
-const profilePathFor = (companyId = '') => `/companies/profile/${companyId}`;
+const profilePathFor = (companyId = '') => `/client/companies/profile/${companyId}`;
 
 const textOrFallback = (value, fallback = '') => String(value || fallback || '').trim();
 

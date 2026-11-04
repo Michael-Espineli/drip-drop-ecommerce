@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import toast from 'react-hot-toast';
+import { safeClientReturnPath } from '../../utils/clientNavigation';
 import { Context } from "../../context/AuthContext";
 import {
     PASSWORD_RESET_RECENTLY_SENT_CODE,
@@ -26,7 +27,7 @@ export default function HomeOwnerSignIn() {
     }, [location.search]);
 
     const queryParams = new URLSearchParams(location.search);
-    const redirectPath = queryParams.get('redirect');
+    const redirectPath = safeClientReturnPath(queryParams.get('redirect'));
     const signUpLink = redirectPath
         ? `/homeownerSignUp?redirect=${encodeURIComponent(redirectPath)}`
         : '/homeownerSignUp';
@@ -34,7 +35,7 @@ export default function HomeOwnerSignIn() {
     useEffect(() => {
         if (!user) return;
         const queryParams = new URLSearchParams(location.search);
-        const redirectPath = queryParams.get('redirect');
+        const redirectPath = safeClientReturnPath(queryParams.get('redirect'));
 
         if (redirectPath && accountType === 'Client') {
             navigate(redirectPath);
@@ -59,7 +60,7 @@ export default function HomeOwnerSignIn() {
             await signInWithEmailAndPassword(auth, email, password);
             toast.success('Signed in successfully!');
             const queryParams = new URLSearchParams(location.search);
-            const redirectPath = queryParams.get('redirect') || '/client/dashboard';
+            const redirectPath = safeClientReturnPath(queryParams.get('redirect'));
             navigate(redirectPath);
         } catch (error) {
             console.error("Firebase Sign-In Error:", error);
@@ -135,7 +136,8 @@ export default function HomeOwnerSignIn() {
                         </div>
 
                         <form onSubmit={handleSignIn} className="space-y-6">
-                            <input
+                            <label htmlFor="homeowner-email" className="block text-sm font-medium">Email address</label>
+                            <input id="homeowner-email" autoComplete="email"
                                 type="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
@@ -143,7 +145,8 @@ export default function HomeOwnerSignIn() {
                                 required
                                 className="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm"
                             />
-                            <input
+                            <label htmlFor="homeowner-password" className="block text-sm font-medium">Password</label>
+                            <input id="homeowner-password" autoComplete="current-password"
                                 type="password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}

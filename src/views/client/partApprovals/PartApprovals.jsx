@@ -1,6 +1,6 @@
+import { listenClientRecords } from '../../../utils/clientRecords';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   CheckCircleIcon,
   ClockIcon,
@@ -134,8 +134,7 @@ const PartApprovals = () => {
     setLoading(true);
     setError('');
 
-    return onSnapshot(
-      query(collection(db, 'customerPartApprovals'), where('customerUserId', '==', user.uid)),
+    return listenClientRecords({ db, user, collectionName: 'customerPartApprovals' },
       (snapshot) => {
         const nextApprovals = snapshot.docs
           .map((approvalDoc) => ({ id: approvalDoc.id, ...approvalDoc.data() }))

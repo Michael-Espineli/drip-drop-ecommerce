@@ -7,6 +7,7 @@ import AdminSideBar from './AdminSideBar';
 
 import NoCompanySidebar from '../components/NoCompanySidebar';
 import Footer from './Footer';
+import ClientLayout from './ClientLayout';
 import { Context } from '../context/AuthContext';
 
 const MainLayout = () => {
@@ -50,6 +51,8 @@ const MainLayout = () => {
     const shellMarginClass = accountType === 'Company' && recentlySelectedCompany && isCompanySidebarCollapsed
         ? "lg:ml-[4.75rem]"
         : "lg:ml-[16.25rem]";
+
+    if (accountType === 'Client') return <ClientLayout />;
 
     if (isAccountingWorkspace) {
         return (

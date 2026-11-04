@@ -1,3 +1,6 @@
+import { netPaymentCents, hasPostedPayment, monthlyRecurringCents, needsBillingFollowUp } from '../../../utils/sales/financialMetrics';
+import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -111,7 +114,7 @@ const invoiceBalanceCents = (invoice) => {
   const paid = Number(invoice.amountPaidCents) || 0;
   const writtenOff = Number(invoice.writeOffAmountCents) || 0;
 
-  return Math.max(total - paid - writtenOff, 0);
+  return Math.max(total - paid - writtenOff - Number(invoice.refundCreditCents || 0) - Number(invoice.creditAmountCents || 0), 0);
 };
 
 const appPaymentMethods = new Set(['stripeCard', 'stripeAch']);
@@ -298,19 +301,9 @@ const Sales = () => {
     [billingSubscriptions]
   );
 
-  const activatedAgreementIds = useMemo(() => {
-    const agreementIds = new Set();
-
-    activeSubscriptions.forEach((subscription) => {
-      if (subscription.agreementId) agreementIds.add(subscription.agreementId);
-    });
-
-    return agreementIds;
-  }, [activeSubscriptions]);
-
   const salesSummary = useMemo(() => {
     const mrrCents = activeSubscriptions.reduce(
-      (total, subscription) => total + (Number(subscription.amountCents) || 0),
+      (total, subscription) => total + monthlyRecurringCents(subscription),
       0
     );
     const receivableStatuses = new Set([
@@ -324,16 +317,16 @@ const Sales = () => {
     const issuedInvoiceCents = invoices
       .filter((invoice) => !['draft', 'void'].includes(normalizeStatus(invoice.status)))
       .reduce((total, invoice) => total + (Number(invoice.totalAmountCents) || 0), 0);
-    const postedPayments = payments.filter((payment) => normalizeStatus(payment.status) === SalesPaymentStatus.posted);
-    const postedPaymentCents = postedPayments.reduce((total, payment) => total + (Number(payment.amountCents) || 0), 0);
+    const postedPayments = payments.filter(hasPostedPayment);
+    const postedPaymentCents = postedPayments.reduce((total, payment) => total + netPaymentCents(payment), 0);
     const paidThroughAppCents = postedPayments
       .filter((payment) => appPaymentMethods.has(payment.method) || payment.stripePaymentIntentId || payment.stripeChargeId)
-      .reduce((total, payment) => total + (Number(payment.amountCents) || 0), 0);
+      .reduce((total, payment) => total + netPaymentCents(payment), 0);
     const acceptedAgreements = agreements.filter(
       (agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted
     );
     const pendingBillingCount = acceptedAgreements.filter(
-      (agreement) => !activatedAgreementIds.has(agreement.id)
+      (agreement) => needsBillingFollowUp(agreement,billingSubscriptions,invoices)
     ).length;
 
     return {
@@ -347,7 +340,7 @@ const Sales = () => {
         .length,
       acceptedAgreementCount: acceptedAgreements.length,
     };
-  }, [activeSubscriptions, agreements, activatedAgreementIds, invoices, payments]);
+  }, [activeSubscriptions, agreements, billingSubscriptions, invoices, payments]);
 
   const recentAgreements = useMemo(() => sortByFreshest(agreements).slice(0, 8), [agreements]);
   const recentSubscriptions = useMemo(() => sortByFreshest(billingSubscriptions).slice(0, 8), [billingSubscriptions]);
@@ -356,8 +349,8 @@ const Sales = () => {
   const pendingBillingAgreements = useMemo(() => (
     agreements
       .filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted)
-      .filter((agreement) => !activatedAgreementIds.has(agreement.id))
-  ), [agreements, activatedAgreementIds]);
+      .filter((agreement) => needsBillingFollowUp(agreement,billingSubscriptions,invoices))
+  ), [agreements, billingSubscriptions, invoices]);
   const openInvoices = useMemo(() => {
     const openStatuses = new Set([
       normalizeStatus(SalesInvoiceStatus.open),
@@ -387,11 +380,11 @@ const Sales = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
       <div className="w-full space-y-5">
-        <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold text-slate-950">Sales Dashboard</h1>
-              <FeatureInfoButton title="How Sales Works" align="left">
+        <WorkspaceHeader
+          title="Sales Dashboard"
+          eyebrow="Company finance"
+          description="Pipeline, recurring revenue, receivables, collections, and billing follow-up."
+          titleAccessory={<FeatureInfoButton title="How Sales Works" align="left">
                 <p>
                   Sales is the finance workspace for homeowner billing. It tracks agreements, billing profiles,
                   Stripe subscriptions, invoices, accounts receivable, and posted payments.
@@ -400,14 +393,8 @@ const Sales = () => {
                   Job estimates still start from Job Detail. Once accepted, those snapshots can become Sales
                   invoices and, later, Stripe invoice items on the pool company connected account.
                 </p>
-              </FeatureInfoButton>
-            </div>
-            <p className="mt-1 max-w-3xl text-sm text-slate-600">
-              Pipeline, recurring revenue, receivables, collections, and billing follow-up.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
+              </FeatureInfoButton>}
+          actions={<div className="flex flex-wrap gap-2">
             <Link
               to="/company/sales/pnl-viewer"
               className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
@@ -429,8 +416,8 @@ const Sales = () => {
               <FaPlus className="text-xs" />
               Agreement
             </Link>
-          </div>
-        </header>
+          </div>}
+        />
 
         {errors.length > 0 && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
@@ -583,7 +570,7 @@ const Sales = () => {
                       <Link key={subscription.id} to={`/company/sales/subscriptions/${subscription.id}`} className="flex items-start justify-between gap-4 px-5 py-4 transition hover:bg-slate-50">
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-slate-900">{customerNameFor(subscription)}</p>
-                          <p className="mt-1 text-sm text-slate-500">{formatCurrency(subscription.amountCents)} monthly</p>
+                          <p className="mt-1 text-sm text-slate-500">{formatCurrency(subscription.amountCents)} every {subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}{subscription.interval || 'month'}</p>
                         </div>
                         <StatusBadge status={subscription.stripeStatus || subscription.status || SalesBillingSubscriptionStatus.notStarted} />
                       </Link>
@@ -662,7 +649,7 @@ const Sales = () => {
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="font-semibold text-slate-900">{formatCurrency(payment.amountCents)}</p>
+                          <p className="font-semibold text-slate-900">{formatCurrency(netPaymentCents(payment))}<PaymentAdjustmentNote payment={payment} /></p>
                           <div className="mt-1">
                             <StatusBadge status={payment.status || SalesPaymentStatus.posted} />
                           </div>

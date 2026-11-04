@@ -1,3 +1,4 @@
+const companyAuthorization = require('../companyAuthorization');
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const functions = require("firebase-functions");
 const functions1 = require('firebase-functions/v1');
@@ -17,6 +18,7 @@ const {
 const { reportCloudFunctionError } = require("../appErrorReporting");
 const { sendCompanyUserInviteEmailInternal } = require("../sendGrid/general");
 
+const { publicMeasurements, publicPhotos } = require('../homeownerServicePublishing');
 const db = admin.firestore();
 const { weeklyServiceDates } = require("../recurringSchedule");
 const recurringAccess = require("../recurringAccess").createRecurringAccess(db, {
@@ -1302,18 +1304,8 @@ const isDefaultLeadConversionEquipment = (equipmentList = []) => {
 };
 
 const userCanAccessCompany = async (firestore, userId, companyId) => {
-  if (!userId || !companyId) return false;
-
-  const [userSnap, accessSnap] = await Promise.all([
-    firestore.collection("users").doc(userId).get(),
-    firestore.collection("users").doc(userId).collection("userAccess").doc(companyId).get(),
-  ]);
-
-  const userData = userSnap.exists ? userSnap.data() || {} : {};
-  if (userData.accountType === "Admin") return true;
-  if (!accessSnap.exists) return false;
-
-  return isCompanyAccessActive(accessSnap.data() || {});
+  try { await companyAuthorization.authority(firestore, userId, companyId); return true; }
+  catch (error) { if (["permission-denied", "unauthenticated", "invalid-argument"].includes(error.code)) return false; throw error; }
 };
 
 const cleanAlertString = (value) => String(value || "").trim();
@@ -1584,7 +1576,7 @@ async function linkHomeownerToCompanyCustomer({
   requestedByUserId = "",
 }) {
   const firestore = getFirestore();
-  const normalizedAuthEmail = normalizeEmail(authEmail);
+  let normalizedAuthEmail = normalizeEmail(authEmail);
 
   if (!companyId || !customerId || !homeownerId) {
     return {
@@ -1599,6 +1591,12 @@ async function linkHomeownerToCompanyCustomer({
       error: "A verified email is required to link this customer account"
     };
   }
+
+  const verifiedUser = await admin.auth().getUser(homeownerId);
+  if (verifiedUser.emailVerified !== true || !verifiedUser.email) {
+    return { status: 403, error: "Verify your email before connecting this customer account.", code: "email-verification-required" };
+  }
+  normalizedAuthEmail = normalizeEmail(verifiedUser.email);
 
   const companyRef = firestore.collection("companies").doc(companyId);
   const customerRef = companyRef.collection("customers").doc(customerId);
@@ -1889,7 +1887,12 @@ async function linkHomeownerToCompanyCustomer({
     writes.push({
       ref: firestore.collection("homeownerServiceStops").doc(homeownerServiceStopId),
       data: removeUndefinedDeep({
-        ...serviceStop,
+        serviceDate: serviceStop.serviceDate || serviceStop.date || null,
+        completedAt: serviceStop.completedAt || serviceStop.finishedAt || null,
+        operationStatus: serviceStop.operationStatus || serviceStop.status || 'Finished',
+        status: serviceStop.status || serviceStop.operationStatus || 'Finished',
+        type: serviceStop.type || serviceStop.serviceType || 'Pool service',
+        photoUrls: publicPhotos(serviceStop.photoUrls || serviceStop.photos),
         id: homeownerServiceStopId,
         userId: homeownerId,
         homeownerId,
@@ -1928,7 +1931,10 @@ async function linkHomeownerToCompanyCustomer({
     writes.push({
       ref: firestore.collection("stopData").doc(homeownerStopDataId),
       data: removeUndefinedDeep({
-        ...stopData,
+        date: stopData.date || stopData.serviceDate || null,
+        readings: publicMeasurements(stopData.readings),
+        dosages: publicMeasurements(stopData.dosages),
+        observation: (Array.isArray(stopData.observation) ? stopData.observation : []).map(item => typeof item === 'string' ? item : String(item.text || item.description || item.name || '')),
         id: homeownerStopDataId,
         userId: homeownerId,
         homeownerId,
@@ -3362,19 +3368,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     let ownerRole = {
       id: "1",
       name: "Owner",
-      permissionIdList: [
-        "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
-        "40", "42", "44", "46", "50", "52", "54", "56", "60", "62", "64", "66", "72", "74",
-        "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
-        "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296", "310",
-        "400", "410", "412", "414", "416", "420", "430", "432", "434", "436", "438",
-        "600", "610", "612", "614", "616", "620", "622", "624", "626", "627", "628",
-        "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
-        "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
-        "870", "872", "874", "876", "880", "882", "884", "886",
-        "890", "892", "894", "896", "900", "910"
-      ],
+      permissionIdList: require("../companyRoleSeeds").seedPermissions("Owner"),
       listOfUserIdsToManage: [],
       color: "red",
       description: "All Permissions Enabled"
@@ -3385,19 +3379,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     let techRole = {
       id: "comp_role_" + uuidv4(),
       name: "Tech",
-      permissionIdList: [
-        "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
-        "40", "42", "44", "46", "50", "52", "54", "56", "60", "62", "64", "66", "72",
-        "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
-        "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296",
-        "400", "410", "412", "414", "416", "430", "432", "434", "436",
-        "600", "610", "612", "614", "616", "620", "622", "624", "626", "627",
-        "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
-        "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
-        "870", "872", "874", "876", "880", "882", "884", "886",
-        "890", "892", "894", "896"
-      ],
+      permissionIdList: require("../companyRoleSeeds").seedPermissions("Tech"),
       listOfUserIdsToManage: [],
       color: "red",
       description: "Basic Permissions For Techs"
@@ -3408,17 +3390,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     let managerRole = {
       id: "comp_role_" + uuidv4(),
       name: "Manager",
-      permissionIdList: [
-        "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36", "72", "74",
-        "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
-        "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296", "310",
-        "400", "430", "432", "434", "436", "438",
-        "600", "610", "612", "614", "616", "620", "622", "624", "626", "627", "628",
-        "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
-        "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
-        "870", "872", "874", "876", "880", "882", "884", "886", "900"
-      ],
+      permissionIdList: require("../companyRoleSeeds").seedPermissions("Manager"),
       listOfUserIdsToManage: [],
       color: "red",
       description: "Basic Permissions For Manager"
@@ -3429,19 +3401,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     let adminRole = {
       id: "comp_role_" + uuidv4(),
       name: "Admin",
-      permissionIdList: [
-        "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
-        "40", "42", "44", "46", "50", "52", "54", "56", "60", "62", "64", "66", "72", "74",
-        "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
-        "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296", "310",
-        "400", "410", "412", "414", "416", "430", "432", "434", "436", "438",
-        "600", "610", "612", "614", "616", "620", "622", "624", "626", "627", "628",
-        "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
-        "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
-        "870", "872", "874", "876", "880", "882", "884", "886",
-        "890", "892", "894", "896", "900", "910"
-      ],
+      permissionIdList: require("../companyRoleSeeds").seedPermissions("Admin"),
       listOfUserIdsToManage: [],
       color: "red",
       description: "Basic Permissions For Admin"
@@ -3452,19 +3412,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     let officeRole = {
       id: "comp_role_" + uuidv4(),
       name: "Office",
-      permissionIdList: [
-        "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
-        "40", "42", "44", "46", "50", "52", "54", "56", "60", "62", "64", "66", "72", "74",
-        "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
-        "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
-        "290", "292", "294", "296",
-        "400", "410", "412", "414", "416", "430", "432", "434", "436", "438",
-        "600", "610", "612", "614", "616", "620", "622", "624", "626", "627", "628",
-        "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
-        "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
-        "870", "872", "874", "876", "880", "882", "884", "886",
-        "890", "892", "894", "896"
-      ],
+      permissionIdList: require("../companyRoleSeeds").seedPermissions("Office"),
       listOfUserIdsToManage: [],
       color: "red",
       description: "Basic Permissions For Office Personal"
@@ -3667,11 +3615,15 @@ exports.updateCompanyHistory = functions.https.onCall(async (data, context) => {
 });
 exports.createCompanyAdminNotes = functions.https.onCall(async (data, context) => {
   try {
+    const auth = await getVerifiedCallableAuth(data?.data ?? data ?? {}, context);
+    if (!(await companyAuthorization.hasPlatformAdminAccess(auth?.uid, auth?.token))) {
+      throw new functions.https.HttpsError("permission-denied", "Platform administrator access is required.");
+    }
     console.log('Updating Company History')
     let receivedData = data.data
     console.log("Received Data")
     console.log(receivedData)
-    let updaterId = receivedData.updaterId
+    let updaterId = auth.uid
     let updaterName = receivedData.updaterName
     let companyId = receivedData.companyId
     let description = receivedData.description
@@ -3738,7 +3690,7 @@ exports.updateCompanyAdminFlags = functions.https.onCall(async (data, context) =
   const userSnap = await firestore.collection("users").doc(authUserId).get();
   const userData = userSnap.exists ? userSnap.data() || {} : {};
 
-  if (userData.accountType !== "Admin") {
+  if (!(await companyAuthorization.hasPlatformAdminAccess(authUserId, verifiedAuth?.token))) {
     throw new functions.https.HttpsError("permission-denied", "Only platform admins can update company admin flags.");
   }
 
@@ -3793,7 +3745,7 @@ const getAdminUserData = async (firestore, authUserId) => {
   const userSnap = await firestore.collection("users").doc(authUserId).get();
   const userData = userSnap.exists ? userSnap.data() || {} : {};
 
-  return userData.accountType === "Admin" ? userData : null;
+  return await companyAuthorization.hasPlatformAdminAccess(authUserId) ? userData : null;
 };
 
 const getQueryCount = async (queryRef) => {
@@ -3949,64 +3901,10 @@ const sanitizeCompanyUserAccessUpdates = (updates = {}) => {
   return sanitized;
 };
 
-const userCanUpdateCompanyUsers = async (firestore, userId, companyId) => {
-  if (!userId || !companyId) return false;
-
-  const [userSnap, accessSnap] = await Promise.all([
-    firestore.collection("users").doc(userId).get(),
-    firestore.collection("users").doc(userId).collection("userAccess").doc(companyId).get(),
-  ]);
-
-  const userData = userSnap.exists ? userSnap.data() || {} : {};
-  if (userData.accountType === "Admin") return true;
-  if (!accessSnap.exists) return false;
-
-  const access = accessSnap.data() || {};
-  if (!isCompanyAccessActive(access)) return false;
-
-  const roleId = String(access.roleId || "").trim();
-  if (roleId) {
-    const roleSnap = await firestore.collection("companies").doc(companyId).collection("roles").doc(roleId).get();
-    if (roleSnap.exists) {
-      const permissionIds = roleSnap.data()?.permissionIdList;
-      if (!Array.isArray(permissionIds)) return true;
-      return permissionIds.map(String).includes(COMPANY_USER_ACCESS_PERMISSION_ID);
-    }
-  }
-
-  return COMPANY_USER_MANAGER_ROLE_NAMES.has(String(access.roleName || "").trim().toLowerCase());
-};
-
-const userCanViewCompanyUsers = async (firestore, userId, companyId) => {
-  if (!userId || !companyId) return false;
-
-  const [userSnap, accessSnap] = await Promise.all([
-    firestore.collection("users").doc(userId).get(),
-    firestore.collection("users").doc(userId).collection("userAccess").doc(companyId).get(),
-  ]);
-
-  const userData = userSnap.exists ? userSnap.data() || {} : {};
-  if (userData.accountType === "Admin") return true;
-  if (!accessSnap.exists) return false;
-
-  const access = accessSnap.data() || {};
-  if (!isCompanyAccessActive(access)) return false;
-
-  const roleId = String(access.roleId || "").trim();
-  if (roleId) {
-    const roleSnap = await firestore.collection("companies").doc(companyId).collection("roles").doc(roleId).get();
-    if (roleSnap.exists) {
-      const permissionIds = roleSnap.data()?.permissionIdList;
-      if (!Array.isArray(permissionIds)) return true;
-
-      const selectedPermissionIds = permissionIds.map(String);
-      return selectedPermissionIds.includes(COMPANY_USER_VIEW_PERMISSION_ID)
-        || selectedPermissionIds.includes(COMPANY_USER_ACCESS_PERMISSION_ID);
-    }
-  }
-
-  return COMPANY_USER_MANAGER_ROLE_NAMES.has(String(access.roleName || "").trim().toLowerCase());
-};
+const userCanUpdateCompanyUsers = (firestore, userId, companyId) => companyAuthorization.hasPermission(firestore, userId, companyId, "264");
+const userCanViewCompanyUsers = async (firestore, userId, companyId) =>
+  await companyAuthorization.hasPermission(firestore, userId, companyId, "260") ||
+  await companyAuthorization.hasPermission(firestore, userId, companyId, "264");
 
 const copyDefinedAccessFields = (source = {}, fields = []) => fields.reduce((payload, field) => {
   if (source[field] !== undefined) payload[field] = source[field];
@@ -4057,6 +3955,19 @@ exports.updateCompanyUserAccess = functions.https.onCall(async (data, context) =
     ...updates,
   };
   const linkedUserId = String(existingCompanyUser.userId || existingCompanyUser.uid || "").trim();
+  const accessActor = await companyAuthorization.requirePermission(firestore, authUserId, companyId, "264", authContext.token);
+  await companyAuthorization.protectMembershipTarget(firestore, accessActor, linkedUserId, existingCompanyUser.roleId);
+  if (updates.roleId !== undefined || updates.roleName !== undefined) {
+    if (linkedUserId === authUserId && accessActor.company.ownerId !== authUserId) {
+      throw new functions.https.HttpsError("permission-denied", "You cannot change your own role.");
+    }
+    const selectedRole = await companyAuthorization.delegatedRole(firestore, accessActor, updates.roleId || existingCompanyUser.roleId);
+    updates.roleId = selectedRole.id;
+    updates.roleName = selectedRole.name;
+    nextCompanyUser.roleId = selectedRole.id;
+    nextCompanyUser.roleName = selectedRole.name;
+  }
+
   const now = admin.firestore.FieldValue.serverTimestamp();
   const auditFields = {
     updatedAt: now,
@@ -4723,7 +4634,7 @@ exports.createCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, a
     const companyId = String(payload.companyId || "").trim();
     const inviteEmail = normalizeEmail(payload.email);
     const roleId = String(payload.roleId || "").trim();
-    const roleName = String(payload.roleName || "").trim();
+    let roleName = String(payload.roleName || "").trim();
 
     if (!companyId || !inviteEmail || !roleId || !roleName) {
       return {
@@ -4740,6 +4651,9 @@ exports.createCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, a
       };
     }
 
+    const inviteActor = await companyAuthorization.requirePermission(firestore, authUserId, companyId, "262", authContext.token);
+    const assignedRole = await companyAuthorization.delegatedRole(firestore, inviteActor, roleId);
+    roleName = assignedRole.name;
     const companyRef = firestore.collection("companies").doc(companyId);
     const companySnap = await companyRef.get();
     if (!companySnap.exists) {
@@ -4754,6 +4668,10 @@ exports.createCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, a
     const inviteRef = firestore.collection("invites").doc(inviteId);
     const inviteSnap = await inviteRef.get();
     const existingInvite = inviteSnap.exists ? inviteSnap.data() || {} : {};
+    if (inviteSnap.exists && (existingInvite.companyId !== companyId || normalizeCompanyInviteStatus(existingInvite.status) !== "pending")) {
+      throw new functions.https.HttpsError("permission-denied", "This invitation cannot be overwritten.");
+    }
+
     const companyName = getCompanyDisplayName(companyData, payload.companyName || existingInvite.companyName || "DripDrop");
     const now = admin.firestore.FieldValue.serverTimestamp();
     const inviteUrl = buildCompanyUserInviteUrl(payload.baseUrl || payload.appBaseUrl || "", inviteId);
@@ -4851,7 +4769,7 @@ exports.createCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, a
   } catch (error) {
     console.error("Error creating company user invite", error);
     return {
-      status: 500,
+      status: error.code === "permission-denied" ? 403 : error.code === "unauthenticated" ? 401 : 500,
       error: error.message || "Could not create company invite.",
     };
   }
@@ -4901,6 +4819,10 @@ exports.manageCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, a
       };
     }
 
+    const inviteActor = await companyAuthorization.requirePermission(firestore, authUserId, companyId, action === "setaccessactive" ? "264" : "262", authContext.token);
+    const assignedRole = await companyAuthorization.delegatedRole(firestore, inviteActor, invite.roleId);
+    await companyAuthorization.protectMembershipTarget(firestore, inviteActor, invite.userId, invite.roleId);
+    invite.roleName = assignedRole.name;
     const companyRef = firestore.collection("companies").doc(companyId);
     const companySnap = await companyRef.get();
     if (!companySnap.exists) {
@@ -5036,7 +4958,7 @@ exports.manageCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, a
   } catch (error) {
     console.error("Error managing company user invite", error);
     return {
-      status: 500,
+      status: error.code === "permission-denied" ? 403 : error.code === "unauthenticated" ? 401 : 500,
       error: error.message || "Could not manage company invite.",
     };
   }
@@ -5811,6 +5733,13 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       };
     }
 
+    if (!invite.createdByUserId) {
+      return { status: 403, error: "Ask the company to reissue this legacy invitation." };
+    }
+    const inviter = await companyAuthorization.requirePermission(db, invite.createdByUserId, invite.companyId, "262");
+    const assignedRole = await companyAuthorization.delegatedRole(db, inviter, invite.roleId);
+    invite.roleName = assignedRole.name;
+    if (!authEmail || !inviteEmail || authEmail !== inviteEmail || authContext.token?.email_verified !== true) return { status: 403, error: "Verify the invited email address before accepting." };
     let companyData = {};
     if (invite.companyId) {
       const companySnap = await db.collection("companies").doc(invite.companyId).get();
@@ -5831,7 +5760,7 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
         email: profile.email || invite.email,
         firstName: profile.firstName || invite.firstName || "",
         lastName: profile.lastName || invite.lastName || "",
-        accountType: profile.accountType || "Company",
+        accountType: "Company",
         photoUrl: profile.photoUrl || null,
         profileImagePath: profile.profileImagePath || null,
         color: profile.color || null,
@@ -5921,7 +5850,7 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       error
     );
     return {
-      status: 500,
+      status: error.code === "permission-denied" ? 403 : error.code === "unauthenticated" ? 401 : 500,
       error: error.message
     };
   }
@@ -6081,7 +6010,7 @@ exports.migrateLegacyVendorsToCanonical = functions.https.onCall(async (data, co
     const userSnap = await db.collection("users").doc(authUserId).get();
     const userData = userSnap.exists ? userSnap.data() : {};
     const isCompanyUser = userData.accountType === "Company" && userData.recentlySelectedCompany === companyId;
-    const isAdmin = userData.accountType === "Admin";
+    const isAdmin = await companyAuthorization.hasPlatformAdminAccess(authUserId);
 
     if (!isCompanyUser && !isAdmin) {
       return { status: 403, error: "You do not have permission to migrate this company's vendors." };

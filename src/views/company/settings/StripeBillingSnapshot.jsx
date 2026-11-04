@@ -468,6 +468,9 @@ const StripeBillingSnapshotPanel = ({
                                     <div className="min-w-0">
                                         <p className="truncate font-semibold text-slate-900">{payout.stripePayoutId || payout.id}</p>
                                         <p className="mt-0.5 text-xs text-slate-500">{labelize(payout.method || payout.type || "standard payout")}</p>
+                                        <p className="mt-1 text-xs text-slate-600">{labelize(payout.reconciliationStatus || 'awaitingReconciliation')}{payout.unmatchedTransactionCount ? ` · ${payout.unmatchedTransactionCount} unmatched` : ''}</p>
+                                        {payout.grossAmountCents != null && <p className="mt-1 text-xs text-slate-600">Gross {formatCurrencyFromCents(payout.grossAmountCents,payout.currency)} · Fees {formatCurrencyFromCents(payout.feeAmountCents,payout.currency)} · Net {formatCurrencyFromCents(payout.netAmountCents,payout.currency)}</p>}
+                                        {payout.failureMessage && <p className="mt-1 text-xs text-red-700">{payout.failureMessage}</p>}
                                     </div>
                                     <div className="text-right font-semibold text-slate-900">
                                         {formatCurrencyFromCents(payout.amountCents, payout.currency)}
@@ -583,6 +586,9 @@ const StripeBillingSnapshotPage = () => {
         setStripePayoutsError("");
 
         try {
+            if (showToast) {
+                await httpsCallable(functions, 'refreshCompanyPayoutReconciliation')({companyId:recentlySelectedCompany});
+            }
             const payoutsQuery = query(
                 collection(db, "companies", recentlySelectedCompany, "stripePayouts"),
                 orderBy("stripeCreatedAt", "desc"),
@@ -590,7 +596,7 @@ const StripeBillingSnapshotPage = () => {
             );
             const payoutsSnapshot = await getDocs(payoutsQuery);
             const payouts = payoutsSnapshot.docs
-                .map((payoutDoc) => ({ id: payoutDoc.id, ...payoutDoc.data() }))
+                .map((payoutDoc) => ({ ...payoutDoc.data(), id: payoutDoc.id }))
                 .sort((first, second) => {
                     const firstDate = dateFromValue(first.stripeCreatedAt || first.createdAt)?.getTime() || 0;
                     const secondDate = dateFromValue(second.stripeCreatedAt || second.createdAt)?.getTime() || 0;

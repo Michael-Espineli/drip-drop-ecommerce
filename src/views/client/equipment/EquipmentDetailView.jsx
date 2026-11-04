@@ -71,6 +71,7 @@ const EquipmentDetailView = () => {
                 const repairQuery = query(
                     collection(db, 'homeownerRepairRequests'),
                     where('equipmentId', '==', equipmentId),
+                    where('userId', '==', user.uid),
                     orderBy('createdAt', 'desc')
                 );
                 promises.push(getDocs(repairQuery));

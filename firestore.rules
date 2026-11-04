@@ -16,10 +16,7 @@ service cloud.firestore {
         && (
           isSuperMaster()
           || request.auth.token.admin == true
-          || (
-            exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountType in ["Admin", "admin"]
-          )
+
         );
     }
 
@@ -46,25 +43,45 @@ service cloud.firestore {
         && get(companyPath(companyId)).data.ownerId == request.auth.uid;
     }
 
+    function activeStatus(value) {
+      return value == null || (value is string && !value.lower().matches(" *(inactive|revoked|past|deleted|declined|pending|invited|rejected|canceled|cancelled|expired) *"));
+    }
+    function activeCompanyMembership(companyId) {
+      let data = get(userAccessPath(companyId));
+      return data != null && data.data.get("active", true) != false && data.data.get("isActive", true) != false
+        && data.data.get("accessActive", true) != false && data.data.get("revoked", false) != true
+        && activeStatus(data.data.get("status", "")) && activeStatus(data.data.get("userStatus", ""))
+        && activeStatus(data.data.get("companyUserStatus", "")) && activeStatus(data.data.get("accessStatus", ""))
+        && activeStatus(data.data.get("userAccessStatus", ""));
+    }
+    function companyPermission(companyId, permissionId) {
+      let access = get(userAccessPath(companyId));
+      let roleId = access == null ? "" : access.data.get("roleId", "");
+      let role = roleId is string && roleId != "" ? get(/databases/$(database)/documents/companies/$(companyId)/roles/$(roleId)) : null;
+      return hasCompanyAccess(companyId) && (isCompanyOwner(companyId)
+        || (access != null && role != null && role.data.get("permissionIdList", null) is list
+          && role.data.get("name", "").lower() == access.data.get("roleName", "").lower()
+          && role.data.get("name", "").lower() in ["owner", "admin", "manager"])
+        || (role != null && role.data.get("permissionIdList", null) is list && (permissionId in role.data.permissionIdList || (permissionId == "860" && role.data.permissionIdList.hasAny(["862", "864", "866"])) )));
+    }
     function hasCompanyAccess(companyId) {
       return signedIn()
         && companyId is string
+        && companyId.size() > 0
         && (
-          get(userAccessPath(companyId)) != null
+          activeCompanyMembership(companyId)
           || isCompanyOwner(companyId)
         );
     }
 
     function isCompanyAdmin(companyId) {
-      return signedIn()
-        && companyId is string
-        && (
-          isCompanyOwner(companyId)
-          || (
-            get(userAccessPath(companyId)) != null
-            && get(userAccessPath(companyId)).data.get("roleName", "") in ["Owner", "Admin", "Manager"]
-          )
-        );
+      let access = get(userAccessPath(companyId));
+      let roleId = access == null ? "" : access.data.get("roleId", "");
+      let role = roleId is string && roleId != "" ? get(/databases/$(database)/documents/companies/$(companyId)/roles/$(roleId)) : null;
+      return signedIn() && (isCompanyOwner(companyId) || (activeCompanyMembership(companyId)
+        && role != null && role.data.get("permissionIdList", null) is list
+        && role.data.get("name", "").lower() == access.data.get("roleName", "").lower()
+        && role.data.get("name", "").lower() in ["owner", "admin", "manager"]));
     }
 
     function companyRolePath(companyId) {
@@ -84,11 +101,11 @@ service cloud.firestore {
     }
 
     function canReadCompanyUserPerformanceReviews(companyId) {
-      return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "260");
+      return companyPermission(companyId, "268");
     }
 
     function canWriteCompanyUserPerformanceReviews(companyId) {
-      return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "264");
+      return companyPermission(companyId, "274");
     }
 
     function canReadOwnVisiblePerformanceReview(companyId, companyUserId) {
@@ -99,67 +116,143 @@ service cloud.firestore {
     }
 
     function isPersonalOrCompanyData(data) {
-      return signedIn()
-        && (
-          (data.userId is string && data.userId == request.auth.uid)
-          || (data.ownerId is string && data.ownerId == request.auth.uid)
-          || (data.clientId is string && data.clientId == request.auth.uid)
-          || (data.customerUserId is string && data.customerUserId == request.auth.uid)
-          || (data.companyId is string && hasCompanyAccess(data.companyId))
-          || (data.linkedCompanyId is string && hasCompanyAccess(data.linkedCompanyId))
-          || (data.senderId is string && hasCompanyAccess(data.senderId))
-          || (data.receiverId is string && hasCompanyAccess(data.receiverId))
-        );
+      return signedIn() && (
+        data.get('userId', '') == request.auth.uid
+        || data.get('ownerId', '') == request.auth.uid
+        || data.get('clientId', '') == request.auth.uid
+        || data.get('customerUserId', '') == request.auth.uid
+        || data.get('homeownerId', '') == request.auth.uid
+        || data.get('homeownerUserId', '') == request.auth.uid
+        || hasCompanyAccess(data.get('companyId', ''))
+        || hasCompanyAccess(data.get('linkedCompanyId', ''))
+        || hasCompanyAccess(data.get('senderId', ''))
+        || hasCompanyAccess(data.get('receiverId', ''))
+      );
     }
 
     function emailMatchesSignedInUser(data) {
       return signedIn()
-        && request.auth.token.email is string
+        && request.auth.token.get('email_verified', false) == true
+        && request.auth.token.get('email', '') != ''
         && (
-          (data.email is string && data.email == request.auth.token.email)
-          || (data.customerEmail is string && data.customerEmail == request.auth.token.email)
-          || (data.billingEmail is string && data.billingEmail == request.auth.token.email)
+          data.get('email', '') == request.auth.token.email
+          || data.get('customerEmail', '') == request.auth.token.email
+          || data.get('billingEmail', '') == request.auth.token.email
         );
     }
 
     function hasLinkedSalesCustomerUser(data) {
-      return data.customerUserId is string && data.customerUserId.size() > 0;
+      return data.get('customerUserId', '') is string && data.get('customerUserId', '').size() > 0;
+    }
+
+    function preservesHomeownerIdentity() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'userId', 'homeownerId', 'homeownerUserId', 'customerUserId', 'companyId', 'linkedCompanyId',
+        'relationshipId', 'customerCompanyRelationshipId', 'linkedCompanyCustomerId',
+        'companyServiceLocationId', 'companyBodyOfWaterId', 'companyEquipmentId',
+        'linkedCompanyServiceLocationId', 'linkedCompanyBodyOfWaterId', 'linkedCompanyEquipmentId',
+        'sourceCompanyServiceLocationId', 'sourceCompanyBodyOfWaterId', 'sourceCompanyEquipmentId'
+      ]);
     }
 
     function canReadSalesRecord(data) {
       return signedIn()
         && (
-          (data.companyId is string && hasCompanyAccess(data.companyId))
-          || (data.customerUserId is string && data.customerUserId == request.auth.uid)
-          || emailMatchesSignedInUser(data)
+          (data.get('customerUserId', '') == request.auth.uid)
+          || (!hasLinkedSalesCustomerUser(data) && emailMatchesSignedInUser(data))
+          || (data.get('companyId', '') is string && canReadCompanyBilling(data.get('companyId', '')))
         );
     }
 
     function canCompanyWriteSalesRecord(data) {
       return signedIn()
         && data.companyId is string
-        && hasCompanyAccess(data.companyId);
+        && canManageCompanyBilling(data.companyId);
+    }
+
+    function billingStatusActive(status) {
+      return status == null || (status is string && !(status.lower() in ["inactive", "revoked", "past", "deleted", "declined", "pending", "invited", "rejected", "canceled", "cancelled", "expired"]));
+    }
+
+    function activeBillingMembership(companyId) {
+      let access = get(userAccessPath(companyId));
+      return access != null
+        && access.data.get("active", true) != false && access.data.get("isActive", true) != false
+        && access.data.get("accessActive", true) != false
+        && access.data.get("revoked", false) != true
+        && billingStatusActive(access.data.get("status", ""))
+        && billingStatusActive(access.data.get("userStatus", ""))
+        && billingStatusActive(access.data.get("companyUserStatus", ""))
+        && billingStatusActive(access.data.get("accessStatus", ""))
+        && billingStatusActive(access.data.get("userAccessStatus", ""));
+    }
+
+    function companyBillingPermission(companyId, permissions) {
+      let access = get(userAccessPath(companyId));
+      let roleId = access == null ? "" : access.data.get("roleId", "");
+      let role = roleId is string && roleId != "" ? get(/databases/$(database)/documents/companies/$(companyId)/roles/$(roleId)) : null;
+      return signedIn() && (isCompanyOwner(companyId) || (activeCompanyMembership(companyId)
+        && access != null && role != null && role.data.get("permissionIdList", null) is list
+        && ((role.data.get("name", "").lower() == access.data.get("roleName", "").lower()
+            && role.data.get("name", "").lower() in ["owner", "admin", "manager"])
+          || role.data.permissionIdList.hasAny(permissions))));
+    }
+
+    function canManageCompanyBilling(companyId) { return companyBillingPermission(companyId, ["404"]); }
+    function canReadCompanyBilling(companyId) { return companyBillingPermission(companyId, ["400", "404"]); }
+
+    function preservesSalesIdentity() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        "id", "companyId", "customerId", "customerUserId", "relationshipId", "customerCompanyRelationshipId",
+        "billingProfileId", "billingSubscriptionId", "agreementId", "jobId"
+      ]);
+    }
+
+    function preservesStripeBillingFields() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        "stripeConnectedAccountId", "stripeConnectAccountId", "stripeCustomerId", "stripeSubscriptionId", "stripeSubscriptionItemId",
+        "stripeInvoiceId", "stripePaymentIntentId", "stripeChargeId", "stripeStatus", "checkoutSessionId", "checkoutUrl", "checkoutStatus",
+        "autopayEnabled", "autopayStatus", "billingCollectionMethod", "manualBillingEnabled", "stripeSyncedAt",
+        "stripeId", "checkoutAttemptId", "checkoutVersion", "checkoutHold", "checkoutCustomerData", "firstAutomaticChargeAt",
+        "billingReviewRequired", "billingReviewReason", "duplicateStripeSubscriptionIds", "stripePricingSnapshotHash"
+      ]);
+    }
+
+    function validUnpaidSalesInvoice(data, invoiceId) {
+      return data.get("id", invoiceId) == invoiceId
+        && data.get("status", "draft") in ["draft", "open", "overdue"]
+        && data.get("totalAmountCents", -1) is int && data.totalAmountCents >= 0
+        && data.get("amountPaidCents", 0) == 0 && data.get("writeOffAmountCents", 0) == 0
+        && data.get("amountDueCents", -1) == data.totalAmountCents
+        && data.get("stripeInvoiceId", "") in ["", null]
+        && data.get("stripePaymentIntentId", "") in ["", null]
+        && data.get("stripeChargeId", "") in ["", null]
+        && data.get("stripeHostedInvoiceUrl", "") in ["", null]
+        && data.get("billingSubscriptionId", "") in ["", null]
+        && data.get("paidAt", null) == null && data.get("lastPaymentAt", null) == null
+        && !data.keys().hasAny(["billingMutation", "portalPaymentAttemptId", "portalPaymentAttemptVersion", "lastPaymentId", "paymentProcessing", "billingRevision"]);
     }
 
     function canUseCompanySalesAgreementPermission(companyId, permissionId) {
       return isCompanyOwner(companyId)
         || hasCompanyRolePermission(companyId, permissionId)
-        || hasCompanyRolePermission(companyId, "400");
+        || canManageCompanyBilling(companyId);
     }
 
     function canReadSalesAgreementRecord(data) {
       return signedIn()
         && (
-          (
-            data.companyId is string
-            && hasCompanyAccess(data.companyId)
+          (data.get('customerUserId', '') == request.auth.uid)
+          || (!hasLinkedSalesCustomerUser(data) && emailMatchesSignedInUser(data))
+          || (
+            data.get('companyId', '') is string
+            && hasCompanyAccess(data.get('companyId', ''))
             && (
               canUseCompanySalesAgreementPermission(data.companyId, "430")
               || canUseCompanySalesAgreementPermission(data.companyId, "628")
+              || canReadCompanyBilling(data.companyId)
             )
           )
-          || (data.customerUserId is string && data.customerUserId == request.auth.uid)
-          || emailMatchesSignedInUser(data)
         );
     }
 
@@ -339,20 +432,19 @@ service cloud.firestore {
 
     function chatParticipant(data) {
       return signedIn()
-        && request.auth.uid in data.participantIds;
+        && request.auth.uid in data.get("participantIds", []);
     }
 
     function companyChatParticipant(data) {
-      return signedIn()
-        && (
-          (data.companyId is string && hasCompanyAccess(data.companyId))
-          || (data.senderCompanyId is string && hasCompanyAccess(data.senderCompanyId))
-          || (data.receiverCompanyId is string && hasCompanyAccess(data.receiverCompanyId))
-        );
+      return signedIn() && (
+        hasCompanyRolePermission(data.get("companyId", ""), "300")
+        || hasCompanyRolePermission(data.get("senderCompanyId", ""), "300")
+        || hasCompanyRolePermission(data.get("receiverCompanyId", ""), "300")
+      );
     }
 
     function canReadChatData(data) {
-      return companyChatParticipant(data) || chatParticipant(data);
+      return chatParticipant(data) || companyChatParticipant(data);
     }
 
     function chatPath(chatId) {
@@ -407,8 +499,14 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow create: if isSelf(userId)
-        && request.resource.data.id == request.auth.uid;
-      allow read, update: if isSelf(userId);
+        && request.resource.data.id == request.auth.uid
+        && request.resource.data.get("accountType", "").lower() in ["company", "seller", "technician", "tech", "employee", "contractor", "client", "homeowner", "customer"]
+        && !request.resource.data.keys().hasAny(["admin", "isAdmin", "customClaims", "claims", "permissions"]);
+      allow read: if isSelf(userId);
+      allow update: if isSelf(userId) && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        "id", "admin", "isAdmin", "customClaims", "claims", "permissions"
+      ]) && (request.resource.data.get("accountType", "") == resource.data.get("accountType", "")
+        || request.resource.data.get("accountType", "").lower() in ["company", "seller", "technician", "tech", "employee", "contractor", "client", "homeowner", "customer"]);
       allow delete: if false;
 
       match /userAccess/{accessId} {
@@ -447,8 +545,15 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn()
         && appLaunchEnabled()
-        && request.resource.data.ownerId == request.auth.uid;
-      allow update: if isCompanyAdmin(companyId);
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.get("stripeCustomerId", "") in ["", null]
+        && request.resource.data.get("stripeId", "") in ["", null]
+        && request.resource.data.get("stripeSubscriptionId", "") in ["", null]
+        && !request.resource.data.keys().hasAny(["checkoutAttemptId", "checkoutHold", "checkoutVersion", "checkoutCustomerData"]);
+      allow update: if (companyPermission(companyId, "814") || companyPermission(companyId, "900"))
+        && preservesStripeBillingFields()
+        && (isCompanyOwner(companyId) || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["ownerId", "stripeConnectedAccountId", "stripeConnectAccountId"]))
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["adminFlags", "verifiedByAdminId", "verified", "isVerified"]);
       allow delete: if false;
 
       match /alerts/{alertId} {
@@ -470,15 +575,104 @@ service cloud.firestore {
         allow read, update, delete: if hasCompanyAccess(companyId);
       }
 
-      function canManagePay() { return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "424"); }
-      function canReadPay() { return canManagePay() || hasCompanyRolePermission(companyId, "420"); }
-      function jobCreationPermissions() {
-        return isCompanyAdmin(companyId) ? ["22", "23", "27", "29", "31"] : (
-          get(userAccessPath(companyId)) != null && get(companyRolePath(companyId)) != null
-            ? get(companyRolePath(companyId)).data.get("permissionIdList", []) : []
+      function permitted(id) { return companyPermission(companyId, id); }
+      function assignedStop(stop) { return hasCompanyAccess(companyId) && stop.get("techId", "") == request.auth.uid; }
+      function canEditJob(job) { return permitted("24") || (job != null && job.get("sourceTemplateId", "") != "" && permitted("28")); }
+      function executionUpdate() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "operationStatus", "status", "completedAt", "finishedAt", "startedAt", "startTime", "endTime", "duration", "actualTime",
+          "completedByUserId", "completedByUserName", "notes", "customerNotes", "description", "photoUrls", "updatedAt", "dateFinished",
+          "actualDuration", "completionDate", "completionSource", "completionRequestId", "timeLogIds"
+        ]);
+      }
+      function roleGrantAllowed(roleId, data) {
+        return data.get("permissionIdList", null) is list && (
+          isCompanyOwner(companyId) || (roleId != "1" && roleId != get(userAccessPath(companyId)).data.get("roleId", "")
+            && !(data.get("name", "").lower() in ["owner", "admin", "manager"])
+            && data.permissionIdList.toSet().difference(get(companyRolePath(companyId)).data.get("permissionIdList", []).toSet()).size() == 0
+            && !data.permissionIdList.hasAny(["262", "264", "266", "274", "404", "408", "424", "862", "864", "866", "890"]))
         );
       }
-      function canManageJobTemplates() { return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "820"); }
+      function unprotectedRole(roleId) {
+        return isCompanyOwner(companyId) || (roleId != "1" && roleId != get(userAccessPath(companyId)).data.get("roleId", "")
+          && !(resource.data.get("name", "").lower() in ["owner", "admin", "manager"])
+          && !resource.data.get("permissionIdList", []).hasAny(["262", "264", "266", "274", "404", "408", "424", "862", "864", "866", "890"]));
+      }
+      function settingsMutation(settingsId, action) {
+        let ids = {
+          "emailConfiguration": ["832", "834", "836"], "readings": ["842", "844", "846"], "dosages": ["842", "844", "846"],
+          "stopData": ["842", "844", "846"], "taskGroups": ["822", "824", "826"],
+          "dataBase": ["852", "854", "856"], "genericItems": ["852", "854", "856"], "termsTemplates": ["882", "884", "886"],
+          "customerPipeline": ["632", "634", "634"]
+        }.get(settingsId, ["900", "900", "900"]);
+        return settingsId == "payStatements" ? canManagePay() : permitted(ids[action]);
+      }
+      function ownTodo(data) {
+        let access = get(userAccessPath(companyId));
+        let ids = [request.auth.uid, access == null ? request.auth.uid : access.data.get("companyUserId", request.auth.uid), access == null ? request.auth.uid : access.data.get("companyUserDocId", request.auth.uid)];
+        return data.get("assignedToUserId", "") in ids || data.get("assignedToCompanyUserDocId", "") in ids
+          || data.get("assignedTechId", "") in ids || data.get("techId", "") in ids
+          || data.get("memberUserIds", []).hasAny(ids) || data.get("memberCompanyUserDocIds", []).hasAny(ids)
+          || data.get("boardMemberUserIds", []).hasAny(ids) || data.get("boardMemberCompanyUserDocIds", []).hasAny(ids)
+          || data.get("boardMemberCompanyUserIds", []).hasAny(ids)
+          || (data.get("scope", "") == "me" && data.get("createdByUserId", "") == request.auth.uid);
+      }
+      function todoAccess(data) {
+        return (hasCompanyAccess(companyId) && (ownTodo(data)
+          || (data.get("boardId", "") != "" && ownTodo(get(/databases/$(database)/documents/companies/$(companyId)/todoBoards/$(data.boardId)).data)))) || permitted("310");
+      }
+      function collectionPermission(name, action) {
+        return (name == "customers" && permitted(["10", "12", "14", "16"][action]))
+          || (name == "mergedCustomers" && permitted(["10", "12", "14", "16"][action]))
+          || (name == "serviceLocations" && permitted(["40", "42", "44", "46"][action]))
+          || (name == "bodiesOfWater" && permitted(["50", "52", "54", "56"][action]))
+          || (name == "equipment" && permitted(["60", "62", "64", "66"][action]))
+          || (name == "repairRequests" && permitted(["30", "32", "34", "36"][action]))
+          || (name == "suggestedWork" && permitted(["30", "32", "34", "36"][action]))
+          || (name == "recurringServiceStop" && permitted(["240", "242", "244", "246"][action]))
+          || (name == "recurringRoutes" && permitted(["230", "232", "234", "236"][action]))
+          || (name == "recurringRoute" && permitted(["230", "232", "234", "236"][action]))
+          || (name == "routes" && permitted(["230", "232", "234", "236"][action]))
+          || (name == "activeRoutes" && permitted(["210", "232", "234", "236"][action]))
+          || (name == "activeRouteLogs" && permitted(["210", "244", "244", "246"][action]))
+          || (name == "activeRouteLocations" && permitted(["220", "244", "244", "246"][action]))
+          || (name == "stopData" && permitted(["240", "244", "244", "246"][action]))
+          || (name == "vehicals" && permitted(["290", "292", "294", "296"][action]))
+          || (name == "vehicles" && permitted(["290", "292", "294", "296"][action]))
+          || (name == "shoppingList" && permitted(["100", "102", "104", "106"][action]))
+          || (name == "purchasedItems" && permitted(["100", "102", "104", "106"][action]))
+          || (name == "receipts" && permitted(["100", "102", "104", "106"][action]))
+          || (name == "associatedBusinesses" && permitted(["260", "262", "264", "266"][action]))
+          || (name == "business" && permitted(["260", "262", "264", "266"][action]))
+          || (name == "customReports" && permitted(["870", "872", "874", "876"][action]))
+          || (name == "termsTemplates" && permitted(["880", "882", "884", "886"][action]))
+          || (name == "leadPrivateNotes" && permitted(["610", "614", "614", "616"][action]))
+          || (name == "customerPipeline" && permitted(["630", "632", "634", "634"][action]))
+          || (name == "companyPayTypes" && permitted(["420", "424", "424", "424"][action]))
+          || (name == "companyStopPayBuckets" && permitted(["420", "424", "424", "424"][action]))
+          || (name == "workOfferBoards" && permitted(["320", "324", "324", "324"][action]))
+          || (name == "accountingNotes" && permitted(["400", "404", "404", "404"][action]))
+          || (name == "companyHistory" && permitted(["810", "900", "900", "900"][action]))
+          || (name == "reviews" && permitted(["810", "814", "814", "814"][action]))
+          || (name == "subscriptions" && action == 0 && permitted("890"))
+          || (name in ["stripePayouts", "stripeBalanceTransactions"] && action == 0 && companyBillingPermission(companyId, ["400", "404", "408"]))
+          || (name == "customerMigrationTracker" && permitted(["910", "910", "910", "910"][action]));
+      }
+      function canManagePay() { return permitted("424"); }
+      function canReadPay() { return permitted("420") || permitted("424"); }
+      function jobCreationPermissions() {
+        let access = get(userAccessPath(companyId));
+        let role = access != null && access.data.get("roleId", "") != "" ? get(companyRolePath(companyId)) : null;
+        let administrator = role != null && role.data.get("permissionIdList", null) is list
+          && role.data.get("name", "").lower() == access.data.get("roleName", "").lower()
+          && role.data.get("name", "").lower() in ["owner", "admin", "manager"];
+        // Every caller also requires active company access or a validated parent
+        // create in this same atomic write. Resolve the role once per check.
+        return isCompanyOwner(companyId) || administrator ? ["22", "23", "27", "29", "31"] : (
+          role != null && role.data.get("permissionIdList", null) is list ? role.data.permissionIdList : []
+        );
+      }
+      function canManageJobTemplates() { return companyPermission(companyId, "920"); }
       function jobPath(jobId) { return /databases/$(database)/documents/companies/$(companyId)/workOrders/$(jobId); }
       function templatePath(templateId) { return /databases/$(database)/documents/companies/$(companyId)/jobTemplates/$(templateId); }
       function activeJobTemplate(data) {
@@ -587,12 +781,10 @@ service cloud.firestore {
         return getAfter(stop) != null && validInitialJobTask(getAfter(stop).data.get("jobId", ""));
       }
       function validTaskPayCreate() {
-        return canManagePay() || (
-          request.resource.data.get("manualPayOverrideCents", null) == null
+        return (request.resource.data.get("manualPayOverrideCents", null) == null
           && request.resource.data.get("contractedRate", 0) in [0, "0", "", null]
           && !request.resource.data.keys().hasAny(["payrollAgreement", "workOfferId", "workOfferClaimId", "claimedWorkOfferId"])
-          && (request.resource.data.get("workerId", "") == "" || isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId,"24") || hasCompanyRolePermission(companyId,"244"))
-        );
+          && (request.resource.data.get("workerId", "") == "" || permitted("24") || permitted("244"))) || canManagePay();
       }
       function preservesPayTerms() {
         return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
@@ -605,24 +797,24 @@ service cloud.firestore {
         allow write: if false;
       }
       match /payChangeRequests/{requestId} {
-        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow read: if hasCompanyAccess(companyId) && (resource.data.technicianId == request.auth.uid || canReadPay());
         allow write: if false;
       }
       match /routeMoveRequests/{requestId} {
-        allow read: if hasCompanyAccess(companyId) && (isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "234") || hasCompanyRolePermission(companyId, "244"));
+        allow read: if hasCompanyAccess(companyId) && (permitted("234") || permitted("244"));
         allow write: if false;
       }
       match /technicianRates/{rateId} {
-        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow read: if hasCompanyAccess(companyId) && (resource.data.technicianId == request.auth.uid || canReadPay());
         allow write: if canManagePay();
       }
       match /technicianPayLineItems/{lineId} {
-        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow read: if hasCompanyAccess(companyId) && (resource.data.technicianId == request.auth.uid || canReadPay());
         allow create, delete: if canManagePay();
         allow update: if canManagePay();
       }
       match /technicianPayStatements/{statementId} {
-        allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.technicianId == request.auth.uid);
+        allow read: if hasCompanyAccess(companyId) && (resource.data.technicianId == request.auth.uid || canReadPay());
         allow write: if canManagePay();
       }
       match /paySettings/{settingsId} {
@@ -630,17 +822,87 @@ service cloud.firestore {
         allow write: if canManagePay();
       }
       match /settings/{settingsId} {
-        allow read: if hasCompanyAccess(companyId) && (settingsId != "payStatements" || canReadPay());
-        allow write: if hasCompanyAccess(companyId) && (settingsId != "payStatements" || canManagePay())
-          && (settingsId != "companyWide" || isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "900"));
+        function counterWrite() {
+          return settingsId in ["workOrders", "recurringServiceStops"] && hasCompanyAccess(companyId)
+            && (permitted("22") || permitted("23") || permitted("27") || permitted("29") || permitted("31") || permitted("242"))
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["increment", "category"])
+            && request.resource.data.increment == resource.data.get("increment", 0) + 1;
+        }
+        allow read: if hasCompanyAccess(companyId) && (settingsId != "payStatements" || canReadPay())
+          && (settingsId != "emailConfiguration" || permitted("830"));
+        allow create: if settingsMutation(settingsId, 0);
+        allow update: if settingsMutation(settingsId, 1) || counterWrite();
+        allow delete: if settingsMutation(settingsId, 2);
         match /{nested=**} {
-          allow read: if hasCompanyAccess(companyId) && settingsId != "companyWide" && (settingsId != "payStatements" || canReadPay());
-          allow write: if hasCompanyAccess(companyId) && settingsId != "companyWide" && (settingsId != "payStatements" || canManagePay());
+          allow read: if hasCompanyAccess(companyId) && settingsId != "companyWide" && (settingsId != "payStatements" || canReadPay())
+            && (settingsId != "emailConfiguration" || permitted("830"));
+          allow create: if settingsId != "companyWide" && settingsMutation(settingsId, 0);
+          allow update: if settingsId != "companyWide" && settingsMutation(settingsId, 1);
+          allow delete: if settingsId != "companyWide" && settingsMutation(settingsId, 2);
         }
       }
       match /roles/{roleId} {
-        allow read: if hasCompanyAccess(companyId);
-        allow write: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "864");
+        allow read: if hasCompanyAccess(companyId) && (permitted("860") || roleId == get(userAccessPath(companyId)).data.get("roleId", ""));
+        allow create: if permitted("862") && roleGrantAllowed(roleId, request.resource.data);
+        allow update: if permitted("864") && unprotectedRole(roleId) && roleGrantAllowed(roleId, request.resource.data);
+        allow delete: if permitted("866") && unprotectedRole(roleId);
+      }
+      match /companyUsers/{companyUserId} {
+        allow read: if hasCompanyAccess(companyId) && (permitted("260") || resource.data.get("userId", "") == request.auth.uid);
+        allow create, delete: if false;
+        allow update: if permitted("264") && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          "userId", "uid", "roleId", "roleName", "active", "isActive", "accessActive", "revoked", "status", "userStatus", "companyUserStatus", "accessStatus", "userAccessStatus", "timeClock",
+          "dashboardScopeAccess", "dashboardScopeAccessMode", "customerRegionTags", "allowedCustomerTags", "fullCustomerRegionAccess", "regionalAccessMode"
+        ]);
+        match /{nested=**} {
+          allow read: if permitted("268");
+          allow write: if permitted("274");
+        }
+      }
+      match /stopData/{readingId} {
+        function ownReading(data) {
+          let id = data.get("serviceStopId", "");
+          return id is string && id != "" && assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(id)).data);
+        }
+        allow read: if permitted("240") || ownReading(resource.data);
+        allow create: if permitted("244") || ownReading(request.resource.data);
+        allow update: if permitted("244") || (ownReading(resource.data) && request.resource.data.get("serviceStopId", "") == resource.data.get("serviceStopId", ""));
+        allow delete: if permitted("246");
+      }
+      match /activeRoutes/{routeId} {
+        allow read: if assignedStop(resource.data) || permitted("210");
+        allow create: if permitted("232");
+        allow update: if permitted("234") || (assignedStop(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "status", "startTime", "endTime", "startMilage", "endMilage", "startMileage", "endMileage", "durationMin", "durationSeconds", "distance", "distanceMiles", "finishedStops", "updatedAt",
+            "vehicalId", "vehicleSource", "personalVehicleOwnerId", "vehicleLabel", "vehiclePlate", "vehicleKind", "vehicleMake", "vehicleModel", "personalVehicle"
+          ]));
+        allow delete: if permitted("236");
+      }
+      match /activeRouteLogs/{logId} {
+        function ownLog(data) { return hasCompanyAccess(companyId) && data.get("userId", "") == request.auth.uid
+          && assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/activeRoutes/$(data.activeRouteId)).data); }
+        allow read: if ownLog(resource.data) || permitted("210");
+        allow create: if ownLog(request.resource.data) || permitted("244");
+        allow update: if permitted("244") || (ownLog(resource.data) && request.resource.data.get("userId", "") == resource.data.get("userId", "") && request.resource.data.activeRouteId == resource.data.activeRouteId);
+        allow delete: if permitted("246");
+      }
+      match /activeRouteLocations/{locationId} {
+        function ownLocation(data) { return assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/activeRoutes/$(data.activeRouteId)).data); }
+        allow read: if ownLocation(resource.data) || permitted("220");
+        allow create: if ownLocation(request.resource.data);
+        allow update, delete: if permitted("244");
+      }
+      match /todoItems/{todoId} {
+        allow read: if todoAccess(resource.data);
+        allow create: if hasCompanyAccess(companyId) && todoAccess(request.resource.data);
+        allow update: if hasCompanyAccess(companyId) && todoAccess(resource.data) && todoAccess(request.resource.data);
+        allow delete: if hasCompanyAccess(companyId) && (permitted("310") || resource.data.get("createdByUserId", "") == request.auth.uid);
+      }
+      match /todoBoards/{boardId} {
+        allow read: if todoAccess(resource.data);
+        allow create: if hasCompanyAccess(companyId) && (permitted("310") || request.auth.uid in request.resource.data.get("memberUserIds", []));
+        allow update, delete: if permitted("310") || (hasCompanyAccess(companyId) && resource.data.get("createdByUserId", "") == request.auth.uid);
       }
       match /workLogs/{logId} {
         allow read: if hasCompanyAccess(companyId) && (canReadPay() || resource.data.userId == request.auth.uid);
@@ -651,46 +913,58 @@ service cloud.firestore {
         allow write: if false;
       }
       match /serviceStops/{stopId} {
-        allow read: if hasCompanyAccess(companyId);
-        allow create: if hasCompanyAccess(companyId) && validInitialJobStop(stopId, request.resource.data) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
-        allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
+        allow read: if permitted("240") || assignedStop(resource.data);
+        allow create: if hasCompanyAccess(companyId) && ((request.resource.data.get("jobId", "") != "" && get(jobPath(request.resource.data.jobId)) == null) || permitted("242")) && validInitialJobStop(stopId, request.resource.data) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
+        allow update: if hasCompanyAccess(companyId) && ((assignedStop(resource.data) && executionUpdate()) || permitted("244")) && (preservesPayTerms() || canManagePay());
         allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "246");
-        match /{subcollection}/{nested=**} { allow read, write: if subcollection != "tasks" && hasCompanyAccess(companyId); }
+        match /{subcollection}/{nested=**} {
+          allow read: if subcollection != "tasks" && (permitted("240") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data));
+          allow write: if subcollection != "tasks" && (permitted("244") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data));
+        }
         match /tasks/{taskId} {
-          allow read: if hasCompanyAccess(companyId);
-          allow create: if (validInitialStopTask(stopId) || (hasCompanyAccess(companyId) && validTaskPayCreate()));
-          allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
+          allow read: if permitted("240") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data);
+          allow create: if (validInitialStopTask(stopId) || ((permitted("244") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data)) && validTaskPayCreate()));
+          allow update: if hasCompanyAccess(companyId) && ((assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data) && executionUpdate()) || permitted("244")) && (preservesPayTerms() || canManagePay());
           allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "244");
         }
       }
       match /workOrders/{jobId} {
-        allow read: if hasCompanyAccess(companyId);
+        allow read: if permitted("20") || resource.data.get("createdByUserId", "") == request.auth.uid;
         allow create: if validJobCreate(jobId, request.resource.data);
-        allow update: if hasCompanyAccess(companyId) && (
-          isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "24")
-          || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["sourceTemplateId", "sourceTemplateName", "assignedTechId", "assignedCompanyUserId", "createdByUserId"])
-        );
+        allow update: if (canEditJob(resource.data) || (hasCompanyAccess(companyId) && resource.data.get("createdByUserId", "") == request.auth.uid
+          && executionUpdate() && request.resource.data.get("operationStatus", "") in ["Draft", "Scheduled", "In Progress"])) && (preservesPayTerms() || canManagePay())
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["createdByUserId", "sourceTemplateId"]);
         allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "26");
         match /tasks/{taskId} {
-          allow read: if hasCompanyAccess(companyId);
-          allow create: if (validInitialJobTask(jobId) || (hasCompanyAccess(companyId) && validTaskPayCreate()));
-          allow update: if hasCompanyAccess(companyId) && (canManagePay() || preservesPayTerms());
+          allow read: if permitted("20");
+          allow create: if (validInitialJobTask(jobId) || ((permitted("72") || canEditJob(get(jobPath(jobId)).data)) && validTaskPayCreate()));
+          allow update: if hasCompanyAccess(companyId) && ((resource.data.get("workerId", "") == request.auth.uid && executionUpdate()) || canEditJob(get(jobPath(jobId)).data)) && (preservesPayTerms() || canManagePay());
           allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "24");
         }
-        match /{subcollection}/{nested=**} { allow read, write: if subcollection != "tasks" && hasCompanyAccess(companyId); }
+        match /{subcollection}/{nested=**} {
+          allow read: if subcollection != "tasks" && permitted("20");
+          allow write: if subcollection != "tasks" && (canEditJob(getAfter(jobPath(jobId)).data)
+            || (subcollection in ["plans", "laborLineItems", "plannedServiceStops"] && permitted("72"))
+            || (subcollection == "history" && get(jobPath(jobId)) == null && getAfter(jobPath(jobId)).data.get("createdByUserId", "") == request.auth.uid)
+            || (subcollection == "comments" && permitted("20") && request.resource.data.get("userId", "") == request.auth.uid));
+        }
       }
       match /jobTemplates/{templateId} {
-        allow read: if hasCompanyAccess(companyId);
+        allow read: if permitted("20") || canManageJobTemplates() || permitted("22") || permitted("23") || permitted("27") || permitted("29") || permitted("31");
         allow write: if canManageJobTemplates();
         match /{scope=**} {
-          allow read: if hasCompanyAccess(companyId);
+          allow read: if permitted("20") || canManageJobTemplates() || permitted("22") || permitted("23") || permitted("27") || permitted("29") || permitted("31");
           allow write: if canManageJobTemplates();
         }
       }
       match /{companyCollection}/{document=**} {
-        allow read: if !(companyCollection in ["routeMoveRequests", "workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders"]) && hasCompanyAccess(companyId);
-        allow write: if !(companyCollection in ["routeMoveRequests", "payrollReconcileWork", "workOffers", "payChangeRequests", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "settings", "roles", "workLogs", "shifts", "serviceStops", "workOrders", "jobTemplates"]) && hasCompanyAccess(companyId);
+        allow read: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 0);
+        allow create: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 1);
+        allow update: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 2);
+        allow delete: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 3);
       }
+      match /adminNotes/{noteId} { allow read, write: if isDripDropAdmin(); }
+
     }
 
     match /companyUserPerformanceReviews/{companyId}/companyUsers/{companyUserId}/reviews/{reviewId} {
@@ -716,56 +990,39 @@ service cloud.firestore {
           || (resource.data.userId is string && resource.data.userId == request.auth.uid)
           || (resource.data.companyId is string && hasCompanyAccess(resource.data.companyId))
         );
-      allow create: if signedIn()
-        && request.resource.data.companyId is string
-        && hasCompanyAccess(request.resource.data.companyId);
-      allow update: if signedIn()
-        && resource.data.companyId is string
-        && (
-          hasCompanyAccess(resource.data.companyId)
-          || (
-            resource.data.email is string
-            && resource.data.email == request.auth.token.email
-            && request.resource.data.companyId == resource.data.companyId
-            && request.resource.data.roleId == resource.data.roleId
-          )
-        );
-      allow delete: if signedIn()
-        && resource.data.companyId is string
-        && isCompanyAdmin(resource.data.companyId);
+      allow create, update, delete: if false;
     }
 
     match /chats/{chatId} {
-      allow list: if isDripDropAdmin() || canReadChatData(resource.data);
-      allow create: if isDripDropAdmin() || canReadChatData(request.resource.data);
-      allow get, update, delete: if isDripDropAdmin() || canReadChatData(resource.data);
+      allow read: if isDripDropAdmin() || canReadChatData(resource.data);
+      allow create: if signedIn() && chatParticipant(request.resource.data);
+      allow update: if canReadChatData(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "lastMessage", "lastMessageKind", "lastConversationLink", "mostRecentChat", "updatedAt", "userWhoHaveNotRead", "companyIdsWhoHaveNotRead", "readByUserIds", "unreadMessages"
+        ]);
+      allow delete: if isDripDropAdmin();
     }
-
     match /messages/{messageId} {
-      allow create: if signedIn()
-        && request.resource.data.senderId == request.auth.uid
-        && (
-          canReadChatById(request.resource.data.chatId)
-          || canReadChatByIdAfter(request.resource.data.chatId)
-        );
-      allow read, update, delete: if signedIn()
-        && (
-          resource.data.senderId == request.auth.uid
-          || resource.data.receiverId == request.auth.uid
-          || (resource.data.senderCompanyId is string && hasCompanyAccess(resource.data.senderCompanyId))
-          || (resource.data.receiverCompanyId is string && hasCompanyAccess(resource.data.receiverCompanyId))
-          || canReadChatById(resource.data.chatId)
-        );
+      allow create: if signedIn() && request.resource.data.senderId == request.auth.uid
+        && (canReadChatById(request.resource.data.chatId) || canReadChatByIdAfter(request.resource.data.chatId));
+      allow read: if signedIn() && canReadChatById(resource.data.chatId);
+      allow update: if signedIn() && canReadChatById(resource.data.chatId)
+        && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readByUserIds", "readAt"])
+          || (resource.data.senderId == request.auth.uid
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["senderId", "senderCompanyId", "chatId", "receiverId", "receiverCompanyId", "dateSent"])));
+      allow delete: if signedIn() && canReadChatById(resource.data.chatId) && resource.data.senderId == request.auth.uid;
     }
 
     match /homeownerServiceRequests/{requestId} {
-      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow read, delete: if isPersonalOrCompanyData(resource.data);
+      allow update: if isPersonalOrCompanyData(resource.data) && preservesHomeownerIdentity();
       allow create: if isPersonalOrCompanyData(request.resource.data);
     }
 
     match /homeownerRepairRequests/{requestId} {
-      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
-      allow create: if isPersonalOrCompanyData(request.resource.data);
+      allow read, delete: if isPersonalOrCompanyData(resource.data);
+      allow update: if isPersonalOrCompanyData(resource.data) && preservesHomeownerIdentity();
+      allow create: if signedIn() && hasCompanyAccess(request.resource.data.get('companyId', ''));
     }
 
     match /homeownerRepairRequests/{requestId}/comments/{commentId} {
@@ -774,28 +1031,32 @@ service cloud.firestore {
     }
 
     match /customerCompanyRelationships/{relationshipId} {
-      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
-      allow create: if isPersonalOrCompanyData(request.resource.data);
+      allow read: if isPersonalOrCompanyData(resource.data);
+      allow write: if false;
     }
 
     match /homeownerServiceLocations/{locationId} {
-      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow read, delete: if isPersonalOrCompanyData(resource.data);
+      allow update: if isPersonalOrCompanyData(resource.data) && preservesHomeownerIdentity();
       allow create: if isPersonalOrCompanyData(request.resource.data);
     }
 
     match /homeownerBodiesOfWater/{bodyOfWaterId} {
-      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow read, delete: if isPersonalOrCompanyData(resource.data);
+      allow update: if isPersonalOrCompanyData(resource.data) && preservesHomeownerIdentity();
       allow create: if isPersonalOrCompanyData(request.resource.data);
     }
 
     match /homeownerEquipment/{equipmentId} {
-      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow read, delete: if isPersonalOrCompanyData(resource.data);
+      allow update: if isPersonalOrCompanyData(resource.data) && preservesHomeownerIdentity();
       allow create: if isPersonalOrCompanyData(request.resource.data);
     }
 
     match /homeownerServiceStops/{serviceStopId} {
-      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
-      allow create: if isPersonalOrCompanyData(request.resource.data);
+      allow read: if isPersonalOrCompanyData(resource.data);
+      allow delete: if signedIn() && resource.data.get('userId', '') == request.auth.uid;
+      allow create, update: if false;
     }
 
     match /homeownerStopData/{stopDataId} {
@@ -846,44 +1107,70 @@ service cloud.firestore {
     match /salesAgreements/{agreementId} {
       allow read: if canReadSalesAgreementRecord(resource.data);
       allow create: if canCreateSalesAgreementRecord(request.resource.data);
-      allow update: if canUpdateSalesAgreementRecord(resource.data);
+      allow update: if canUpdateSalesAgreementRecord(resource.data) && preservesSalesIdentity();
       allow delete: if canDeleteSalesAgreementRecord(resource.data);
     }
 
     match /salesBillingProfiles/{billingProfileId} {
       allow read: if canReadSalesRecord(resource.data);
       allow create: if canCompanyWriteSalesRecord(request.resource.data);
-      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+      allow update: if canCompanyWriteSalesRecord(resource.data) && preservesSalesIdentity() && preservesStripeBillingFields();
+      allow delete: if false;
     }
 
     match /salesBillingSubscriptions/{billingSubscriptionId} {
       allow read: if canReadSalesRecord(resource.data);
-      allow create: if canCompanyWriteSalesRecord(request.resource.data);
-      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data)
+        && request.resource.data.get("stripeSubscriptionId", "") in ["", null]
+        && request.resource.data.get("stripeCustomerId", "") in ["", null]
+        && !request.resource.data.keys().hasAny(["checkoutAttemptId", "checkoutHold", "checkoutVersion", "checkoutSessionId", "checkoutCustomerData", "billingReviewRequired", "stripePricingSnapshotHash"])
+        && request.resource.data.get("autopayEnabled", false) != true;
+      allow update: if canCompanyWriteSalesRecord(resource.data) && preservesSalesIdentity() && preservesStripeBillingFields()
+        && ((resource.data.get("stripeSubscriptionId", "") in ["", null] && resource.data.get("checkoutHold", false) != true)
+          || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["status", "amountCents", "lineItems", "currency", "interval", "intervalCount", "currentPeriodStart", "currentPeriodEnd", "cancelAtPeriodEnd", "applicationFeePercent", "taxAmountCents", "discountAmountCents", "billingTimeZone", "billingAnchorDay", "billingSendAnchorDay", "manualBillingNextPeriodStart", "manualBillingNextPeriodEnd", "manualBillingNextInvoiceAt"]));
+      allow delete: if canCompanyWriteSalesRecord(resource.data) && resource.data.get("stripeSubscriptionId", "") in ["", null];
     }
 
     match /salesInvoices/{invoiceId} {
       allow read: if canReadSalesRecord(resource.data);
-      allow create: if canCompanyWriteSalesRecord(request.resource.data);
-      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data) && validUnpaidSalesInvoice(request.resource.data, invoiceId);
+      allow update, delete: if false;
     }
 
     match /salesPayments/{paymentId} {
       allow read: if canReadSalesRecord(resource.data);
-      allow create: if canCompanyWriteSalesRecord(request.resource.data);
-      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+      allow create, update, delete: if false;
     }
 
     match /salesPaymentEvents/{paymentEventId} {
       allow read: if canReadSalesRecord(resource.data);
       allow create, update: if false;
-      allow delete: if canCompanyWriteSalesRecord(resource.data);
+      allow delete: if false;
     }
+
+    match /salesInvoiceEvents/{eventId} {
+      allow read: if signedIn() && canReadCompanyBilling(resource.data.companyId);
+      allow write: if false;
+    }
+
+    match /salesPaymentAdjustments/{adjustmentId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow write: if false;
+    }
+
+    match /billingEmailQueue/{emailId} {
+      allow read: if signedIn() && canReadCompanyBilling(resource.data.companyId);
+      allow write: if false;
+    }
+
+    match /stripeSyncLocks/{lockId} { allow read, write: if false; }
+    match /stripeSyncEvents/{eventId} { allow read, write: if false; }
 
     match /customerPartApprovals/{approvalId} {
       allow read: if canReadSalesRecord(resource.data);
       allow create: if canCompanyWriteSalesRecord(request.resource.data);
-      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+      allow update: if canCompanyWriteSalesRecord(resource.data) && preservesSalesIdentity();
+      allow delete: if canCompanyWriteSalesRecord(resource.data);
     }
 
     match /subscriptions/{subscriptionId} {
@@ -965,7 +1252,10 @@ service cloud.firestore {
     }
 
     match /{document=**} {
-      allow read, write: if isSuperMaster();
+      allow read: if isSuperMaster();
+      allow write: if isSuperMaster() && !(request.path[3] in ["salesAgreements", "salesInvoices", "salesBillingProfiles", "salesBillingSubscriptions", "salesPayments", "salesPaymentEvents", "salesInvoiceEvents", "salesPaymentAdjustments", "billingEmailQueue", "stripeSyncLocks", "stripeSyncEvents", "customerPartApprovals"])
+        && !(request.path[3] == "companies" && request.path == companyPath(request.path[4]) && !preservesStripeBillingFields())
+        && !(request.path[3] == "companies" && request.path != companyPath(request.path[4]) && request.path[5] in ["subscriptions", "checkoutAttempts", "stripePayouts", "stripeBalanceTransactions"]);
     }
   }
 }

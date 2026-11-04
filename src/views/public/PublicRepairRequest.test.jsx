@@ -41,6 +41,8 @@ const chooseOption = async (label, name) => {
 const fillRequiredFields = async () => {
   await chooseOption("Technician", "Alex Technician");
   await chooseOption("Customer", "Taylor Homeowner");
+  await screen.findByText("Backyard");
+  await waitFor(() => expect(mockGetOptions).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'location-main' })));
   await waitFor(() => expect(screen.getByRole("combobox", { name: "Equipment (Optional)", exact: true })).toBeEnabled());
   fireEvent.change(screen.getByRole("textbox", { name: "Description", exact: true }), { target: { value: "The pump is leaking." } });
 };

@@ -23,7 +23,7 @@ const getStripeApiKey = () => {
 
 const getStripe = () => {
   if (!stripeClient) {
-    stripeClient = stripePackage(getStripeApiKey());
+    stripeClient = stripePackage(getStripeApiKey(), { apiVersion: '2025-02-24.acacia', maxNetworkRetries: 2 });
   }
 
   return stripeClient;

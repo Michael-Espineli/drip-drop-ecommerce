@@ -1,8 +1,8 @@
 const { HttpsError } = require('firebase-functions/v2/https');
 const text = value => String(value ?? '').trim();
 const key = value => text(value).replace(/[^a-z0-9]/gi, '').toLowerCase();
-const active = value => value?.active !== false && value?.isActive !== false && value?.revoked !== true &&
-  [value?.status,value?.userStatus,value?.companyUserStatus].every(status=>!['inactive','revoked','past','deleted','declined','pending','invited','rejected','canceled','cancelled','expired'].includes(key(status)));
+const active = value => value?.active !== false && value?.accessActive !== false && value?.isActive !== false && value?.revoked !== true &&
+  [value?.status,value?.userStatus,value?.companyUserStatus,value?.accessStatus,value?.userAccessStatus].every(status=>!['inactive','revoked','past','deleted','declined','pending','invited','rejected','canceled','cancelled','expired'].includes(key(status)));
 const fail = (code, message) => { throw new HttpsError(code, message); };
 const documentId = (value, label = 'Record') => {
   const result = typeof value === 'string' ? value.trim() : '';
@@ -19,12 +19,13 @@ async function companyActor(db, transaction, companyId, uid, token = {}) {
   ]);
   const a = access.data() || {}, company = co.data() || {};
   const owner = company.ownerId === uid;
-  const globalAdmin = token.admin === true || key(profile.data()?.accountType) === 'admin';
+  const globalAdmin = require('./platformAccess').isPlatformAdmin(uid, token);
   if (!co.exists || (!owner && !globalAdmin && (!access.exists || !active(a)))) fail('permission-denied', 'Active company access is required.');
   const user = users.docs.map(s => ({ ...s.data(), id: s.id })).find(active) || {};
   if (!owner && !globalAdmin && users.docs.length && !users.docs.some(s => active(s.data()))) fail('permission-denied', 'Active company access is required.');
   const role = a.roleId ? await transaction.get(c.collection('roles').doc(documentId(a.roleId, 'Role'))) : null;
-  const admin = owner || globalAdmin || ['owner','admin','manager'].includes(key(a.roleName));
+  const validRole = role?.exists && Array.isArray(role.data()?.permissionIdList);
+  const admin = owner || globalAdmin || (validRole && key(role.data()?.name) === key(a.roleName) && ['owner','admin','manager'].includes(key(a.roleName)));
   return { uid, companyId, company, user, admin, administrator: admin,
     name: user.userName || [user.firstName,user.lastName].filter(Boolean).join(' ') || a.userName || uid,
     workerType: user.workerType || 'Not Assigned', permissions: Array.isArray(role?.data()?.permissionIdList) ? role.data().permissionIdList.map(String) : [] };

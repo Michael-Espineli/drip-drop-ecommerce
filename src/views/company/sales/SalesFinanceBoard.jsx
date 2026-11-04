@@ -1,3 +1,5 @@
+import { netPaymentCents, hasPostedPayment, monthlyRecurringCents } from '../../../utils/sales/financialMetrics';
+import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -33,6 +35,8 @@ import {
   recordManualSalesPayment,
 } from '../../../utils/sales/manualBilling';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import { newManualPaymentForm, persistManualPaymentDraft, clearManualPaymentDraft, manualPaymentDateMillis } from '../../../utils/sales/invoiceCommands';
+import { canManageCustomerBilling } from '../../../utils/companyPermissionAccess';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -147,7 +151,7 @@ const invoiceAgingInfo = (invoice = {}) => {
 };
 
 const invoiceCanSendReminder = (invoice = {}) => Boolean(
-  invoice?.id &&
+  invoice?.id && !invoice.paymentReviewRequired && invoiceBalanceCents(invoice)>0 &&
   invoice.email &&
   Array.isArray(invoice.lineItems) &&
   invoice.lineItems.length > 0 &&
@@ -155,6 +159,7 @@ const invoiceCanSendReminder = (invoice = {}) => Boolean(
 );
 
 const invoiceSendDisabledReason = (invoice = {}) => {
+  if (invoice?.paymentReviewRequired) return 'Resolve the payment adjustment before sending another collection reminder.';
   if (!invoice?.email) return 'Add a customer email before sending a reminder.';
   if (!Array.isArray(invoice.lineItems) || invoice.lineItems.length === 0) return 'Add at least one line item before sending.';
   if (['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice.status))) return 'This invoice cannot be sent in its current status.';
@@ -340,7 +345,9 @@ const customerLink = (customerId) => (customerId ? `/company/customers/details/$
 
 const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   const navigate = useNavigate();
-  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
+  const authContext = useContext(Context);
+  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = authContext;
+  const canManageBilling = canManageCustomerBilling(authContext);
   const [loading, setLoading] = useState(true);
   const [invoices, setInvoices] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -360,6 +367,10 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   const [sendingInvoiceId, setSendingInvoiceId] = useState('');
   const [openActionInvoiceId, setOpenActionInvoiceId] = useState('');
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
+  const paymentScope = { companyId: recentlySelectedCompany, userId: user?.uid, invoiceId: recordPaymentInvoice?.id };
+  useEffect(() => {
+    if (recordPaymentInvoice && paymentForm.requestId) persistManualPaymentDraft({ companyId: recentlySelectedCompany, userId: user?.uid, invoiceId: recordPaymentInvoice.id }, paymentForm);
+  }, [paymentForm, recordPaymentInvoice, recentlySelectedCompany, user?.uid]);
 
   const activeView = ['invoices', 'payments', 'subscriptions'].includes(defaultView) ? defaultView : 'invoices';
   const pageMeta = {
@@ -415,7 +426,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   }, [recentlySelectedCompany]);
 
   const summary = useMemo(() => {
-    const postedPayments = payments.filter((payment) => normalizeStatus(payment.status) === normalizeStatus(SalesPaymentStatus.posted));
+    const postedPayments = payments.filter(hasPostedPayment);
     const invoicedCents = invoices
       .filter((invoice) => !['draft', 'void'].includes(normalizeStatus(invoice.status)))
       .reduce((total, invoice) => total + Number(invoice.totalAmountCents || 0), 0);
@@ -423,16 +434,16 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
     const openArCents = invoices
       .filter(invoiceIsOpenAr)
       .reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0);
-    const receivedCents = postedPayments.reduce((total, payment) => total + Number(payment.amountCents || 0), 0);
+    const receivedCents = postedPayments.reduce((total, payment) => total + netPaymentCents(payment), 0);
     const paidThroughAppCents = postedPayments
       .filter((payment) => appPaymentMethods.has(payment.method) || payment.stripePaymentIntentId || payment.stripeChargeId)
-      .reduce((total, payment) => total + Number(payment.amountCents || 0), 0);
+      .reduce((total, payment) => total + netPaymentCents(payment), 0);
     const manualPaymentCents = postedPayments
       .filter((payment) => !appPaymentMethods.has(payment.method) && !payment.stripePaymentIntentId && !payment.stripeChargeId)
-      .reduce((total, payment) => total + Number(payment.amountCents || 0), 0);
+      .reduce((total, payment) => total + netPaymentCents(payment), 0);
     const recurringCents = subscriptions
       .filter((subscription) => ['active', 'trialing'].includes(normalizeStatus(subscription.stripeStatus || subscription.status)))
-      .reduce((total, subscription) => total + Number(subscription.amountCents || 0), 0);
+      .reduce((total, subscription) => total + monthlyRecurringCents(subscription), 0);
     const overdueInvoices = invoices.filter(invoiceIsOverdue);
     const pendingCheckoutSubscriptions = subscriptions.filter((subscription) => (
       ['pendingpaymentmethod', 'pendingstripe', 'notstarted'].includes(normalizeStatus(subscription.status || subscription.stripeStatus)) &&
@@ -534,7 +545,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   }, [activeView, invoices, payments, searchTerm, statusFilter, subscriptions]);
 
   const recentPaid = useMemo(
-    () => sortByFreshest(payments.filter((payment) => normalizeStatus(payment.status) === normalizeStatus(SalesPaymentStatus.posted))).slice(0, 6),
+    () => sortByFreshest(payments.filter(hasPostedPayment)).slice(0, 6),
     [payments]
   );
   const openActionInvoice = useMemo(
@@ -573,14 +584,10 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   };
 
   const openRecordPaymentModal = (invoice) => {
+    if (!canManageBilling) return;
     const balanceCents = invoiceBalanceCents(invoice);
     setRecordPaymentInvoice(invoice);
-    setPaymentForm({
-      amount: balanceCents > 0 ? (balanceCents / 100).toFixed(2) : '',
-      method: SalesPaymentMethod.cash,
-      referenceNumber: '',
-      memo: '',
-    });
+    setPaymentForm(newManualPaymentForm({ companyId: recentlySelectedCompany, userId: user?.uid, invoiceId: invoice.id }, balanceCents > 0 ? (balanceCents / 100).toFixed(2) : ''));
   };
 
   const closeRecordPaymentModal = () => {
@@ -590,7 +597,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
 
   const handleRecordPayment = async (event) => {
     event.preventDefault();
-    if (!recordPaymentInvoice || savingPayment) return;
+    if (!recordPaymentInvoice || savingPayment || !canManageBilling) return;
 
     const amountCents = dollarsToCents(paymentForm.amount);
     if (amountCents <= 0) {
@@ -606,13 +613,16 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
         method: paymentForm.method,
         referenceNumber: paymentForm.referenceNumber,
         memo: paymentForm.memo,
+        receivedAtMillis: manualPaymentDateMillis(paymentForm.receivedDate),
       }, {
         companyId: recentlySelectedCompany,
         stripeConnectedAccountId,
         userId: user?.uid || '',
+        requestId: paymentForm.requestId,
       });
 
       toast.success('Payment recorded.');
+      clearManualPaymentDraft(paymentScope);
       closeRecordPaymentModal();
     } catch (error) {
       console.error('Failed to record payment', error);
@@ -622,6 +632,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   };
 
   const sendInvoiceReminder = async (invoice) => {
+    if (!canManageBilling) return;
     if (!invoice?.id || sendingInvoiceId || !invoiceCanSendReminder(invoice)) {
       const reason = invoiceSendDisabledReason(invoice);
       if (reason) toast.error(reason);
@@ -654,6 +665,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   };
 
   const createSubscriptionInvoice = async (subscription) => {
+    if (!canManageBilling) return;
     if (!subscription?.id || creatingInvoiceId) return;
 
     setCreatingInvoiceId(subscription.id);
@@ -676,6 +688,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   };
 
   const startSubscriptionCheckout = async (subscription) => {
+    if (!canManageBilling) return;
     if (!subscription?.id || startingCheckoutId) return;
 
     setStartingCheckoutId(subscription.id);
@@ -697,8 +710,8 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
         return;
       }
 
-      if (result.data?.status === 'already_active') {
-        toast.success('This billing subscription is already active in Stripe.');
+      if (['already_active','processing'].includes(result.data?.status)) {
+        toast(result.data?.message || 'Billing setup is being confirmed.');
         return;
       }
 
@@ -775,7 +788,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
                 </div>
 
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  {activeView === 'invoices' && (
+                  {activeView === 'invoices' && canManageBilling && (
                     <Link
                       to="/company/sales/invoices/new"
                       className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
@@ -824,6 +837,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
                 subscriptions={recordsForView}
                 onStartCheckout={startSubscriptionCheckout}
                 startingCheckoutId={startingCheckoutId}
+                canManageBilling={canManageBilling}
                 onCreateInvoice={createSubscriptionInvoice}
                 creatingInvoiceId={creatingInvoiceId}
               />
@@ -852,7 +866,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
                           {labelize(payment.method)} · {formatDate(payment.receivedAt || payment.createdAt)}
                         </p>
                       </div>
-                      <p className="text-sm font-bold text-slate-900">{formatCurrency(payment.amountCents)}</p>
+                      <p className="text-sm font-bold text-slate-900">{formatCurrency(netPaymentCents(payment))}<PaymentAdjustmentNote payment={payment} /></p>
                     </div>
                     <p className="mt-1 text-xs font-semibold text-slate-500">
                       {appPaymentMethods.has(payment.method) || payment.stripePaymentIntentId ? 'Paid through app' : 'Recorded manually'}
@@ -910,6 +924,12 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
             </div>
 
             <div className="mt-5 grid gap-4">
+              <label className="space-y-1.5">
+                <span className="text-sm font-semibold text-slate-700">Received date</span>
+                <input aria-label="Received date" type="date" required value={paymentForm.receivedDate || ''}
+                  onChange={event => setPaymentForm(current => ({ ...current, receivedDate: event.target.value }))}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+              </label>
               <label className="space-y-1.5">
                 <span className="text-sm font-semibold text-slate-700">Amount</span>
                 <input
@@ -996,7 +1016,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
               icon={FaEnvelope}
               tone="blue"
               loading={sendingInvoiceId === openActionInvoice.id}
-              disabled={Boolean(invoiceSendDisabledReason(openActionInvoice)) || Boolean(sendingInvoiceId)}
+              disabled={!canManageBilling || Boolean(invoiceSendDisabledReason(openActionInvoice)) || Boolean(sendingInvoiceId)}
               title={invoiceSendDisabledReason(openActionInvoice)}
               onClick={() => {
                 sendInvoiceReminder(openActionInvoice);
@@ -1007,7 +1027,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
               label="Record Payment"
               icon={FaReceipt}
               tone="emerald"
-              disabled={invoiceBalanceCents(openActionInvoice) <= 0 || ['void', 'uncollectible'].includes(normalizeStatus(openActionInvoice.status))}
+              disabled={!canManageBilling || Boolean(openActionInvoice.stripeInvoiceId || openActionInvoice.stripeHostedInvoiceUrl) || invoiceBalanceCents(openActionInvoice) <= 0 || ['void', 'uncollectible'].includes(normalizeStatus(openActionInvoice.status))}
               title={invoiceBalanceCents(openActionInvoice) <= 0 ? 'This invoice has no open balance.' : ''}
               onClick={() => {
                 openRecordPaymentModal(openActionInvoice);
@@ -1129,7 +1149,7 @@ const PaymentsTable = ({ payments }) => (
                 )}
                 <p className="mt-1 text-xs text-slate-500">{payment.referenceNumber || (payment.invoiceId ? 'Invoice payment' : 'Payment')}</p>
               </td>
-              <td className="px-5 py-4 font-semibold text-slate-900">{formatCurrency(payment.amountCents)}</td>
+              <td className="px-5 py-4 font-semibold text-slate-900">{formatCurrency(netPaymentCents(payment))}<PaymentAdjustmentNote payment={payment} /></td>
               <td className="px-5 py-4 text-slate-700">{labelize(payment.method)}</td>
               <td className="px-5 py-4">
                 <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${paidInApp ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
@@ -1150,6 +1170,7 @@ const SubscriptionsTable = ({
   subscriptions,
   onStartCheckout,
   startingCheckoutId,
+  canManageBilling,
   onCreateInvoice,
   creatingInvoiceId,
 }) => (
@@ -1176,7 +1197,7 @@ const SubscriptionsTable = ({
           const manualBillingAllowed = subscription.manualBillingEnabled !== false && !isStripeManagedBilling;
           const workflowLabel = isStripeManagedBilling ? 'Automatic Stripe billing' : 'Manual invoices until autopay';
           const canCheckout = !isStripeManagedBilling && Number(subscription.amountCents || 0) > 0 && Boolean(subscription.stripeConnectedAccountId);
-          const canCreateInvoice = manualBillingAllowed && Number(subscription.amountCents || 0) > 0;
+          const canCreateInvoice = !subscription.checkoutHold && !subscription.stripeSubscriptionId && manualBillingAllowed && Number(subscription.amountCents || 0) > 0;
           const manualInvoicePreview = getSubscriptionBillingPeriodPreview(subscription);
 
           return (
@@ -1234,7 +1255,7 @@ const SubscriptionsTable = ({
                   <button
                     type="button"
                     onClick={() => onStartCheckout(subscription)}
-                    disabled={!canCheckout || startingCheckoutId === subscription.id}
+                    disabled={!canManageBilling || !canCheckout || startingCheckoutId === subscription.id}
                     className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {startingCheckoutId === subscription.id ? 'Opening...' : isActive ? 'Active' : 'Start Checkout'}
@@ -1242,7 +1263,7 @@ const SubscriptionsTable = ({
                   <button
                     type="button"
                     onClick={() => onCreateInvoice(subscription)}
-                    disabled={!canCreateInvoice || creatingInvoiceId === subscription.id}
+                    disabled={!canManageBilling || !canCreateInvoice || creatingInvoiceId === subscription.id}
                     className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {creatingInvoiceId === subscription.id ? 'Creating...' : 'Create Invoice'}

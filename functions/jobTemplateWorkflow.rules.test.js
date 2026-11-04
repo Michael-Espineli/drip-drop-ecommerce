@@ -16,7 +16,7 @@ function client(uid) {
   users[uid] = { app, db };
   return db;
 }
-const permissions = { full: ['22'], self: ['23'], others: ['29'], custom: ['27'], customOthers: ['31'], stopOnly: ['252'], editor: ['820'], none: [], owner: [], 'someone-else': [] };
+const permissions = { full: ['22'], self: ['23'], others: ['29'], custom: ['27'], customOthers: ['31'], stopOnly: ['252'], editor: ['920'], none: [], owner: [], 'someone-else': [] };
 Object.keys(permissions).forEach(client);
 const seeded = (async () => {
   const batch = store.batch();

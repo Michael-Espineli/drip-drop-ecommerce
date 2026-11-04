@@ -12,7 +12,7 @@ const p='companies/company/';
 const seeded=(async()=>{const docs={
  'companies/company':{ownerId:'owner'},'users/tech/userAccess/company':{roleId:'tech',roleName:'Technician'},'users/manager/userAccess/company':{roleId:'manager',roleName:'Team Lead'},'users/viewer/userAccess/company':{roleId:'viewer',roleName:'Viewer'},
  'users/operator/userAccess/company':{roleId:'operator',roleName:'Team Lead'},[p+'roles/operator']:{permissionIdList:['244']},[p+'routeMoveRequests/move']:{actorId:'operator',result:{status:200}},
- [p+'roles/tech']:{permissionIdList:['322','334']},[p+'roles/manager']:{permissionIdList:['424']},[p+'roles/viewer']:{permissionIdList:['420']},
+ [p+'roles/tech']:{permissionIdList:['20','72','240','322','334']},[p+'roles/manager']:{permissionIdList:['424']},[p+'roles/viewer']:{permissionIdList:['420']},
  [p+'technicianRates/own']:{technicianId:'tech',amountCents:5000},[p+'technicianRates/other']:{technicianId:'other',amountCents:8000},
  [p+'technicianPayLineItems/own']:{technicianId:'tech',totalAmountCents:5000},[p+'technicianPayLineItems/other']:{technicianId:'other',totalAmountCents:8000},
  [p+'workOffers/offer']:{postedToBoard:true,status:'Posted',createdByUserId:'tech',claims:[]},[p+'payChangeRequests/own']:{technicianId:'tech'},[p+'payChangeRequests/other']:{technicianId:'other'},

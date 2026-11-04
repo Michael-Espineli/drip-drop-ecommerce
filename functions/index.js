@@ -847,6 +847,9 @@ exports.reconcileWorkLogTime = technicianWork.reconcileWorkLogTime;
 exports.reconcileRouteTime = technicianWork.reconcileRouteTime;
 exports.reconcileRouteLogTime = technicianWork.reconcileRouteLogTime;
 exports.finalizeTechnicianJob = technicianWork.finalizeTechnicianJob;
+exports.reconcileJobEquipmentCompletion = technicianWork.reconcileJobEquipmentCompletion;
+exports.reconcileJobTaskEquipmentCompletion = technicianWork.reconcileJobTaskEquipmentCompletion;
+exports.reconcileStopTaskEquipmentCompletion = technicianWork.reconcileStopTaskEquipmentCompletion;
 exports.manageTechnicianRates = technicianWork.manageTechnicianRates;
 exports.syncWorkOfferStopProgress = technicianWork.syncWorkOfferStopProgress;
 exports.syncWorkOfferTaskProgress = technicianWork.syncWorkOfferTaskProgress;
@@ -855,3 +858,21 @@ exports.syncWorkOfferProductProgress = technicianWork.syncWorkOfferProductProgre
 exports.syncWorkOfferStopTaskProgress = technicianWork.syncWorkOfferStopTaskProgress;
 exports.reconcileWorkOfferPayroll = technicianWork.reconcileWorkOfferPayroll;
 exports.reconcileWorkOfferIncentive = technicianWork.reconcileWorkOfferIncentive;
+
+// Customer portal commands validate the homeowner and company relationship server-side.
+exports.submitHomeownerRepairRequest = require('./homeownerRequests').submitHomeownerRepairRequest;
+const homeownerPublishing = require('./homeownerServicePublishing');
+exports.publishHomeownerServiceStop = homeownerPublishing.publishHomeownerServiceStop;
+exports.publishHomeownerStopReadings = homeownerPublishing.publishHomeownerStopReadings;
+exports.publishHomeownerStopTask = homeownerPublishing.publishHomeownerStopTask;
+exports.publishHomeownerRelationship = homeownerPublishing.publishHomeownerRelationship;
+const customerPortalBilling = require('./customerPortalBilling');
+exports.createCustomerInvoiceCheckout = customerPortalBilling.createCustomerInvoiceCheckout;
+exports.createCustomerBillingPortal = customerPortalBilling.createCustomerBillingPortal;
+exports.manageSalesInvoice = require('./salesInvoiceCommands').manageSalesInvoice;
+
+exports.createManualSalesSubscriptionInvoice = require('./manualRecurringBilling').createManualSalesSubscriptionInvoice;
+exports.refreshCompanyPayoutReconciliation = require('./payoutReconciliation').refreshCompanyPayoutReconciliation;
+exports.createJobSalesInvoice = require('./jobBilling').createJobSalesInvoice;
+
+exports.ensureOwnTechnicianRoute = require("./technicianWork").ensureOwnTechnicianRoute;

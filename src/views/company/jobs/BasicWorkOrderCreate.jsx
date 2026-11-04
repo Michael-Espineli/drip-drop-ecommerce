@@ -881,6 +881,7 @@ const BasicWorkOrderCreate = () => {
                     searchParams.get("locationId") ||
                     customerContext?.serviceLocationId ||
                     customerContext?.locationId ||
+                    repairRequest?.companyServiceLocationId ||
                     repairRequest?.serviceLocationId ||
                     repairRequest?.locationId ||
                     equipmentContext?.serviceLocationId ||
@@ -951,12 +952,14 @@ const BasicWorkOrderCreate = () => {
                 const initialBodyOfWaterId =
                     searchParams.get("bodyOfWaterId") ||
                     customerContext?.bodyOfWaterId ||
+                    repairRequest?.companyBodyOfWaterId ||
                     repairRequest?.bodyOfWaterId ||
                     equipmentContext?.bodyOfWaterId ||
                     "";
                 const initialEquipmentId =
                     searchParams.get("equipmentId") ||
                     customerContext?.equipmentId ||
+                    repairRequest?.companyEquipmentId ||
                     repairRequest?.equipmentId ||
                     equipmentContext?.equipmentId ||
                     "";

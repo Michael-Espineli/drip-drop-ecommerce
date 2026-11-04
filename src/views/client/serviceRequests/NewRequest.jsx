@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, where, serverTimestamp, setDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
@@ -11,6 +11,7 @@ import {
     isChatVisibleTo,
     sendChatMessage,
 } from '../../../utils/chatMessaging';
+import { readClientDraft, saveClientDraft, clearClientDraft } from '../../../utils/clientDrafts';
 import CompanySummaryCard, { getCompanySummary } from './CompanySummaryCard';
 
 const NewRequest = () => {
@@ -19,21 +20,25 @@ const NewRequest = () => {
     const [searchParams] = useSearchParams();
     const { user, dataBaseUser } = useContext(Context);
     const sourceChatId = searchParams.get('chatId') || '';
+    const draftKey = `client-service-request:${user?.uid}:${companyId}`;
+    const draft = readClientDraft(draftKey);
 
     const [company, setCompany] = useState(null);
     const [userLocations, setUserLocations] = useState([]);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipment, setEquipment] = useState([]);
 
-    const [selectedLocation, setSelectedLocation] = useState('');
+    const [selectedLocation, setSelectedLocation] = useState(searchParams.get('locationId') || draft.locationId || '');
     const [selectedBodyOfWater, setSelectedBodyOfWater] = useState('');
     const [selectedEquipment, setSelectedEquipment] = useState('');
 
-    const [issueDescription, setIssueDescription] = useState('Id like to inquire about weekly maintenance plans.');
+    const [issueDescription, setIssueDescription] = useState(draft.description || '');
     const [loading, setLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState(null);
-    const [requestType, setRequestType] = useState('service'); // 'repair' or 'service'
+    const [requestType, setRequestType] = useState(draft.requestType || 'service'); // 'repair' or 'service'
+
+    useEffect(() => { saveClientDraft(draftKey, { description: issueDescription, requestType, locationId: selectedLocation }); }, [draftKey, issueDescription, requestType, selectedLocation]);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -53,6 +58,7 @@ const NewRequest = () => {
                 const locationsSnap = await getDocs(locationsQuery);
                 const locations = locationsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 setUserLocations(locations);
+                if (locations.length === 1) setSelectedLocation(current => current || locations[0].id);
 
             } catch (err) {
                 console.error(err);
@@ -74,7 +80,7 @@ const NewRequest = () => {
                 return;
             }
             const q = query(collection(db, 'homeownerBodiesOfWater'), where('serviceLocationId', '==', selectedLocation), where('userId', '==', user.uid));
-            const snap = await getDocs(q);
+            let snap; try { snap = await getDocs(q); } catch (_) { setError("Could not load pools. Please try selecting the address again."); return; }
             const bows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setBodiesOfWater(bows);
         };
@@ -91,7 +97,7 @@ const NewRequest = () => {
                 return;
             }
             const q = query(collection(db, 'homeownerEquipment'), where('bodyOfWaterId', '==', selectedBodyOfWater), where('userId', '==', user.uid));
-            const snap = await getDocs(q);
+            let snap; try { snap = await getDocs(q); } catch (_) { setError("Could not load equipment. Please try selecting the pool again."); return; }
             const equip = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setEquipment(equip);
         };
@@ -132,13 +138,13 @@ const NewRequest = () => {
                 serviceName: '',
                 serviceLocationAddress,
                 creatorId: user.uid,
-                creatorName: dataBaseUser.firstName + ' ' + dataBaseUser.lastName,
+                creatorName: getUserDisplayName(dataBaseUser, user),
                 customerId: '', //comp
                 customerName: '', //comp
                 customerUserId: user.uid,
-                homeownerName: dataBaseUser.firstName + ' ' + dataBaseUser.lastName, //shared
-                homeownerEmail: dataBaseUser.email || user.email || '', //shared
-                homeownerPhone: dataBaseUser.phoneNumber || dataBaseUser.phone || '', //shared
+                homeownerName: getUserDisplayName(dataBaseUser, user), //shared
+                homeownerEmail: dataBaseUser?.email || user.email || '', //shared
+                homeownerPhone: dataBaseUser?.phoneNumber || dataBaseUser?.phone || '', //shared
                 homeownerId: user.uid, //homeowner
                 homeownerServiceLocationId: selectedLocation, //homeowner
                 homeownerBodyOfWaterId: selectedBodyOfWater || "", //homeowner
@@ -148,6 +154,7 @@ const NewRequest = () => {
                 requestType,
             });
 
+            clearClientDraft(draftKey);
             if (sourceChatId) {
                 try {
                     const chatSnap = await getDoc(doc(db, 'chats', sourceChatId));
@@ -199,9 +206,6 @@ const NewRequest = () => {
         return <div className="p-8">Loading...</div>;
     }
 
-    if (error) {
-        return <div className="p-8 text-red-500">Error: {error}</div>;
-    }
 
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
@@ -216,6 +220,9 @@ const NewRequest = () => {
 
                 <form onSubmit={handleSubmit} className="space-y-6 bg-white p-8 rounded-lg shadow-md">
                     <h2 className="text-xl font-semibold text-gray-900">Request Details</h2>
+                    {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-700">{error}</p>}
+                    {userLocations.length === 0 && <p className="text-slate-600">Add a service address to send your request. Your draft will be kept.</p>}
+                    <Link className="inline-flex min-h-[44px] items-center font-semibold text-blue-700" to={`/serviceLocation/create?returnTo=${encodeURIComponent(`/client/service-requests/new/${companyId}${window.location.search}`)}`}>Add a service address</Link>
                     <div>
                         <label htmlFor="serviceLocation" className="block text-sm font-medium text-gray-700 mb-1">
                             Service Location
@@ -224,14 +231,14 @@ const NewRequest = () => {
                             id="serviceLocation"
                             name="serviceLocation"
                             value={selectedLocation}
-                            onChange={(e) => setSelectedLocation(e.target.value)}
+                            onChange={(e) => { setSelectedLocation(e.target.value); setSelectedBodyOfWater(''); setSelectedEquipment(''); }}
                             className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
                             required
                         >
                             <option value="" disabled>Select a location</option>
                             {userLocations.map(loc => (
                                 <option key={loc.id} value={loc.id}>
-                                    {loc.address.streetAddress || loc.name || "Unnamed Location"}
+                                    {loc.address?.streetAddress || loc.name || "Unnamed Location"}
                                 </option>
                             ))}
                         </select>
@@ -246,7 +253,7 @@ const NewRequest = () => {
                                 id="bodyOfWater"
                                 name="bodyOfWater"
                                 value={selectedBodyOfWater}
-                                onChange={(e) => setSelectedBodyOfWater(e.target.value)}
+                                onChange={(e) => { setSelectedBodyOfWater(e.target.value); setSelectedEquipment(''); }}
                                 className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
                             >
                                 <option value="">Select a pool or spa</option>
@@ -331,7 +338,7 @@ const NewRequest = () => {
                     <div className="text-right">
                         <button
                             type="submit"
-                            disabled={isSubmitting}
+                            disabled={isSubmitting || !company || !selectedLocation}
                             className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400"
                         >
                             {isSubmitting ? 'Submitting...' : 'Submit Request'}

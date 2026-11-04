@@ -3,11 +3,11 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Switch } from '@headlessui/react';
 import { BellIcon, EnvelopeIcon, CogIcon } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
-import { doc, updateDoc, getDoc } from 'firebase/firestore';
+import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 
 const ClientSettings = () => {
-    const { user, userData, setUserData } = useContext(Context);
+    const { user, dataBaseUser, setDataBaseUser } = useContext(Context);
     const [settings, setSettings] = useState({
         emailNotifications: true,
         pushNotifications: false,
@@ -17,15 +17,16 @@ const ClientSettings = () => {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        if (userData?.settings) {
-            setSettings(prev => ({ ...prev, ...userData.settings }));
+        if (dataBaseUser?.settings) {
+            setSettings(prev => ({ ...prev, ...dataBaseUser.settings }));
         }
         setLoading(false);
-    }, [userData]);
+    }, [dataBaseUser]);
 
     const handleSettingChange = async (setting, value) => {
         if (!user) return;
         
+        const previousSettings = settings;
         const newSettings = { ...settings, [setting]: value };
         setSettings(newSettings);
         setIsSaving(true);
@@ -37,12 +38,12 @@ const ClientSettings = () => {
                 [`settings.${setting}`]: value
             });
             // Optionally update context after successful save
-            setUserData(prev => ({...prev, settings: newSettings}));
+            setDataBaseUser(prev => ({...prev, settings: newSettings}));
         } catch (err) {
             console.error("Error updating settings:", err);
             setError("Failed to save setting. Please try again.");
             // Revert on failure
-            setSettings(prev => ({ ...prev, [setting]: !value }));
+            setSettings(previousSettings);
         } finally {
             setIsSaving(false);
         }
@@ -68,7 +69,7 @@ const ClientSettings = () => {
                     <ul className="divide-y divide-gray-200">
                         <SettingToggle
                             label="Email Notifications"
-                            description="Receive updates and alerts via email."
+                            description="Receive optional pool service updates by email. Billing and account emails are still sent."
                             icon={EnvelopeIcon}
                             enabled={settings.emailNotifications}
                             onChange={(val) => handleSettingChange('emailNotifications', val)}
@@ -84,7 +85,7 @@ const ClientSettings = () => {
                             disabled={true} // Feature is not ready
                         />
                     </ul>
-                    {error && <p className="p-4 text-sm text-center text-red-600 bg-red-50">{error}</p>}
+                    {error && <p role="alert" className="p-4 text-sm text-center text-red-600 bg-red-50">{error}</p>}
                 </div>
             </div>
         </div>
@@ -101,6 +102,7 @@ const SettingToggle = ({ label, description, icon: Icon, enabled, onChange, isSa
             </div>
         </div>
         <Switch
+            aria-label={label}
             checked={enabled}
             onChange={onChange}
             disabled={isSaving || disabled}

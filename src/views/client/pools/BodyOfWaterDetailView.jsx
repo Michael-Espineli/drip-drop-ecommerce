@@ -9,7 +9,8 @@ import {
     ChevronRightIcon, TruckIcon, PencilIcon, XMarkIcon, CheckIcon
 } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
-import { displayRepairRequestStatus } from '../../../utils/models/RepairRequest';
+import { displayRepairRequestStatus, isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
+import { clientVisitSummary } from '../../../utils/clientServiceHistory';
 
 const BodyOfWaterDetailView = () => {
     const { bodyOfWaterId } = useParams();
@@ -52,7 +53,7 @@ const BodyOfWaterDetailView = () => {
                 const equipQuery = query(collection(db, 'homeownerEquipment'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid));
                 const serviceStopsQuery = query(collection(db, 'homeownerServiceStops'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'), limit(5));
                 const stopDataQuery = query(collection(db, 'stopData'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), orderBy('date', 'desc'), limit(5));
-                const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), where('status', 'not-in', ['Completed', 'Cancelled']));
+                const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid));
 
                 const [equipSnap, serviceStopsSnap, stopDataSnap, repairSnap] = await Promise.all([
                     getDocs(equipQuery),
@@ -62,8 +63,8 @@ const BodyOfWaterDetailView = () => {
                 ]);
 
                 setEquipment(equipSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-                setServiceStops(serviceStopsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-                setRepairRequests(repairSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+                setServiceStops(clientVisitSummary(serviceStopsSnap.docs.map(d => ({ id: d.id, ...d.data() }))).completed);
+                setRepairRequests(repairSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(request => isOpenRepairRequestStatus(request.status)));
 
                 const processedStopData = stopDataSnap.docs.map(doc => {
                     const data = doc.data();
@@ -230,7 +231,7 @@ const EquipmentList = ({ equipment }) => (
             <ul className="space-y-1">
                 {equipment.map(item => (
                     <li key={item.id}>
-                        <Link to={`/equipment/${item.id}`} className="flex justify-between items-center text-sm p-2 hover:bg-gray-50 rounded-md -m-2">
+                        <Link to={`/client/equipment/${item.id}`} className="flex justify-between items-center text-sm p-2 hover:bg-gray-50 rounded-md -m-2">
                             <div>
                                 <p className="font-semibold text-gray-800">{item.name}</p>
                                 <p className="text-gray-500">{item.make} {item.model}</p>
@@ -253,7 +254,7 @@ const OutstandingRepairsWidget = ({ repairRequests }) => {
                     <Link to={`/client/repair-requests/${req.id}`} key={req.id} className="block p-3 hover:bg-gray-50 rounded-lg -m-2">
                         <div className="flex justify-between items-start text-sm">
                             <div>
-                                <p className="font-semibold text-gray-800">{req.issueDescription || "No description"}</p>
+                                <p className="font-semibold text-gray-800">{req.description || req.issueDescription || "No description"}</p>
                                 <p className="text-gray-500">Status: <span className="font-medium text-yellow-600">{displayRepairRequestStatus(req.status)}</span></p>
                             </div>
                             <p className="text-gray-500 flex-shrink-0 ml-4">{req.createdAt ? format(req.createdAt.toDate(), 'MMM d, yyyy') : ''}</p>

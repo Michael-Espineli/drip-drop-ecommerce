@@ -1,6 +1,9 @@
+import { netPaymentCents, hasPostedPayment } from '../../../utils/sales/financialMetrics';
+import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
+import { listenClientRecords } from '../../../utils/clientRecords';
+import { ManageClientBilling } from '../../../components/billing/ClientPaymentActions';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
@@ -70,7 +73,7 @@ const invoiceBalanceCents = (invoice) => {
   const paid = Number(invoice.amountPaidCents) || 0;
   const writtenOff = Number(invoice.writeOffAmountCents) || 0;
 
-  return Math.max(total - paid - writtenOff, 0);
+  return Math.max(total - paid - writtenOff - Number(invoice.refundCreditCents || 0) - Number(invoice.creditAmountCents || 0), 0);
 };
 
 const sortByFreshest = (records) =>
@@ -217,16 +220,15 @@ const ClientFinance = () => {
 
     setLoading(true);
     setError('');
-    let firstSnapshotsRemaining = 5;
+    const initialized = new Set();
 
     const publish = (setter) => (snapshot) => {
       const nextRecords = snapshot.docs
-        .map((recordDoc) => ({ id: recordDoc.id, ...recordDoc.data() }))
-        .filter((record) => record.customerUserId === user.uid);
+        .map((recordDoc) => ({ ...recordDoc.data(), id: recordDoc.id }));
 
       setter(sortByFreshest(nextRecords));
-      firstSnapshotsRemaining -= 1;
-      if (firstSnapshotsRemaining <= 0) setLoading(false);
+      if (snapshot.ready !== false) initialized.add(setter);
+      if (initialized.size === 5) setLoading(false);
     };
 
     const onError = (label) => (snapshotError) => {
@@ -236,28 +238,23 @@ const ClientFinance = () => {
     };
 
     const unsubscribes = [
-      onSnapshot(
-        query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid)),
+      listenClientRecords({ db, user, collectionName: salesCollectionNames.agreements },
         publish(setAgreements),
         onError('service agreements')
       ),
-      onSnapshot(
-        query(collection(db, 'customerPartApprovals'), where('customerUserId', '==', user.uid)),
+      listenClientRecords({ db, user, collectionName: 'customerPartApprovals' },
         publish(setApprovals),
         onError('part approvals')
       ),
-      onSnapshot(
-        query(collection(db, salesCollectionNames.invoices), where('customerUserId', '==', user.uid)),
+      listenClientRecords({ db, user, collectionName: salesCollectionNames.invoices },
         publish(setInvoices),
         onError('invoices')
       ),
-      onSnapshot(
-        query(collection(db, salesCollectionNames.payments), where('customerUserId', '==', user.uid)),
+      listenClientRecords({ db, user, collectionName: salesCollectionNames.payments },
         publish(setPayments),
         onError('payments')
       ),
-      onSnapshot(
-        query(collection(db, salesCollectionNames.billingSubscriptions), where('customerUserId', '==', user.uid)),
+      listenClientRecords({ db, user, collectionName: salesCollectionNames.billingSubscriptions },
         publish(setSubscriptions),
         onError('billing subscriptions')
       ),
@@ -273,7 +270,7 @@ const ClientFinance = () => {
       invoiceBalanceCents(invoice) > 0 &&
       !['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice.status))
     ));
-    const postedPayments = payments.filter((payment) => normalizeStatus(payment.status) === normalizeStatus(SalesPaymentStatus.posted));
+    const postedPayments = payments.filter(hasPostedPayment);
     const activeSubscriptions = subscriptions.filter((subscription) => (
       ['active', 'trialing'].includes(normalizeStatus(subscription.stripeStatus || subscription.status))
     ));
@@ -281,7 +278,7 @@ const ClientFinance = () => {
     return {
       needsReviewCount: pendingAgreements.length + pendingApprovals.length + openInvoices.length,
       openBalanceCents: openInvoices.reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0),
-      paidCents: postedPayments.reduce((total, payment) => total + Number(payment.amountCents || 0), 0),
+      paidCents: postedPayments.reduce((total, payment) => total + netPaymentCents(payment), 0),
       activeSubscriptionCount: activeSubscriptions.length,
       agreementValueCents: agreements.reduce((total, agreement) => total + Number(agreement.totalAmountCents || agreement.rateAmountCents || 0), 0),
       partApprovalValueCents: approvals.reduce((total, approval) => total + Number(approval.plannedTotalPriceCents || approval.totalPriceCents || 0), 0),
@@ -368,8 +365,8 @@ const ClientFinance = () => {
         return;
       }
 
-      if (result.data?.status === 'already_active') {
-        toast.success('Billing is already active.');
+      if (['already_active','processing'].includes(result.data?.status)) {
+        toast(result.data?.message || 'Billing setup is being confirmed.');
         return;
       }
 
@@ -637,7 +634,7 @@ const ClientFinance = () => {
                         <div className="min-w-0">
                           <p className="font-semibold text-slate-900">{subscription.companyName || subscription.customerName || 'Pool service'}</p>
                           <p className="mt-1 text-xs text-slate-500">
-                            {formatCurrency(subscription.amountCents)} every {subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}{subscription.interval || 'month'}
+                            {formatCurrency(subscription.amountCents)} every {subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}{subscription.interval || 'month'}{subscription.firstAutomaticChargeAt && <span className="mt-1 block text-xs text-slate-500">First automatic charge: {formatDate(subscription.firstAutomaticChargeAt)}</span>}
                           </p>
                         </div>
                         <StatusBadge status={subscription.stripeStatus || subscription.status} />
@@ -647,6 +644,7 @@ const ClientFinance = () => {
                           View agreement
                         </Link>
                       )}
+                      <ManageClientBilling subscription={subscription} />
                       {!isActive && (
                         <PaymentMethodSelector
                           amountCents={subscription.amountCents}
@@ -657,7 +655,7 @@ const ClientFinance = () => {
                           className="mt-3"
                         />
                       )}
-                      <button
+                      {!isActive && <button
                         type="button"
                         onClick={() => startCheckout(subscription)}
                         disabled={!canCheckout || startingCheckoutId === subscription.id}
@@ -665,7 +663,7 @@ const ClientFinance = () => {
                       >
                         <CreditCardIcon className="h-5 w-5" />
                         {startingCheckoutId === subscription.id ? 'Opening...' : isActive ? 'Billing Active' : 'Set Up Payment'}
-                      </button>
+                      </button>}
                     </div>
                   );
                 })}
@@ -681,10 +679,11 @@ const ClientFinance = () => {
                   <div key={payment.id} className="p-3">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
-                        <p className="font-semibold text-slate-900">{formatCurrency(payment.amountCents)}</p>
+                        <p className="font-semibold text-slate-900">{formatCurrency(netPaymentCents(payment))}<PaymentAdjustmentNote payment={payment} /></p>
                         <p className="mt-1 text-xs text-slate-500">{labelize(payment.method)} - {formatDate(payment.receivedAt || payment.createdAt)}</p>
                       </div>
                       <StatusBadge status={payment.status || SalesPaymentStatus.posted} />
+                      {payment.receiptUrl && <a href={payment.receiptUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-[44px] items-center text-sm font-semibold text-blue-700">View receipt</a>}
                     </div>
                     {payment.invoiceId && (
                       <Link to={`/client/billing/invoices/${payment.invoiceId}`} className="mt-2 inline-flex text-xs font-semibold text-blue-700 hover:text-blue-900">

@@ -1,7 +1,7 @@
 import { lazy } from "react";
 
 const ProfilePage = lazy(()=> import("../../views/client/ProfilePage"))
-const Dashboard = lazy(()=> import("../../views/client/Dashboard"))
+const Dashboard = lazy(()=> import("../../views/client/ClientHome"))
 const MyPool = lazy(()=> import("../../views/client/MyPool"))
 const NewPool = lazy(()=> import("../../views/client/NewPool"))
 const ConnectToCompany = lazy(()=> import("../../views/client/ConnectToCompany"))
@@ -43,7 +43,9 @@ const BodyOfWaterDetailView = lazy(() => import("../../views/client/pools/BodyOf
 
 const ClientProfile = lazy(() => import('../../views/client/account/ClientProfile'));
 const ClientSettings = lazy(() => import('../../views/client/account/ClientSettings'));
+const ClientMore = lazy(() => import("../../views/client/More"));
 export const clientRoutes = [
+    { path: "/client/more", element: <ClientMore />, ability: ["Client"], role: "Client" },
     
     {
         path:'/client/connect-to-company', 
@@ -55,12 +57,6 @@ export const clientRoutes = [
         path:'/client/dashboard', 
         element: <Dashboard/>,
         ability :['Admin','Client'], 
-        role:'Client'
-    },
-    {
-        path:'/companies',
-        element: <Companies/>,
-        ability :['Admin','Client'],
         role:'Client'
     },
     {
@@ -127,7 +123,7 @@ export const clientRoutes = [
     }
     ,
     {
-        path:'/companies/profile/:companyId',
+        path:'/client/companies/profile/:companyId',
         element: <CompanyProfilePage/>,
         ability :['Admin','Client'],
         role:'Client'

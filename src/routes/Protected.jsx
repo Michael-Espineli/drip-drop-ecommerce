@@ -1,4 +1,4 @@
-import { Navigate, useLocation } from "react-router-dom";
+import { Link, Navigate, useLocation } from "react-router-dom";
 import React, { useContext } from "react";
 import { getAuth } from "firebase/auth";
 import { Context } from "../context/AuthContext";
@@ -35,6 +35,7 @@ export function Protected({ route, children }) {
                     <p className="mt-3 text-sm text-slate-600">
                         We could not load a web role for this account. Please contact support and include this user id:
                     </p>
+                    <Link to="/homeownerSignUp" className="mt-4 inline-flex min-h-[44px] items-center text-blue-700">Finish homeowner setup</Link>
                     <p className="mt-3 break-all rounded-md bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">
                         {dataBaseUser?.id || user.uid}
                     </p>
@@ -75,9 +76,7 @@ export function Protected({ route, children }) {
                 }
             }
 
-            if (companySubscription === null) {
-                return children;
-            } else {
+            { // Subscription state never bypasses audience or role authorization.
                 if (route.path === "/signIn") {
                     return <Navigate to='/company/dashboard' replace />
                 }
@@ -110,6 +109,9 @@ export function Protected({ route, children }) {
             }
 
         } else if (accountType === 'Client') {
+            if (!user.emailVerified && !location.pathname.startsWith('/client/profile') && !location.pathname.startsWith('/client/settings')) {
+                return <Navigate to={`/client/verify-email?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`} replace />;
+            }
             if (route.path === "/homeownerSignIn") {
                 return <Navigate to='/client/dashboard' />
             }

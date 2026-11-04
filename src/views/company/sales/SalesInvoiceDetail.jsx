@@ -1,6 +1,10 @@
+import InvoiceAdjustments from '../../../components/billing/InvoiceAdjustments';
+import JobInvoiceReissue from '../../../components/billing/JobInvoiceReissue';
+import { netPaymentCents } from '../../../utils/sales/financialMetrics';
+import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, Timestamp, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, Timestamp, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
@@ -33,6 +37,8 @@ import {
 import CustomerBillingNotesPanel from './components/CustomerBillingNotesPanel';
 import ShareItemButton from '../../components/share/ShareItemButton';
 import { appConfirm } from '../../../utils/appDialog';
+import { manageSalesInvoice, newManualPaymentForm, persistManualPaymentDraft, clearManualPaymentDraft, manualPaymentDateMillis, invoiceActionRequestId, clearInvoiceActionRequest } from '../../../utils/sales/invoiceCommands';
+import { canManageCustomerBilling } from '../../../utils/companyPermissionAccess';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -656,6 +662,8 @@ const SelectInput = ({ label, value, onChange, options }) => (
 );
 
 const createDraft = (invoice) => ({
+  expectedRevision: invoice?.billingRevision || 0,
+  expectedUpdatedAtMillis: toMillis(invoice?.updatedAt),
   invoiceNumber: invoice?.invoiceNumber || '',
   customerName: invoice?.customerName || '',
   email: invoice?.email || '',
@@ -702,7 +710,9 @@ const blankLineItem = () => ({
 const SalesInvoiceDetail = () => {
   const { invoiceId } = useParams();
   const navigate = useNavigate();
-  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
+  const authContext = useContext(Context);
+  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = authContext;
+  const canManageBilling = canManageCustomerBilling(authContext);
   const [invoice, setInvoice] = useState(null);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -722,6 +732,10 @@ const SalesInvoiceDetail = () => {
     memo: '',
   });
   const [savingPayment, setSavingPayment] = useState(false);
+  const paymentScope = { companyId: recentlySelectedCompany, invoiceId, userId: user?.uid };
+  useEffect(() => {
+    if (paymentModalOpen && paymentForm.requestId) persistManualPaymentDraft({ companyId: recentlySelectedCompany, invoiceId, userId: user?.uid }, paymentForm);
+  }, [paymentForm, paymentModalOpen, recentlySelectedCompany, invoiceId, user?.uid]);
 
   useEffect(() => {
     if (!invoiceId) {
@@ -744,7 +758,7 @@ const SalesInvoiceDetail = () => {
           return;
         }
 
-        const nextInvoice = { id: snapshot.id, ...snapshot.data() };
+        const nextInvoice = { ...snapshot.data(), id: snapshot.id };
         setInvoice(nextInvoice);
         setDraft((current) => (current && editing ? current : createDraft(nextInvoice)));
         setLoading(false);
@@ -774,7 +788,7 @@ const SalesInvoiceDetail = () => {
       ),
       (snapshot) => {
         const nextPayments = snapshot.docs
-          .map((paymentDoc) => ({ id: paymentDoc.id, ...paymentDoc.data() }))
+          .map((paymentDoc) => ({ ...paymentDoc.data(), id: paymentDoc.id }))
           .sort((left, right) => toMillis(right.receivedAt || right.createdAt) - toMillis(left.receivedAt || left.createdAt));
         setPayments(nextPayments);
         setPaymentsLoaded(true);
@@ -795,7 +809,7 @@ const SalesInvoiceDetail = () => {
   const balanceCents = invoice ? invoiceBalanceCents(invoice) : 0;
   const partApprovalId = invoice ? invoicePartApprovalId(invoice) : '';
   const paymentActivityCents = useMemo(
-    () => payments.reduce((total, payment) => total + Math.max(Number(payment.amountCents || 0), 0), 0),
+    () => payments.reduce((total, payment) => total + Math.max(netPaymentCents(payment), 0), 0),
     [payments]
   );
   const hasPaymentActivity = Boolean(
@@ -839,6 +853,7 @@ const SalesInvoiceDetail = () => {
   }, [draft, invoice?.amountPaidCents]);
 
   const canSend = Boolean(
+    canManageBilling && !invoice?.paymentReviewRequired && balanceCents > 0 &&
     invoice &&
     !companyMismatch &&
     !editing &&
@@ -848,12 +863,14 @@ const SalesInvoiceDetail = () => {
     !['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice.status))
   );
   const canVoid = Boolean(
+    canManageBilling && !hasStripeActivity && Number(invoice?.amountPaidCents || 0) === 0 &&
     invoice &&
     !companyMismatch &&
     !voiding &&
     !['paid', 'void'].includes(normalizeStatus(invoice.status))
   );
   const canDelete = Boolean(
+    canManageBilling && !invoice?.sentAt && !invoice?.portalPaymentAttemptId && !invoice?.emailDelivery?.reviewAccessToken &&
     invoice &&
     !companyMismatch &&
     !editing &&
@@ -863,6 +880,7 @@ const SalesInvoiceDetail = () => {
     !hasStripeActivity
   );
   const canRecordPayment = Boolean(
+    canManageBilling && !hasStripeActivity && !invoice?.paymentReviewRequired &&
     invoice &&
     !companyMismatch &&
     !editing &&
@@ -908,6 +926,7 @@ const SalesInvoiceDetail = () => {
   };
 
   const startEditing = () => {
+    if (!canManageBilling || hasStripeActivity || ['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice?.status))) return;
     setDraft(createDraft(invoice));
     setEditing(true);
   };
@@ -918,12 +937,8 @@ const SalesInvoiceDetail = () => {
   };
 
   const openPaymentModal = () => {
-    setPaymentForm({
-      amount: balanceCents > 0 ? centsToInput(balanceCents) : '',
-      method: SalesPaymentMethod.cash,
-      referenceNumber: '',
-      memo: '',
-    });
+    if (!canRecordPayment) return;
+    setPaymentForm(newManualPaymentForm(paymentScope, balanceCents > 0 ? centsToInput(balanceCents) : ''));
     setPaymentModalOpen(true);
   };
 
@@ -950,13 +965,16 @@ const SalesInvoiceDetail = () => {
         method: paymentForm.method,
         referenceNumber: paymentForm.referenceNumber,
         memo: paymentForm.memo,
+        receivedAtMillis: manualPaymentDateMillis(paymentForm.receivedDate),
       }, {
         companyId: recentlySelectedCompany,
         stripeConnectedAccountId,
         userId: user?.uid || '',
+        requestId: paymentForm.requestId,
       });
 
       toast.success(amountCents >= balanceCents ? 'Invoice marked paid.' : 'Payment recorded.');
+      clearManualPaymentDraft(paymentScope);
       closePaymentModal();
     } catch (paymentError) {
       console.error('Unable to record invoice payment', paymentError);
@@ -967,7 +985,7 @@ const SalesInvoiceDetail = () => {
 
   const saveInvoice = async (event) => {
     event.preventDefault();
-    if (!invoice || !draft || saving || companyMismatch) return;
+    if (!invoice || !draft || saving || companyMismatch || !canManageBilling) return;
 
     const nextLineItems = (draft.lineItems || [])
       .map((item) => {
@@ -1001,29 +1019,23 @@ const SalesInvoiceDetail = () => {
     setSaving(true);
 
     try {
-      const nextStatus = draftTotals.amountDueCents <= 0 && Number(invoice.amountPaidCents || 0) > 0
-        ? SalesInvoiceStatus.paid
-        : draft.status;
-
-      await updateDoc(doc(db, salesCollectionNames.invoices, invoice.id), {
+      await manageSalesInvoice({companyId: recentlySelectedCompany, invoiceId: invoice.id, action: 'update',
+        requestId: invoiceActionRequestId(paymentScope, 'update'), expectedRevision: draft.expectedRevision,
+        expectedUpdatedAtMillis: draft.expectedUpdatedAtMillis, changes: {
         invoiceNumber: draft.invoiceNumber.trim(),
         customerName: draft.customerName.trim(),
         email: draft.email.trim(),
-        status: nextStatus,
+        status: draft.status,
         deliveryMethod: draft.deliveryMethod,
-        dueDate: dateFromInput(draft.dueDate),
-        subtotalAmountCents: draftTotals.subtotalAmountCents,
+        dueDateMillis: dateFromInput(draft.dueDate)?.toMillis() ?? null,
         discountAmountCents: draftTotals.discountAmountCents,
         taxAmountCents: draftTotals.taxAmountCents,
-        totalAmountCents: draftTotals.totalAmountCents,
         writeOffAmountCents: draftTotals.writeOffAmountCents,
-        amountDueCents: draftTotals.amountDueCents,
         memo: draft.memo.trim(),
         lineItems: nextLineItems,
-        updatedAt: serverTimestamp(),
-        updatedByUserId: user?.uid || '',
-      });
+      }});
 
+      clearInvoiceActionRequest(paymentScope, 'update');
       toast.success('Invoice updated.');
       setEditing(false);
     } catch (saveError) {
@@ -1093,13 +1105,8 @@ const SalesInvoiceDetail = () => {
     setVoiding(true);
 
     try {
-      await updateDoc(doc(db, salesCollectionNames.invoices, invoice.id), {
-        status: SalesInvoiceStatus.void,
-        amountDueCents: 0,
-        voidedAt: serverTimestamp(),
-        voidedByUserId: user?.uid || '',
-        updatedAt: serverTimestamp(),
-      });
+      await manageSalesInvoice({companyId:recentlySelectedCompany,invoiceId:invoice.id,action:'void',requestId:invoiceActionRequestId(paymentScope,'void')});
+      clearInvoiceActionRequest(paymentScope,'void');
       toast.success('Invoice voided.');
     } catch (voidError) {
       console.error('Unable to void invoice', voidError);
@@ -1130,7 +1137,8 @@ const SalesInvoiceDetail = () => {
     setDeleting(true);
 
     try {
-      await deleteDoc(doc(db, salesCollectionNames.invoices, invoice.id));
+      await manageSalesInvoice({companyId:recentlySelectedCompany,invoiceId:invoice.id,action:'delete',requestId:invoiceActionRequestId(paymentScope,'delete')});
+      clearInvoiceActionRequest(paymentScope,'delete');
       toast.success('Invoice deleted.');
       navigate('/company/sales/invoices');
     } catch (deleteError) {
@@ -1234,7 +1242,7 @@ const SalesInvoiceDetail = () => {
                 <button
                   type="button"
                   onClick={startEditing}
-                  disabled={!invoice || companyMismatch}
+                  disabled={!invoice || companyMismatch || !canManageBilling || hasStripeActivity || ['paid', 'void', 'uncollectible'].includes(normalizeStatus(invoice.status))}
                   className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaEdit className="text-xs" />
@@ -1303,7 +1311,7 @@ const SalesInvoiceDetail = () => {
                         label="Status"
                         value={draft.status}
                         onChange={(value) => updateDraft('status', value)}
-                        options={Object.values(SalesInvoiceStatus)}
+                        options={['draft', 'open', 'overdue', 'uncollectible']}
                       />
                       <SelectInput
                         label="Delivery"
@@ -1496,6 +1504,9 @@ const SalesInvoiceDetail = () => {
                   </div>
                 </section>
 
+              {canManageBilling && !companyMismatch && <InvoiceAdjustments key={invoice.id} invoice={invoice} payments={payments} userId={user?.uid} />}
+              {canManageBilling && !companyMismatch && <JobInvoiceReissue key={`reissue-${invoice.id}`} invoice={invoice} />}
+              {invoice.paymentReviewRequired && <p role="status" className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">Payment adjustment needs review: {labelize(invoice.paymentReviewReason)}. Resolve the charge or credit in Stripe, then refresh its status before collecting again.</p>}
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
                   <FaReceipt className="text-slate-400" />
@@ -1508,7 +1519,7 @@ const SalesInvoiceDetail = () => {
                     <div key={payment.id} className="p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="font-semibold text-slate-900">{formatCurrency(payment.amountCents)}</p>
+                          <p className="font-semibold text-slate-900">{formatCurrency(netPaymentCents(payment))}<PaymentAdjustmentNote payment={payment} /></p>
                           <p className="mt-1 text-xs text-slate-500">{labelize(payment.method)} - {formatDate(payment.receivedAt || payment.createdAt)}</p>
                         </div>
                         <StatusBadge status={payment.status || SalesPaymentStatus.posted} />
@@ -1584,6 +1595,8 @@ const SalesInvoiceDetail = () => {
             </div>
 
             <div className="mt-5 grid gap-4">
+              <TextInput label="Received date" type="date" value={paymentForm.receivedDate || ''}
+                onChange={value => setPaymentForm(current => ({...current,receivedDate:value}))} />
               <TextInput
                 label="Amount"
                 value={paymentForm.amount}

@@ -1,5 +1,6 @@
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import React, { useState, useEffect, useContext } from "react";
-import { query, collection, getDocs } from "firebase/firestore";
+import { query, collection, getDocs, doc, setDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRightIcon,
@@ -12,6 +13,12 @@ import { Context } from "../../../context/AuthContext";
 
 const Roles = () => {
   const navigate = useNavigate();
+  const { can, requirePermission } = useCompanyPermissions();
+  const [creating, setCreating] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+
   const [roleList, setRoleList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -57,6 +64,18 @@ const Roles = () => {
     fetchRoles();
   }, [recentlySelectedCompany]);
 
+  const createRole = async event => {
+    event.preventDefault();
+    if (!requirePermission("862", "create user roles") || !newName.trim() || creating) return;
+    setCreating(true); setError("");
+    try {
+      const reference = doc(collection(db, "companies", recentlySelectedCompany, "roles"));
+      await setDoc(reference, { id: reference.id, name: newName.trim(), description: newDescription.trim(), color: "#0ea5e9", permissionIdList: [], listOfUserIdsToManage: [] });
+      navigate(`/company/roles/${reference.id}`);
+    } catch (failure) { setError(failure.code === "permission-denied" ? "This role cannot be created with your current access." : "Could not create the role. Your details are still here."); }
+    finally { setCreating(false); }
+  };
+
   const totalPermissions = roleList.reduce(
     (total, role) => total + (role.permissionIdList?.length || 0),
     0
@@ -92,6 +111,17 @@ const Roles = () => {
             />
           </div>
         </header>
+
+        {can("862") && <div>
+          <button type="button" onClick={() => setShowCreate(value => !value)} className="rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">New Role</button>
+          {showCreate && <form onSubmit={createRole} className="mt-3 max-w-xl space-y-3 rounded-lg border bg-white p-4">
+            <label className="block">Role name<input aria-label="Role name" value={newName} onChange={event => setNewName(event.target.value)} maxLength={120} required className="mt-1 block w-full rounded border p-2" /></label>
+            <label className="block">Description<textarea aria-label="Role description" value={newDescription} onChange={event => setNewDescription(event.target.value)} className="mt-1 block w-full rounded border p-2" /></label>
+            <p className="text-sm text-slate-600">New roles start with no access. A role editor can grant the permissions needed.</p>
+            <button disabled={creating || !newName.trim()} className="rounded bg-blue-700 px-4 py-2 text-white">{creating ? "Creating…" : "Create Role"}</button>
+            <button type="button" disabled={creating} onClick={() => setShowCreate(false)} className="ml-3 px-3 py-2">Cancel</button>
+          </form>}
+        </div>}
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="grid grid-cols-[1.2fr_120px_1fr_44px] gap-4 border-b border-slate-200 bg-slate-100 px-5 py-3 text-xs font-semibold uppercase text-slate-500 max-md:hidden">

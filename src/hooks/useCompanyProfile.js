@@ -19,7 +19,7 @@ const useCompanyProfile = (companyId) => {
                 const companyDoc = await getDoc(docRef);
 
                 if (companyDoc.exists()) {
-                    setCompany(companyDoc.data());
+                    setCompany({ ...companyDoc.data(), id: companyDoc.id });
                 } else {
                     setError('No such document!');
                 }

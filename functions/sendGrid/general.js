@@ -27,7 +27,7 @@ const recurringReportAccess = require("../recurringAccess").createRecurringAcces
 const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
 const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
 const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
-const FINANCE_PERMISSION_ID = "400";
+const FINANCE_PERMISSION_ID = "404";
 const SEND_SERVICE_AGREEMENTS_PERMISSION_ID = "438";
 const FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID = "628";
 const SERVICE_STOP_CATEGORIES = {
@@ -417,50 +417,11 @@ const buildCustomerAccessTemplateData = async ({
     };
 };
 
-const userHasCompanyAccess = async (uid, companyId) => {
-    if (!uid || !companyId) return false;
-
-    const accessDoc = await db
-        .collection("users")
-        .doc(uid)
-        .collection("userAccess")
-        .doc(companyId)
-        .get();
-
-    return accessDoc.exists;
-};
-
-const userHasAnyCompanyPermission = async (uid, companyId, permissionIds = []) => {
-    if (!uid || !companyId) return false;
-
-    const accessDoc = await db
-        .collection("users")
-        .doc(uid)
-        .collection("userAccess")
-        .doc(companyId)
-        .get();
-
-    if (!accessDoc.exists) return false;
-
-    const roleId = String(accessDoc.data()?.roleId || "").trim();
-    if (!roleId) return true;
-
-    const roleDoc = await db
-        .collection("companies")
-        .doc(companyId)
-        .collection("roles")
-        .doc(roleId)
-        .get();
-
-    if (!roleDoc.exists) return true;
-
-    const permissionIdList = roleDoc.data()?.permissionIdList;
-    if (!Array.isArray(permissionIdList)) return true;
-
-    const selectedIds = permissionIdList.map(String);
-    return permissionIds.map(String).some((permissionId) => selectedIds.includes(permissionId));
-};
-
+const { hasActiveCompanyPermission } = require('../billingAccess');
+const userHasCompanyAccess = (uid, companyId) => hasActiveCompanyPermission(db, companyId, uid, ['404']);
+const userHasAnyCompanyPermission = (uid, companyId, permissionIds = []) => (
+    hasActiveCompanyPermission(db, companyId, uid, permissionIds)
+);
 const formatCurrency = (amountCents = 0) => {
     const amount = (Number(amountCents) || 0) / 100;
     return new Intl.NumberFormat("en-US", {
@@ -1234,6 +1195,13 @@ const publicSalesInvoiceSnapshot = (invoice = {}, options = {}) => {
         taxAmountCents: Number(invoice.taxAmountCents || 0),
         totalAmountCents: Number(invoice.totalAmountCents || invoice.totalCents || 0),
         amountPaidCents: Number(invoice.amountPaidCents || 0),
+        grossAmountPaidCents: Number(invoice.grossAmountPaidCents ?? invoice.amountPaidCents ?? 0),
+        amountRefundedCents: Number(invoice.amountRefundedCents || 0),
+        amountReversedCents: Number(invoice.amountReversedCents || 0),
+        creditAmountCents: Number(invoice.creditAmountCents || 0),
+        refundCreditCents: Number(invoice.refundCreditCents || 0),
+        paymentReviewRequired: invoice.paymentReviewRequired === true,
+        paymentReviewReason: invoice.paymentReviewReason || '',
         amountDueCents: invoiceBalanceCents(invoice),
         balanceCents: invoiceBalanceCents(invoice),
         currency: invoice.currency || "usd",
@@ -1266,6 +1234,9 @@ const publicSalesPaymentSnapshot = (payment = {}) => ({
     id: payment.id || "",
     invoiceId: payment.invoiceId || "",
     amountCents: Number(payment.amountCents || 0),
+    netAmountCents: Number(payment.netAmountCents ?? payment.amountCents ?? 0),
+    refundedAmountCents: Number(payment.refundedAmountCents || 0),
+    reversedAmountCents: Number(payment.reversedAmountCents || 0),
     currency: payment.currency || "usd",
     method: payment.method || "",
     paymentMethodType: payment.paymentMethodType || "",
@@ -1284,6 +1255,8 @@ const publicBillingSubscriptionSnapshot = (subscription = {}) => ({
     email: subscription.email || "",
     agreementId: subscription.agreementId || "",
     amountCents: Number(subscription.amountCents || 0),
+    firstAutomaticChargeAt: serializeDateValue(subscription.firstAutomaticChargeAt),
+    checkoutHold: subscription.checkoutHold === true,
     currency: subscription.currency || "usd",
     interval: subscription.interval || "month",
     intervalCount: Number(subscription.intervalCount || 1),
@@ -1519,11 +1492,12 @@ exports.getPublicSalesInvoice = functions.https.onCall(async (data) => {
         accessToken,
         email: payload.email,
     });
-    const [paymentsSnapshot, billingSubscriptionDoc] = await Promise.all([
+    const [paymentsSnapshot, billingSubscriptionDoc, companySnapshot] = await Promise.all([
         db.collection("salesPayments").where("invoiceId", "==", invoiceId).get(),
         invoice.billingSubscriptionId
             ? db.collection("salesBillingSubscriptions").doc(invoice.billingSubscriptionId).get()
             : Promise.resolve(null),
+        db.collection('companies').doc(invoice.companyId).get(),
     ]);
     const billingSubscription = billingSubscriptionDoc?.exists
         ? {
@@ -1534,13 +1508,13 @@ exports.getPublicSalesInvoice = functions.https.onCall(async (data) => {
 
     return {
         status: 200,
-        invoice: publicSalesInvoiceSnapshot(invoice, {
+        invoice: { ...publicSalesInvoiceSnapshot(invoice, {
             accessToken,
             baseUrl: payload.baseUrl || payload.appBaseUrl || "",
-        }),
+        }), onlinePaymentAvailable: Boolean((companySnapshot.data()?.customerBillingEnabled || companySnapshot.data()?.salesBillingEnabled || companySnapshot.data()?.salesBillingAutomationEnabled) && (companySnapshot.data()?.stripeConnectedAccountId || companySnapshot.data()?.stripeConnectAccountId)) },
         payments: paymentsSnapshot.docs.map((paymentDoc) => publicSalesPaymentSnapshot({
-            id: paymentDoc.id,
-            ...paymentDoc.data()
+            ...paymentDoc.data(),
+            id: paymentDoc.id
         })),
         billingSubscription: billingSubscription
             ? publicBillingSubscriptionSnapshot(billingSubscription)
@@ -1976,6 +1950,8 @@ const sendSalesInvoiceEmailCore = async ({
         throw new HttpsError("permission-denied", "Invoice does not belong to the selected company.");
     }
 
+    if (invoice.paymentReviewRequired) throw new HttpsError('failed-precondition','Resolve the payment adjustment before sending a collection reminder.');
+
     if (!invoice.email) {
         throw new HttpsError("failed-precondition", "Invoice is missing a customer email.");
     }
@@ -2278,6 +2254,13 @@ const sendServiceReportOnFinishCore = async (payload = {}) => {
                 customerId: serviceStopData.customerId || stopData.customerId || "",
             })
         );
+        const customerIdForPreferences = serviceStopData.customerId || stopData.customerId || '';
+        const customerForPreferences = customerIdForPreferences ? await db.collection('companies').doc(companyId).collection('customers').doc(customerIdForPreferences).get() : null;
+        const linkedHomeowners = customerForPreferences?.data()?.linkedCustomerIds || [];
+        if (linkedHomeowners.length) {
+            const profiles = await Promise.all(linkedHomeowners.map(uid => db.collection('users').doc(uid).get()));
+            if (profiles.some(profile => profile.data()?.settings?.emailNotifications === false)) return { status: 200, account: 'Homeowner service update emails are turned off' };
+        }
         const serviceReportBaseUrl = payload.serviceReportBaseUrl || process.env.SERVICE_REPORT_BASE_URL || process.env.APP_BASE_URL || "";
         const serviceReportUrl = buildUrl(serviceReportBaseUrl, `/serviceStop/detail/${serviceStopId}`);
         const customerAccess = await buildCustomerAccessTemplateData({

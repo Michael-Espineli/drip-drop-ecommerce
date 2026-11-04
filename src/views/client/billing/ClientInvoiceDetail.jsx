@@ -1,3 +1,6 @@
+import {netPaymentCents} from '../../../utils/sales/financialMetrics';
+import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
+import { ClientInvoicePayment } from '../../../components/billing/ClientPaymentActions';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
@@ -109,6 +112,7 @@ const ClientInvoiceDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [startingCheckout, setStartingCheckout] = useState(false);
+  const [refreshTick,setRefreshTick] = useState(0);
   const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState(SalesPaymentMethodType.ach);
   const isPublicInvoiceRoute = location.pathname.startsWith('/customer/invoices/');
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -118,7 +122,7 @@ const ClientInvoiceDetail = () => {
   useEffect(() => {
     const checkoutResult = queryParams.get('stripeCheckout');
     if (checkoutResult === 'success') {
-      toast.success('Payment setup returned from Stripe.');
+      toast('Returned from Stripe. Payment status updates after confirmation.');
     }
   }, [queryParams]);
 
@@ -190,7 +194,7 @@ const ClientInvoiceDetail = () => {
           return;
         }
 
-        setInvoice({ id: snapshot.id, ...snapshot.data() });
+        setInvoice({ ...snapshot.data(), id: snapshot.id });
         setLoading(false);
       },
       (snapshotError) => {
@@ -199,7 +203,7 @@ const ClientInvoiceDetail = () => {
         setLoading(false);
       }
     );
-  }, [accessToken, emailParam, invoiceId, isPublicInvoiceRoute]);
+  }, [accessToken, emailParam, invoiceId, isPublicInvoiceRoute, refreshTick]);
 
   useEffect(() => {
     if (isPublicInvoiceRoute) return undefined;
@@ -213,7 +217,7 @@ const ClientInvoiceDetail = () => {
 
     const publish = (snapshot) => {
       snapshot.docs.forEach((paymentDoc) => {
-        paymentMap.set(paymentDoc.id, { id: paymentDoc.id, ...paymentDoc.data() });
+        paymentMap.set(paymentDoc.id, { ...paymentDoc.data(), id: paymentDoc.id });
       });
 
       const nextPayments = Array.from(paymentMap.values()).sort(
@@ -253,13 +257,21 @@ const ClientInvoiceDetail = () => {
     return onSnapshot(
       doc(db, salesCollectionNames.billingSubscriptions, billingSubscriptionId),
       (snapshot) => {
-        setBillingSubscription(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
+        setBillingSubscription(snapshot.exists() ? { ...snapshot.data(), id: snapshot.id } : null);
       },
       (snapshotError) => {
         console.error('Unable to load billing subscription', snapshotError);
       }
     );
   }, [invoice?.billingSubscriptionId, isPublicInvoiceRoute, user?.uid]);
+
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden) setRefreshTick(value => value + 1); };
+    window.addEventListener('focus',refresh); document.addEventListener('visibilitychange',refresh);
+    let count=0;
+    const timer=queryParams.get('invoiceCheckout')==='returned' && invoice?.status!=='paid' ? window.setInterval(()=>{refresh();if(++count>=10)window.clearInterval(timer);},3000):null;
+    return ()=>{window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);if(timer)window.clearInterval(timer);};
+  }, [queryParams,invoice?.status]);
 
   const lineItems = useMemo(
     () => (Array.isArray(invoice?.lineItems) ? invoice.lineItems : []),
@@ -319,8 +331,8 @@ const ClientInvoiceDetail = () => {
         return;
       }
 
-      if (result.data?.status === 'already_active') {
-        toast.success('Billing is already active.');
+      if (['already_active','processing'].includes(result.data?.status)) {
+        toast(result.data?.message || 'Billing setup is being confirmed.');
         return;
       }
 
@@ -391,6 +403,12 @@ const ClientInvoiceDetail = () => {
         <StatusBadge status={invoice.status || SalesInvoiceStatus.draft} />
       </div>
 
+      <section className="mb-5 rounded-xl border border-blue-200 bg-white p-5">
+        <p className="text-sm text-slate-500">Amount due</p><p className="mt-1 text-3xl font-bold">{formatCurrency(balanceCents)}</p>
+        <ClientInvoicePayment invoice={invoice} balanceCents={balanceCents} accessToken={accessToken} user={user}/>
+        {(queryParams.get('invoiceCheckout')==='returned' || invoice.paymentProcessing) && balanceCents>0 && <p role="status" className="mt-3 text-sm text-slate-600">Payment confirmation may take a moment. Your balance updates when the payment is recorded.</p>}
+        <button type="button" onClick={()=>setRefreshTick(value=>value+1)} className="mt-2 min-h-[44px] text-sm font-semibold text-blue-700">Refresh payment status</button>
+      </section>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-5">
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -418,7 +436,7 @@ const ClientInvoiceDetail = () => {
             </div>
 
             <div className="p-5">
-              <LineItemSectionTables
+              <LineItemSectionTables mobileCards
                 lineItems={lineItems}
                 formatCurrency={formatCurrency}
                 emptyMessage="No services or products were included."
@@ -446,16 +464,6 @@ const ClientInvoiceDetail = () => {
               <Field label="Last Payment" value={formatDate(invoice.lastPaymentAt || invoice.paidAt)} />
             </dl>
 
-            {invoice.stripeHostedInvoiceUrl && (
-              <a
-                href={invoice.stripeHostedInvoiceUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-5 inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700"
-              >
-                Pay Stripe Invoice
-              </a>
-            )}
 
             {invoice.stripeInvoicePdfUrl && (
               <a
@@ -523,11 +531,6 @@ const ClientInvoiceDetail = () => {
               </div>
             )}
 
-            {!invoice.stripeHostedInvoiceUrl && balanceCents > 0 && !billingSubscriptionId && (
-              <p className="mt-4 text-xs text-slate-500">
-                This invoice does not have an online payment link yet. Contact the company or use their normal payment instructions.
-              </p>
-            )}
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -539,10 +542,11 @@ const ClientInvoiceDetail = () => {
                 <div key={payment.id} className="p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-semibold text-slate-900">{formatCurrency(payment.amountCents)}</p>
+                      <p className="font-semibold text-slate-900">{formatCurrency(netPaymentCents(payment))}<PaymentAdjustmentNote payment={payment} /></p>
                       <p className="mt-1 text-xs text-slate-500">{labelize(payment.method)} - {formatDate(payment.receivedAt || payment.createdAt)}</p>
                     </div>
                     <StatusBadge status={payment.status || SalesPaymentStatus.posted} />
+                    {payment.receiptUrl && <a href={payment.receiptUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-[44px] items-center text-sm font-semibold text-blue-700">View receipt</a>}
                   </div>
                 </div>
               ))}

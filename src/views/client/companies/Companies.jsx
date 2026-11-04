@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import { collection, getDocs, addDoc, query, where, onSnapshot, getDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, query, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { useNavigate } from 'react-router-dom';
 import { Context } from '../../../context/AuthContext';
@@ -22,7 +22,7 @@ const Companies = () => {
                 const querySnapshot = await getDocs(collection(db, 'companies'));
                 const companiesList = querySnapshot.docs
                     .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .filter(company => company.hideFromBrowse !== true);
+                    .filter(company => company.hideFromBrowse !== true && company.publicProfileDisabled !== true && company.deleted !== true);
                 setCompanies(companiesList);
             } catch (error) {
                 console.error("Error fetching companies: ", error);
@@ -82,7 +82,7 @@ const Companies = () => {
 
     const handleCompanyClick = (companyId) => {
         // Updated to match your existing routing structure
-        navigate(`/companies/profile/${companyId}`);
+        navigate(`/client/companies/profile/${companyId}`);
     };
 
     const renderSkeleton = () => (
@@ -140,7 +140,7 @@ const Companies = () => {
                                             <p className="text-sm text-gray-500">{company.ownerName || 'No owner specified'}</p>
                                         </div>
                                     </div>
-                                    <button onClick={(e) => handleToggleSaveCompany(e, company.id)} className="p-2 rounded-full hover:bg-gray-100">
+                                    <button aria-label={savedCompanyEntries.has(company.id) ? `Unsave ${company.name}` : `Save ${company.name}`} onClick={(e) => handleToggleSaveCompany(e, company.id)} className="p-2 rounded-full hover:bg-gray-100">
                                         {savedCompanyEntries.has(company.id) ? (
                                             <BookmarkIconSolid className="w-6 h-6 text-blue-500" />
                                         ) : (

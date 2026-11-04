@@ -1,3 +1,5 @@
+import WorkspaceSectionHeader from '../../components/workspace/WorkspaceSectionHeader';
+import WorkspaceHeader from '../../components/workspace/WorkspaceHeader';
 import useCompanyRepairRequests from '../../hooks/useCompanyRepairRequests';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -1007,20 +1009,19 @@ const OperationsMetric = ({ label, value, tone = 'slate' }) => {
     );
 };
 
+const dashboardSectionIcons = {
+    'Assigned Jobs': FaClipboardCheck, 'Recent Messages': FaUsers, Alerts: FaExclamationTriangle,
+    Equipment: FaTools, 'Assigned Customers': FaUsers, 'Active Jobs': FaClipboardCheck,
+};
+
 const OperationsPreviewPanel = ({ title, helper, count, to, children }) => (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
-            <div className="min-w-0">
-                <h2 className="truncate text-sm font-bold text-slate-950">{title}</h2>
-                {helper && <p className="mt-1 truncate text-xs text-slate-500">{helper}</p>}
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700">
-                    {count}
-                </span>
+        <WorkspaceSectionHeader title={title} subtitle={helper} icon={dashboardSectionIcons[title] || FaClipboardCheck}
+            actions={<>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700">{count}</span>
                 {to && <Link to={to} className="text-xs font-bold text-blue-700 hover:text-blue-900">View</Link>}
-            </div>
-        </div>
+            </>}
+        />
         {children}
     </section>
 );
@@ -1153,20 +1154,12 @@ const PersonalStatCard = ({ icon: Icon, title, value, helper, to, tone = 'blue' 
 
 const PersonalPanel = ({ title, helper, count, to, actionLabel = 'View', className = '', children }) => (
     <section className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}>
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-            <div className="min-w-0">
-                <h2 className="truncate text-sm font-bold text-slate-950">{title}</h2>
-                {helper && <p className="mt-0.5 truncate text-xs text-slate-500">{helper}</p>}
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-                {count !== undefined && (
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700">
-                        {count}
-                    </span>
-                )}
+        <WorkspaceSectionHeader title={title} subtitle={helper} icon={dashboardSectionIcons[title] || FaClipboardCheck}
+            actions={<>
+                {count !== undefined && <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700">{count}</span>}
                 {to && <Link to={to} className="text-xs font-bold text-blue-700 hover:text-blue-900">{actionLabel}</Link>}
-            </div>
-        </div>
+            </>}
+        />
         {children}
     </section>
 );
@@ -2040,15 +2033,13 @@ const Dashboard = () => {
 
     return (
         <div className="min-h-screen bg-slate-100 px-3 py-3 text-slate-900 sm:px-4 lg:px-5">
-            <div className="w-full space-y-3">
-                <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                        <div className="flex min-w-0 items-center gap-3">
-                            <h1 className="text-xl font-bold text-slate-950">Dashboard</h1>
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-600">
-                                {scopeLabel}
-                            </span>
-                        </div>
+            <div className="w-full space-y-6">
+                <WorkspaceHeader
+                    title="Dashboard"
+                    eyebrow="My workspace"
+                    description="Your work, team activity, and company overview."
+                    meta={<span className="workspace-header-badge">{scopeLabel}</span>}
+                    actions={
                         <div className="flex flex-wrap items-center gap-2">
                             {availableDashboardViews.map((scope) => (
                                 <ScopeButton
@@ -2065,8 +2056,8 @@ const Dashboard = () => {
                                 Sales
                             </Link>
                         </div>
-                    </div>
-                </section>
+                    }
+                />
 
                 {dashboardView === 'manager' && (
                     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

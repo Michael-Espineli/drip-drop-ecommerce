@@ -534,7 +534,7 @@ const PublicServiceAgreementLanding = () => {
               </div>
 
               <div className="p-5">
-                <LineItemSectionTables
+                <LineItemSectionTables mobileCards
                   lineItems={displayLineItems}
                   formatCurrency={formatCurrency}
                   emptyMessage="No services or products were included."

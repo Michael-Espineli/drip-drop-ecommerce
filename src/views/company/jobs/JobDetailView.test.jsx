@@ -661,6 +661,17 @@ const openFinishJob = async () => {
   return screen.findByRole('dialog', { name: 'Finish Job', exact: true });
 };
 
+test('the Finished operations dropdown opens work review instead of bypassing closeout', async () => {
+  installCloseoutFixtures();
+  await openJob();
+  const operations = await screen.findByRole('combobox', { name: 'Job operations status' });
+  fireEvent.keyDown(operations, { key: 'ArrowDown', code: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('option', { name: 'Finished', exact: true }));
+  expect(await screen.findByRole('dialog', { name: 'Finish Job', exact: true })).toBeInTheDocument();
+  expect(updateDoc.mock.calls.some(([, data]) => data.operationStatus === 'Finished')).toBe(false);
+  expect(mockWorkspaceCall).not.toHaveBeenCalled();
+});
+
 test('Quick Finish includes stop tasks and services in the job completion request', async () => {
   installCloseoutFixtures();
   await openJob();
@@ -713,6 +724,7 @@ test('failed finalization keeps selections, shows the server error, and reuses i
   fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
   expect(await within(dialog).findByRole('alert')).toHaveTextContent('Review the remaining scheduled visits');
   expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).toBeChecked();
+  expect(updateDoc.mock.calls.filter(([path, data]) => path.includes('/tasks/') && data.status === 'Finished')).toEqual([]);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   expect(mockWorkspaceCall).toHaveBeenCalledTimes(2);

@@ -294,22 +294,7 @@ const getVerifiedCallableAuth = async (payload = {}, request = {}) => {
 };
 
 const assertCompanyAccess = async (db, companyId, authContext) => {
-  const uid = authContext?.uid || "";
-  if (!uid) {
-    throw new HttpsError("unauthenticated", "Sign in to sync customer name references.");
-  }
-
-  const [userSnapshot, accessSnapshot] = await Promise.all([
-    db.collection("users").doc(uid).get(),
-    db.collection("users").doc(uid).collection("userAccess").doc(companyId).get(),
-  ]);
-  const userData = userSnapshot.exists ? userSnapshot.data() || {} : {};
-
-  if (userData.accountType === "Admin" || accessSnapshot.exists) {
-    return;
-  }
-
-  throw new HttpsError("permission-denied", "You do not have access to this company.");
+  await require("./companyAuthorization").requirePermission(db, authContext?.uid, companyId, "14", authContext?.token);
 };
 
 const customerDisplayName = (customer = {}, fallbackId = "") => {

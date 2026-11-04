@@ -160,7 +160,10 @@ test("saved statements load their complete linked items on inspection and preser
   const initial = getDocs.getMockImplementation();
   getDocs.mockImplementation(async ref => ref.endsWith("technicianPayLineItems") ? docs([line("positive"), line("zero", { totalAmountCents: 0 })]) : initial(ref));
   await openStatements();
-  fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
+  // This historical statement must be inspected in its own period, regardless of today's date.
+  fireEvent.change(screen.getByLabelText("Payroll start date"), { target: { value: "2026-10-25" } });
+  fireEvent.change(screen.getByLabelText("Payroll end date"), { target: { value: "2026-10-31" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Inspect" }));
   const detail = await screen.findByRole("dialog", { name: "PS-000005" });
   await within(detail).findByText("positive");
   expect(within(detail).queryByText("zero")).not.toBeInTheDocument();

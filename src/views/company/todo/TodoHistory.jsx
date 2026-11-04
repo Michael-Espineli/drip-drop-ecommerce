@@ -1,3 +1,4 @@
+import { listenCompanyTodos } from "../../../utils/companyTodoAccess";
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import toast from "react-hot-toast";
@@ -150,42 +151,20 @@ const TodoHistory = () => {
 
     setLoading(true);
 
-    const todoRef = query(
-      collection(db, "companies", recentlySelectedCompany, "todoItems"),
-      where("status", "==", TODO_STATUS.done)
-    );
-    const boardsRef = collection(db, "companies", recentlySelectedCompany, "todoBoards");
-
-    const unsubscribeTodos = onSnapshot(
-      todoRef,
-      (snapshot) => {
-        setTodoItems(snapshot.docs.map(normalizeTodo));
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Error loading todo history:", error);
-        toast.error("Failed to load todo history.");
-        setLoading(false);
-      }
-    );
-
-    const unsubscribeBoards = onSnapshot(
-      boardsRef,
-      (snapshot) => {
-        setTodoBoards(snapshot.docs
-          .map(normalizeTodoBoard)
-          .sort((left, right) => left.name.localeCompare(right.name)));
-      },
-      (error) => {
-        console.error("Error loading todo boards:", error);
-      }
-    );
-
+    const unsubscribeTodos = listenCompanyTodos({
+      db, companyId: recentlySelectedCompany, userId: user?.uid,
+      companyUserId: companyUserAccess?.companyUserId || companyUserAccess?.companyUserDocId,
+      includeAll: hasCompanyPermission("310"),
+      onTodos: docs => { setTodoItems(docs.map(normalizeTodo).filter(todo => todo.status === TODO_STATUS.done)); setLoading(false); },
+      onBoards: docs => setTodoBoards(docs.map(normalizeTodoBoard).sort((a, b) => a.name.localeCompare(b.name))),
+      onError: error => { console.error("Todo access failed", error); setLoading(false); },
+    });
+    const unsubscribeBoards = () => {};
     return () => {
       unsubscribeTodos();
       unsubscribeBoards();
     };
-  }, [recentlySelectedCompany]);
+  }, [recentlySelectedCompany, user?.uid, companyUserAccess, hasCompanyPermission]);
 
   const currentTodoUserIds = useMemo(() => todoUserIdSet([
     user?.uid,

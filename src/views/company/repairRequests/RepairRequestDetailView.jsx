@@ -155,7 +155,7 @@ const RepairRequestDetailView = () => {
   }, [repairRequest]);
 
   const partApprovalServiceLocation = useMemo(() => {
-    const serviceLocationId = repairRequest?.serviceLocationId || repairRequest?.locationId || "";
+    const serviceLocationId = repairRequest?.companyServiceLocationId || repairRequest?.serviceLocationId || repairRequest?.locationId || "";
     if (!serviceLocationId) return null;
 
     return {
@@ -243,7 +243,7 @@ const RepairRequestDetailView = () => {
       customerName: getRepairRequestCustomerName(),
       bodyOfWaterId: repairRequest?.bodyOfWaterId || "",
       bodyOfWaterName: repairRequest?.bodyOfWaterName || "",
-      serviceLocationId: repairRequest?.serviceLocationId || repairRequest?.locationId || "",
+      serviceLocationId: repairRequest?.companyServiceLocationId || repairRequest?.serviceLocationId || repairRequest?.locationId || "",
       userId,
       userName: getAuditUserName(),
       authorId: userId,
@@ -510,11 +510,11 @@ const RepairRequestDetailView = () => {
         requestStatus: repairRequest.status || "",
         requesterId: repairRequest.requesterId || "",
         requesterName: repairRequest.requesterName || "",
-        serviceLocationId: repairRequest.locationId || repairRequest.serviceLocationId || "",
+        serviceLocationId: repairRequest.companyServiceLocationId || repairRequest.locationId || repairRequest.serviceLocationId || "",
         serviceLocationName: repairRequest.locationName || repairRequest.serviceLocationName || "",
-        bodyOfWaterId: repairRequest.bodyOfWaterId || "",
+        bodyOfWaterId: repairRequest.companyBodyOfWaterId || repairRequest.bodyOfWaterId || "",
         bodyOfWaterName: repairRequest.bodyOfWaterName || "",
-        equipmentId: repairRequest.equipmentId || "",
+        equipmentId: repairRequest.companyEquipmentId || repairRequest.equipmentId || "",
         equipmentName: repairRequest.equipmentName || repairRequest.equipmentModel || "",
         photoUrls: repairRequest.photoUrls || [],
         createdAt: serverTimestamp(),

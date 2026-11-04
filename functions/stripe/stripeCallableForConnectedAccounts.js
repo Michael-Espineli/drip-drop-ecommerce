@@ -26,7 +26,8 @@ const salesCollectionNames = {
   billingSubscriptions: 'salesBillingSubscriptions',
   catalogItems: 'salesCatalogItems',
 };
-const FINANCE_PERMISSION_ID = '400';
+const { hasActiveCompanyPermission } = require('../billingAccess');
+const FINANCE_PERMISSION_ID = '404';
 const DELETE_SERVICE_AGREEMENTS_PERMISSION_ID = '436';
 
 const timestampFromStripeSeconds = (seconds) => (
@@ -293,49 +294,11 @@ const getCallableAuth = async (data, context, message) => {
   }
 };
 
-const userHasCompanyAccess = async (uid, companyId) => {
-  if (!uid || !companyId) return false;
+const userHasCompanyAccess = (uid, companyId) => hasActiveCompanyPermission(db, companyId, uid, ['400', '404']);
 
-  const accessDoc = await db
-    .collection('users')
-    .doc(uid)
-    .collection('userAccess')
-    .doc(companyId)
-    .get();
-
-  return accessDoc.exists;
-};
-
-const userHasAnyCompanyPermission = async (uid, companyId, permissionIds = []) => {
-  if (!uid || !companyId) return false;
-
-  const accessDoc = await db
-    .collection('users')
-    .doc(uid)
-    .collection('userAccess')
-    .doc(companyId)
-    .get();
-
-  if (!accessDoc.exists) return false;
-
-  const roleId = String(accessDoc.data()?.roleId || '').trim();
-  if (!roleId) return true;
-
-  const roleDoc = await db
-    .collection('companies')
-    .doc(companyId)
-    .collection('roles')
-    .doc(roleId)
-    .get();
-
-  if (!roleDoc.exists) return true;
-
-  const permissionIdList = roleDoc.data()?.permissionIdList;
-  if (!Array.isArray(permissionIdList)) return true;
-
-  const selectedIds = permissionIdList.map(String);
-  return permissionIds.map(String).some((permissionId) => selectedIds.includes(permissionId));
-};
+const userHasAnyCompanyPermission = (uid, companyId, permissionIds = []) => (
+  hasActiveCompanyPermission(db, companyId, uid, permissionIds)
+);
 
 const userCanAccessSalesRecord = async ({ auth, record }) => {
   if (!auth || !record) return false;
@@ -343,13 +306,13 @@ const userCanAccessSalesRecord = async ({ auth, record }) => {
   const recordCustomerUserId = String(record.customerUserId || '').trim();
   if (recordCustomerUserId && recordCustomerUserId === auth.uid) return true;
 
-  if (await userHasCompanyAccess(auth.uid, record.companyId)) return true;
+  if (await hasActiveCompanyPermission(db, record.companyId, auth.uid, ['404'])) return true;
 
   if (recordCustomerUserId) return false;
 
   const authEmail = normalizeEmail(auth.token?.email);
   const recordEmail = normalizeEmail(record.email || record.customerEmail || record.billingEmail);
-  if (authEmail && recordEmail && authEmail === recordEmail) return true;
+  if (auth.token?.email_verified === true && authEmail && recordEmail && authEmail === recordEmail) return true;
 
   return false;
 };
@@ -985,7 +948,7 @@ const copyLineItemsForBilling = (lineItems = []) => (
       sourceId: item.sourceId || '',
       name: item.name || item.description || 'Service',
       description: item.description || '',
-      quantity: Number(item.quantity || 1),
+      quantity: Number(item.quantity ?? 1),
       unitAmountCents: Number(item.unitAmountCents || 0),
       totalAmountCents: Number(item.totalAmountCents || 0),
       taxable: Boolean(item.taxable),
@@ -1039,6 +1002,9 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     autopayStatus: canStartStripeCheckout ? 'available' : 'unavailable',
     autopayEnabled: false,
     amountCents,
+    billingTimeZone: agreement.billingTimeZone || 'UTC',
+    taxAmountCents: Number(agreement.taxAmountCents || 0),
+    discountAmountCents: Number(agreement.discountAmountCents || 0),
     currency: agreement.currency || 'usd',
     interval: cadenceToStripeInterval(billingFrequency, agreement.rateType),
     intervalCount: billingIntervalCountForAgreement(agreement),
@@ -1156,7 +1122,7 @@ const requireCompanyManagerForSalesSubscription = async ({ auth, billingSubscrip
     throw new functions.https.HttpsError('permission-denied', 'This billing subscription belongs to another company.');
   }
 
-  const hasAccess = await userHasCompanyAccess(auth.uid, companyId);
+  const hasAccess = await hasActiveCompanyPermission(db, companyId, auth.uid, ['404']);
   if (!hasAccess) {
     throw new functions.https.HttpsError('permission-denied', 'You do not have access to manage billing for this company.');
   }
@@ -1223,7 +1189,7 @@ const requireManagedConnectedAccount = async ({ data, context, message }) => {
     throw new functions.https.HttpsError('invalid-argument', 'companyId or a saved connected account id is required.');
   }
 
-  const hasAccess = company.data.ownerId === callableAuth.uid || await userHasCompanyAccess(callableAuth.uid, company.data.id);
+  const hasAccess = await hasActiveCompanyPermission(db, company.data.id, callableAuth.uid, ['404']);
   if (!hasAccess) {
     throw new functions.https.HttpsError('permission-denied', 'You do not have access to this company Stripe account.');
   }
@@ -1317,48 +1283,10 @@ const syncSalesSubscriptionRecordFromStripe = async ({
   stripeSubscription,
   connectedAccount,
 }) => {
-  const updateData = buildStripeSubscriptionUpdateData({ stripeSubscription, connectedAccount });
-  if (updateData.manualBillingEnabled) {
-    updateData.manualBillingAutoSendEnabled = subscription.manualBillingAutoSendEnabled === true;
-  }
-
-  if (updateData.status === 'active' && !subscription.operationsSetupStatus) {
-    updateData.operationsSetupStatus = 'needsRecurringServiceStop';
-    updateData.operationsSetupReason = 'paidBillingSubscription';
-    updateData.operationsSetupUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-  }
-
-  const batch = db.batch();
-  batch.set(subscriptionRef, updateData, { merge: true });
-
-  if (subscription.agreementId || stripeSubscription.metadata?.salesAgreementId) {
-    const agreementId = subscription.agreementId || stripeSubscription.metadata.salesAgreementId;
-    const agreementUpdate = {
-      stripeCustomerId: updateData.stripeCustomerId,
-      billingSubscriptionId: subscription.id,
-      billingFlowStatus: updateData.status,
-      billingFlowNextAction: updateData.nextAction,
-      billingFlowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      billingCollectionMethod: updateData.billingCollectionMethod,
-      autopayStatus: updateData.autopayStatus,
-      manualBillingEnabled: updateData.manualBillingEnabled,
-      manualBillingAutoSendEnabled: updateData.manualBillingAutoSendEnabled,
-      customerCanPayImmediately: false,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    if (updateData.operationsSetupStatus) {
-      agreementUpdate.operationsSetupStatus = updateData.operationsSetupStatus;
-      agreementUpdate.operationsSetupReason = updateData.operationsSetupReason;
-      agreementUpdate.operationsSetupUpdatedAt = updateData.operationsSetupUpdatedAt;
-    }
-
-    batch.set(db.collection(salesCollectionNames.agreements).doc(agreementId), agreementUpdate, { merge: true });
-  }
-
-  await batch.commit();
-
-  return updateData;
+  await require('../stripeLifecycle').createStripeLifecycle(db, stripe).syncSubscription({
+    id: `operator_${uuidv4()}`, type: 'customer.subscription.updated', account: connectedAccount,
+  }, stripeSubscription.id);
+  return (await subscriptionRef.get()).data();
 };
 
 const createConnectedAccountPriceForSalesLineItem = async ({ connectedAccount, subscription, item, index }) => {
@@ -1575,7 +1503,7 @@ exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (da
   }
 
   const companyData = companySnap.data() || {};
-  const hasAccess = companyData.ownerId === callableAuth.uid || await userHasCompanyAccess(callableAuth.uid, companyId);
+  const hasAccess = await hasActiveCompanyPermission(db, companyId, callableAuth.uid, ['404']);
 
   if (!hasAccess) {
     throw new functions.https.HttpsError(
@@ -2787,210 +2715,8 @@ exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
 });
 
 exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(async (data, context) => {
-  const callableAuth = await getCallableAuth(data, context, 'You must be signed in to start Stripe Checkout.');
-  const receivedData = getCallableData(data);
-  const {
-    billingSubscriptionId,
-    agreementId,
-    companyId,
-    successUrl,
-    cancelUrl,
-    paymentMethodType: requestedPaymentMethodType,
-  } = receivedData;
-
-  if (!billingSubscriptionId || !companyId || !successUrl || !cancelUrl) {
-    throw new functions.https.HttpsError(
-      'invalid-argument',
-      'billingSubscriptionId, companyId, successUrl, and cancelUrl are required.'
-    );
-  }
-
-  const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(billingSubscriptionId);
-  const subscriptionSnap = await subscriptionRef.get();
-
-  if (!subscriptionSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Billing subscription was not found.');
-  }
-
-  const subscription = { id: subscriptionSnap.id, ...subscriptionSnap.data() };
-
-  if (subscription.companyId !== companyId) {
-    throw new functions.https.HttpsError('permission-denied', 'This billing subscription belongs to another company.');
-  }
-
-  const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: subscription });
-  if (!canAccess) {
-    throw new functions.https.HttpsError('permission-denied', 'You do not have access to this billing subscription.');
-  }
-
-  if (agreementId && subscription.agreementId && subscription.agreementId !== agreementId) {
-    throw new functions.https.HttpsError('invalid-argument', 'Billing subscription does not match the service agreement.');
-  }
-
-  if (subscription.stripeSubscriptionId && ['active', 'trialing'].includes(String(subscription.stripeStatus || subscription.status || '').toLowerCase())) {
-    return {
-      status: 'already_active',
-      stripeSubscriptionId: subscription.stripeSubscriptionId,
-      message: 'This billing subscription is already active in Stripe.',
-    };
-  }
-
-  const connectedAccount = subscription.stripeConnectedAccountId;
-  if (!connectedAccount) {
-    throw new functions.https.HttpsError('failed-precondition', 'The company needs a Stripe connected account before Checkout can start.');
-  }
-
-  const companySnapshot = await db.collection('companies').doc(companyId).get();
-  const companyData = companySnapshot.exists ? companySnapshot.data() : {};
-  const companyConnectedAccount = getCompanyConnectedAccountId(companyData);
-
-  if (!companyCustomerBillingEnabled(companyData)) {
-    throw new functions.https.HttpsError(
-      'failed-precondition',
-      'Turn on customer billing before starting Stripe Checkout.'
-    );
-  }
-
-  if (companyConnectedAccount && connectedAccount !== companyConnectedAccount) {
-    throw new functions.https.HttpsError('permission-denied', 'Billing subscription is not connected to this company Stripe account.');
-  }
-
-  const paymentMethodPolicy = resolveSalesPaymentMethodFeePolicy(
-    requestedPaymentMethodType ||
-    subscription.paymentMethodType ||
-    subscription.preferredPaymentMethodType ||
-    companyData.defaultSalesPaymentMethodType ||
-    'card'
-  );
-
-  if (paymentMethodPolicy.paymentMethodType === 'ach' && String(subscription.currency || 'usd').toLowerCase() !== 'usd') {
-    throw new functions.https.HttpsError('failed-precondition', 'ACH billing requires USD currency.');
-  }
-
-  const applicationFee = resolveApplicationFee(subscription, companyData, paymentMethodPolicy.paymentMethodType);
-  const applicationFeePercent = applicationFee.percent;
-
-  const lineItems = buildCheckoutLineItems(subscription);
-  if (lineItems.length === 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'At least one billable line item is required before Checkout can start.');
-  }
-
-  try {
-    const account = await stripe.accounts.retrieve(connectedAccount);
-    if (!account.charges_enabled) {
-      throw new functions.https.HttpsError('failed-precondition', 'Stripe says this connected account cannot create charges yet.');
-    }
-
-    const stripeCustomer = await getOrCreateConnectedStripeCustomer({ subscription, connectedAccount });
-    const metadata = {
-      flow: 'sales_billing_subscription',
-      companyId,
-      salesBillingSubscriptionId: billingSubscriptionId,
-      salesAgreementId: subscription.agreementId || agreementId || '',
-      salesCustomerId: subscription.customerId || '',
-      createdByUserId: callableAuth.uid,
-      stripeConnectedAccountId: connectedAccount,
-      paymentMethodType: paymentMethodPolicy.paymentMethodType,
-      stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
-      applicationFeePercent: applicationFeePercent === null ? '' : String(applicationFeePercent),
-      applicationFeeSource: applicationFee.source,
-    };
-    const subscriptionData = {
-      metadata,
-    };
-
-    if (applicationFeePercent !== null) {
-      subscriptionData.application_fee_percent = applicationFeePercent;
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      customer: stripeCustomer.id,
-      payment_method_types: paymentMethodPolicy.stripePaymentMethodTypes,
-      line_items: lineItems,
-      client_reference_id: billingSubscriptionId,
-      metadata,
-      subscription_data: subscriptionData,
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-    }, {
-      stripeAccount: connectedAccount,
-    });
-
-    const updateData = {
-      stripeCustomerId: stripeCustomer.id,
-      checkoutSessionId: session.id,
-      checkoutUrl: session.url || '',
-      checkoutStatus: 'created',
-      status: 'pendingStripe',
-      billingCollectionMethod: 'manualUntilAutopay',
-      autopayStatus: 'checkoutStarted',
-      autopayEnabled: false,
-      manualBillingEnabled: subscription.manualBillingEnabled !== false,
-      manualBillingAutoSendEnabled: subscription.manualBillingAutoSendEnabled === true,
-      manualBillingStatus: subscription.manualBillingStatus || 'readyToInvoice',
-      manualBillingReason: 'autopayCheckoutStarted',
-      nextAction: 'completeCheckout',
-      customerCanPayImmediately: true,
-      paymentMethodType: paymentMethodPolicy.paymentMethodType,
-      stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
-      stripePaymentMethodTypes: paymentMethodPolicy.stripePaymentMethodTypes,
-      paymentMethodLabel: paymentMethodPolicy.label,
-      applicationFeePercent,
-      platformFeeSource: applicationFee.source,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      stripeCheckoutCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      stripeCheckoutCreatedByUserId: callableAuth.uid,
-    };
-
-    const batch = db.batch();
-    batch.set(subscriptionRef, updateData, { merge: true });
-
-    if (subscription.billingProfileId) {
-      batch.set(db.collection('salesBillingProfiles').doc(subscription.billingProfileId), {
-        stripeCustomerId: stripeCustomer.id,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-    }
-
-    if (subscription.agreementId || agreementId) {
-      batch.set(db.collection(salesCollectionNames.agreements).doc(subscription.agreementId || agreementId), {
-        stripeCustomerId: stripeCustomer.id,
-        billingFlowStatus: 'pendingStripe',
-        billingFlowNextAction: 'completeCheckout',
-        billingFlowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        billingCollectionMethod: 'manualUntilAutopay',
-        autopayStatus: 'checkoutStarted',
-        manualBillingEnabled: subscription.manualBillingEnabled !== false,
-        manualBillingAutoSendEnabled: subscription.manualBillingAutoSendEnabled === true,
-        paymentMethodType: paymentMethodPolicy.paymentMethodType,
-        stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
-        paymentMethodLabel: paymentMethodPolicy.label,
-        applicationFeePercent,
-        platformFeeSource: applicationFee.source,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-    }
-
-    await batch.commit();
-
-    return {
-      status: 'success',
-      url: session.url,
-      sessionId: session.id,
-      stripeCustomerId: stripeCustomer.id,
-      paymentMethodType: paymentMethodPolicy.paymentMethodType,
-      applicationFeePercent,
-    };
-  } catch (error) {
-    if (error instanceof functions.https.HttpsError) throw error;
-
-    console.error('Unable to create sales billing Checkout session', error);
-    throw new functions.https.HttpsError(
-      'internal',
-      error.message || 'Unable to create Stripe Checkout session.'
-    );
-  }
+  const auth = await getCallableAuth(data, context, 'Sign in to start billing setup.');
+  return require('../subscriptionCheckout').createSubscriptionCheckout(db, stripe).start({ auth, data: getCallableData(data) });
 });
 
 exports.syncSalesBillingSubscriptionFromStripe = functions.https.onCall(async (data, context) => {
@@ -3193,92 +2919,27 @@ exports.updateSalesBillingSubscriptionStripeItems = functions.https.onCall(async
     throw new functions.https.HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
   }
 
-  const rawLineItems = Array.isArray(subscription.lineItems) ? subscription.lineItems : [];
-  if (!rawLineItems.length) {
-    throw new functions.https.HttpsError('failed-precondition', 'Add at least one line item before updating Stripe pricing.');
-  }
-
-  try {
-    const priceResults = await Promise.all(
-      rawLineItems.map((item, index) => createConnectedAccountPriceForSalesLineItem({
-        connectedAccount,
-        subscription,
-        item,
-        index,
-      }))
-    );
-
-    const nextLineItems = rawLineItems.map((item, index) => ({
-      ...item,
-      stripePriceId: priceResults[index].stripePriceId,
-      stripeProductId: priceResults[index].stripeProductId || item.stripeProductId || '',
-    }));
-    const createdPriceCount = priceResults.filter((result) => result.created).length;
-    const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripeSubscriptionId, {
-      expand: ['items.data.price'],
-    }, {
-      stripeAccount: connectedAccount,
-    });
-    const existingItems = stripeSubscription.items?.data || [];
-    const updateItems = [
-      ...existingItems.map((item) => ({
-        id: item.id,
-        deleted: true,
-      })),
-      ...nextLineItems.map((item) => ({
-        price: item.stripePriceId,
-        quantity: Math.max(Number(item.quantity || 1), 1),
-      })),
-    ];
-    const updatedStripeSubscription = await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
-      items: updateItems,
-      proration_behavior: prorationBehavior,
-      metadata: {
-        ...(stripeSubscription.metadata || {}),
-        salesBillingSubscriptionId: subscription.id,
-        salesAgreementId: subscription.agreementId || '',
-        companyId: subscription.companyId || '',
-        stripeConnectedAccountId: connectedAccount,
-      },
-    }, {
-      stripeAccount: connectedAccount,
-    });
-
-    await subscriptionRef.set({
-      lineItems: nextLineItems,
-      stripePricingUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      stripePricingUpdatedByUserId: context.auth.uid,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    const updateData = await syncSalesSubscriptionRecordFromStripe({
-      subscriptionRef,
-      subscription: {
-        ...subscription,
-        lineItems: nextLineItems,
-      },
-      stripeSubscription: updatedStripeSubscription,
-      connectedAccount,
-    });
-
-    return {
-      status: 'success',
-      stripeSubscriptionId: updatedStripeSubscription.id,
-      stripeStatus: updateData.stripeStatus,
-      billingStatus: updateData.status,
-      nextAction: updateData.nextAction,
-      createdPriceCount,
-      lineItemCount: nextLineItems.length,
-    };
-  } catch (error) {
-    if (error instanceof functions.https.HttpsError) throw error;
-
-    console.error('Unable to update sales billing subscription Stripe items', error);
-    throw new functions.https.HttpsError(
-      'internal',
-      error.message || 'Unable to update Stripe pricing for this billing subscription.'
-    );
-  }
+  if (prorationBehavior !== 'none') throw new functions.https.HttpsError('failed-precondition', 'Pricing changes take effect at the next renewal. Immediate adjustments require a separate reviewed invoice.');
+  const {pricing,hash,id} = require('../billingMath');
+  const accepted = pricing(subscription);
+  const interval = normalizeStripeInterval(subscription.interval || 'month');
+  const intervalCount = Number(subscription.intervalCount || 1);
+  const priceKey = hash({subscriptionId:subscription.id,accepted,interval,intervalCount});
+  const options = {stripeAccount:connectedAccount};
+  const current = await stripe.subscriptions.retrieve(subscription.stripeSubscriptionId, {}, options);
+  if (id(current.customer) !== subscription.stripeCustomerId || current.metadata?.salesBillingSubscriptionId && current.metadata.salesBillingSubscriptionId !== subscription.id)
+    throw new functions.https.HttpsError('permission-denied', 'Stripe subscription ownership does not match.');
+  const price = await stripe.prices.create({currency:accepted.currency,unit_amount:accepted.totalAmountCents,
+    recurring:{interval,interval_count:intervalCount},product_data:{name:subscription.agreementSnapshot?.title || 'Pool service',metadata:{pricingSnapshotHash:priceKey}}},
+    {...options,idempotencyKey:`price_${priceKey}`});
+  const existing = current.items?.data || [];
+  const updated = await stripe.subscriptions.update(current.id, {proration_behavior:'none',
+    items:[{...(existing[0]?{id:existing[0].id}:{}),price:price.id,quantity:1},...existing.slice(1).map(item=>({id:item.id,deleted:true}))],
+    metadata:{...(current.metadata || {}),companyId:subscription.companyId,salesBillingSubscriptionId:subscription.id,salesAgreementId:subscription.agreementId || '',pricingSnapshotHash:priceKey}},
+    {...options,idempotencyKey:`pricing_${priceKey}`});
+  await subscriptionRef.set({stripePricingSnapshotHash:priceKey,stripePricingUpdatedAt:admin.firestore.FieldValue.serverTimestamp(),stripePricingUpdatedByUserId:context.auth.uid},{merge:true});
+  const result = await syncSalesSubscriptionRecordFromStripe({subscriptionRef,subscription,stripeSubscription:updated,connectedAccount});
+  return {status:'success',stripeSubscriptionId:updated.id,stripeStatus:result.stripeStatus,billingStatus:result.status,nextAction:result.nextAction,createdPriceCount:1,lineItemCount:accepted.lines.length};
 });
 
 
@@ -3600,75 +3261,14 @@ exports.getDefaultPrice = functions.https.onCall(async(data,context) => {
   //------------------CRUD Contract------------------
 
 exports.acceptContract = functions.https.onCall(async(data,context) => {
-    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
-      data,
-      context,
-      message: 'You must be signed in to create connected-account subscriptions.',
-    });
-
-    try {
-  
-      const subscription = await stripe.subscriptions.create(
-        {
-          customer: receivedData.customerId,
-          items: [
-            {
-              price: receivedData.priceId,
-            },
-          ],
-          expand: ['latest_invoice.payment_intent'],
-        },
-        {
-          stripeAccount: connectedAccount,
-        }
-      );
-      return {
-        subscription:subscription
-      }
-    } catch(error) {
-  
-      console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account subscription.');
-    }
+    await requireManagedConnectedAccount({data,context,message:'Sign in to manage billing.'});
+    throw new functions.https.HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
   });
   
 
 exports.acceptContract2 = functions.https.onCall(async(data,context) => {
-    const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
-      data,
-      context,
-      message: 'You must be signed in to create connected-account checkout sessions.',
-    });
-
-    try {
-  
-      const session = await stripe.checkout.sessions.create({
-        mode: 'subscription',
-        customer:receivedData.customerId,
-        line_items: [
-          {
-            price: receivedData.priceId,
-            // For metered billing, do not pass quantity
-            quantity: 1,
-          },
-        ],
-        // {CHECKOUT_SESSION_ID} is a string literal; do not change it!
-        // the actual Session ID is returned in the query parameter when your customer
-        // is redirected to the success page.
-        success_url: 'http://localhost:3000/success/sessionId/{CHECKOUT_SESSION_ID}',
-        cancel_url: 'http://localhost:3000/canceled',
-      },
-      {
-        stripeAccount: connectedAccount,
-      });
-      return {
-        session:session
-      }
-    } catch(error) {
-  
-      console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account checkout session.');
-    }
+    await requireManagedConnectedAccount({data,context,message:'Sign in to manage billing.'});
+    throw new functions.https.HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
   });
   
   exports.getSubcriptionList = functions.https.onCall(async(data,context) => {

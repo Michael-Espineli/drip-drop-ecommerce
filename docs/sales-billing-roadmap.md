@@ -4,6 +4,12 @@ Feature flag: `feature_flag_004` (`Sales`)
 
 Email delivery flag: `feature_flag_012` (`Turn on real emails`)
 
+## Billing audit — November 2, 2026
+
+First hardening batch: **Review locally**. Permission 404, server-owned external receipts/invoice mutations, Checkout mutation fencing/expiration, Stripe-owned invoice guards, verified-recipient Finance visibility, and deterministic/atomic job invoice preservation are implemented. Existing roles are not automatically expanded. Checks: 447 web tests, 170 backend checks, nine actual-rule emulator tests, development build and scoped lint pass. No deployment/live financial changes; phone and real Stripe test-mode acceptance remain. See [batch evidence and rollout](../../outputs/billing-hardening-2026-11-02/README.md) and the audit's current status table. Recurring duplication, refunds/event reconciliation, remaining billing findings, and broader access-grant defects remain open.
+
+**Open release blockers:** the current implementation needs authorization and lifecycle hardening before broad live use. See [the money movement audit](../../docs/money-movement-audit.md) for findings BILL-01–16, reproductions, affected files, and acceptance. Priority: restrict financial writes and protect processor/audit records; introduce authorized, retry-safe manual receipts/invoice mutations; prevent duplicate subscriptions and stale webhook changes; reconcile edits/voids/refunds and manual-to-autopay periods; preserve agreed totals and verified-recipient visibility; then verify fees/payouts and real Stripe test-mode mobile flows. The daily manual invoice scheduler already exists in `functions/timeBased/general.js`; older next-step notes below should not be read as proof it is absent. Existing 435 web tests, 136 backend checks, and the development build pass while the audit's additional diagnostics reproduce defects. No application fix or deployment was part of the audit.
+
 ## Purpose
 
 Sales is the finance workspace for customer billing. It should support two billing flows:
@@ -53,7 +59,7 @@ The invoice system should support four company operating modes without changing 
 - Mixed billing: companies can collect some invoices through Stripe and record other payments manually against the same customer account or invoice balance.
 - Full Stripe billing: companies can send one-time invoices and recurring service invoices through the connected Stripe account, while DripDrop continues to own invoice snapshots, services/products, operations links, notes, and payment history.
 
-Next Stripe invoice build target: add a connected-account callable that can turn an open DripDrop `salesInvoices` record into a Stripe-hosted invoice or Checkout payment session, store `stripeInvoiceId`, `stripeHostedInvoiceUrl`, `stripeInvoicePdfUrl`, and sync paid/failed/void state through existing webhooks.
+Implemented locally, 2026-11-02 (**Review**): `createCustomerInvoiceCheckout` creates one-time card Checkout on the invoice company's connected account for the trusted outstanding balance. A reserved payment attempt prevents duplicate sessions; changed balances retire the previous checkout. The signed Checkout webhook creates one deterministic `salesPayments` entry, preserves manual payments, differentiates processing/failure/posted states, records receipts, and flags voided or overpaid invoices for review. `createCustomerBillingPortal` opens payment-method/receipt management for the existing subscription customer on that same connected account. Client/public invoice pages show a top payment action, refresh after returning, and wait for authoritative confirmation. This uses Checkout sessions, not newly created Stripe Invoice/PDF documents. Existing recurring ACH support remains; one-time Checkout currently accepts cards. Stripe test-mode connected-account end-to-end verification, endpoint configuration, and deployment remain before release.
 
 ### Job Detail Estimates
 

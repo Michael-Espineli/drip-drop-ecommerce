@@ -1501,6 +1501,7 @@ const CreateNewJob = () => {
                 const initialLocationId =
                     locationIdParam ||
                     repairRequest?.locationId ||
+                    repairRequest?.companyServiceLocationId ||
                     repairRequest?.serviceLocationId ||
                     suggestedWork?.serviceLocationId ||
                     customerContext?.serviceLocationId ||
@@ -1583,6 +1584,7 @@ const CreateNewJob = () => {
 
                 const initialBodyOfWaterId =
                     customerContext?.bodyOfWaterId ||
+                    repairRequest?.companyBodyOfWaterId ||
                     repairRequest?.bodyOfWaterId ||
                     suggestedWork?.bodyOfWaterId ||
                     equipmentContext?.bodyOfWaterId;
@@ -1593,6 +1595,7 @@ const CreateNewJob = () => {
 
                 const initialEquipmentId =
                     customerContext?.equipmentId ||
+                    repairRequest?.companyEquipmentId ||
                     repairRequest?.equipmentId ||
                     suggestedWork?.equipmentId ||
                     equipmentContext?.equipmentId;

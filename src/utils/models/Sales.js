@@ -56,6 +56,9 @@ export const SalesInvoiceStatus = {
   draft: 'draft',
   open: 'open',
   partiallyPaid: 'partiallyPaid',
+  partiallyRefunded: 'partiallyRefunded',
+  refunded: 'refunded',
+  paymentReview: 'paymentReview',
   paid: 'paid',
   overdue: 'overdue',
   void: 'void',
@@ -82,6 +85,9 @@ export const SalesPaymentStatus = {
   posted: 'posted',
   failed: 'failed',
   refunded: 'refunded',
+  partiallyRefunded: 'partiallyRefunded',
+  disputed: 'disputed',
+  reversed: 'reversed',
   void: 'void',
 };
 

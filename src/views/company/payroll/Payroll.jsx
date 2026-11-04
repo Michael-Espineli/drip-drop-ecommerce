@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
 import { buildCompanyPayType, defaultStopPayCategories, emptyWorkTypeForm, rateTypeOptions, resolveStopPayCategories, stackBehaviorOptions, workCategoryOptions } from "../../../utils/payroll/payTypeSetup";
 import PayRequestsPanel from './PayRequestsPanel';
@@ -4615,20 +4616,13 @@ const Payroll = ({ mode = "payroll" }) => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
-                {isSetupMode ? "Company Settings" : "Payroll Review"}
-              </p>
-              <h1 className="mt-2 text-3xl font-bold text-slate-950">{isSetupMode ? "Payroll Setup" : "Payroll"}</h1>
-              <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                {isSetupMode
-                  ? "Configure how scheduled work turns into technician pay."
-                  : "Review payroll line items, create statements from approved pay, and mark technician pay as paid."}
-              </p>
-            </div>
-            {isSetupMode ? (
+        <WorkspaceHeader
+          title={isSetupMode ? "Payroll Setup" : "Payroll"}
+          eyebrow={isSetupMode ? "Company settings" : "Payroll review"}
+          description={isSetupMode
+            ? "Configure how scheduled work turns into technician pay."
+            : "Review payroll line items, create statements from approved pay, and mark technician pay as paid."}
+          actions={isSetupMode ? (
               <Link
                 to="/company/payroll"
                 className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
@@ -4682,8 +4676,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 <p className="col-span-full text-xs text-slate-600">Approve All covers the selected dates and technician across every page. Items that need review stay unapproved.</p>
               </div>
             )}
-          </div>
-        </section>
+        />
 
         {showServiceStopBackfillPanel ? (
           <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">

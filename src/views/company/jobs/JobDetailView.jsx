@@ -7654,6 +7654,13 @@ const JobDetailView = () => {
     if (requireEmail && !email) throw new Error("Customer email is required before sending an invoice.");
 
     const existingInvoice = await findLinkedSalesInvoice();
+    // Resending an invoice never reprices or reopens its existing debt.
+    // Explicit changes go through the authorized invoice command instead.
+    if (existingInvoice) {
+      if (existingInvoice.companyId !== recentlySelectedCompany || existingInvoice.jobId && existingInvoice.jobId !== jobId) throw new Error('The linked invoice belongs to another company or job.');
+      if (['void', 'voided', 'uncollectible', 'canceled', 'cancelled'].includes(String(existingInvoice.status || '').toLowerCase())) throw new Error('This job invoice is closed. Create an explicit new invoice or adjustment instead of reopening it.');
+      return existingInvoice;
+    }
     const sourceAgreement = agreementInput && typeof agreementInput === "object"
       ? agreementInput
       : selectedSalesAgreement;
@@ -7666,7 +7673,7 @@ const JobDetailView = () => {
     if (!lineItems.length) throw new Error("Add at least one line item or job price before invoicing.");
 
     const agreementId = typeof agreementInput === "string" ? agreementInput : sourceAgreement?.id || "";
-    const id = existingInvoice?.id || `si_${uuidv4()}`;
+    const id = `si_job_${recentlySelectedCompany}_${jobId}`;
     const subtotalAmountCents = lineItems.reduce((total, item) => total + cents(item.totalAmountCents), 0);
     const totalAmountCents = cents(
       sourceAgreement?.totalAmountCents ??
@@ -7725,37 +7732,20 @@ const JobDetailView = () => {
       serviceLocationSnapshots: [getServiceLocationSnapshot()].filter((location) => location.id || location.streetAddress),
     };
 
-    await setDoc(doc(db, salesCollectionNames.invoices, id), payload, { merge: true });
-    await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
-      salesInvoiceId: id,
-      invoiceDate: serverTimestamp(),
-      invoiceType: "salesInvoice",
-      invoiceRef: id,
+    const result = await httpsCallable(functions, 'createJobSalesInvoice')({
+      ...(await getCallableAuthPayload()), companyId: recentlySelectedCompany, jobId,
+      agreementId: payload.agreementId, contractId: payload.contractId,
+      requireEmail, invoiceDraft: {
+        invoiceNumber: payload.invoiceNumber, email: payload.email, companyName: payload.companyName,
+        customerName: payload.customerName, lineItems: payload.lineItems,
+        serviceLocationSnapshots: payload.serviceLocationSnapshots,
+      },
     });
-
-    if (selectedContract?.id) {
-      await updateDoc(doc(db, "contracts", selectedContract.id), {
-        salesInvoiceId: id,
-        receiverName: selectedContract.receiverName || getCustomerDisplayName(),
-        receiverEmail: selectedContract.receiverEmail || email,
-        customerId: selectedContract.customerId || job.customerId || customer.id || "",
-        customerName: selectedContract.customerName || getCustomerDisplayName(),
-        customerEmail: selectedContract.customerEmail || email,
-        email: selectedContract.email || email,
-        billingEmail: selectedContract.billingEmail || customer.billingEmail || email,
-        customerUserId: getCustomerUserId(selectedContract) || getCustomerUserId(),
-        relationshipId: selectedContract.relationshipId || customer.relationshipId || customer.customerCompanyRelationshipId || "",
-        customerCompanyRelationshipId:
-          selectedContract.customerCompanyRelationshipId ||
-          customer.customerCompanyRelationshipId ||
-          customer.relationshipId ||
-          "",
-        updatedAt: serverTimestamp(),
-      });
-    }
-
-    setLinkedSalesInvoice(payload);
-    return payload;
+    const saved = await getDoc(doc(db, salesCollectionNames.invoices, result.data.id));
+    if (!saved.exists()) throw new Error('Invoice was created but could not be loaded. Refresh this job.');
+    const invoice = { ...saved.data(), id: saved.id };
+    setLinkedSalesInvoice(invoice);
+    return invoice;
   };
 
   const activeWorkOfferTaskIds = useMemo(() => {
@@ -8288,31 +8278,6 @@ const JobDetailView = () => {
     };
   };
 
-  const buildJobLevelEquipmentCompletionTask = ({ completedAt }) => {
-    const equipmentId = job.equipmentId || (Array.isArray(job.equipmentIds) ? job.equipmentIds[0] : "");
-    const taskType = equipmentCompletionTypeFromJob(job);
-
-    if (!equipmentId || !taskType) return null;
-
-    return {
-      id: `job_equipment_${jobId}_${taskType.toLowerCase()}`,
-      name: `${taskType} ${job.equipmentName || "equipment"}`,
-      description: job.description || "",
-      type: taskType,
-      status: "Finished",
-      equipmentId,
-      bodyOfWaterId: job.bodyOfWaterId || "",
-      serviceLocationId: job.serviceLocationId || "",
-      customerId: job.customerId || "",
-      customerName: job.customerName || "",
-      workerId: job.assignedTechId || job.adminId || "",
-      workerName: job.assignedTechName || job.adminName || "",
-      workerType: job.assignedTechId ? "Employee" : "",
-      equipmentStatusOnCompletion: EQUIPMENT_STATUS.OPERATIONAL,
-      completedAt,
-    };
-  };
-
   const markJobAsFinished = async (selectedTaskIds = null, selectedShoppingActions = null) => {
     if (markingJobFinished) return;
 
@@ -8396,7 +8361,7 @@ const JobDetailView = () => {
 
       await updateDoc(jobRef, { billingStatus: nextBillingStatus });
 
-      const completionResults = await Promise.all(
+      await Promise.all(
         finishedTasks.map(async (task) => {
           if (!task?.id) return;
 
@@ -8410,8 +8375,6 @@ const JobDetailView = () => {
           });
 
           const taskUpdates = {
-              status: "Finished",
-              completedAt: Timestamp.fromDate(completedAt),
               ...(task.equipmentStatusOnCompletion ? { equipmentStatusOnCompletion: task.equipmentStatusOnCompletion } : {}),
               ...(task.installedEquipmentName ? { installedEquipmentName: task.installedEquipmentName } : {}),
               ...(task.installedEquipmentType ? { installedEquipmentType: task.installedEquipmentType } : {}),
@@ -8437,7 +8400,7 @@ const JobDetailView = () => {
                 }
                 : {}),
           };
-          await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), taskUpdates);
+          if (Object.keys(taskUpdates).length) await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), taskUpdates);
           Object.assign(task, taskUpdates);
 
           return effects;
@@ -8462,26 +8425,6 @@ const JobDetailView = () => {
         if (equipment?.installedEquipmentId || equipment?.replacementEquipmentId) metadata.installedEquipmentId = equipment.installedEquipmentId || equipment.replacementEquipmentId;
         if (equipment?.installedPurchasedItemId) metadata.purchasedItemId = metadata.installedPurchasedItemId = equipment.installedPurchasedItemId;
         if (Object.keys(metadata).length) await updateDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks", task.id), metadata);
-      }
-
-      const equipmentHistoryIds = new Set(
-        completionResults
-          .map((effects) => effects?.equipmentHistory?.equipmentId)
-          .filter(Boolean)
-      );
-      const jobEquipmentId = job.equipmentId || (Array.isArray(job.equipmentIds) ? job.equipmentIds[0] : "");
-      if (jobEquipmentId && !equipmentHistoryIds.has(jobEquipmentId)) {
-        const jobLevelTask = buildJobLevelEquipmentCompletionTask({ completedAt });
-        if (jobLevelTask) {
-          await runWorkCompletionEffects({
-            db,
-            companyId: recentlySelectedCompany,
-            task: jobLevelTask,
-            jobId,
-            completedAt,
-            currentJobOperationStatus: "Finished",
-          });
-        }
       }
 
       const closeoutResult = await technicianWorkflow("finalizeTechnicianJob", {
@@ -10734,6 +10677,10 @@ const JobDetailView = () => {
         updates.operationStatus = nextSelectedOperationStatus.value;
       }
 
+      const reviewCompletion = updates.operationStatus === JOB_OPERATION_STATUS.finished &&
+        (updates.billingStatus ?? job.billingStatus) !== JOB_BILLING_STATUS.customerResolved;
+      if (reviewCompletion) delete updates.operationStatus;
+
       let resolvedBillingStatus = updates.billingStatus ?? job.billingStatus ?? "";
       const resolvedOperationStatus = updates.operationStatus ?? job.operationStatus ?? "";
       if (
@@ -10902,6 +10849,7 @@ const JobDetailView = () => {
       }
 
       setEdit(false);
+      if (reviewCompletion) await openJobFinishConfirm();
     } catch (err) {
       console.error(err);
       toast.error("Failed to save changes");
@@ -11740,6 +11688,11 @@ const JobDetailView = () => {
     }
 
     if (!requireUpdateCurrentJob("update jobs")) return;
+
+    if (field === "operationStatus" && opt.value === JOB_OPERATION_STATUS.finished && job.operationStatus !== JOB_OPERATION_STATUS.finished) {
+      await openJobFinishConfirm();
+      return;
+    }
 
     const currentBillingStatus = job.billingStatus || "Draft";
     const currentOperationStatus = job.operationStatus || "Estimate Pending";
@@ -20131,6 +20084,7 @@ const JobDetailView = () => {
                       <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Operations</p>
                       <Select
                         value={edit ? selectedOperationStatus : statusSelectOption(job.operationStatus, "Estimate Pending")}
+                        aria-label="Job operations status"
                         options={operationStatusOptions}
                         onChange={(opt) => handleQuickJobSelectChange("operationStatus", opt)}
                         isSearchable

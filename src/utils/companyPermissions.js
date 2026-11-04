@@ -1,5 +1,6 @@
 export const COMPANY_WIDE_MESSAGES_PERMISSION_ID = "300";
 export const TODO_ALL_BOARDS_PERMISSION_ID = "310";
+export const MANAGE_CUSTOMER_BILLING_PERMISSION_ID = "404";
 export const OFFERED_WORK_PERMISSION_ID = "320";
 export const CREATE_OFFERED_WORK_PERMISSION_ID = "322";
 export const UPDATE_OFFERED_WORK_PERMISSION_ID = "324";
@@ -33,6 +34,8 @@ export const BASIC_WORK_ORDER_PERMISSION_IDS = [
 ];
 
 const webImplementedPermissionIds = new Set([
+  "100", "102", "104", "106", "268", "274", "408", "920",
+  MANAGE_CUSTOMER_BILLING_PERMISSION_ID,
   "0", "10", "12", "14", "16", JOBS_PERMISSION_ID, CREATE_JOBS_PERMISSION_ID, SCHEDULE_TEMPLATE_WORK_ORDERS_PERMISSION_ID, UPDATE_JOBS_PERMISSION_ID, "26", CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID, EDIT_TEMPLATE_WORK_ORDERS_PERMISSION_ID, CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "30", CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID, "32", "34", "36",
   "40", "42", "44", "50", "52", "54", "60", "62", "64", "66", FIELD_JOB_ESTIMATE_PLAN_PERMISSION_ID, FIELD_JOB_ESTIMATE_SEND_PERMISSION_ID,
   "210", "230", "232", "234", "236", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID, OFFERED_WORK_PERMISSION_ID, CREATE_OFFERED_WORK_PERMISSION_ID, UPDATE_OFFERED_WORK_PERMISSION_ID, SPLIT_OFFERED_WORK_PERMISSION_ID, INCENTIVIZE_OFFERED_WORK_PERMISSION_ID, APPROVE_OFFERED_WORK_PERMISSION_ID, VIEW_ALL_OFFERED_WORK_PERMISSION_ID, ACCEPT_OFFERED_WORK_PERMISSION_ID, "400", "420", "424",
@@ -42,6 +45,14 @@ const webImplementedPermissionIds = new Set([
 ]);
 
 const permissionCatalog = [
+  {"id": "100", "name": "Purchases and Receipts", "description": "View purchasing requests, purchases, and receipts.", "category": "Finance", "ios": true, "web": true},
+  {"id": "102", "name": "Create Purchases", "description": "Create shopping requests, purchases, and receipts.", "category": "Finance", "ios": true, "web": true},
+  {"id": "104", "name": "Update Purchases", "description": "Update purchase records and reconcile receipts.", "category": "Finance", "ios": true, "web": true},
+  {"id": "106", "name": "Delete Purchases", "description": "Remove editable purchase records.", "category": "Finance", "ios": true, "web": true},
+  {"id": "268", "name": "Private Personnel Files", "description": "View private personnel documents.", "category": "Management", "ios": true, "web": true},
+  {"id": "274", "name": "Manage Performance Reviews", "description": "Create and update performance reviews and personnel attachments.", "category": "Management", "ios": true, "web": true},
+  {"id": "408", "name": "Manage Connected Account", "description": "Manage company Stripe connection and payout configuration.", "category": "Finance", "ios": true, "web": true},
+  {"id": "920", "name": "Manage Job Templates", "description": "Manage job templates, availability, and template pay setup.", "category": "Settings", "ios": true, "web": true},
   { id: "0", name: "Operations", description: "Can See the Operations Tabs", category: "Operations", ios: true, web: false },
   { id: "10", name: "Customer", description: "", category: "Operations", ios: true, web: false },
   { id: "12", name: "Create Customer", description: "", category: "Operations", ios: false, web: false },
@@ -112,6 +123,7 @@ const permissionCatalog = [
   { id: VIEW_ALL_OFFERED_WORK_PERMISSION_ID, name: "View All Offered Work", description: "Can view every direct offer, board post, route coverage offer, and incentive.", category: "Management", ios: false, web: false },
   { id: ACCEPT_OFFERED_WORK_PERMISSION_ID, name: "Accept Offered Work", description: "Can claim eligible board posts and direct work offers.", category: "Management", ios: false, web: false },
   { id: "400", name: "Finance", description: "", category: "Finance", ios: true, web: false },
+  { id: MANAGE_CUSTOMER_BILLING_PERMISSION_ID, name: "Manage Customer Billing", description: "Can create and change customer invoices, record external payments, send invoices, and manage customer billing subscriptions. Does not grant payroll management.", category: "Finance", ios: true, web: true },
   { id: "410", name: "Finished Jobs", description: "", category: "Finance", ios: true, web: false },
   { id: "412", name: "Create Finished Jobs", description: "", category: "Finance", ios: false, web: false },
   { id: "414", name: "Update Finished Jobs", description: "", category: "Finance", ios: false, web: false },

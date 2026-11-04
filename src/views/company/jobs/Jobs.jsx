@@ -1,3 +1,5 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
+import { workspaceButtonClass } from '../../../components/workspace/workspaceStyles';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import {
     doc,
@@ -422,31 +424,7 @@ const SortHeaderButton = ({ children, sortKey, activeSortKey, sortDirection, onS
     );
 };
 
-const outlinedButtonToneClasses = {
-    blue: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 focus-visible:ring-blue-500",
-    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 focus-visible:ring-emerald-500",
-    amber: "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 focus-visible:ring-amber-500",
-    slate: "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 focus-visible:ring-slate-500",
-};
-
-const activeOutlinedButtonToneClasses = {
-    blue: "border-blue-300 bg-blue-100 text-blue-800 ring-1 ring-blue-200 focus-visible:ring-blue-500",
-    emerald: "border-emerald-300 bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200 focus-visible:ring-emerald-500",
-    amber: "border-amber-300 bg-amber-100 text-amber-900 ring-1 ring-amber-200 focus-visible:ring-amber-500",
-    slate: "border-slate-300 bg-slate-100 text-slate-800 ring-1 ring-slate-200 focus-visible:ring-slate-500",
-};
-
-const getOutlinedButtonClass = ({ tone = "blue", active = false, className = "" } = {}) => {
-    const toneClass = active
-        ? activeOutlinedButtonToneClasses[tone] || activeOutlinedButtonToneClasses.blue
-        : outlinedButtonToneClasses[tone] || outlinedButtonToneClasses.blue;
-
-    return [
-        "rounded-md border px-4 py-2 text-sm font-semibold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60",
-        toneClass,
-        className,
-    ].filter(Boolean).join(" ");
-};
+const getOutlinedButtonClass = workspaceButtonClass;
 
 const Jobs = () => {
     const { view } = useParams();
@@ -1422,27 +1400,12 @@ const Jobs = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company operations</p>
-                            <h2 className="mt-1 text-3xl font-bold text-slate-950">Jobs</h2>
-
-                            <p className="mt-1 text-sm text-slate-500">
-                                Track jobs, service schedules, and operational status.
-                            </p>
-
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                                    Jobs: {visibleJobs.length}
-                                </span>
-
-                                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                                    Unique IDs: {uniqueJobsCount}
-                                </span>
-                            </div>
-                        </div>
-
+                <WorkspaceHeader
+                    title="Jobs"
+                    eyebrow="Company operations"
+                    description="Track jobs, service schedules, and operational status."
+                    meta={<><span className="workspace-header-badge">Jobs: {visibleJobs.length}</span><span className="workspace-header-badge">Unique IDs: {uniqueJobsCount}</span></>}
+                    actions={
                         <div className="flex flex-wrap gap-2 lg:justify-end">
                             <button
                                 type="button"
@@ -1470,8 +1433,8 @@ const Jobs = () => {
 
                             <CreateJobFlowLauncher />
                         </div>
-                    </div>
-                </section>
+                    }
+                />
 
                 <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     <JobMetricCard
@@ -1674,7 +1637,7 @@ const Jobs = () => {
                     </div>
 
                     <div className="overflow-x-auto border-t border-slate-200">
-                        <table className="min-w-full bg-white">
+                        <table className="workspace-data-table min-w-full bg-white">
                             <thead>
                                 <tr>
                                     <th className="w-px whitespace-nowrap border-b border-r border-slate-200 bg-slate-100 px-1 py-3 text-center">

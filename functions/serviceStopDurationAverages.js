@@ -154,21 +154,7 @@ function serviceStopsCollection(companyId) {
 }
 
 async function assertCompanyAccess(companyId, auth) {
-  const uid = auth?.uid;
-  if (!uid) {
-    throw new HttpsError("unauthenticated", "Sign in to manage recurring service stop duration history.");
-  }
-
-  const [userSnap, accessSnap] = await Promise.all([
-    db.collection("users").doc(uid).get(),
-    db.collection("users").doc(uid).collection("userAccess").doc(companyId).get(),
-  ]);
-
-  if (accessSnap.exists || userSnap.data()?.accountType === "Admin") {
-    return;
-  }
-
-  throw new HttpsError("permission-denied", "You do not have access to this company.");
+  await require("./companyAuthorization").requirePermission(db, auth?.uid, companyId, "244", auth?.token);
 }
 
 async function commitBatches(operations) {

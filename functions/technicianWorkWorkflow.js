@@ -44,13 +44,7 @@ const timestampFields = v => { const result = { ...v }; for (const k of ['servic
 function createTechnicianWorkWorkflow(db, now = () => new Date()) {
   const company = companyId => db.collection('companies').doc(companyId);
   async function actorFor(t, companyId, uid) {
-    const c = company(companyId);
-    const [co, access, users] = await Promise.all([t.get(c), t.get(db.collection('users').doc(uid).collection('userAccess').doc(companyId)), t.get(c.collection('companyUsers').where('userId', '==', uid))]);
-    if (!co.exists || !(access.exists || co.data().ownerId === uid)) fail('permission-denied', 'Company access is required.');
-    const a = access.data() || {}, user = rows(users)[0] || {};
-    const role = a.roleId ? record(await t.get(c.collection('roles').doc(a.roleId))) : null;
-    const admin = co.data().ownerId === uid || ['owner','admin','manager'].includes(key(a.roleName));
-    return { uid, name: user.userName || [user.firstName,user.lastName].filter(Boolean).join(' ') || a.userName || uid, workerType: user.workerType || 'Not Assigned', admin, permissions: list(role?.permissionIdList).map(str), user, company: co.data() };
+    return require('./companyActor').companyActor(db, t, companyId, uid);
   }
   const can = (a, permission) => a.admin || a.permissions.includes(permission);
   async function context(t, c, a) {

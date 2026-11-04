@@ -40,18 +40,18 @@ const NewEquipment = () => {
     }, [user]);
 
     useEffect(() => {
-        if (!selectedLocation) {
+        if (!selectedLocation || !user?.uid) {
             setBodiesOfWater([]);
             return;
         }
         const fetchBodiesOfWater = async () => {
-            const q = query(collection(db, 'homeownerBodiesOfWater'), where("serviceLocationId", "==", selectedLocation));
+            const q = query(collection(db, 'homeownerBodiesOfWater'), where("serviceLocationId", "==", selectedLocation), where("userId", "==", user.uid));
             const querySnapshot = await getDocs(q);
             const bow = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setBodiesOfWater(bow);
         };
         fetchBodiesOfWater();
-    }, [selectedLocation]);
+    }, [selectedLocation, user?.uid]);
 
     const handleEquipmentChange = (field, value) => {
         setEquipment(new EquipmentHO({ ...equipment, [field]: value }));

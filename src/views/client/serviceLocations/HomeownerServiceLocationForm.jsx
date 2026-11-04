@@ -1,9 +1,10 @@
 import React, { useContext, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { writeBatch, doc } from 'firebase/firestore';
 import { ArrowLeftIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { v4 as uuidv4 } from 'uuid';
 import { Context } from '../../../context/AuthContext';
+import { safeClientReturnPath } from '../../../utils/clientNavigation';
 import { db } from '../../../utils/config';
 import { BodyOfWaterHO } from '../../../utils/models/BodyOfWaterHO';
 import { EquipmentHO } from '../../../utils/models/EquipmentHO';
@@ -49,20 +50,6 @@ const createBlankHomeownerEquipment = (overrides = {}) => new EquipmentHO({
     ...overrides,
 });
 
-const createDefaultHomeownerEquipment = () => ([
-    createBlankHomeownerEquipment({
-        name: 'Pump 1',
-        category: 'Pump',
-    }),
-    createBlankHomeownerEquipment({
-        name: 'Filter 1',
-        category: 'Filter',
-        needsService: true,
-        serviceFrequency: 6,
-        serviceFrequencyEvery: 'Month',
-    }),
-]);
-
 const renderOptions = (options, placeholder) => (
     <>
         <option value="">{placeholder}</option>
@@ -79,11 +66,13 @@ const getDateInputValue = (value) => (typeof value === 'string' ? value : '');
 const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' }) => {
     const { user } = useContext(Context);
     const navigate = useNavigate();
+    const [params] = useSearchParams();
+    const returnTo = safeClientReturnPath(params.get("returnTo"), "/client/my-pool");
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(false);
     const [serviceLocation] = useState(new ServiceLocationHO());
-    const [bodiesOfWater, setBodiesOfWater] = useState([createDefaultBodyOfWater()]);
-    const [equipment, setEquipment] = useState([createDefaultHomeownerEquipment()]);
+    const [bodiesOfWater, setBodiesOfWater] = useState([]);
+    const [equipment, setEquipment] = useState([]);
     const [formData, setFormData] = useState({
         streetAddress: '',
         city: '',
@@ -113,11 +102,11 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
 
     const addBodyOfWater = () => {
         setBodiesOfWater([...bodiesOfWater, createDefaultBodyOfWater(`Body ${bodiesOfWater.length + 1}`)]);
-        setEquipment([...equipment, createDefaultHomeownerEquipment()]);
+        setEquipment([...equipment, []]);
     };
 
     const removeBodyOfWater = (index) => {
-        if (bodiesOfWater.length <= 1) return;
+
         setBodiesOfWater(bodiesOfWater.filter((_, i) => i !== index));
         setEquipment(equipment.filter((_, i) => i !== index));
     };
@@ -149,8 +138,8 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
 
     const handleSave = async (e) => {
         e.preventDefault();
-        if (!formData.streetAddress) {
-            setError('Please enter a service address.');
+        if (!formData.streetAddress.trim() || !formData.city.trim() || !formData.state.trim() || !formData.zip.trim()) {
+            setError('Enter a street address, city, state, and ZIP code.');
             return;
         }
         setLoading(true);
@@ -203,7 +192,9 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
             }
 
             await batch.commit();
-            navigate('/client/my-pool');
+            const destination = new URL(returnTo, window.location.origin);
+            destination.searchParams.set('locationId', serviceLocationId);
+            navigate(`${destination.pathname}${destination.search}`);
         } catch (err) {
             setError('Failed to save. Please try again.');
             console.error(err);
@@ -220,7 +211,7 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
                 <div className="flex items-center gap-4 mb-8">
-                    <button type="button" onClick={() => navigate(-1)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
+                    <button type="button" aria-label="Go back" onClick={() => navigate(-1)} className="min-h-[44px] min-w-[44px] p-2 text-gray-600 hover:bg-gray-100 rounded-full">
                         <ArrowLeftIcon className="w-6 h-6" />
                     </button>
                     <h1 className="text-3xl font-bold text-gray-900">{title}</h1>
@@ -229,11 +220,14 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
                 <form onSubmit={handleSave} className="space-y-8 bg-white rounded-lg shadow-md p-6 md:p-8">
                     <div className="space-y-4">
                         <h2 className="text-xl font-bold text-gray-800">Service Location</h2>
-                        <AddressAutocomplete onAddressSelect={handleAddressSelect} placeholder="Enter service address" customClasses={inputClasses} />
+                        <label className="block text-sm font-semibold" htmlFor="service-address">Street address</label>
+                        <AddressAutocomplete inputId="service-address" onAddressSelect={handleAddressSelect} onInputChange={streetAddress => setFormData(previous => ({ ...previous, streetAddress, latitude: null, longitude: null }))} placeholder="Enter service address" customClasses={inputClasses} />
+                        <p className="text-sm text-slate-500">Choose a suggestion or enter the full address below.</p>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">{[['city','City','address-level2'],['state','State','address-level1'],['zip','ZIP code','postal-code']].map(([field,label,autoComplete]) => <label key={field} className="block text-sm font-semibold">{label}<input name={field} autoComplete={autoComplete} value={formData[field]} onChange={event => setFormData(previous => ({ ...previous, [field]: event.target.value }))} className={formInputClasses} required /></label>)}</div>
                     </div>
 
                     <div className="space-y-6">
-                        <h2 className="text-xl font-bold text-gray-800">Pools & Spas</h2>
+                        <h2 className="text-xl font-bold text-gray-800">Pools & Spas</h2><p className="text-sm text-slate-500">Optional. Your pool company can help add pool and equipment details later.</p>
                         {bodiesOfWater.map((body, index) => (
                             <section key={index} className="p-4 border rounded-lg space-y-4 relative">
                                 <div>
@@ -385,7 +379,7 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
                                     </button>
                                 </div>
 
-                                {bodiesOfWater.length > 1 && (
+                                {bodiesOfWater.length > 0 && (
                                     <button type="button" onClick={() => removeBodyOfWater(index)} className="absolute top-2 right-2 p-1 text-red-500 hover:text-red-700">
                                         <TrashIcon className="w-5 h-5" />
                                     </button>
@@ -393,7 +387,7 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
                             </section>
                         ))}
                         <button type="button" onClick={addBodyOfWater} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800">
-                            <PlusIcon className="w-5 h-5" /> Add Another Pool or Spa
+                            <PlusIcon className="w-5 h-5" /> Add a pool or spa (optional)
                         </button>
                     </div>
 

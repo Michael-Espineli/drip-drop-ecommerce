@@ -226,7 +226,7 @@ const ChatConversationView = ({ audience = 'company', backPath = '/companies-cha
                 <>
                   <button
                     type="button"
-                    onClick={() => navigate(`/companies/profile/${clientCompanyId}`)}
+                    onClick={() => navigate(`/client/companies/profile/${clientCompanyId}`)}
                     className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white text-sm font-semibold text-slate-700 transition hover:bg-slate-50 sm:w-auto sm:gap-2 sm:px-3"
                     title="View company"
                   >
@@ -296,11 +296,12 @@ const ChatConversationView = ({ audience = 'company', backPath = '/companies-cha
             />
             <form onSubmit={handleSendMessage} className="flex items-end gap-2 sm:gap-3">
               <textarea
+                aria-label="Message"
                 rows={1}
                 value={newMessage}
                 onChange={(event) => setNewMessage(event.target.value)}
                 placeholder="Type a message..."
-                className="min-h-[44px] max-h-28 flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="min-h-[44px] max-h-28 flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-base text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault();

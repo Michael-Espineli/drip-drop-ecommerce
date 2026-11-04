@@ -22,6 +22,7 @@ import {
 import { format } from 'date-fns';
 import { displayRepairRequestStatus } from '../../utils/models/RepairRequest';
 import { salesCollectionNames } from '../../utils/models/Sales';
+import { clientVisitSummary } from '../../utils/clientServiceHistory';
 import { appConfirm } from '../../utils/appDialog';
 
 const toDate = (value) => {
@@ -107,6 +108,7 @@ const MyPool = () => {
 
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [locationActionError, setLocationActionError] = useState(null);
     const [savingLocation, setSavingLocation] = useState(false);
     const [editingLocation, setEditingLocation] = useState(null);
@@ -121,10 +123,18 @@ const MyPool = () => {
     });
 
     useEffect(() => {
+        const refresh = () => setInitialLoad(true);
+        window.addEventListener('focus', refresh);
+        return () => window.removeEventListener('focus', refresh);
+    }, []);
+
+    useEffect(() => {
         if (!user || !initialLoad) return;
+        let active = true;
 
         const fetchAllData = async () => {
             setLoading(true);
+            setLoadError('');
             try {
                 const locationQuery = query(collection(db, 'homeownerServiceLocations'), where('userId', '==', user.uid));
                 const bowQuery = query(collection(db, 'homeownerBodiesOfWater'), where('userId', '==', user.uid));
@@ -143,7 +153,7 @@ const MyPool = () => {
                     getDocs(stopDataQuery),
                     getDocs(agreementQuery)
                 ]);
-
+                if (!active) return;
                 setServiceLocations(locSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 setAllData({
                     bodiesOfWater: bowSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
@@ -161,14 +171,17 @@ const MyPool = () => {
                 });
 
             } catch (error) {
-                console.error("Error fetching initial data: ", error);
+                if (active) setLoadError('Your pool details could not be loaded. Please try again.');
             } finally {
-                setInitialLoad(false);
-                setLoading(false);
+                if (active) {
+                    setInitialLoad(false);
+                    setLoading(false);
+                }
             }
         };
 
         fetchAllData();
+        return () => { active = false; };
     }, [user, initialLoad]);
 
     useEffect(() => {
@@ -184,10 +197,10 @@ const MyPool = () => {
         if (selectedLocation !== 'all') {
             filteredBodiesOfWater = allData.bodiesOfWater.filter(item => item.serviceLocationId === selectedLocation);
             filteredEquipment = allData.equipment.filter(item => item.serviceLocationId === selectedLocation);
-            filteredRepairRequests = allData.repairRequests.filter(item => item.serviceLocationId === selectedLocation);
-            filteredServiceAgreements = allData.serviceAgreements.filter((item) => (
-                Array.isArray(item.serviceLocationIds) && item.serviceLocationIds.includes(selectedLocation)
-            ));
+            filteredRepairRequests = allData.repairRequests.filter(item => (item.serviceLocationId || item.locationId) === selectedLocation);
+            const property = serviceLocations.find(location => location.id === selectedLocation);
+            const locationIds = new Set([selectedLocation, property?.linkedCompanyServiceLocationId, property?.sourceCompanyServiceLocationId].filter(Boolean));
+            filteredServiceAgreements = allData.serviceAgreements.filter(item => locationIds.has(item.serviceLocationId) || (item.serviceLocationIds || []).some(id => locationIds.has(id)));
             filteredServiceStops = allData.serviceStops.filter(item => item.serviceLocationId === selectedLocation);
             const filteredBodyIds = new Set(filteredBodiesOfWater.map(item => item.id));
             const filteredServiceStopIds = new Set(filteredServiceStops.map(item => item.id));
@@ -198,20 +211,20 @@ const MyPool = () => {
             ));
         }
 
-        const lastService = filteredServiceStops.length > 0 ? filteredServiceStops[0] : null;
+        const { lastService, nextService, completed } = clientVisitSummary(filteredServiceStops);
 
         setDisplayData({
             bodiesOfWater: filteredBodiesOfWater.slice(0, 5),
             equipment: filteredEquipment.slice(0, 5),
             repairRequests: filteredRepairRequests.slice(0, 5),
             serviceAgreements: filteredServiceAgreements,
-            serviceStops: filteredServiceStops,
+            serviceStops: completed,
             stopData: filteredStopData,
             lastService: lastService,
-            nextService: null,
+            nextService,
         });
 
-    }, [selectedLocation, allData, initialLoad]);
+    }, [selectedLocation, allData, initialLoad, serviceLocations]);
 
     const handleLocationChange = (newLocationId) => {
         console.log("Selected Location Changed:", newLocationId);
@@ -347,6 +360,7 @@ const MyPool = () => {
                     selected={selectedLocation}
                     onSelect={handleLocationChange}
                 />
+                {loadError && <div role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-red-700">{loadError}<button className="ml-3 min-h-[44px] font-semibold underline" onClick={() => setInitialLoad(true)}>Try again</button></div>}
                 <ServiceLocationManager
                     locations={serviceLocations}
                     selectedLocation={selectedLocation}
@@ -592,7 +606,7 @@ const RepairRequestsWidget = ({ repairRequests }) => (
             repairRequests.map(req => (
                 <Link to={`/client/repair-requests/${req.id}`} key={req.id} className="flex justify-between items-start p-3 hover:bg-gray-50 rounded-lg -m-2">
                     <div>
-                        <p className="font-semibold text-gray-800">{req.issueDescription || "No description"}</p>
+                        <p className="font-semibold text-gray-800">{req.description || req.issueDescription || "No description"}</p>
                         <p className="text-sm text-gray-500">Status: <span className="font-medium text-yellow-600">{displayRepairRequestStatus(req.status)}</span></p>
                     </div>
                     {req.createdAt && <p className="text-sm text-gray-500 flex-shrink-0 ml-4">{format(req.createdAt.toDate(), 'MMM d, yyyy')}</p>}

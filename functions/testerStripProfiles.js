@@ -161,7 +161,7 @@ const getRequiredDripDropAdmin = async (uid = "") => {
   const userSnapshot = await db.collection("users").doc(uid).get();
   const userData = userSnapshot.exists ? userSnapshot.data() || {} : {};
 
-  if (userData.accountType !== "Admin") {
+  if (!(await require("./platformAccess").hasPlatformAdminAccess(uid))) {
     throw new HttpsError("permission-denied", "Only platform admins can manage tester strip profiles.");
   }
 
@@ -576,8 +576,8 @@ const userCanAnalyzeCompany = async (uid, companyId) => {
   ]);
 
   return {
-    isAdmin: userSnapshot.exists && userSnapshot.data()?.accountType === "Admin",
-    hasCompanyAccess: accessSnapshot.exists,
+    isAdmin: await require("./platformAccess").hasPlatformAdminAccess(uid),
+    hasCompanyAccess: accessSnapshot.exists && require("./companyActor").active(accessSnapshot.data()),
   };
 };
 

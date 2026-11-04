@@ -1,4 +1,6 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from "react";
+import WorkspaceSectionHeader from '../../components/workspace/WorkspaceSectionHeader';
+import { workspaceButtonClass } from '../../components/workspace/workspaceStyles';
 import { updateProfile } from "firebase/auth";
 import { httpsCallable } from 'firebase/functions';
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
@@ -18,11 +20,11 @@ import {
     sendAccountPasswordResetEmail,
 } from "../../utils/passwordReset";
 
-const primaryButtonClass = "profile-button profile-button-primary";
-const secondaryButtonClass = "profile-button profile-button-secondary";
-const subtleButtonClass = "profile-button profile-button-subtle";
-const dangerButtonClass = "profile-button profile-button-danger";
-const dangerSubtleButtonClass = "profile-button profile-button-danger-subtle";
+const primaryButtonClass = workspaceButtonClass({ active: true });
+const secondaryButtonClass = workspaceButtonClass({ tone: 'slate' });
+const subtleButtonClass = workspaceButtonClass();
+const dangerButtonClass = workspaceButtonClass({ tone: 'rose', active: true });
+const dangerSubtleButtonClass = workspaceButtonClass({ tone: 'rose' });
 
 const dateFromValue = (value) => {
     if (!value) return null;
@@ -84,13 +86,7 @@ const ProfileCard = ({ title, children, actions, className = "", subtitle }) => 
     const Icon = sectionIcons[title] || HiOutlineUserCircle;
     return (
         <section className={`profile-card ${className}`} aria-label={title}>
-            <div className="profile-card-header">
-                <div>
-                    <h2 className="profile-card-title"><Icon className="profile-section-icon" aria-hidden="true" />{title}</h2>
-                    {subtitle && <p className="profile-payout-subtitle">{subtitle}</p>}
-                </div>
-                {actions && <div className="shrink-0">{actions}</div>}
-            </div>
+            <WorkspaceSectionHeader title={title} subtitle={subtitle} icon={Icon} actions={actions} />
             <div className="profile-card-body">{children}</div>
         </section>
     );
@@ -175,9 +171,9 @@ export default function ProfilePage() {
         companyUserAccess,
         hasCompanyPermission,
     } = useContext(Context);
-    const canViewPayrollInformation = typeof hasCompanyPermission === "function"
-        ? hasCompanyPermission("420")
-        : false;
+    const canViewPayrollInformation = Boolean(user?.uid && recentlySelectedCompany && (
+        companyUserAccess || (typeof hasCompanyPermission === "function" && (hasCompanyPermission("420") || hasCompanyPermission("424")))
+    ));
 
     const [editMode, setEditMode] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);

@@ -85,49 +85,18 @@ const isDripDropAdmin = async ({ uid, token = {} }) => {
     if (uid === 'yRV5Ie18rrUSxT6UkWctPc99lMJ2') return true;
     if (token.admin === true) return true;
 
-    const userSnap = await db.collection('users').doc(uid).get();
-    const accountType = String(userSnap.data()?.accountType || '').toLowerCase();
-    return accountType === 'admin';
+    // Account type is a self-editable profile/navigation field, not a trusted admin grant.
+    return false;
 };
 
+const { hasActiveCompanyPermission } = require('../billingAccess');
 const getCompanyBillingAccess = async ({ uid, companyId }) => {
     if (!uid || !companyId) return { allowed: false };
-
     const companyRef = db.collection('companies').doc(companyId);
-    const accessRef = db.collection('users').doc(uid).collection('userAccess').doc(companyId);
-    const [companySnap, accessSnap] = await Promise.all([
-        companyRef.get(),
-        accessRef.get(),
-    ]);
-
-    if (!companySnap.exists) {
-        throw new HttpsError('not-found', 'Company not found.');
-    }
-
-    const companyData = companySnap.data() || {};
-    if (companyData.ownerId === uid) {
-        return { allowed: true, companyRef, companyData, accessData: null };
-    }
-
-    if (!accessSnap.exists) {
-        return { allowed: false, companyRef, companyData, accessData: null };
-    }
-
-    const accessData = accessSnap.data() || {};
-    const roleName = String(accessData.roleName || '').trim().toLowerCase();
-    if (['owner', 'admin', 'manager'].includes(roleName)) {
-        return { allowed: true, companyRef, companyData, accessData };
-    }
-
-    if (accessData.roleId) {
-        const roleSnap = await companyRef.collection('roles').doc(String(accessData.roleId)).get();
-        const permissionIdList = roleSnap.data()?.permissionIdList;
-        if (Array.isArray(permissionIdList) && permissionIdList.includes('400')) {
-            return { allowed: true, companyRef, companyData, accessData };
-        }
-    }
-
-    return { allowed: false, companyRef, companyData, accessData };
+    const [companySnap, accessSnap] = await Promise.all([companyRef.get(), db.collection('users').doc(uid).collection('userAccess').doc(companyId).get()]);
+    if (!companySnap.exists) throw new HttpsError('not-found', 'Company not found.');
+    const allowed = await hasActiveCompanyPermission(db, companyId, uid, ['890']);
+    return { allowed, companyRef, companyData: companySnap.data(), accessData: accessSnap.data() || null };
 };
 
 const requireCompanyBillingManager = async ({ uid, companyId }) => {
@@ -332,8 +301,8 @@ const getOwnerCompanyForStripe = async ({ companyId, uid }) => {
     }
 
     const companyData = companySnap.data() || {};
-    if (companyData.ownerId !== uid) {
-        throw new functions.https.HttpsError('permission-denied', 'Only the company owner can manage the connected Stripe account.');
+    if (!(await hasActiveCompanyPermission(db, companyId, uid, ['408']))) {
+        throw new functions.https.HttpsError('permission-denied', 'Connected-account management permission is required.');
     }
 
     return { companyRef, companyData };
@@ -436,45 +405,9 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
     }
 
     await requireCompanyBillingManager({ uid: request.auth.uid, companyId });
-    await requireActiveDripDropPlanByPriceId(stripePriceId);
+    const plan = await requireActiveDripDropPlanByPriceId(stripePriceId);
+    return require('../subscriptionCheckout').createSubscriptionCheckout(db, stripe).start(request, { platform: true, plan });
 
-    try {
-        const resolvedStripeCustomerId = await resolveOrCreateStripeCustomer({
-            providedCustomerId: stripeCustomerId || stripeId,
-            companyId,
-            userId: billingUserId,
-            authEmail: request.auth.token?.email,
-        });
-
-        const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            mode: 'subscription',
-            customer: resolvedStripeCustomerId,
-            line_items: [
-                {
-                    price: stripePriceId,
-                    quantity: 1,
-                },
-            ],
-            metadata: {
-                userId: billingUserId,
-                companyId: companyId,
-            },
-            // Use the URLs passed from the frontend client
-            success_url: buildStripeRedirectUrl(successUrl, '/company/settings/subscriptions?success=true'),
-            cancel_url: buildStripeRedirectUrl(cancelUrl, '/company/settings/subscriptions/picker?canceled=true'),
-        });
-
-        return { url: session.url };
-
-    } catch (error) {
-        if (error instanceof HttpsError) {
-            throw error;
-        }
-
-        console.error("Stripe Checkout Session Error:", error);
-        throw new HttpsError('internal', 'Unable to create Stripe checkout session.', error.message);
-    }
 });
 
 // --- Other functions --- 
@@ -840,53 +773,9 @@ exports.createSubscriptionPaymentIntent = functions.https.onCall(async(data,cont
 
     const companyId = receivedData.companyId || resolvedCompanyAccess.companyId;
 
-    try {
-      const resolvedStripeCustomerId = await resolveOrCreateStripeCustomer({
-        providedCustomerId,
-        companyId,
-        userId: auth.uid,
-        authEmail: auth.token?.email,
-      });
-
-      const subscription = await stripe.subscriptions.create({
-        customer: resolvedStripeCustomerId,
-        items: [{
-          price: stripePriceId,
-        }],
-        payment_behavior: 'default_incomplete',
-        payment_settings: { save_default_payment_method: 'on_subscription' },
-        metadata: {
-          userId: auth.uid,
-          companyId,
-          dripDropSubscriptionId: activePlan.id || '',
-        },
-        expand: ['latest_invoice.confirmation_secret'],
-      });
-      const requestedStripeVersion = String(receivedData.stripeVersion || '').trim();
-      const ephemeralKey = await stripe.ephemeralKeys.create(
-        { customer: resolvedStripeCustomerId },
-        requestedStripeVersion ? { apiVersion: requestedStripeVersion } : undefined
-      );
-
-      return {
-        status: 200,
-        subscriptionId: subscription.id,
-        customerId: resolvedStripeCustomerId,
-        ephemeralKey: ephemeralKey.secret,
-        publishableKey,
-        clientSecret: subscription.latest_invoice.confirmation_secret.client_secret,
-      };
-    } catch (error) {
-      if (error instanceof functions.https.HttpsError) {
-        throw error;
-      }
-
-      console.error(
-        "An error occurred when calling the Stripe API:",
-        error
-      );
-      throw new functions.https.HttpsError('internal', 'Unable to create subscription payment intent.', error.message);
-    }
+    return require('../nativePlatformBilling').createNativePlatformBilling(db, stripe).start({
+      auth, data:{...receivedData,companyId},
+    }, {...activePlan,stripePriceId}, publishableKey);
   });
 
 exports.cancelStripeSubscription = onCall(async (request) => {

@@ -1,3 +1,5 @@
+import WorkspaceSectionHeader from '../../../components/workspace/WorkspaceSectionHeader';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -60,9 +62,9 @@ const SettingsLink = ({ to, icon, title, description, accent = "default" }) => {
 
 const SettingsSection = ({ title, items }) => {
     return (
-        <section className="mb-8">
-            <h2 className="mb-3 text-lg font-semibold text-slate-900">{title}</h2>
-            <div className="overflow-hidden rounded-md border border-slate-200 bg-white divide-y divide-slate-200">
+        <section className="mb-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <WorkspaceSectionHeader title={title} icon={CogIcon} />
+            <div className="divide-y divide-slate-200">
                 {items.map(item => <SettingsLink key={item.to} {...item} />)}
             </div>
         </section>
@@ -758,10 +760,12 @@ const CompanySettings = () => {
     return (
         <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
             <div className="w-full">
-                <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
-                    <p className="text-gray-600 mt-1">Manage your company's information, users, billing, and integrations.</p>
-                </div>
+                <WorkspaceHeader
+                    title="Settings"
+                    eyebrow="Company workspace"
+                    description="Manage your company's information, users, billing, and integrations."
+                    className="mb-6"
+                />
 
                 {visibleSettings.general.length > 0 && <SettingsSection title="General" items={visibleSettings.general} />}
                 {visibleSettings.configuration.length > 0 && <SettingsSection title="Configuration" items={visibleSettings.configuration} />}

@@ -1050,8 +1050,8 @@ const ServiceAgreementDetail = () => {
         return;
       }
 
-      if (result.data?.status === 'already_active') {
-        toast.success('Billing is already active.');
+      if (['already_active','processing'].includes(result.data?.status)) {
+        toast(result.data?.message || 'Billing setup is being confirmed.');
         return;
       }
 
@@ -1296,7 +1296,7 @@ const ServiceAgreementDetail = () => {
                   <p className="mb-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">{agreement.description}</p>
                 )}
                 <div>
-                  <LineItemSectionTables
+                  <LineItemSectionTables mobileCards
                     lineItems={displayLineItems}
                     formatCurrency={formatCurrency}
                     emptyMessage="No services or products were included."
@@ -1381,7 +1381,7 @@ const ServiceAgreementDetail = () => {
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-950">Acceptance</h2>
+            <h2 id="client-agreement-response" tabIndex={-1} className="scroll-mt-20 text-lg font-bold text-slate-950">Acceptance</h2>
             <p className="mt-1 text-sm text-slate-500">
               Accepting records your approval and saves the billing choice for the company.
             </p>
@@ -1630,6 +1630,7 @@ const ServiceAgreementDetail = () => {
           </section>
         </aside>
       </div>
+      {!isAccepted && !isClosed && <div className="fixed inset-x-0 bottom-[calc(64px+env(safe-area-inset-bottom,0px))] z-30 border-t border-slate-200 bg-white px-4 py-2 lg:hidden"><a href="#client-agreement-response" className="flex min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Review terms & respond</a></div>}
     </div>
   );
 };

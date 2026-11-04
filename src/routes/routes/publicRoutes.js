@@ -33,7 +33,10 @@ const SharedRecordRedirect = lazy(() => import("../../views/SharedRecordRedirect
 
 const TermsOfService = lazy(() => import("../../views/public/TermsOfService"))
 
+const ClientEmailVerification = lazy(() => import("../../views/auth/ClientEmailVerification"));
+
 const publicRoutes = [
+  { path: "/client/verify-email", element: <ClientEmailVerification /> },
   {
     path: "/",
     element: <Home />,

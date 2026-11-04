@@ -16,47 +16,49 @@ service firebase.storage {
       return /databases/(default)/documents/users/$(request.auth.uid)/userAccess/$(companyId);
     }
 
+    function activeStatus(value) {
+      return value == null || (value is string && !value.lower().matches(" *(inactive|revoked|past|deleted|declined|pending|invited|rejected|canceled|cancelled|expired) *"));
+    }
+    function activeMember(companyId) {
+      let access = firestore.get(userAccessPath(companyId)).data;
+      return access.get("active", true) != false && access.get("isActive", true) != false
+        && access.get("accessActive", true) != false && access.get("revoked", false) != true
+        && activeStatus(access.get("status", "")) && activeStatus(access.get("userStatus", ""))
+        && activeStatus(access.get("companyUserStatus", "")) && activeStatus(access.get("accessStatus", ""))
+        && activeStatus(access.get("userAccessStatus", ""));
+    }
+    function owner(companyId) {
+      return signedIn() && firestore.get(/databases/(default)/documents/companies/$(companyId)).data.ownerId == request.auth.uid;
+    }
     function hasCompanyAccess(companyId) {
-      return signedIn()
-        && companyId is string
-        && firestore.exists(userAccessPath(companyId));
+      return signedIn() && companyId is string && ((firestore.exists(userAccessPath(companyId)) && activeMember(companyId)) || owner(companyId));
     }
-
     function isCompanyAdmin(companyId) {
-      return hasCompanyAccess(companyId)
-        && firestore.get(userAccessPath(companyId)).data.roleName in ["Owner", "Admin", "Manager"];
+      return signedIn() && firestore.exists(userAccessPath(companyId)) && activeMember(companyId)
+        && firestore.exists(companyRolePath(companyId))
+        && firestore.get(companyRolePath(companyId)).data.get("permissionIdList", null) is list
+        && firestore.get(companyRolePath(companyId)).data.get("name", "").lower() == firestore.get(userAccessPath(companyId)).data.get("roleName", "").lower()
+        && firestore.get(companyRolePath(companyId)).data.get("name", "").lower() in ["owner", "admin", "manager"];
     }
-
     function companyRolePath(companyId) {
       return /databases/(default)/documents/companies/$(companyId)/roles/$(firestore.get(userAccessPath(companyId)).data.roleId);
     }
-
     function hasCompanyRolePermission(companyId, permissionId) {
-      return hasCompanyAccess(companyId)
-        && firestore.get(userAccessPath(companyId)).data.roleId is string
+      return signedIn() && firestore.exists(userAccessPath(companyId)) && activeMember(companyId)
+        && firestore.get(userAccessPath(companyId)).data.get("roleId", "") is string
+        && firestore.get(userAccessPath(companyId)).data.get("roleId", "") != ""
         && firestore.exists(companyRolePath(companyId))
-        && (
-          !(firestore.get(companyRolePath(companyId)).data.permissionIdList is list)
-          || permissionId in firestore.get(companyRolePath(companyId)).data.permissionIdList
-        );
+        && firestore.get(companyRolePath(companyId)).data.get("permissionIdList", null) is list
+        && permissionId in firestore.get(companyRolePath(companyId)).data.permissionIdList;
     }
-
-    function canReadPerformanceAttachment(companyId) {
-      return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "260");
+    function allowed(companyId, id) { return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, id) || owner(companyId); }
+    function assignedStop(companyId, stopId) {
+      return hasCompanyAccess(companyId) && firestore.get(/databases/(default)/documents/companies/$(companyId)/serviceStops/$(stopId)).data.get("techId", "") == request.auth.uid;
     }
-
-    function canWritePerformanceAttachment(companyId) {
-      return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "264");
-    }
-
-    function canReadRepairRequestAttachment(companyId) {
-      return hasCompanyAccess(companyId);
-    }
-
-    function canWriteRepairRequestAttachment(companyId) {
-      return hasCompanyAccess(companyId);
-    }
-
+    function canReadPerformanceAttachment(companyId) { return allowed(companyId, "268"); }
+    function canWritePerformanceAttachment(companyId) { return allowed(companyId, "274"); }
+    function canReadRepairRequestAttachment(companyId) { return allowed(companyId, "30"); }
+    function canWriteRepairRequestAttachment(companyId) { return allowed(companyId, "32") || allowed(companyId, "34"); }
     function isRepairRequestImageUpload() {
       return request.resource != null
         && request.resource.size < 10 * 1024 * 1024
@@ -83,8 +85,8 @@ service firebase.storage {
     }
 
     match /repair-request/{repairRequestId}/{allPaths=**} {
-      allow read: if signedIn();
-      allow write: if signedIn() && isRepairRequestImageUpload();
+      // Legacy unscoped request IDs cannot establish company ownership.
+      allow read, write: if false;
     }
 
     match /companies/{companyId}/repairRequests/{repairRequestId}/{allPaths=**} {
@@ -93,33 +95,39 @@ service firebase.storage {
     }
 
     match /companies/{companyId}/serviceLocations/{serviceLocationId}/{allPaths=**} {
-      allow read: if hasCompanyAccess(companyId);
-      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
+      allow read: if allowed(companyId, "40");
+      allow create, update: if allowed(companyId, "44") && isCompanyImageUpload();
+      allow delete: if allowed(companyId, "46");
     }
 
     match /companies/{companyId}/bodiesOfWater/{bodyOfWaterId}/{allPaths=**} {
-      allow read: if hasCompanyAccess(companyId);
-      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
+      allow read: if allowed(companyId, "50");
+      allow create, update: if allowed(companyId, "54") && isCompanyImageUpload();
+      allow delete: if allowed(companyId, "56");
     }
 
     match /companies/{companyId}/equipment/{equipmentId}/{allPaths=**} {
-      allow read: if hasCompanyAccess(companyId);
-      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
+      allow read: if allowed(companyId, "60");
+      allow create, update: if allowed(companyId, "64") && isCompanyImageUpload();
+      allow delete: if allowed(companyId, "66");
     }
 
     match /companies/{companyId}/serviceStops/{serviceStopId}/{allPaths=**} {
-      allow read: if hasCompanyAccess(companyId);
-      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
+      allow read: if allowed(companyId, "240") || assignedStop(companyId, serviceStopId);
+      allow create, update: if (allowed(companyId, "244") || assignedStop(companyId, serviceStopId)) && isCompanyImageUpload();
+      allow delete: if allowed(companyId, "246");
     }
 
     match /companies/{companyId}/receipts/{allPaths=**} {
-      allow read, write: if request.auth != null;
+      allow read: if allowed(companyId, "100");
+      allow create, update: if (allowed(companyId, "102") || allowed(companyId, "104")) && isCompanyUserFileUpload();
+      allow delete: if allowed(companyId, "106");
     }
 
     match /companies/{companyId}/companyUsers/{companyUserId}/files/{allPaths=**} {
-      allow read: if hasCompanyAccess(companyId);
-      allow write: if (isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "264"))
-        && isCompanyUserFileUpload();
+      allow read: if allowed(companyId, "268") || (hasCompanyAccess(companyId) && companyUserId == request.auth.uid);
+      allow create, update: if allowed(companyId, "274") && isCompanyUserFileUpload();
+      allow delete: if allowed(companyId, "274");
     }
 
     match /companies/{companyId}/performanceReviews/{companyUserId}/internal/{allPaths=**} {
@@ -128,7 +136,7 @@ service firebase.storage {
     }
 
     match /companies/{companyId}/performanceReviews/{companyUserId}/shared/{allPaths=**} {
-      allow read: if hasCompanyAccess(companyId);
+      allow read: if canReadPerformanceAttachment(companyId) || (hasCompanyAccess(companyId) && companyUserId == request.auth.uid);
       allow write: if canWritePerformanceAttachment(companyId);
     }
 

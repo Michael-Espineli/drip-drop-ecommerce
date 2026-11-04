@@ -15,6 +15,7 @@ import {
   WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { functions } from '../../utils/config';
+import { clientVerificationPath } from '../../utils/clientNavigation';
 import { Context } from '../../context/AuthContext';
 import { getCallableAuthPayload } from '../../utils/callableAuth';
 
@@ -152,6 +153,8 @@ export default function ClientAccountInviteLanding() {
       navigate(authLinks.signIn);
       return;
     }
+
+    if (!user.emailVerified) { navigate(clientVerificationPath(redirectPath)); return; }
 
     if (accountType && accountType !== 'Client') {
       toast.error('Sign in with a homeowner account to claim this customer invite.');

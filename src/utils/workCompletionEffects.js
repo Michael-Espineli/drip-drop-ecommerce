@@ -1029,7 +1029,10 @@ export const runWorkCompletionEffects = async ({
     completedAt,
   });
 
-  effects.equipmentHistory = await recordEquipmentTaskHistory({
+  // Saved task/job completion is reconciled by Functions for maintenance and
+  // repairs. Keeping those writes on the server makes interrupted clients safe.
+  const equipmentHistoryType = taskTypeToEquipmentHistoryType(finishedTask.type);
+  effects.equipmentHistory = [EQUIPMENT_HISTORY_TYPES.MAINTENANCE, EQUIPMENT_HISTORY_TYPES.REPAIR].includes(equipmentHistoryType) ? null : await recordEquipmentTaskHistory({
     db,
     companyId,
     task: finishedTask,

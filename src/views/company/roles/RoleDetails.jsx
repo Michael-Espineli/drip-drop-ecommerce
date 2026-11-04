@@ -1,3 +1,4 @@
+import { canDelegateCompanyRole } from "../../../utils/companyPermissionAccess";
 import React, { useState, useEffect, useContext } from "react";
 import { Link, useParams } from "react-router-dom";
 import { collection, doc, getDoc, getDocs, updateDoc } from "firebase/firestore";
@@ -221,7 +222,7 @@ const getDashboardScopeLabel = (scopes) => {
 };
 
 const RoleDetails = () => {
-  const { recentlySelectedCompany, companyRole, setCompanyRole } = useContext(Context);
+  const { recentlySelectedCompany, companyRole, setCompanyRole, companyOwnerId, user } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
   const { roleId } = useParams();
 
@@ -355,7 +356,7 @@ const RoleDetails = () => {
   };
 
   const handleSave = async () => {
-    if (!requirePermission("864", "update user roles")) return;
+    if (!requirePermission("864", "update user roles") || !canDelegateCompanyRole({ currentRole: companyRole, targetRole: role, userId: user?.uid, companyOwnerId })) return;
 
     const payload = {
       ...formData,
@@ -452,7 +453,7 @@ const RoleDetails = () => {
 
             <div className="flex flex-wrap items-center gap-2 lg:justify-end">
               {!editMode ? (
-                can("864") && (
+                can("864") && canDelegateCompanyRole({ currentRole: companyRole, targetRole: role, userId: user?.uid, companyOwnerId }) && (
                   <button
                     onClick={() => setEditMode(true)}
                     className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"

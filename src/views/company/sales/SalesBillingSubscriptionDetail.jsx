@@ -1,3 +1,5 @@
+import {parts as billingDateParts,zonedDate} from '../../../utils/sales/billingCalendar';
+import { canManageCustomerBilling } from '../../../utils/companyPermissionAccess';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { doc, getDoc, onSnapshot, serverTimestamp, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
@@ -93,31 +95,22 @@ const formatDateTime = (value) => {
   }).format(new Date(millis));
 };
 
-const toInputDate = (value) => {
-  const millis = toMillis(value);
-  if (!millis) return '';
-  return new Date(millis).toISOString().split('T')[0];
+const toInputDate = (value,timeZone='UTC') => {
+  if (!toMillis(value)) return '';
+  const p=billingDateParts(new Date(toMillis(value)),timeZone);
+  return `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`;
 };
-
-const toInputDateTime = (value) => {
-  const millis = toMillis(value);
-  if (!millis) return '';
-  const date = new Date(millis);
-  const localDate = new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
-  return localDate.toISOString().slice(0, 16);
+const toInputDateTime = (value,timeZone='UTC') => {
+  if (!toMillis(value)) return '';
+  const p=billingDateParts(new Date(toMillis(value)),timeZone);
+  return `${toInputDate(value,timeZone)}T${String(p.hour).padStart(2,'0')}:${String(p.minute).padStart(2,'0')}`;
 };
-
-const dateFromInput = (value) => {
+const dateTimeFromInput = (value,timeZone='UTC') => {
   if (!value) return null;
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+  const [year,month,day,hour=0,minute=0]=value.split(/[-T:]/).map(Number);
+  return Timestamp.fromDate(zonedDate({year,month,day,hour,minute,second:0},timeZone));
 };
-
-const dateTimeFromInput = (value) => {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
-};
+const dateFromInput = (value,timeZone='UTC') => dateTimeFromInput(value,timeZone);
 
 const paymentTermsDueDays = (paymentTerms = '') => {
   const key = normalizeStatus(paymentTerms);
@@ -207,6 +200,7 @@ const createDraft = (subscription) => ({
   status: subscription?.status || SalesBillingSubscriptionStatus.notStarted,
   amount: centsToInput(subscription?.amountCents),
   currency: subscription?.currency || 'usd',
+  billingTimeZone: subscription?.billingTimeZone || 'UTC',
   interval: subscription?.interval || 'month',
   intervalCount: String(subscription?.intervalCount || 1),
   billingFrequency: subscription?.billingFrequency || '',
@@ -217,10 +211,10 @@ const createDraft = (subscription) => ({
   paymentTerms: subscription?.paymentTerms || 'dueOnReceipt',
   invoiceDeliveryMethod: subscription?.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
   nextAction: subscription?.nextAction || 'collectPaymentMethod',
-  currentPeriodStart: toInputDate(subscription?.currentPeriodStart),
-  currentPeriodEnd: toInputDate(subscription?.currentPeriodEnd),
+  currentPeriodStart: toInputDate(subscription?.currentPeriodStart,subscription?.billingTimeZone||'UTC'),
+  currentPeriodEnd: toInputDate(subscription?.currentPeriodEnd,subscription?.billingTimeZone||'UTC'),
   manualBillingAutoSendEnabled: subscription?.manualBillingAutoSendEnabled === true,
-  manualBillingNextInvoiceAt: toInputDateTime(subscription?.manualBillingNextInvoiceAt || subscription?.manualBillingNextPeriodStart || subscription?.currentPeriodStart),
+  manualBillingNextInvoiceAt: toInputDateTime(subscription?.manualBillingNextInvoiceAt || subscription?.manualBillingNextPeriodStart || subscription?.currentPeriodStart,subscription?.billingTimeZone||'UTC'),
   cancelAtPeriodEnd: Boolean(subscription?.cancelAtPeriodEnd),
   customerCanPayImmediately: Boolean(subscription?.customerCanPayImmediately),
   applicationFeePercent: subscription?.applicationFeePercent === null || subscription?.applicationFeePercent === undefined
@@ -233,7 +227,9 @@ const SalesBillingSubscriptionDetail = () => {
   const { billingSubscriptionId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
+  const authContext = useContext(Context);
+  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = authContext;
+  const canManageBilling = canManageCustomerBilling(authContext);
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -291,12 +287,13 @@ const SalesBillingSubscriptionDetail = () => {
   const hasActiveStripeSubscription = ['active', 'trialing'].includes(statusKey);
   const billingCollectionMethod = subscription?.billingCollectionMethod || SalesBillingCollectionMethod.manualUntilAutopay;
   const isStripeManagedBilling = billingCollectionMethod === SalesBillingCollectionMethod.automaticStripe || hasActiveStripeSubscription;
-  const manualBillingAllowed = Boolean(subscription?.manualBillingEnabled !== false && !isStripeManagedBilling);
+  const manualBillingAllowed = Boolean(subscription?.manualBillingEnabled !== false && !isStripeManagedBilling && !subscription?.checkoutHold && !subscription?.stripeSubscriptionId);
   const billingWorkflowLabel = isStripeManagedBilling ? 'Automatic Stripe billing' : 'Manual invoices until autopay';
   const receiptWorkflowLabel = subscription?.receiptsEnabled === false
     ? 'Receipts disabled'
     : labelize(subscription?.receiptDeliveryMethod || subscription?.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email);
   const canStartCheckout = Boolean(
+    canManageBilling &&
     subscription &&
     !companyMismatch &&
     !isStripeManagedBilling &&
@@ -307,6 +304,7 @@ const SalesBillingSubscriptionDetail = () => {
     !stripeAction
   );
   const canCreateManualInvoice = Boolean(
+    canManageBilling &&
     subscription &&
     !companyMismatch &&
     manualBillingAllowed &&
@@ -323,9 +321,10 @@ const SalesBillingSubscriptionDetail = () => {
   const hasStripeSubscription = Boolean(subscription?.stripeSubscriptionId);
   const lineItemsMissingStripePrices = lineItems.filter((item) => !item.stripePriceId);
   const subscriptionCompanyId = subscription?.companyId || recentlySelectedCompany || '';
-  const canSyncStripe = Boolean(hasStripeSubscription && !companyMismatch && !stripeAction);
-  const canApplyStripePricing = Boolean(hasStripeSubscription && !companyMismatch && !editing && !stripeAction && lineItems.length > 0);
+  const canSyncStripe = Boolean(canManageBilling && hasStripeSubscription && !companyMismatch && !stripeAction);
+  const canApplyStripePricing = Boolean(canManageBilling && hasStripeSubscription && !companyMismatch && !editing && !stripeAction && lineItems.length > 0);
   const canCancelStripe = Boolean(
+    canManageBilling &&
     hasStripeSubscription &&
     !companyMismatch &&
     !subscription?.cancelAtPeriodEnd &&
@@ -333,6 +332,7 @@ const SalesBillingSubscriptionDetail = () => {
     !stripeAction
   );
   const canResumeStripe = Boolean(
+    canManageBilling &&
     hasStripeSubscription &&
     !companyMismatch &&
     subscription?.cancelAtPeriodEnd &&
@@ -340,6 +340,7 @@ const SalesBillingSubscriptionDetail = () => {
     !stripeAction
   );
   const canDeleteSubscription = Boolean(
+    canManageBilling &&
     subscription &&
     editing &&
     !companyMismatch &&
@@ -369,6 +370,7 @@ const SalesBillingSubscriptionDetail = () => {
   };
 
   const startEditing = () => {
+    if (!canManageBilling || subscription?.stripeSubscriptionId || subscription?.checkoutHold) return;
     setDraft(createDraft(subscription));
     setEditing(true);
   };
@@ -380,7 +382,7 @@ const SalesBillingSubscriptionDetail = () => {
 
   const saveSubscription = async (event) => {
     event.preventDefault();
-    if (!subscription || !draft || saving || companyMismatch) return;
+    if (!subscription || !draft || saving || companyMismatch || !canManageBilling || subscription.stripeSubscriptionId || subscription.checkoutHold) return;
 
     const amountCents = moneyInputToCents(draft.amount);
     const intervalCount = Math.max(Number(draft.intervalCount || 1), 1);
@@ -391,7 +393,9 @@ const SalesBillingSubscriptionDetail = () => {
     const applicationFeePercent = draft.applicationFeePercent === ''
       ? null
       : Number(draft.applicationFeePercent);
-    const manualBillingNextInvoiceAt = dateTimeFromInput(draft.manualBillingNextInvoiceAt);
+    try { new Intl.DateTimeFormat('en-US',{timeZone:draft.billingTimeZone}).format(new Date()); }
+    catch (_) { toast.error('Choose a valid billing timezone, such as America/Los_Angeles.'); return; }
+    const manualBillingNextInvoiceAt = dateTimeFromInput(draft.manualBillingNextInvoiceAt,draft.billingTimeZone);
 
     if (amountCents < 0) {
       toast.error('Amount cannot be negative.');
@@ -416,6 +420,7 @@ const SalesBillingSubscriptionDetail = () => {
         email: draft.email.trim(),
         status: draft.status,
         amountCents,
+        billingTimeZone: draft.billingTimeZone,
         currency: draft.currency.trim().toLowerCase() || 'usd',
         interval: draft.interval,
         intervalCount,
@@ -427,8 +432,8 @@ const SalesBillingSubscriptionDetail = () => {
         paymentTerms: draft.paymentTerms,
         invoiceDeliveryMethod: draft.invoiceDeliveryMethod,
         nextAction: draft.nextAction.trim() || 'collectPaymentMethod',
-        currentPeriodStart: dateFromInput(draft.currentPeriodStart),
-        currentPeriodEnd: dateFromInput(draft.currentPeriodEnd),
+        currentPeriodStart: dateFromInput(draft.currentPeriodStart,draft.billingTimeZone),
+        currentPeriodEnd: dateFromInput(draft.currentPeriodEnd,draft.billingTimeZone),
         manualBillingAutoSendEnabled: Boolean(draft.manualBillingAutoSendEnabled),
         manualBillingNextInvoiceAt,
         manualBillingNextDueDate: dueDateTimestampForTerms(draft.paymentTerms, manualBillingNextInvoiceAt),
@@ -485,8 +490,8 @@ const SalesBillingSubscriptionDetail = () => {
         return;
       }
 
-      if (result.data?.status === 'already_active') {
-        toast.success('This billing subscription is already active in Stripe.');
+      if (['already_active','processing'].includes(result.data?.status)) {
+        toast(result.data?.message || 'Billing setup is being confirmed.');
         return;
       }
 
@@ -670,7 +675,7 @@ const SalesBillingSubscriptionDetail = () => {
                 <button
                   type="button"
                   onClick={startEditing}
-                  disabled={!subscription || companyMismatch}
+                  disabled={!subscription || companyMismatch || !canManageBilling || Boolean(subscription.stripeSubscriptionId || subscription.checkoutHold)}
                   className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaEdit className="text-xs" />
@@ -804,6 +809,8 @@ const SalesBillingSubscriptionDetail = () => {
                     <TextInput label="Next Action" value={draft.nextAction} onChange={(value) => updateDraft('nextAction', value)} />
                     <TextInput label="Current Period Start" value={draft.currentPeriodStart} onChange={(value) => updateDraft('currentPeriodStart', value)} type="date" />
                     <TextInput label="Current Period End" value={draft.currentPeriodEnd} onChange={(value) => updateDraft('currentPeriodEnd', value)} type="date" />
+                    <TextInput label="Billing Timezone" value={draft.billingTimeZone} onChange={(value) => updateDraft('billingTimeZone', value)} />
+                    <p className="text-sm text-slate-500 md:col-span-2">Send times use this billing timezone. Scheduled invoices run within 15 minutes of the chosen time.</p>
                     <TextInput label="Next Invoice Send" value={draft.manualBillingNextInvoiceAt} onChange={(value) => updateDraft('manualBillingNextInvoiceAt', value)} type="datetime-local" />
                     <TextInput label="Application Fee Percent" value={draft.applicationFeePercent} onChange={(value) => updateDraft('applicationFeePercent', value)} type="number" min="0" step="0.01" />
                     <label className="space-y-1.5 md:col-span-2">

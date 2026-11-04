@@ -42,7 +42,7 @@ const clientNavItems = {
     ],
     'Finance': [
         {
-            title: 'Finance',
+            title: 'Billing',
             icon: <CreditCardIcon />,
             path: '/client/finance',
             aliases: ['/client/billing'],
@@ -114,7 +114,7 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
                 <div className='flex h-full flex-col overflow-hidden'>
                     {/* Header */}
                     <div className='h-[5.9375rem] flex items-center justify-between border-b border-b-slate-200 px-4 shrink-0 lg:justify-center'>
-                        <Link to='/' className='text-gray-800 font-bold text-3xl'>
+                        <Link to='/client/dashboard' className='text-gray-800 font-bold text-3xl'>
                             Drip Drop
                         </Link>
                         <button

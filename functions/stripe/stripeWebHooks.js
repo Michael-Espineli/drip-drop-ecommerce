@@ -696,6 +696,28 @@ exports.stripeWebHook = onRequest(async (request, response) => {
         return;
     }
 
+    try {
+        if (await require('../stripeLifecycle').createStripeLifecycle(admin.firestore(), stripe).handle(event)) {
+            response.status(200).send('Billing state synchronized.');
+            return;
+        }
+    } catch (error) {
+        console.error('Stripe lifecycle synchronization failed; event will retry.', error);
+        response.status(500).send('Billing synchronization will be retried.');
+        return;
+    }
+
+    if (event.data?.object?.metadata?.flow === 'customer_invoice_payment') {
+        try {
+            const handled = await require('../customerPortalBilling').createCustomerPortalBilling(admin.firestore(), stripe).reconcile(event);
+            response.status(200).send(handled ? 'Customer invoice payment synchronized.' : 'Invoice event acknowledged.');
+        } catch (error) {
+            console.error('Customer invoice payment reconciliation failed:', error);
+            response.status(500).send('Payment reconciliation will be retried.');
+        }
+        return;
+    }
+
     if (event.type === 'account.updated') {
         try {
             const account = event.data.object;

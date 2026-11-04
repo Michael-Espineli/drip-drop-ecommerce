@@ -22,6 +22,7 @@ import {
 } from '../../../utils/models/Sales';
 import { salesCatalogCollection, saveSalesModel } from '../../../utils/sales/salesFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import { canManageCustomerBilling } from '../../../utils/companyPermissionAccess';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -184,6 +185,7 @@ const CreateSalesInvoice = () => {
   const [searchParams] = useSearchParams();
   const queryCustomerId = searchParams.get('customerId') || '';
   const queryServiceLocationId = searchParams.get('serviceLocationId') || '';
+  const authContext = useContext(Context);
   const {
     recentlySelectedCompany,
     recentlySelectedCompanyName,
@@ -192,7 +194,8 @@ const CreateSalesInvoice = () => {
     user,
     currentuser,
     dataBaseUser,
-  } = useContext(Context);
+  } = authContext;
+  const canManageBilling = canManageCustomerBilling(authContext);
   const activeUser = currentUser || user || currentuser || {};
   const activeUserId = activeUser?.uid || activeUser?.id || dataBaseUser?.id || '';
 
@@ -497,6 +500,7 @@ const CreateSalesInvoice = () => {
   };
 
   const canSave = Boolean(
+    canManageBilling &&
     recentlySelectedCompany &&
     form.customerId &&
     form.email.trim() &&
@@ -586,6 +590,7 @@ const CreateSalesInvoice = () => {
               <p className="mt-2 text-sm text-slate-600">
                 {selectedCompanyName} - create a one-time customer invoice.
               </p>
+              {!canManageBilling && <p className="mt-2 text-sm text-amber-800">Manage Customer Billing permission is required to create invoices.</p>}
             </div>
 
             <button

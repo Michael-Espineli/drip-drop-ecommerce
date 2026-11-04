@@ -3,6 +3,7 @@ const {createTechnicianWorkWorkflow,id,record,rows,done,key,stable}=require('./t
 const closedStop=stop=>done({status:stop.operationStatus || stop.status}) || Boolean(stop.finishedAt || stop.completedAt);
 function createJobCloseout(db,now=()=>new Date()) {
  const work=createTechnicianWorkWorkflow(db,now);
+ const equipment=require('./equipmentCompletion').createEquipmentCompletion(db,now);
  return async request=>{
   if(!request.auth?.uid) throw new HttpsError('unauthenticated','Sign in first.');
   const d=request.data || {},companyId=id(d.companyId),jobId=id(d.jobId);
@@ -29,8 +30,8 @@ function createJobCloseout(db,now=()=>new Date()) {
    if([...selectedStopIds].some(value=>!stops.some(stop=>stop.id===value))) throw new HttpsError('failed-precondition','A selected service stop no longer belongs to this job. Refresh before finishing.');
    const selectedStops=stops.filter(stop=>selectedStopIds.has(stop.id) && !closedStop(stop));
    if(!work.can(a,'24') && selectedStops.some(stop=>stop.techId!==a.uid)) throw new HttpsError('permission-denied','Management must review completing another technician’s service stop.');
-   const stopTaskSnapshots=await Promise.all(selectedStops.map(stop=>t.get(c.collection('serviceStops').doc(stop.id).collection('tasks'))));
-   const stopTasks=stopTaskSnapshots.map(rows);
+   const stopTaskSnapshots=await Promise.all(stops.map(stop=>t.get(c.collection('serviceStops').doc(stop.id).collection('tasks'))));
+   const stopTasks=selectedStops.map(stop=>rows(stopTaskSnapshots[stops.findIndex(value=>value.id===stop.id)]));
    const linkedAssignments=new Map();
    selectedStops.forEach((stop,index)=>{
     const reviewed=d.serviceStopTaskIds?.[stop.id];
@@ -54,7 +55,9 @@ function createJobCloseout(db,now=()=>new Date()) {
    const future=stops.filter(v=>!closedStop(v) && !selectedStopIds.has(v.id)),offers=rows(offersSnap),openOffers=offers.filter(v=>!['Rejected','Cancelled','Expired','Completed'].includes(v.status) && !(v.claims || []).some(claim=>['Accepted','Scheduled','In Progress','Completed'].includes(claim.status))),planned=rows(plannedSnap).filter(v=>!done(v) && !id(v.serviceStopId));
    if(d.finishJob!==false && (remainingTasks.length || remainingProducts.length || remainingServices.length)) throw new HttpsError('failed-precondition','Finish the remaining tasks, services, and product installations, or keep the job open.');
    if(d.finishJob!==false && (future.length || planned.length || openOffers.length) && !d.cancelRemainingVisits) throw new HttpsError('failed-precondition','Review the remaining scheduled visits before closing the job.');
-   if(tasks.length+products.length+purchases.length+nextServices.length+future.length+planned.length+offers.length+selectedStops.length+stopTasks.flat().length>400) throw new HttpsError('resource-exhausted','Close out this job in smaller groups.');
+   const equipmentStopTasks=stops.flatMap((stop,index)=>rows(stopTaskSnapshots[index]).map(task=>({stop,task:selectedStopIds.has(stop.id) && !closedStop(stop) && !done(task)?{...task,status:'Finished',completedAt:task.completedAt || at}:task})));
+   const equipmentWrites=await equipment.plan(t,{companyId,jobId,job:{...job,...(d.finishJob?{completedAt:job.completedAt || at}:{})},tasks:completedTasks,stopTasks:equipmentStopTasks,finishJob:d.finishJob,completedAt:at});
+   if(tasks.length+products.length+purchases.length+nextServices.length+future.length+planned.length+offers.length+selectedStops.length+stopTasks.flat().length+equipmentWrites.length>400) throw new HttpsError('resource-exhausted','Close out this job in smaller groups.');
    if(d.finishJob && d.cancelRemainingVisits) {
      const cancelled=new Set(future.map(v=>v.id));
      const dropped=new Set(openOffers.map(v=>v.id));
@@ -84,6 +87,7 @@ function createJobCloseout(db,now=()=>new Date()) {
    });
    if(d.finishJob!==false) future.forEach(v=>t.set(c.collection('serviceStops').doc(v.id),{operationStatus:'Skipped',skipReason:'Job completed; remaining appointment cancelled during closeout.',cancelledAt:at,cancelledByUserId:a.uid},{merge:true}));
    if(d.finishJob!==false) planned.forEach(v=>t.set(ref.collection('plannedServiceStops').doc(v.id),{status:'Cancelled',cancelledAt:at,cancelledByUserId:a.uid,cancelReason:'Job finished during closeout.'},{merge:true}));
+   equipment.apply(t,equipmentWrites);
    t.set(ref,{laborLineItems:nextServices,...(d.finishJob===false?{}:{operationStatus:'Finished',completedAt:job.completedAt || at,completedByUserId:a.uid}),updatedAt:at},{merge:true});
    const result={jobId,finished:d.finishJob,remainingTasks:remainingTasks.length,remainingProducts:remainingProducts.length,remainingServices:remainingServices.length,completedServiceStopIds:selectedStops.map(stop=>stop.id)};
    t.set(ref.collection('history').doc(eventId),{id:eventId,companyId,jobId,type:'Updated',action:d.finishJob===false?'Work Completed':'Job Finished',title:d.finishJob===false?'Work completed':'Job finished',description:'Closeout by '+a.name,createdAt:at,date:at,userId:a.uid,userName:a.name,actorId:a.uid,actorName:a.name,serviceIds:[...selected],taskIds:[...taskIds],productIds:[...productIds],completedServiceStopIds:selectedStops.map(stop=>stop.id),cancelledVisitIds:d.finishJob!==false?future.map(v=>v.id):[],cancelledOfferIds:d.finishJob?openOffers.map(v=>v.id):[],result},{merge:true});

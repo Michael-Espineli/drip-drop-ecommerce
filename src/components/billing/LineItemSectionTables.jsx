@@ -77,7 +77,15 @@ const sectionLabels = {
   },
 };
 
-const LineItemTable = ({ items, formatCurrency, fallbackName, includeStripePrice }) => (
+const LineItemTable = ({ items, formatCurrency, fallbackName, includeStripePrice, mobileCards }) => (
+  <>
+    {mobileCards && <div className="divide-y rounded-lg border border-slate-200 md:hidden">{items.map((item,index) => {
+      const quantity = Number(item.quantity || 1);
+      const unit = lineItemAmountCents(item, 'unitAmountCents', lineItemAmountCents(item, 'unitPriceCents', lineItemAmountCents(item, 'rateAmountCents')));
+      const total = lineItemAmountCents(item, 'totalAmountCents', lineItemAmountCents(item, 'totalPriceCents', lineItemAmountCents(item, 'amount', lineItemAmountCents(item, 'totalCents', unit * quantity))));
+      return <div key={item.id || index} className="space-y-2 p-4"><div className="flex items-start justify-between gap-3"><p className="min-w-0 break-words font-semibold text-slate-900">{item.name || item.description || fallbackName}</p><p className="shrink-0 font-bold">{formatCurrency(total)}</p></div>{item.description && <p className="text-sm text-slate-500">{item.description}</p>}<p className="text-xs text-slate-500">{quantity} × {formatCurrency(unit)}</p></div>;
+    })}</div>}
+  <div className={mobileCards ? 'hidden md:block' : ''}>
   <div className="overflow-x-auto rounded-lg border border-slate-200">
     <table className="min-w-full divide-y divide-slate-200 text-sm">
       <thead className="bg-slate-50">
@@ -127,6 +135,8 @@ const LineItemTable = ({ items, formatCurrency, fallbackName, includeStripePrice
       </tbody>
     </table>
   </div>
+  </div>
+  </>
 );
 
 const LineItemSectionTables = ({
@@ -135,6 +145,7 @@ const LineItemSectionTables = ({
   emptyMessage = 'No services or products were included.',
   includeEmptySections = false,
   includeStripePrice = false,
+  mobileCards = false,
 }) => {
   const groups = groupLineItemsByBillingSection(lineItems);
   const orderedSections = ['services', 'products', 'other'];
@@ -170,6 +181,7 @@ const LineItemSectionTables = ({
                 formatCurrency={formatCurrency}
                 fallbackName={labels.fallbackName}
                 includeStripePrice={includeStripePrice}
+              mobileCards={mobileCards}
               />
             )}
           </section>

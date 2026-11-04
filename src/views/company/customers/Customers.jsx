@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Select from 'react-select';
@@ -679,14 +680,11 @@ export default function Customers() {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                {/* Header */}
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company relationships</p>
-                            <h1 className="mt-1 text-3xl font-bold text-slate-950">Customers</h1>
-                            <p className="mt-1 text-sm text-slate-500">Manage your customers and their information.</p>
-                        </div>
+                <WorkspaceHeader
+                    title="Customers"
+                    eyebrow="Company relationships"
+                    description="Manage your customers and their information."
+                    actions={
                         <div className="flex flex-wrap gap-2">
                             {customerAreaFilteringEnabled && can("14") && (
                                 <Link
@@ -712,8 +710,8 @@ export default function Customers() {
                             Update Equipment
                         </button> */}
                         </div>
-                    </div>
-                </section>
+                    }
+                />
 
                 {/* Upgrade Banner */}
                 {!upgradeState.isUnlimited && upgradeState.remaining < 10 && (

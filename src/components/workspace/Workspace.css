@@ -1,0 +1,88 @@
+/* Profile headers + Jobs controls. Page behavior and audience navigation stay local. */
+.workspace-header {
+    min-width: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--app-card-radius, .5rem);
+    background: var(--color-surface);
+}
+
+.workspace-header-identity {
+    padding: 1.5rem;
+    background: #0e245c;
+    color: #fff;
+    border-radius: inherit;
+}
+
+.workspace-header-has-actions .workspace-header-identity { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.workspace-header-actions { border-bottom-left-radius: inherit; border-bottom-right-radius: inherit; }
+
+.workspace-header-eyebrow {
+    margin-bottom: .3rem;
+    color: #bfdbfe;
+    font-size: .75rem;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.workspace-header-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.workspace-header-title { color: #fff; font-size: 2rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.workspace-header-description { max-width: 64rem; margin-top: .5rem; color: #dbeafe; font-size: .875rem; line-height: 1.5; }
+.workspace-header-meta { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.workspace-header-badge { padding: .35rem .7rem; border: 1px solid #ffffff30; border-radius: .375rem; background: #ffffff12; color: #dbeafe; font-size: .75rem; font-weight: 600; }
+.workspace-header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .75rem; padding: 1rem 1.5rem; background: var(--color-surface); color: var(--color-text); }
+.workspace-header-actions > div { min-width: 0; max-width: 100%; }
+
+.workspace-section-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding: 1.25rem; border-bottom: 1px solid var(--color-border); }
+.workspace-section-heading { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.workspace-section-icon { width: 2.25rem; height: 2.25rem; padding: .5rem; flex-shrink: 0; border-radius: var(--app-control-radius, .375rem); background: var(--workspace-blue-bg); color: var(--workspace-blue-text); }
+.workspace-section-title { color: var(--color-text); font-size: 1.125rem; font-weight: 700; line-height: 1.4; }
+.workspace-section-subtitle { margin-top: .25rem; color: var(--color-text-subtle); font-size: .875rem; font-weight: 400; line-height: 1.5; }
+.workspace-section-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+
+.workspace-tone-blue { --workspace-button-bg: var(--workspace-blue-bg); --workspace-button-border: var(--workspace-blue-border); --workspace-button-text: var(--workspace-blue-text); --workspace-button-hover: var(--workspace-blue-hover); --workspace-button-active: var(--workspace-blue-active); }
+.workspace-tone-emerald { --workspace-button-bg: var(--workspace-emerald-bg); --workspace-button-border: var(--workspace-emerald-border); --workspace-button-text: var(--workspace-emerald-text); --workspace-button-hover: var(--workspace-emerald-hover); --workspace-button-active: var(--workspace-emerald-active); }
+.workspace-tone-amber { --workspace-button-bg: var(--workspace-amber-bg); --workspace-button-border: var(--workspace-amber-border); --workspace-button-text: var(--workspace-amber-text); --workspace-button-hover: var(--workspace-amber-hover); --workspace-button-active: var(--workspace-amber-active); }
+.workspace-tone-rose { --workspace-button-bg: var(--workspace-rose-bg); --workspace-button-border: var(--workspace-rose-border); --workspace-button-text: var(--workspace-rose-text); --workspace-button-hover: var(--workspace-rose-hover); --workspace-button-active: var(--workspace-rose-active); }
+.workspace-tone-slate { --workspace-button-bg: var(--workspace-slate-bg); --workspace-button-border: var(--workspace-slate-border); --workspace-button-text: var(--workspace-slate-text); --workspace-button-hover: var(--workspace-slate-hover); --workspace-button-active: var(--workspace-slate-active); }
+
+.workspace-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    padding: .5rem 1rem;
+    border: 1px solid var(--workspace-button-border, var(--workspace-blue-border));
+    border-radius: var(--app-control-radius, .375rem);
+    background: var(--workspace-button-bg, var(--workspace-blue-bg));
+    color: var(--workspace-button-text, var(--workspace-blue-text));
+    box-shadow: var(--app-control-shadow);
+    font-size: .875rem;
+    font-weight: 600;
+    line-height: 1.25rem;
+    text-align: center;
+    transition: background-color 160ms, border-color 160ms, box-shadow 160ms;
+}
+
+.workspace-button:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--workspace-button-hover, var(--workspace-blue-hover)); }
+.workspace-button-active { background: var(--workspace-button-hover, var(--workspace-blue-hover)); box-shadow: 0 0 0 1px var(--workspace-button-border, var(--workspace-blue-border)); }
+.workspace-button:focus-visible { outline: 2px solid var(--workspace-button-active, var(--color-primary)); outline-offset: 3px; }
+.workspace-button:disabled, .workspace-button[aria-disabled="true"] { cursor: not-allowed; opacity: .6; }
+
+/* Keep Jobs' column tints readable when translucent utility colors would stay light. */
+.theme-dark .workspace-data-table td:is([class~="bg-slate-100/70"], [class~="bg-slate-50/70"]) { background-color: var(--color-surface-soft); }
+.theme-dark .workspace-data-table td[class~="bg-amber-50/60"] { background-color: color-mix(in srgb, var(--workspace-amber-bg) 60%, var(--color-surface)); }
+.theme-dark .workspace-data-table td[class~="bg-emerald-50/60"] { background-color: color-mix(in srgb, var(--workspace-emerald-bg) 60%, var(--color-surface)); }
+.theme-dark .workspace-data-table td[class~="bg-blue-50/60"] { background-color: color-mix(in srgb, var(--workspace-blue-bg) 60%, var(--color-surface)); }
+.theme-dark .workspace-data-table td[class~="bg-cyan-50/60"] { background-color: color-mix(in srgb, var(--workspace-cyan-bg) 60%, var(--color-surface)); }
+
+@media (max-width: 600px) {
+    .workspace-header-identity, .workspace-header-actions, .workspace-section-header { padding: 1rem; }
+    .workspace-header-title { font-size: 1.5rem; }
+    .workspace-header-actions { justify-content: flex-start; }
+    .workspace-button { min-height: 2.75rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .workspace-button { transition: none; }
+}

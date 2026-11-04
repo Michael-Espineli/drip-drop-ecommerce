@@ -89,6 +89,7 @@ const EditServiceRequest = () => {
                 serviceLocationId: serviceLocation,
                 serviceLocationAddress: selectedLocation?.address || {},
                 serviceDescription: description,
+                homeownerBodyOfWaterId: "", homeownerEquipmentId: "",
             });
             navigate(`/client/service-requests/${requestId}`);
         } catch (err) {
@@ -103,9 +104,6 @@ const EditServiceRequest = () => {
         return <div className="p-8">Loading...</div>;
     }
 
-    if (error) {
-        return <div className="p-8 text-red-500">Error: {error}</div>;
-    }
 
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
@@ -114,6 +112,7 @@ const EditServiceRequest = () => {
                 <h2 className="text-2xl font-semibold text-blue-600 mb-6">{company?.name}</h2>
 
                 <form onSubmit={handleSubmit} className="space-y-6">
+                    {error && <p role="alert" className="text-red-700">{error}</p>}
                     <div>
                         <label htmlFor="serviceLocation" className="block text-sm font-medium text-gray-700 mb-1">
                             Service Location
@@ -154,7 +153,7 @@ const EditServiceRequest = () => {
                     <div className="flex justify-end pt-4">
                         <button
                             type="submit"
-                            disabled={submitting}
+                            disabled={submitting || !company}
                             className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400"
                         >
                             {submitting ? 'Saving Changes...' : 'Save Changes'}

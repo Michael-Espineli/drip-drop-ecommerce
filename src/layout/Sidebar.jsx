@@ -1,3 +1,4 @@
+import { listenCompanyTodos } from "../utils/companyTodoAccess";
 import React, { useEffect, useState, useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Context } from '../context/AuthContext';
@@ -542,22 +543,13 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 companyUserAccess?.companyUserDocId,
             ]);
 
-            unsubscribeTodos = onSnapshot(
-                collection(db, "companies", recentlySelectedCompany, "todoItems"),
-                snapshot => {
-                    const openCount = snapshot.docs
-                        .map(normalizeTodo)
-                        .filter(todoIsOpen)
-                        .filter((todo) => canViewAllTodoItems || todoVisibleToUser(todo, todoUserIds))
-                        .length;
-
-                    setCounts(prev => ({ ...prev, todoItems: openCount }));
-                },
-                error => {
-                    console.error("Error loading todo count:", error);
-                    setCounts(prev => ({ ...prev, todoItems: 0 }));
-                }
-            );
+            unsubscribeTodos = listenCompanyTodos({
+                db, companyId: recentlySelectedCompany, userId: user.uid,
+                companyUserId: companyUserAccess?.companyUserId || companyUserAccess?.companyUserDocId,
+                includeAll: canViewAllTodoItems,
+                onTodos: docs => setCounts(prev => ({ ...prev, todoItems: docs.map(normalizeTodo).filter(todoIsOpen).length })),
+                onError: error => { console.error("Error loading todo count", error); setCounts(prev => ({ ...prev, todoItems: 0 })); },
+            });
         } else {
             setCounts(prev => ({ ...prev, todoItems: 0 }));
         }

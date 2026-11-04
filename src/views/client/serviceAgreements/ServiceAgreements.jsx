@@ -1,6 +1,6 @@
+import { listenClientRecords } from '../../../utils/clientRecords';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   DocumentTextIcon,
   CheckCircleIcon,
@@ -138,12 +138,11 @@ const ServiceAgreements = () => {
     setLoading(true);
     setError('');
 
-    return onSnapshot(
-      query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid)),
+    return listenClientRecords({ db, user, collectionName: salesCollectionNames.agreements },
       (snapshot) => {
         const nextAgreements = snapshot.docs
           .map((agreementDoc) => ({ id: agreementDoc.id, ...agreementDoc.data() }))
-          .filter((agreement) => agreement.customerUserId === user.uid)
+          .filter((agreement) => !agreement.customerUserId || agreement.customerUserId === user.uid)
           .sort((left, right) => {
             const rightMillis = toMillis(right.updatedAt || right.sentAt || right.createdAt);
             const leftMillis = toMillis(left.updatedAt || left.sentAt || left.createdAt);

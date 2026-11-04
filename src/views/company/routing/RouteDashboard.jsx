@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import DatePicker from "react-datepicker";
@@ -169,11 +170,9 @@ const weekOffsetFromCurrent = (weekStart, currentWeekStart) => (
 );
 
 const clampDateToRouteWindow = (date, currentWeekStart) => {
-    const minDate = startOfDayDate(currentWeekStart);
     const maxDate = endOfDayDate(addDaysToDate(currentWeekStart, (MAX_ROUTE_WEEK_OFFSET * 7) + 6));
     const nextDate = startOfDayDate(date);
 
-    if (nextDate < minDate) return minDate;
     if (nextDate > maxDate) return maxDate;
 
     return nextDate;
@@ -1166,7 +1165,6 @@ const RouteDashboard = () => {
         })
     ), [weekDays, weekMetrics]);
     const selectedWeekOffset = weekOffsetFromCurrent(selectedWeekStart, currentWeekStart);
-    const canNavigatePreviousWeek = selectedWeekOffset > 0;
     const canNavigateNextWeek = selectedWeekOffset < MAX_ROUTE_WEEK_OFFSET;
 
     const handleServiceDateChange = useCallback((date) => {
@@ -1178,7 +1176,7 @@ const RouteDashboard = () => {
         const nextWeekStart = addDaysToDate(selectedWeekStart, direction * 7);
         const nextWeekOffset = weekOffsetFromCurrent(nextWeekStart, currentWeekStart);
 
-        if (nextWeekOffset < 0 || nextWeekOffset > MAX_ROUTE_WEEK_OFFSET) return;
+        if (nextWeekOffset > MAX_ROUTE_WEEK_OFFSET) return;
 
         handleServiceDateChange(addDaysToDate(nextWeekStart, serviceDate.getDay()));
     }, [currentWeekStart, handleServiceDateChange, selectedWeekStart, serviceDate]);
@@ -2353,12 +2351,12 @@ const RouteDashboard = () => {
     return (
         <div className='min-h-screen bg-gray-50 p-4 pb-28 sm:p-6 sm:pb-28 lg:p-8 lg:pb-28'>
             <div className=" mx-auto">
-                <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <h1 className="text-3xl font-bold text-gray-800">Daily Route Board</h1>
-                        <p className="text-gray-500">Manage today's routes, stops, technician locations, and route activity.</p>
-                    </div>
-                    <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                <WorkspaceHeader
+                    title="Daily Route Board"
+                    eyebrow="Company management"
+                    description="Manage today's routes, stops, technician locations, and route activity."
+                    className="mb-6"
+                    actions={<div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
                         <Link
                             to="/company/serviceStops"
                             className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-center text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
@@ -2387,13 +2385,12 @@ const RouteDashboard = () => {
                         <DatePicker
                             selected={serviceDate}
                             onChange={handleServiceDateChange}
-                            minDate={currentWeekStart}
                             maxDate={maxSelectableDate}
                             className="bg-white border border-gray-300 rounded-lg p-2 shadow-sm text-gray-700"
                             calendarClassName="route-day-calendar"
                         />
-                    </div>
-                </header>
+                    </div>}
+                />
 
                 <RouteWeekNavigator
                     weekDays={weekDays}
@@ -2402,7 +2399,6 @@ const RouteDashboard = () => {
                     selectedDate={serviceDate}
                     todayDate={todayDate}
                     isLoading={isLoadingWeekMetrics}
-                    canNavigatePreviousWeek={canNavigatePreviousWeek}
                     canNavigateNextWeek={canNavigateNextWeek}
                     onPreviousWeek={() => navigateWeek(-1)}
                     onNextWeek={() => navigateWeek(1)}
@@ -2935,7 +2931,6 @@ const RouteWeekNavigator = ({
     selectedDate,
     todayDate,
     isLoading,
-    canNavigatePreviousWeek,
     canNavigateNextWeek,
     onPreviousWeek,
     onNextWeek,
@@ -2974,7 +2969,6 @@ const RouteWeekNavigator = ({
             <button
                 type="button"
                 onClick={onPreviousWeek}
-                disabled={!canNavigatePreviousWeek}
                 className="flex w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Previous week"
             >

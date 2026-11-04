@@ -79,6 +79,7 @@ export function AuthContext({ children }) {
     // User Information
     const auth = getAuth();
     const [user, setUser] = useState(null);
+    const [authRevision, setAuthRevision] = useState(0);
     const [dataBaseUser, setDataBaseUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const [accountType, setAccountType] = useState(null);
@@ -146,10 +147,13 @@ export function AuthContext({ children }) {
                     const docSnap = await getDoc(docRef);
                     if (docSnap.exists()) {
                         const dbUser = docSnap.data();
-                        const normalizedAccountType = normalizeAccountType(dbUser.accountType);
+                        const token = await currentUser.getIdTokenResult();
+                        const requestedAccountType = normalizeAccountType(dbUser.accountType);
+                        const platformAdmin = token.claims.admin === true || currentUser.uid === "yRV5Ie18rrUSxT6UkWctPc99lMJ2";
+                        const normalizedAccountType = requestedAccountType === "Admin" && !platformAdmin ? null : requestedAccountType;
                         const appUser = {
                             ...dbUser,
-                            accountType: normalizedAccountType || dbUser.accountType || null,
+                            accountType: normalizedAccountType,
                         };
                         setDataBaseUser(appUser);
                         setAccountType(normalizedAccountType);
@@ -224,6 +228,33 @@ export function AuthContext({ children }) {
 
         return () => unsubscribe();
     }, [auth]);
+
+    const refreshAccount = useCallback(async () => {
+        const currentUser = auth.currentUser;
+        if (!currentUser) return false;
+        await currentUser.reload();
+        await currentUser.getIdToken(true);
+        setAuthRevision(value => value + 1);
+        return currentUser.emailVerified === true;
+    }, [auth]);
+
+    useEffect(() => {
+        if (!user?.uid) return undefined;
+        return onSnapshot(doc(db, 'users', user.uid), async snapshot => {
+            if (!snapshot.exists()) return;
+            const profile = snapshot.data();
+            const requestedType = normalizeAccountType(profile.accountType);
+            const token = await user.getIdTokenResult();
+            if (auth.currentUser?.uid !== user.uid) return;
+            const trustedAdmin = token.claims.admin === true || user.uid === "yRV5Ie18rrUSxT6UkWctPc99lMJ2";
+            const type = requestedType === "Admin" && !trustedAdmin ? null : requestedType;
+            setDataBaseUser({ ...profile, accountType: type });
+            setAccountType(type);
+            setRole(type);
+            setName([profile.firstName, profile.lastName].filter(Boolean).join(' ') || profile.name || '');
+            setPhotoUrl(profile.photoUrl || '');
+        }, error => console.error('Unable to refresh account profile:', error));
+    }, [user?.uid]);
 
     useEffect(() => {
         if (!user) {
@@ -300,118 +331,85 @@ export function AuthContext({ children }) {
 
     useEffect(() => {
         let cancelled = false;
-
-        const resetCompanyContext = () => {
+        let stopRole = () => {};
+        let roleGeneration = 0;
+        let companyData;
+        let accessData;
+        let loadedRoleId;
+        const clearAccess = () => {
             setCompanyOwnerId(null);
-            setRecentlySelectedCompanyName(null);
-            setStripeConnectedAccountId(null);
-            setCustomerBillingEnabled(false);
-            setSalesBillingAutomationEnabled(false);
-            setShoppingItemInstallInvoiceAutomationEnabled(false);
-            setPayrollEnabled(true);
             setCompanyUserAccess(null);
             setCompanyRole(null);
             setCompanyRoleLoading(false);
-            setCompanyRoleLoaded(false);
+            setCompanyRoleLoaded(true);
         };
-
-        const clearSelectedCompanyAccess = () => {
-            setCompanyOwnerId(null);
-            setRecentlySelectedCompany(null);
-            setRecentlySelectedCompanyName(null);
-            setStripeConnectedAccountId(null);
-            setCustomerBillingEnabled(false);
-            setSalesBillingAutomationEnabled(false);
-            setShoppingItemInstallInvoiceAutomationEnabled(false);
-            setPayrollEnabled(true);
-            setCompanyUserAccess(null);
-            setCompanyRole(null);
-        };
-
-        const loadSelectedCompanyContext = async () => {
-            if (!user || accountType !== "Company" || !recentlySelectedCompany) {
-                resetCompanyContext();
+        setCompanyOwnerId(null);
+        setCompanyUserAccess(null);
+        setCompanyRole(null);
+        setCompanyRoleLoaded(false);
+        setCompanyRoleLoading(Boolean(user && accountType === "Company" && recentlySelectedCompany));
+        if (!user || accountType !== "Company" || !recentlySelectedCompany) {
+            setCompanyRoleLoading(false);
+            return undefined;
+        }
+        const reconcile = () => {
+            if (cancelled || companyData === undefined || accessData === undefined) return;
+            const owner = companyData?.ownerId === user.uid;
+            if (!companyData || (!owner && (!accessData || isCompanyAccessInactive(accessData)))) {
+                roleGeneration += 1;
+                stopRole();
+                loadedRoleId = undefined;
+                clearAccess();
                 return;
             }
-
-            setCompanyRoleLoading(true);
-            setCompanyRoleLoaded(false);
-            setCompanyOwnerId(null);
-
-            try {
-                const companyDocRef = doc(db, "companies", recentlySelectedCompany);
-                const userAccessDocRef = doc(db, "users", user.uid, "userAccess", recentlySelectedCompany);
-
-                const [companyDoc, userAccessDoc] = await Promise.all([
-                    getDoc(companyDocRef),
-                    getDoc(userAccessDocRef),
-                ]);
-
-                if (cancelled) return;
-
-                if (companyDoc.exists()) {
-                    const companyData = companyDoc.data();
-                    setCompanyOwnerId(companyData.ownerId || null);
-                    setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
-                    setStripeConnectedAccountId(getStripeConnectedAccountId(companyData));
-                    setCustomerBillingEnabled(isCustomerBillingEnabled(companyData));
-                    setSalesBillingAutomationEnabled(isSalesBillingAutomationEnabled(companyData));
-                    setShoppingItemInstallInvoiceAutomationEnabled(isShoppingItemInstallInvoiceAutomationEnabled(companyData));
-                    setPayrollEnabled(isPayrollEnabled(companyData));
-                    setStripeId(getStripeCustomerId(dataBaseUser) || getStripeCustomerId(companyData));
-                } else {
-                    setCompanyOwnerId(null);
-                    setRecentlySelectedCompanyName(null);
-                    setStripeConnectedAccountId(null);
-                    setCustomerBillingEnabled(false);
-                    setSalesBillingAutomationEnabled(false);
-                    setShoppingItemInstallInvoiceAutomationEnabled(false);
-                    setPayrollEnabled(true);
-                }
-
-                if (!userAccessDoc.exists()) {
-                    clearSelectedCompanyAccess();
-                    return;
-                }
-
-                const access = { id: userAccessDoc.id, ...userAccessDoc.data() };
-                if (isCompanyAccessInactive(access)) {
-                    clearSelectedCompanyAccess();
-                    return;
-                }
-
-                setCompanyUserAccess(access);
-
-                if (!access.roleId) {
-                    setCompanyRole(null);
-                    return;
-                }
-
-                const roleDoc = await getDoc(doc(db, "companies", recentlySelectedCompany, "roles", access.roleId));
-                if (cancelled) return;
-
-                setCompanyRole(roleDoc.exists() ? { id: roleDoc.id, ...roleDoc.data() } : null);
-            } catch (error) {
-                if (!cancelled) {
-                    console.error("Error loading selected company role context:", error);
-                    setCompanyOwnerId(null);
-                    setCompanyUserAccess(null);
-                    setCompanyRole(null);
-                }
-            } finally {
-                if (!cancelled) {
-                    setCompanyRoleLoading(false);
-                    setCompanyRoleLoaded(true);
-                }
+            setCompanyOwnerId(companyData.ownerId || null);
+            setCompanyUserAccess(accessData);
+            const roleId = accessData?.roleId;
+            if (!roleId) {
+                stopRole();
+                roleGeneration += 1;
+                loadedRoleId = undefined;
+                setCompanyRole(null);
+                setCompanyRoleLoading(false);
+                setCompanyRoleLoaded(true);
+                return;
             }
+            if (loadedRoleId === roleId) return;
+            stopRole();
+            loadedRoleId = roleId;
+            const generation = ++roleGeneration;
+            setCompanyRole(null);
+            setCompanyRoleLoading(true);
+            stopRole = onSnapshot(doc(db, "companies", recentlySelectedCompany, "roles", roleId), snapshot => {
+                if (cancelled || generation !== roleGeneration) return;
+                setCompanyRole(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
+                setCompanyRoleLoading(false);
+                setCompanyRoleLoaded(true);
+            }, error => {
+                if (cancelled || generation !== roleGeneration) return;
+                console.error("Company role access unavailable", error);
+                clearAccess();
+            });
         };
-
-        loadSelectedCompanyContext();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [user, accountType, recentlySelectedCompany, dataBaseUser]);
+        const stopCompany = onSnapshot(doc(db, "companies", recentlySelectedCompany), snapshot => {
+            if (cancelled) return;
+            companyData = snapshot.exists() ? snapshot.data() : null;
+            setCompanyOwnerId(companyData?.ownerId || null);
+            setRecentlySelectedCompanyName(companyData ? getCompanyDisplayName(companyData) : null);
+            setStripeConnectedAccountId(companyData ? getStripeConnectedAccountId(companyData) : null);
+            setCustomerBillingEnabled(companyData ? isCustomerBillingEnabled(companyData) : false);
+            setSalesBillingAutomationEnabled(companyData ? isSalesBillingAutomationEnabled(companyData) : false);
+            setShoppingItemInstallInvoiceAutomationEnabled(companyData ? isShoppingItemInstallInvoiceAutomationEnabled(companyData) : false);
+            setPayrollEnabled(companyData ? isPayrollEnabled(companyData) : true);
+            reconcile();
+        }, () => { if (!cancelled) { companyData = null; reconcile(); } });
+        const stopAccess = onSnapshot(doc(db, "users", user.uid, "userAccess", recentlySelectedCompany), snapshot => {
+            if (cancelled) return;
+            accessData = snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null;
+            reconcile();
+        }, () => { if (!cancelled) { accessData = null; reconcile(); } });
+        return () => { cancelled = true; roleGeneration += 1; stopCompany(); stopAccess(); stopRole(); };
+    }, [user, accountType, recentlySelectedCompany]);
 
     useEffect(() => {
         if (!recentlySelectedCompany || typeof window === "undefined") {
@@ -448,8 +446,12 @@ export function AuthContext({ children }) {
     }, [recentlySelectedCompany]);
 
     const hasCompanyPermission = useCallback((permissionId) => {
+        if (companyRoleLoading || !companyRoleLoaded) return false;
+        if (companyOwnerId === user?.uid && String(permissionId) !== "300") return true;
+        if (!companyUserAccess || isCompanyAccessInactive(companyUserAccess)) return false;
+        if (Array.isArray(companyRole?.permissionIdList) && String(companyRole?.name || "").toLowerCase() === String(companyUserAccess.roleName || "").toLowerCase() && ["owner", "admin", "manager"].includes(String(companyUserAccess.roleName || "").toLowerCase()) && String(permissionId) !== "300") return true;
         return roleHasCompanyPermission(companyRole, permissionId);
-    }, [companyRole]);
+    }, [companyRole, companyUserAccess, companyOwnerId, user?.uid, companyRoleLoading, companyRoleLoaded]);
 
     const isFeatureEnabled = useCallback((featureFlagId) => {
         if (featureFlagsOfflineFallback && !featureFlags[featureFlagId]) {
@@ -461,6 +463,8 @@ export function AuthContext({ children }) {
 
     const values = {
         user,
+        authRevision,
+        refreshAccount,
         setUser,
         dataBaseUser,
         setDataBaseUser,

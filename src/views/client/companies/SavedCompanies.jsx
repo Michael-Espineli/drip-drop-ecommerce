@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import { collection, query, where, onSnapshot, getDoc, doc } from 'firebase/firestore';
+import { collection, query, onSnapshot, getDoc, doc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
@@ -46,7 +46,7 @@ const SavedCompanies = () => {
     }, [user]);
 
     const handleCompanyClick = (companyId) => {
-        navigate(`/companies/profile/${companyId}`);
+        navigate(`/client/companies/profile/${companyId}`);
     };
 
     if (loading) {

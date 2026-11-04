@@ -52,14 +52,14 @@ function createRecurringAccess(db, { verifyIdToken } = {}) {
       db.collection('users').doc(auth.uid).get(),
     ]);
     if (!co.exists) fail('permission-denied', 'Company access is required.');
-    const globalAdmin = auth.token?.admin === true || key(user.data()?.accountType) === 'admin';
+    const globalAdmin = require('./platformAccess').isPlatformAdmin(auth.uid, auth.token);
     const owner = co.data().ownerId === auth.uid;
     const membership = access.data() || {};
     if (!globalAdmin && !owner && (!access.exists || !active(membership))) fail('permission-denied', 'Active company access is required.');
-    const administrator = globalAdmin || owner || ['owner', 'admin', 'manager'].includes(key(membership.roleName));
     const roleId = identifier(membership.roleId, 'Role', false);
     const role = roleId ? await c.collection('roles').doc(roleId).get() : null;
     const ids = Array.isArray(role?.data()?.permissionIdList) ? role.data().permissionIdList.map(String) : [];
+    const administrator = globalAdmin || owner || (role?.exists && Array.isArray(role.data()?.permissionIdList) && key(role.data()?.name) === key(membership.roleName) && ['owner', 'admin', 'manager'].includes(key(membership.roleName)));
     return { auth, companyId, administrator, permissions: ids };
   }
   async function owned(companyId, collectionName, value, required = true) {

@@ -1,3 +1,4 @@
+import { listenCompanyTodos } from "../../../utils/companyTodoAccess";
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -369,38 +370,18 @@ const TodoList = () => {
 
     setLoading(true);
 
-    const todoRef = collection(db, "companies", recentlySelectedCompany, "todoItems");
-    const boardsRef = collection(db, "companies", recentlySelectedCompany, "todoBoards");
-    const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
-
-    const unsubscribeTodos = onSnapshot(
-      todoRef,
-      (snapshot) => {
-        setTodoItems(snapshot.docs.map(normalizeTodo));
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Error loading todo items:", error);
-        toast.error("Failed to load todo list.");
-        setLoading(false);
-      }
-    );
-
-    const unsubscribeBoards = onSnapshot(
-      boardsRef,
-      (snapshot) => {
-        setTodoBoards(snapshot.docs
-          .map(normalizeTodoBoard)
-          .sort((left, right) => left.name.localeCompare(right.name)));
-      },
-      (error) => {
-        console.error("Error loading todo boards:", error);
-        toast.error("Failed to load todo boards.");
-      }
-    );
-
+    const unsubscribeTodos = listenCompanyTodos({
+      db, companyId: recentlySelectedCompany, userId: user?.uid,
+      companyUserId: companyUserAccess?.companyUserId || companyUserAccess?.companyUserDocId,
+      includeAll: hasCompanyPermission("310"),
+      onTodos: docs => { setTodoItems(docs.map(normalizeTodo)); setLoading(false); },
+      onBoards: docs => setTodoBoards(docs.map(normalizeTodoBoard).sort((a, b) => a.name.localeCompare(b.name))),
+      onError: error => { console.error("Todo access failed", error); setLoading(false); },
+    });
+    const unsubscribeBoards = () => {};
     const unsubscribeUsers = onSnapshot(
-      usersRef,
+      hasCompanyPermission("260") ? collection(db, "companies", recentlySelectedCompany, "companyUsers")
+        : query(collection(db, "companies", recentlySelectedCompany, "companyUsers"), where("userId", "==", user.uid)),
       (snapshot) => {
         setCompanyUsers(sortCompanyUsersByName(snapshot.docs.map((userDoc) => ({
           id: userDoc.id,
@@ -417,7 +398,7 @@ const TodoList = () => {
       unsubscribeBoards();
       unsubscribeUsers();
     };
-  }, [recentlySelectedCompany]);
+  }, [recentlySelectedCompany, user?.uid, companyUserAccess, hasCompanyPermission]);
 
   useEffect(() => {
     if (
