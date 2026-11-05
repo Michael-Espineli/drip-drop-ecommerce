@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
@@ -57,7 +58,7 @@ function ProductFeedback() {
       setItems(nextItems);
     } catch (error) {
       console.error('Error loading product feedback:', error);
-      toast.error('Could not load product feedback.');
+      toast.error(userFacingErrorMessage(error, 'Could not load product feedback.'));
     } finally {
       setIsLoading(false);
     }
@@ -105,7 +106,7 @@ function ProductFeedback() {
     } catch (error) {
       console.error('Error updating product feedback status:', error);
       setItems(previousItems);
-      toast.error('Could not update status.');
+      toast.error(userFacingErrorMessage(error, 'Could not update status.'));
     }
   };
 

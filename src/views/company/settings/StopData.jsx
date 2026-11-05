@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -478,7 +479,7 @@ const StopData = () => {
     } catch (error) {
       if (signal.aborted) return;
       console.error("Failed to load stop data:", error);
-      toast.error("Could not load stop data.");
+      toast.error(userFacingErrorMessage(error, "Could not load stop data."));
       setRecords([]);
       setServiceStopCount(0);
     } finally {

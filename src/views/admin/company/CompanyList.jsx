@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useMemo } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../../../utils/config';
@@ -73,7 +74,7 @@ function CompanyList() {
         setSummary(response.summary || initialSummary);
       } catch (error) {
         console.error('Failed to load admin company list:', error);
-        setErrorMessage(error.message || 'Could not load company list.');
+        setErrorMessage(userFacingErrorMessage(error, error.message || 'Could not load company list.'));
       } finally {
         setIsLoading(false);
       }

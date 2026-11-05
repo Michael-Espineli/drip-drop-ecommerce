@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
@@ -790,7 +791,7 @@ const CompanyPartApprovals = () => {
       }
     } catch (installError) {
       console.error('Unable to mark part approval installed', installError);
-      toast.error(installError.message || 'Unable to mark installed.');
+      toast.error(userFacingErrorMessage(installError, installError.message || 'Unable to mark installed.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -890,7 +891,7 @@ const CompanyPartApprovals = () => {
       toast.success('Part marked invoiced.');
     } catch (invoiceError) {
       console.error('Unable to mark part approval invoiced', invoiceError);
-      toast.error(invoiceError.message || 'Unable to mark invoiced.');
+      toast.error(userFacingErrorMessage(invoiceError, invoiceError.message || 'Unable to mark invoiced.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -995,7 +996,7 @@ const CompanyPartApprovals = () => {
       toast.success('Draft invoice created. No email was sent.');
     } catch (workflowError) {
       console.error('Unable to convert part approval to invoice', workflowError);
-      toast.error(workflowError.message || 'Unable to convert to invoice.');
+      toast.error(userFacingErrorMessage(workflowError, workflowError.message || 'Unable to convert to invoice.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -1114,7 +1115,7 @@ const CompanyPartApprovals = () => {
       }
     } catch (statusError) {
       console.error('Unable to update part approval status', statusError);
-      toast.error(statusError.message || 'Unable to update status.');
+      toast.error(userFacingErrorMessage(statusError, statusError.message || 'Unable to update status.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -1182,7 +1183,7 @@ const CompanyPartApprovals = () => {
       setEditApproval(null);
     } catch (editError) {
       console.error('Unable to edit part approval', editError);
-      toast.error(editError.message || 'Unable to save edits.');
+      toast.error(userFacingErrorMessage(editError, editError.message || 'Unable to save edits.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -1203,7 +1204,7 @@ const CompanyPartApprovals = () => {
       setStatusApproval(null);
     } catch (deleteError) {
       console.error('Unable to delete part approval', deleteError);
-      toast.error(deleteError.message || 'Unable to delete approval.');
+      toast.error(userFacingErrorMessage(deleteError, deleteError.message || 'Unable to delete approval.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -1254,7 +1255,7 @@ const CompanyPartApprovals = () => {
       }
     } catch (resendError) {
       console.error('Unable to resend part approval', resendError);
-      toast.error(resendError.message || 'Unable to resend approval.');
+      toast.error(userFacingErrorMessage(resendError, resendError.message || 'Unable to resend approval.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -1913,7 +1914,7 @@ const PartApprovalEditModal = ({ approval, working, onClose, onSave, onDelete })
         }
       } catch (loadError) {
         console.error('Unable to load products for part approval edit', loadError);
-        toast.error('Unable to load products.');
+        toast.error(userFacingErrorMessage(loadError, 'Unable to load products.'));
       } finally {
         if (active) setLoadingDbItems(false);
       }

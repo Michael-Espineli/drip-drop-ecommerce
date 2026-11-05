@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -530,7 +531,7 @@ export default function Customers() {
             setMergePreview(preview);
         } catch (error) {
             console.error('Failed to preview customer merge:', error);
-            toast.error('Could not preview this merge.');
+            toast.error(userFacingErrorMessage(error, 'Could not preview this merge.'));
         } finally {
             setMergeLoading(false);
         }
@@ -538,7 +539,7 @@ export default function Customers() {
 
     const handleMergeCustomers = async () => {
         if (!canMergeCustomers) {
-            toast.error('You need update and delete customer permissions to merge customers.');
+            toast.error('Drip Drop permission denied: You need update and delete customer permissions to merge customers.');
             return;
         }
 
@@ -574,7 +575,7 @@ export default function Customers() {
             );
         } catch (error) {
             console.error('Failed to merge customers:', error);
-            toast.error(error.message || 'Customer merge failed.');
+            toast.error(userFacingErrorMessage(error, error.message || 'Customer merge failed.'));
         } finally {
             setMerging(false);
         }

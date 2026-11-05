@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
@@ -514,7 +516,7 @@ const CustomerNotesSection = ({ customer, compact = false }) => {
             toast.success('Customer note added.');
         } catch (error) {
             console.error('Failed to add customer note:', error);
-            toast.error('Failed to add customer note.');
+            toast.error(userFacingErrorMessage(error, 'Failed to add customer note.'));
         } finally {
             setAddingNote(false);
         }
@@ -536,7 +538,7 @@ const CustomerNotesSection = ({ customer, compact = false }) => {
             });
         } catch (error) {
             console.error('Failed to update customer note:', error);
-            toast.error('Failed to update customer note.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update customer note.'));
         }
     };
 
@@ -1182,7 +1184,7 @@ const ServiceLocationsTab = ({ customer }) => {
                     setSelectedLocation(fetchedLocations[0]);
                 }
             } catch (error) {
-                toast.error("Failed to fetch service locations.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch service locations."));
             } finally {
                 setLoading(false);
             }
@@ -1221,7 +1223,7 @@ const ServiceLocationsTab = ({ customer }) => {
             return contacts;
         } catch (error) {
             console.error(error);
-            toast.error('Failed to load customer contacts.');
+            toast.error(userFacingErrorMessage(error, 'Failed to load customer contacts.'));
             return [];
         } finally {
             setContactsLoading(false);
@@ -1482,7 +1484,7 @@ const ServiceLocationsTab = ({ customer }) => {
             toast.success('Service location updated.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to update service location.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update service location.'));
         } finally {
             setSavingLocation(false);
         }
@@ -1527,7 +1529,7 @@ const ServiceLocationsTab = ({ customer }) => {
             toast.success('Main contact updated.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to update main contact.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update main contact.'));
         } finally {
             setSavingLocation(false);
         }
@@ -1555,7 +1557,7 @@ const ServiceLocationsTab = ({ customer }) => {
             toast.success('Service location deleted.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to delete service location.');
+            toast.error(userFacingErrorMessage(error, 'Failed to delete service location.'));
         } finally {
             setSavingLocation(false);
         }
@@ -1579,7 +1581,7 @@ const ServiceLocationsTab = ({ customer }) => {
             toast.success('Location notes saved.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to save location notes.');
+            toast.error(userFacingErrorMessage(error, 'Failed to save location notes.'));
         } finally {
             setSavingLocationNotes(false);
         }
@@ -1637,7 +1639,7 @@ const ServiceLocationsTab = ({ customer }) => {
             toast.success('Location photos uploaded.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to upload location photos.');
+            toast.error(userFacingErrorMessage(error, 'Failed to upload location photos.'));
         } finally {
             setUploadingLocationPhotos(false);
         }
@@ -2188,7 +2190,7 @@ const RecentServiceHistoryCard = ({ location }) => {
                 const historySnap = await getDocs(historyQ);
                 setServiceHistory(historySnap.docs.map(d => ({ id: d.id, ...d.data() })));
             } catch (err) {
-                toast.error("Failed to load recent service history.");
+                toast.error(userFacingErrorMessage(err, "Failed to load recent service history."));
                 console.log(err);
             } finally {
                 setLoading(false);
@@ -2296,7 +2298,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                 setEquipment(equipSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
             } catch (err) {
-                toast.error("Failed to load location details.");
+                toast.error(userFacingErrorMessage(err, "Failed to load location details."));
                 console.log(err)
             } finally {
                 setLoading(false);
@@ -2462,7 +2464,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             toast.success('Body of water updated.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to update body of water.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update body of water.'));
         } finally {
             setSavingBodyOfWaterEdit(false);
         }
@@ -2622,7 +2624,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             toast.success('Equipment created.');
         } catch (error) {
             console.error("Error creating new equipment: ", error);
-            toast.error('Failed to create equipment.');
+            toast.error(userFacingErrorMessage(error, 'Failed to create equipment.'));
         } finally {
             setSavingEquipmentCreate(false);
         }
@@ -2743,7 +2745,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             toast.success('Equipment updated.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to update equipment.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update equipment.'));
         } finally {
             setSavingEquipmentEdit(false);
         }
@@ -2770,7 +2772,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             toast.success('Equipment deleted.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to delete equipment.');
+            toast.error(userFacingErrorMessage(error, 'Failed to delete equipment.'));
         } finally {
             setSavingEquipmentEdit(false);
         }
@@ -2839,7 +2841,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             toast.success('Equipment reassigned.');
         } catch (error) {
             console.error(error);
-            toast.error('Failed to reassign equipment.');
+            toast.error(userFacingErrorMessage(error, 'Failed to reassign equipment.'));
         } finally {
             setMovingEquipment(false);
         }
@@ -3843,7 +3845,7 @@ const LeadsTab = ({ customer }) => {
                 const snapshot = await getDocs(q);
                 setLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
             } catch (error) {
-                toast.error("Failed to fetch leads.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch leads."));
             } finally {
                 setLoading(false);
             }
@@ -4005,7 +4007,7 @@ const WorkOrdersTab = ({ customer }) => {
                 const snapshot = await getDocs(q);
                 setWorkOrders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
             } catch (error) {
-                toast.error("Failed to fetch work orders.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch work orders."));
             } finally {
                 setLoading(false);
             }
@@ -4068,7 +4070,7 @@ const RepairRequestsSection = ({ customer }) => {
                 setInternalRepairRequests(internalResults || []);
                 setExternalRepairRequests(externalResults || []);
             } catch (error) {
-                toast.error('Failed to fetch repair requests.');
+                toast.error(userFacingErrorMessage(error, 'Failed to fetch repair requests.'));
             } finally {
                 setLoading(false);
             }
@@ -4233,7 +4235,7 @@ const OutstandingWorkSection = ({ customer }) => {
                 );
             } catch (error) {
                 console.error('Failed to fetch outstanding customer work:', error);
-                toast.error('Failed to fetch outstanding work.');
+                toast.error(userFacingErrorMessage(error, 'Failed to fetch outstanding work.'));
                 setOutstandingRecords([]);
                 setCustomerJobs([]);
                 setRepairRequests([]);
@@ -4488,7 +4490,7 @@ const SalesActivitySection = ({ customer }) => {
                 setSalesData({ billingProfiles, agreements, invoices, payments, subscriptions });
             } catch (error) {
                 console.error('Failed to fetch customer sales activity', error);
-                toast.error('Failed to fetch customer sales activity.');
+                toast.error(userFacingErrorMessage(error, 'Failed to fetch customer sales activity.'));
             } finally {
                 setLoading(false);
             }
@@ -4853,7 +4855,7 @@ const HistoryTab = ({ customer }) => {
                 );
             } catch (error) {
                 console.error(error);
-                toast.error("Failed to fetch customer timeline.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch customer timeline."));
             } finally {
                 setLoading(false);
             }
@@ -5485,7 +5487,7 @@ export default function CustomerDetails() {
             setIsProfileEditing(false);
         } catch (error) {
             console.error('Failed to update customer.', error);
-            toast.error('Failed to update customer.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update customer.'));
         } finally {
             setSavingProfile(false);
         }
@@ -5647,7 +5649,7 @@ export default function CustomerDetails() {
             toast.success(`Customer and ${Math.max(result.totalDeleted - 1, 0)} associated record(s) deleted.`);
             navigate('/company/customers');
         } catch (error) {
-            toast.error('Failed to delete customer.');
+            toast.error(userFacingErrorMessage(error, 'Failed to delete customer.'));
             console.error("Deletion error: ", error);
         } finally {
             setShowDeleteModal(false);
@@ -5684,7 +5686,7 @@ export default function CustomerDetails() {
             setCustomer(prev => ({ ...prev, active: nextActive, isActive: nextActive })); // Update local state
         } catch (error) {
             console.error('Failed to update customer status.', error);
-            toast.error('Failed to update customer status.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update customer status.'));
         } finally {
             setShowInactiveModal(false);
         }
@@ -5731,7 +5733,7 @@ export default function CustomerDetails() {
             }
         } catch (error) {
             console.error('Failed to create customer invite link', error);
-            toast.error(error.message || 'Could not create customer invite link.');
+            toast.error(userFacingErrorMessage(error, error.message || 'Could not create customer invite link.'));
         } finally {
             setCreatingInviteLink(false);
         }
@@ -5844,7 +5846,7 @@ export default function CustomerDetails() {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-4 text-slate-900 sm:px-3 sm:py-6 lg:px-4">
             <div className="w-full space-y-4 sm:space-y-6">
-                <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-5">
+                <WorkspaceRecordHeader title={<>{customerName}</>} eyebrow="Customer profile"><div className="workspace-record-toolbar">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                             <div className="flex flex-wrap items-center gap-2">
@@ -5866,7 +5868,7 @@ export default function CustomerDetails() {
                                     <StatusBadge key={tag}>{tag}</StatusBadge>
                                 ))}
                             </div>
-                            <h1 className="mt-3 text-2xl font-bold text-slate-950 sm:text-3xl">{customerName}</h1>
+
                             <p className="mt-2 max-w-3xl text-sm text-slate-600">
                                 {[customer.email, customer.phoneNumber].filter(Boolean).join(' · ') || 'No contact details saved'}
                             </p>
@@ -5924,7 +5926,7 @@ export default function CustomerDetails() {
 
                         </div>
                     </div>
-                </section>
+                </div></WorkspaceRecordHeader>
 
                 <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] xl:gap-6">
                     <aside className="space-y-4">

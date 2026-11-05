@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Select from "react-select";
@@ -187,7 +188,7 @@ function EquipmentImport() {
       return nextData;
     } catch (error) {
       console.error("Failed to load equipment import matching data:", error);
-      toast.error("Could not load company records for equipment matching.");
+      toast.error(userFacingErrorMessage(error, "Could not load company records for equipment matching."));
       const errorData = {
         loading: false,
         customers: [],
@@ -431,7 +432,7 @@ function EquipmentImport() {
       } catch (error) {
         console.error("Failed to parse equipment workbook:", error);
         setParseIssues(["Could not read this Excel file as an equipment import workbook."]);
-        toast.error("Could not parse this workbook.");
+        toast.error(userFacingErrorMessage(error, "Could not parse this workbook."));
       }
     };
 
@@ -628,7 +629,7 @@ function EquipmentImport() {
       toast.success(`Imported ${importableRecords.length} equipment rows. Skipped ${skippedImportRecords.length}.`);
     } catch (error) {
       console.error("Failed to import equipment workbook:", error);
-      toast.error("Equipment import failed before all rows were saved.");
+      toast.error(userFacingErrorMessage(error, "Equipment import failed before all rows were saved."));
     } finally {
       setUploading(false);
     }

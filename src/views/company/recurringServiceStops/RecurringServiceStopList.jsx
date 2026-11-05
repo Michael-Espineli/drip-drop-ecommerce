@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -384,7 +385,7 @@ const RecurringServiceStopList = () => {
                     recurringServiceStopId: stop?.id || "",
                 },
             });
-            toast.error("Failed to load recurring stop tasks");
+            toast.error(userFacingErrorMessage(error, "Failed to load recurring stop tasks"));
         } finally {
             setLoadingEditingStopTasks(false);
         }
@@ -624,7 +625,7 @@ const RecurringServiceStopList = () => {
                     endDate: bulkEditForm?.endDate || "",
                 },
             });
-            toast.error(error.message || "Failed to update selected recurring service stops");
+            toast.error(userFacingErrorMessage(error, error.message || "Failed to update selected recurring service stops"));
         } finally {
             setSavingBulkEdit(false);
         }
@@ -665,7 +666,7 @@ const RecurringServiceStopList = () => {
                     taskGroupId: selectedTaskTemplate?.id || "",
                 },
             });
-            toast.error(error.message || "Failed to apply task template");
+            toast.error(userFacingErrorMessage(error, error.message || "Failed to apply task template"));
         } finally {
             setApplyingTaskTemplate(false);
         }
@@ -716,7 +717,7 @@ const RecurringServiceStopList = () => {
                     endDate: editForm?.endDate || "",
                 },
             });
-            toast.error(error.message || "Failed to update recurring service stop");
+            toast.error(userFacingErrorMessage(error, error.message || "Failed to update recurring service stop"));
         } finally {
             setSavingEdit(false);
         }

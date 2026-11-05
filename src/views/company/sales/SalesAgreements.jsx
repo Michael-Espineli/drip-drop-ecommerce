@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs, increment, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
@@ -1241,7 +1242,7 @@ const SalesAgreements = ({
       setQuickEditDrafts({});
     } catch (quickEditError) {
       console.error('Unable to save quick edited service agreements', quickEditError);
-      toast.error(quickEditError.message || 'Failed to save quick edits.');
+      toast.error(userFacingErrorMessage(quickEditError, quickEditError.message || 'Failed to save quick edits.'));
     } finally {
       setSavingQuickEdit(false);
     }
@@ -1400,7 +1401,7 @@ const SalesAgreements = ({
       setSendDialogAgreementId('');
     } catch (sendError) {
       console.error('Unable to send service agreement email from list', sendError);
-      toast.error(sendError.message || 'Failed to send service agreement email.');
+      toast.error(userFacingErrorMessage(sendError, sendError.message || 'Failed to send service agreement email.'));
     } finally {
       setActionLoadingKey('');
     }
@@ -1543,7 +1544,7 @@ const SalesAgreements = ({
       if (silent) {
         throw acceptError;
       }
-      toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
+      toast.error(userFacingErrorMessage(acceptError, acceptError.message || 'Failed to mark service agreement accepted.'));
     } finally {
       setActionLoadingKey('');
     }
@@ -1585,7 +1586,7 @@ const SalesAgreements = ({
       setQuickEditSelectedIds([]);
     } catch (bulkAcceptError) {
       console.error('Unable to bulk mark service agreements accepted', bulkAcceptError);
-      toast.error(bulkAcceptError.message || 'Failed to mark selected agreements accepted.');
+      toast.error(userFacingErrorMessage(bulkAcceptError, bulkAcceptError.message || 'Failed to mark selected agreements accepted.'));
     } finally {
       setSavingQuickEdit(false);
     }
@@ -1639,7 +1640,7 @@ const SalesAgreements = ({
       toast.success('Agreement marked rejected.');
     } catch (rejectError) {
       console.error('Unable to mark service agreement rejected from list', rejectError);
-      toast.error(rejectError.message || 'Failed to mark service agreement rejected.');
+      toast.error(userFacingErrorMessage(rejectError, rejectError.message || 'Failed to mark service agreement rejected.'));
     } finally {
       setActionLoadingKey('');
     }
@@ -1701,7 +1702,7 @@ const SalesAgreements = ({
       toast.error('No recurring service stops found on planned routes.');
     } catch (generationError) {
       console.error('Unable to generate service agreements from routes', generationError);
-      toast.error('Failed to generate service agreements from routes.');
+      toast.error(userFacingErrorMessage(generationError, 'Failed to generate service agreements from routes.'));
     } finally {
       setGeneratingFromRoutes(false);
     }

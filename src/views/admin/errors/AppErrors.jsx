@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { FaCopy } from 'react-icons/fa';
@@ -148,7 +149,7 @@ function AppErrors() {
       setErrors(nextErrors);
     } catch (error) {
       console.error('Error loading app errors:', error);
-      toast.error('Could not load app errors.');
+      toast.error(userFacingErrorMessage(error, 'Could not load app errors.'));
     } finally {
       setIsLoading(false);
     }
@@ -198,7 +199,7 @@ function AppErrors() {
     } catch (error) {
       console.error('Error updating app error status:', error);
       setErrors(previousErrors);
-      toast.error('Could not update error status.');
+      toast.error(userFacingErrorMessage(error, 'Could not update error status.'));
     }
   };
 
@@ -208,7 +209,7 @@ function AppErrors() {
       toast.success('Error copied.');
     } catch (copyError) {
       console.error('Error copying app error:', copyError);
-      toast.error('Could not copy error.');
+      toast.error(userFacingErrorMessage(copyError, 'Could not copy error.'));
     }
   };
 
@@ -223,7 +224,7 @@ function AppErrors() {
       toast.success(`${filteredErrors.length} error${filteredErrors.length === 1 ? '' : 's'} copied.`);
     } catch (copyError) {
       console.error('Error copying app errors:', copyError);
-      toast.error('Could not copy errors.');
+      toast.error(userFacingErrorMessage(copyError, 'Could not copy errors.'));
     }
   };
 

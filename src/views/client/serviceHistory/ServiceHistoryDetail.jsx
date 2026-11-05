@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
@@ -46,7 +47,7 @@ export default function ServiceHistoryDetail() {
     tasks = stop?.tasks || [];
   const photos = (stop?.photoUrls || []).map(photo => typeof photo === 'string' ? photo : photo.imageURL || photo.url).filter(Boolean);
   const measurements = (title, items) => <section className="rounded-xl border bg-white p-5"><h2 className="text-lg font-bold">{title}</h2>{items.length ? <dl className="mt-3 divide-y">{items.map((item, index) => <div key={item.id || index} className="flex justify-between gap-4 py-3"><dt className="min-w-0 break-words text-sm text-slate-600">{item.name || item.label || 'Reading'}</dt><dd className="shrink-0 font-semibold">{item.amount ?? item.value} {item.UOM || item.unit || ''}</dd></div>)}</dl> : <p className="mt-2 text-sm text-slate-500">None recorded for this visit.</p>}</section>;
-  return <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6"><Link to="/client/my-pool" className="inline-flex min-h-[44px] items-center font-semibold text-blue-700">Back to my pool</Link>{loading ? <p role="status">Loading service report…</p> : <>{error && <p role="alert" className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800">{error}</p>}{stop && <><header><p className="text-sm font-semibold text-blue-700">{stop.companyName}</p><h1 className="mt-1 text-2xl font-bold">Service report</h1><p className="mt-2 text-sm text-slate-500">{clientServiceDate(stop.serviceDate)?.toLocaleDateString('en-US', {
+  return <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6"><Link to="/client/my-pool" className="inline-flex min-h-[44px] items-center font-semibold text-blue-700">Back to my pool</Link>{loading ? <p role="status">Loading service report…</p> : <>{error && <p role="alert" className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800">{error}</p>}{stop && <><header><p className="text-sm font-semibold text-blue-700">{stop.companyName}</p><WorkspaceHeader title={<>Service report</>} eyebrow="Your pool care" /><p className="mt-2 text-sm text-slate-500">{clientServiceDate(stop.serviceDate)?.toLocaleDateString('en-US', {
               month: 'long',
               day: 'numeric',
               year: 'numeric'

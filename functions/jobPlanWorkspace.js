@@ -1,5 +1,5 @@
 const { jobLaborTotals } = require("./jobScopePricing");
-const { HttpsError } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 
 const key = (value) => String(value || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
 const id = (value) => typeof value === 'object' ? value?.id || value?.value || '' : String(value || '');

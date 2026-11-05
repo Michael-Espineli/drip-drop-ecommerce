@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
@@ -1219,7 +1220,7 @@ const RouteDashboard = () => {
 
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
-            toast.error("Failed to load dashboard data.");
+            toast.error(userFacingErrorMessage(error, "Failed to load dashboard data."));
         } finally {
             setIsLoading(false);
         }
@@ -2005,7 +2006,7 @@ const RouteDashboard = () => {
             refreshWeekMetrics();
         } catch (error) {
             console.error('Error moving selected stops:', error);
-            toast.error(error.message || 'Failed to move selected stops.');
+            toast.error(userFacingErrorMessage(error, error.message || 'Failed to move selected stops.'));
         } finally {
             setIsMovingStops(false);
         }
@@ -2096,7 +2097,7 @@ const RouteDashboard = () => {
             toast.success('Route vehicle updated.');
         } catch (error) {
             console.error('Error updating route vehicle:', error);
-            toast.error('Failed to update route vehicle.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update route vehicle.'));
         } finally {
             setVehicleUpdatingRouteId('');
         }
@@ -2163,7 +2164,7 @@ const RouteDashboard = () => {
             toast.success("Route completion saved.");
         } catch (error) {
             console.error("Error saving route completion:", error);
-            toast.error("Failed to save route completion.");
+            toast.error(userFacingErrorMessage(error, "Failed to save route completion."));
         }
     };
 
@@ -2275,9 +2276,9 @@ const RouteDashboard = () => {
             return true;
         } catch (error) {
             console.error('Error saving route order:', error);
-            toast.error(activeRouteSaved && updatePlannedRoute
+            toast.error(userFacingErrorMessage(error, activeRouteSaved && updatePlannedRoute
                 ? 'Daily order saved, but failed to update the planned route.'
-                : 'Failed to save route order.'
+                : 'Failed to save route order.')
             );
 
             if (activeRouteSaved) {
@@ -2318,7 +2319,7 @@ const RouteDashboard = () => {
             refreshWeekMetrics();
         } catch (error) {
             console.error('Error seeding demo route:', error);
-            toast.error('Failed to add demo route data.');
+            toast.error(userFacingErrorMessage(error, 'Failed to add demo route data.'));
         } finally {
             setIsSeedingDemoRoute(false);
         }

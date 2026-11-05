@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState } from 'react';
 import { acceptInvite, declineInvite } from '../../../utils/invites';
 
@@ -16,7 +17,7 @@ const AcceptInviteModal = ({ invite, user, onClose, onAcceptSuccess }) => {
             }
         } catch (err) {
             console.error("Error accepting invite:", err);
-            setError('Failed to accept invite. Please try again.');
+            setError(userFacingErrorMessage(err, 'Failed to accept invite. Please try again.'));
             setLoading(false);
         }
     };
@@ -29,7 +30,7 @@ const AcceptInviteModal = ({ invite, user, onClose, onAcceptSuccess }) => {
             onClose(); // Close modal on decline
         } catch (err) {
             console.error("Error declining invite:", err);
-            setError('Failed to decline invite. Please try again.');
+            setError(userFacingErrorMessage(err, 'Failed to decline invite. Please try again.'));
         } finally {
             setLoading(false);
         }

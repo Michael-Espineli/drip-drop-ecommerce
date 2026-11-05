@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
@@ -721,7 +722,7 @@ const CreateSalesAgreement = () => {
         }
       } catch (error) {
         console.error('Unable to load agreement source records', error);
-        if (isActive) toast.error('Failed to load the lead or survey context for this agreement.');
+        if (isActive) toast.error(userFacingErrorMessage(error, 'Failed to load the lead or survey context for this agreement.'));
       } finally {
         if (isActive) setSourceContextLoaded(true);
       }
@@ -973,7 +974,7 @@ const CreateSalesAgreement = () => {
       ));
     } catch (error) {
       console.error('Unable to apply terms template to new agreement', error);
-      toast.error('Failed to apply selected agreement template.');
+      toast.error(userFacingErrorMessage(error, 'Failed to apply selected agreement template.'));
     } finally {
       setApplyingTermsTemplate(false);
     }
@@ -1239,7 +1240,7 @@ const CreateSalesAgreement = () => {
           await Promise.all(linkUpdates);
         } catch (linkError) {
           console.error('Agreement created but source records were not linked', linkError);
-          toast.error('Agreement created, but the lead or survey link could not be updated.');
+          toast.error(userFacingErrorMessage(linkError, 'Agreement created, but the lead or survey link could not be updated.'));
         }
       }
 
@@ -1247,7 +1248,7 @@ const CreateSalesAgreement = () => {
       navigate(`/company/sales/agreements/${agreement.id}`);
     } catch (error) {
       console.error('Unable to save service agreement draft', error);
-      toast.error('Failed to save service agreement draft.');
+      toast.error(userFacingErrorMessage(error, 'Failed to save service agreement draft.'));
     } finally {
       setSaving(false);
     }

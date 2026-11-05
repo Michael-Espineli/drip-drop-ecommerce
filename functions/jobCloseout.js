@@ -1,4 +1,4 @@
-const {HttpsError}=require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const {createTechnicianWorkWorkflow,id,record,rows,done,key,stable}=require('./technicianWorkWorkflow');
 const closedStop=stop=>done({status:stop.operationStatus || stop.status}) || Boolean(stop.finishedAt || stop.completedAt);
 function createJobCloseout(db,now=()=>new Date()) {

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState, useContext, useEffect, useCallback, useMemo } from "react";
 import WorkspaceSectionHeader from '../../components/workspace/WorkspaceSectionHeader';
 import { workspaceButtonClass } from '../../components/workspace/workspaceStyles';
@@ -488,7 +489,7 @@ export default function ProfilePage() {
             // Note: User will be signed out automatically by backend functions
         } catch (error) {
             console.error("Error deleting account:", error);
-            toast.error('Failed to delete account.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Failed to delete account.'), { id: toastId });
         }
         setShowDeleteModal(false);
     };

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -548,7 +549,7 @@ const CompanyAccountingWorkspace = () => {
       if (showToast) toast.success("Stripe account checked.");
     } catch (error) {
       console.error("Unable to verify Stripe account", error);
-      if (showToast) toast.error(error.message || "Unable to verify Stripe account.");
+      if (showToast) toast.error(userFacingErrorMessage(error, error.message || "Unable to verify Stripe account."));
     } finally {
       setStripeReadinessLoading(false);
     }
@@ -575,7 +576,7 @@ const CompanyAccountingWorkspace = () => {
       toast.success("Payment marked reconciled.");
     } catch (error) {
       console.error("Unable to reconcile payment", error);
-      toast.error(error.message || "Unable to reconcile payment.");
+      toast.error(userFacingErrorMessage(error, error.message || "Unable to reconcile payment."));
     } finally {
       setReconcilingPaymentId("");
     }
@@ -608,7 +609,7 @@ const CompanyAccountingWorkspace = () => {
       toast.success("Accounting note saved.");
     } catch (error) {
       console.error("Unable to save accounting note", error);
-      toast.error(error.message || "Unable to save accounting note.");
+      toast.error(userFacingErrorMessage(error, error.message || "Unable to save accounting note."));
     } finally {
       setSavingNote(false);
     }
@@ -627,7 +628,7 @@ const CompanyAccountingWorkspace = () => {
       toast.success("Note resolved.");
     } catch (error) {
       console.error("Unable to resolve accounting note", error);
-      toast.error(error.message || "Unable to resolve accounting note.");
+      toast.error(userFacingErrorMessage(error, error.message || "Unable to resolve accounting note."));
     }
   };
 

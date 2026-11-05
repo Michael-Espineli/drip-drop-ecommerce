@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { collection, getDocs, addDoc, query, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
@@ -105,7 +106,7 @@ const Companies = () => {
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-7xl mx-auto">
                  <div className="mb-8 text-center">
-                    <h1 className="text-4xl font-extrabold text-gray-900">Find a Service Company</h1>
+                    <WorkspaceHeader title={<>Find a Service Company</>} eyebrow="Your pool care" />
                     <p className="mt-2 text-lg text-gray-600">Browse and connect with trusted pool service professionals.</p>
                 </div>
 

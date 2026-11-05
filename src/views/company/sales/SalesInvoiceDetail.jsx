@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import InvoiceAdjustments from '../../../components/billing/InvoiceAdjustments';
 import JobInvoiceReissue from '../../../components/billing/JobInvoiceReissue';
 import { netPaymentCents } from '../../../utils/sales/financialMetrics';
@@ -978,7 +979,7 @@ const SalesInvoiceDetail = () => {
       closePaymentModal();
     } catch (paymentError) {
       console.error('Unable to record invoice payment', paymentError);
-      toast.error(paymentError.message || 'Failed to record payment.');
+      toast.error(userFacingErrorMessage(paymentError, paymentError.message || 'Failed to record payment.'));
       setSavingPayment(false);
     }
   };
@@ -1040,7 +1041,7 @@ const SalesInvoiceDetail = () => {
       setEditing(false);
     } catch (saveError) {
       console.error('Unable to update sales invoice', saveError);
-      toast.error(saveError.message || 'Failed to update invoice.');
+      toast.error(userFacingErrorMessage(saveError, saveError.message || 'Failed to update invoice.'));
     } finally {
       setSaving(false);
     }
@@ -1068,7 +1069,7 @@ const SalesInvoiceDetail = () => {
       }
     } catch (sendError) {
       console.error('Unable to send invoice email', sendError);
-      toast.error(sendError.message || 'Failed to send invoice email.');
+      toast.error(userFacingErrorMessage(sendError, sendError.message || 'Failed to send invoice email.'));
     } finally {
       setSending(false);
     }
@@ -1110,7 +1111,7 @@ const SalesInvoiceDetail = () => {
       toast.success('Invoice voided.');
     } catch (voidError) {
       console.error('Unable to void invoice', voidError);
-      toast.error(voidError.message || 'Failed to void invoice.');
+      toast.error(userFacingErrorMessage(voidError, voidError.message || 'Failed to void invoice.'));
     } finally {
       setVoiding(false);
     }
@@ -1143,7 +1144,7 @@ const SalesInvoiceDetail = () => {
       navigate('/company/sales/invoices');
     } catch (deleteError) {
       console.error('Unable to delete sales invoice', deleteError);
-      toast.error(deleteError.message || 'Failed to delete invoice.');
+      toast.error(userFacingErrorMessage(deleteError, deleteError.message || 'Failed to delete invoice.'));
       setDeleting(false);
     }
   };

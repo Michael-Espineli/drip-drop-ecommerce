@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -83,7 +84,7 @@ export default function PublicServiceRequestVerification() {
                 if (!cancelled) setPreview(response);
             } catch (loadError) {
                 console.error('Failed to load public service request verification', loadError);
-                if (!cancelled) setError(loadError.message || 'Could not load this verification link.');
+                if (!cancelled) setError(userFacingErrorMessage(loadError, loadError.message || 'Could not load this verification link.'));
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -127,7 +128,7 @@ export default function PublicServiceRequestVerification() {
             navigate(response.clientWebPath || `/client/service-requests/${response.leadId}`);
         } catch (claimError) {
             console.error('Failed to claim public service request', claimError);
-            toast.error(claimError.message || 'Could not connect this request.');
+            toast.error(userFacingErrorMessage(claimError, claimError.message || 'Could not connect this request.'));
         } finally {
             setClaiming(false);
         }

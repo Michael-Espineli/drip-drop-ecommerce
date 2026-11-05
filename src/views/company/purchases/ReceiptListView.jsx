@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
@@ -179,7 +180,7 @@ const ReceiptListView = () => {
         setReceipts(snapshot.docs.map(normalizeReceipt));
       } catch (err) {
         console.error("Error loading receipts:", err);
-        setError("Failed to load receipts.");
+        setError(userFacingErrorMessage(err, "Failed to load receipts."));
       } finally {
         setLoading(false);
       }

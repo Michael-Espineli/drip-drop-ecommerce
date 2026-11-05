@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { Context } from "../../../context/AuthContext";
 import { useNavigate } from 'react-router-dom';
@@ -72,7 +73,7 @@ export default function CompanySelection() {
             toast.success("Verification email sent. Check your inbox.");
         } catch (error) {
             console.error("Error sending verification email:", error);
-            toast.error("Could not send verification email.");
+            toast.error(userFacingErrorMessage(error, "Could not send verification email."));
         } finally {
             setVerificationLoading(false);
         }
@@ -95,7 +96,7 @@ export default function CompanySelection() {
             }
         } catch (error) {
             console.error("Error checking email verification:", error);
-            toast.error("Could not check email verification.");
+            toast.error(userFacingErrorMessage(error, "Could not check email verification."));
         } finally {
             setVerificationLoading(false);
         }

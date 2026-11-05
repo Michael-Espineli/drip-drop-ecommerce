@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../../../utils/config';
@@ -98,7 +99,7 @@ const InvitesPage = ({ status: initialStatus }) => {
             setSelectedInvite(null);
         } catch (error) {
             console.error('Error updating invite status:', error);
-            toast.error(error.message || 'Invite could not be updated.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, error.message || 'Invite could not be updated.'), { id: toastId });
         } finally {
             setActionLoadingId('');
         }

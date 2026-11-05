@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { addDoc, collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc, Timestamp, where } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
@@ -5633,7 +5634,7 @@ const Reports = () => {
     const nextReportType = reportCatalog.some((report) => report.value === savedReportType) ? savedReportType : "readings";
 
     if (payrollOnlyReportTypes.has(nextReportType) && !canViewPayrollInformation) {
-      toast.error("Payroll reports require payroll information permission.");
+      toast.error("Drip Drop permission denied: Payroll reports require payroll information permission.");
       return false;
     }
 
@@ -5707,7 +5708,7 @@ const Reports = () => {
         }
       } catch (error) {
         console.error("Failed to load custom report:", error);
-        toast.error(`Could not load custom report: ${error.message}`);
+        toast.error(userFacingErrorMessage(error, `Could not load custom report: ${error.message}`));
       }
     };
 
@@ -5792,7 +5793,7 @@ const Reports = () => {
 
   const handleReportSelect = (value) => {
     if (payrollOnlyReportTypes.has(value) && !canViewPayrollInformation) {
-      toast.error("Payroll reports require payroll information permission.");
+      toast.error("Drip Drop permission denied: Payroll reports require payroll information permission.");
       return;
     }
 
@@ -6076,7 +6077,7 @@ const Reports = () => {
       toast.success(`Performance note created for ${group.technicianName || group.name}.${customerNoteText}`, { id: toastId });
     } catch (error) {
       console.error("Error creating performance note from report:", error);
-      toast.error(`Could not create performance note: ${error.message}`, { id: toastId });
+      toast.error(userFacingErrorMessage(error, `Could not create performance note: ${error.message}`), { id: toastId });
     } finally {
       setCreatingPerformanceNoteGroupId("");
     }
@@ -6142,7 +6143,7 @@ const Reports = () => {
     }
 
     if (payrollOnlyReportTypes.has(reportType) && !canViewPayrollInformation) {
-      toast.error("Payroll reports require payroll information permission.");
+      toast.error("Drip Drop permission denied: Payroll reports require payroll information permission.");
       return;
     }
 
@@ -6419,7 +6420,7 @@ const Reports = () => {
       toast.success(`${selectedReport.label} report generated.`, { id: toastId });
     } catch (error) {
       console.error("Error generating report:", error);
-      toast.error(`Report generation failed: ${error.message}`, { id: toastId });
+      toast.error(userFacingErrorMessage(error, `Report generation failed: ${error.message}`), { id: toastId });
     } finally {
       setIsLoading(false);
     }

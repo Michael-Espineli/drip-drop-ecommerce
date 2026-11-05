@@ -1,4 +1,5 @@
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const { onDocumentDeleted, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { getFirestore, Timestamp, FieldValue } = require("firebase-admin/firestore");
 const admin = require("firebase-admin");

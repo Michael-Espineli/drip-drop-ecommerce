@@ -1,5 +1,6 @@
 
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('../appErrors');
 const functions = require("firebase-functions");
 const functions1 = require('firebase-functions/v1');
 const {getFirestore} = require("firebase-admin/firestore");
@@ -278,7 +279,7 @@ const getCallableAuth = async (data, context, message) => {
   ].find((candidate) => String(candidate || '').trim());
 
   if (!idToken) {
-    throw new functions.https.HttpsError('unauthenticated', message);
+    throw new HttpsError('unauthenticated', message);
   }
 
   try {
@@ -290,7 +291,7 @@ const getCallableAuth = async (data, context, message) => {
     };
   } catch (error) {
     console.error('Unable to verify callable id token', error);
-    throw new functions.https.HttpsError('unauthenticated', message);
+    throw new HttpsError('unauthenticated', message);
   }
 };
 
@@ -439,19 +440,19 @@ const validateAgreementAcceptance = (receivedData = {}) => {
   const signatureName = String(receivedData.signatureName || receivedData.acceptedBySignatureName || '').trim();
 
   if (receivedData.acceptedTerms !== true) {
-    throw new functions.https.HttpsError('invalid-argument', 'Confirm that the service agreement terms were reviewed.');
+    throw new HttpsError('invalid-argument', 'Confirm that the service agreement terms were reviewed.');
   }
 
   if (receivedData.acceptedPricing !== true) {
-    throw new functions.https.HttpsError('invalid-argument', 'Confirm that the agreement pricing was reviewed.');
+    throw new HttpsError('invalid-argument', 'Confirm that the agreement pricing was reviewed.');
   }
 
   if (receivedData.acceptedAutopayNotice !== true) {
-    throw new functions.https.HttpsError('invalid-argument', 'Confirm that the recurring payment authorization was reviewed.');
+    throw new HttpsError('invalid-argument', 'Confirm that the recurring payment authorization was reviewed.');
   }
 
   if (signatureName.length < 2) {
-    throw new functions.https.HttpsError('invalid-argument', 'Enter the customer name as the acceptance signature.');
+    throw new HttpsError('invalid-argument', 'Enter the customer name as the acceptance signature.');
   }
 
   return {
@@ -648,17 +649,17 @@ exports.applyJobPlanWorkspace = functions.https.onCall(async (data, context) => 
   if (![companyId, jobId, planId].every(validId) || !['load', 'accept'].includes(mode) ||
       [request.agreementId, request.contractId].some((value) => value && !validId(value)) ||
       (mode !== 'accept' && (request.agreementId || request.contractId))) {
-    throw new functions.https.HttpsError('invalid-argument', 'Choose a company, job, plan, and load or accept action.');
+    throw new HttpsError('invalid-argument', 'Choose a company, job, plan, and load or accept action.');
   }
   const companyRef = db.collection('companies').doc(companyId);
   const [companySnap, jobSnap] = await Promise.all([companyRef.get(), companyRef.collection('workOrders').doc(jobId).get()]);
-  if (!companySnap.exists || !jobSnap.exists) throw new functions.https.HttpsError('not-found', 'This job is no longer available.');
+  if (!companySnap.exists || !jobSnap.exists) throw new HttpsError('not-found', 'This job is no longer available.');
   const job = jobSnap.data();
   const templateJob = Boolean(job.sourceTemplateId || job.jobTemplateId || (job.createdFromBasicWorkOrderForm && job.basicWorkOrderMode === 'template'));
   const permissions = mode === 'accept' ? ['24', '400'] : ['24', '72', '400'];
   if (templateJob) permissions.push('28');
   const allowed = companySnap.data().ownerId === auth.uid || await userHasAnyCompanyPermission(auth.uid, companyId, permissions);
-  if (!allowed) throw new functions.https.HttpsError('permission-denied', 'You do not have permission to update this job plan.');
+  if (!allowed) throw new HttpsError('permission-denied', 'You do not have permission to update this job plan.');
   return db.runTransaction(async (transaction) => {
     const timestamp = admin.firestore.FieldValue.serverTimestamp();
     const actorUserName = auth.token?.name || auth.token?.email || auth.uid;
@@ -672,11 +673,11 @@ exports.applyJobPlanWorkspace = functions.https.onCall(async (data, context) => 
     if (agreementRef) {
       const agreement = agreementSnap?.data();
       if (!agreementSnap.exists || agreement.companyId !== companyId || linkedJobIdForAgreement(agreement) !== jobId) {
-        throw new functions.https.HttpsError('permission-denied', 'This estimate does not belong to the selected job.');
+        throw new HttpsError('permission-denied', 'This estimate does not belong to the selected job.');
       }
       const selection = agreementWithSelectedSolution(agreement, planId);
       if (selection.selectedSolutionId && selection.selectedSolutionId !== planId) {
-        throw new functions.https.HttpsError('failed-precondition', 'This plan is not included in the selected estimate.');
+        throw new HttpsError('failed-precondition', 'This plan is not included in the selected estimate.');
       }
       selectedOption = selection.selectedOption;
     }
@@ -684,7 +685,7 @@ exports.applyJobPlanWorkspace = functions.https.onCall(async (data, context) => 
       const contract = contractSnap?.data();
       const contractJobId = typeof contract?.jobId === 'object' ? contract.jobId?.id : contract?.jobId;
       if (!contractSnap.exists || (contract.companyId || contract.senderId) !== companyId || contractJobId !== jobId) {
-        throw new functions.https.HttpsError('permission-denied', 'This legacy estimate does not belong to the selected job.');
+        throw new HttpsError('permission-denied', 'This legacy estimate does not belong to the selected job.');
       }
     }
     const prepared = await prepareJobPlanWorkspace({
@@ -1102,29 +1103,29 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
 
 const requireCompanyManagerForSalesSubscription = async ({ auth, billingSubscriptionId, companyId }) => {
   if (!auth?.uid) {
-    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in to manage billing subscriptions.');
+    throw new HttpsError('unauthenticated', 'You must be signed in to manage billing subscriptions.');
   }
 
   if (!billingSubscriptionId || !companyId) {
-    throw new functions.https.HttpsError('invalid-argument', 'billingSubscriptionId and companyId are required.');
+    throw new HttpsError('invalid-argument', 'billingSubscriptionId and companyId are required.');
   }
 
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(billingSubscriptionId);
   const subscriptionSnap = await subscriptionRef.get();
 
   if (!subscriptionSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Billing subscription was not found.');
+    throw new HttpsError('not-found', 'Billing subscription was not found.');
   }
 
   const subscription = { id: subscriptionSnap.id, ...subscriptionSnap.data() };
 
   if (subscription.companyId !== companyId) {
-    throw new functions.https.HttpsError('permission-denied', 'This billing subscription belongs to another company.');
+    throw new HttpsError('permission-denied', 'This billing subscription belongs to another company.');
   }
 
   const hasAccess = await hasActiveCompanyPermission(db, companyId, auth.uid, ['404']);
   if (!hasAccess) {
-    throw new functions.https.HttpsError('permission-denied', 'You do not have access to manage billing for this company.');
+    throw new HttpsError('permission-denied', 'You do not have access to manage billing for this company.');
   }
 
   return { subscriptionRef, subscription };
@@ -1177,7 +1178,7 @@ const requireManagedConnectedAccount = async ({ data, context, message }) => {
     const companySnap = await companyRef.get();
 
     if (!companySnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Company was not found.');
+      throw new HttpsError('not-found', 'Company was not found.');
     }
 
     company = { ref: companyRef, data: { id: companySnap.id, ...companySnap.data() } };
@@ -1186,21 +1187,21 @@ const requireManagedConnectedAccount = async ({ data, context, message }) => {
   }
 
   if (!company) {
-    throw new functions.https.HttpsError('invalid-argument', 'companyId or a saved connected account id is required.');
+    throw new HttpsError('invalid-argument', 'companyId or a saved connected account id is required.');
   }
 
   const hasAccess = await hasActiveCompanyPermission(db, company.data.id, callableAuth.uid, ['404']);
   if (!hasAccess) {
-    throw new functions.https.HttpsError('permission-denied', 'You do not have access to this company Stripe account.');
+    throw new HttpsError('permission-denied', 'You do not have access to this company Stripe account.');
   }
 
   const companyConnectedAccount = getCompanyConnectedAccountId(company.data);
   if (!companyConnectedAccount) {
-    throw new functions.https.HttpsError('failed-precondition', 'This company does not have a Stripe connected account yet.');
+    throw new HttpsError('failed-precondition', 'This company does not have a Stripe connected account yet.');
   }
 
   if (requestedAccount && requestedAccount !== companyConnectedAccount) {
-    throw new functions.https.HttpsError('permission-denied', 'Connected account does not belong to this company.');
+    throw new HttpsError('permission-denied', 'Connected account does not belong to this company.');
   }
 
   return {
@@ -1302,7 +1303,7 @@ const createConnectedAccountPriceForSalesLineItem = async ({ connectedAccount, s
   const unitAmount = Number(item.unitAmountCents || Math.round(Number(item.totalAmountCents || 0) / quantity));
 
   if (!unitAmount || unitAmount < 1) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       `Line item "${item.name || item.description || index + 1}" needs an amount before it can be added to Stripe.`
     );
@@ -1378,7 +1379,7 @@ const createConnectedAccountStripeObjectForSalesCatalogItem = async ({
   };
 
   if (!Number.isFinite(unitAmount) || unitAmount < 0) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Service price must be zero or greater before creating a Stripe object.'
     );
@@ -1492,21 +1493,21 @@ exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (da
   const catalogItemId = String(receivedData.catalogItemId || '').trim();
 
   if (!companyId || !catalogItemId) {
-    throw new functions.https.HttpsError('invalid-argument', 'companyId and catalogItemId are required.');
+    throw new HttpsError('invalid-argument', 'companyId and catalogItemId are required.');
   }
 
   const companyRef = db.collection('companies').doc(companyId);
   const companySnap = await companyRef.get();
 
   if (!companySnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Company was not found.');
+    throw new HttpsError('not-found', 'Company was not found.');
   }
 
   const companyData = companySnap.data() || {};
   const hasAccess = await hasActiveCompanyPermission(db, companyId, callableAuth.uid, ['404']);
 
   if (!hasAccess) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'permission-denied',
       'You do not have access to manage this company service catalog.'
     );
@@ -1514,7 +1515,7 @@ exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (da
 
   const connectedAccount = getCompanyConnectedAccountId(companyData);
   if (!connectedAccount) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Connect this company to Stripe before creating Stripe objects for catalog services.'
     );
@@ -1524,12 +1525,12 @@ exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (da
   const catalogItemSnap = await catalogItemRef.get();
 
   if (!catalogItemSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Service catalog item was not found.');
+    throw new HttpsError('not-found', 'Service catalog item was not found.');
   }
 
   const catalogItem = { id: catalogItemSnap.id, ...catalogItemSnap.data() };
   if (catalogItem.companyId && catalogItem.companyId !== companyId) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'permission-denied',
       'This service catalog item belongs to another company.'
     );
@@ -1554,13 +1555,13 @@ exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (da
 
     return stripeObject;
   } catch (error) {
-    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof HttpsError) throw error;
     console.error('Unable to create Stripe object for sales catalog item', {
       companyId,
       catalogItemId,
       error,
     });
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'internal',
       error.message || 'Unable to create Stripe object for this service.'
     );
@@ -1584,26 +1585,26 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   const acceptanceAudit = getAgreementAcceptanceAudit(context);
 
   if (!agreementId) {
-    throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
+    throw new HttpsError('invalid-argument', 'agreementId is required.');
   }
 
   const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
   const agreementSnap = await agreementRef.get();
 
   if (!agreementSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    throw new HttpsError('not-found', 'Service agreement was not found.');
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
   const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: agreement });
 
   if (!canAccess) {
-    throw new functions.https.HttpsError('permission-denied', 'This service agreement does not belong to your account.');
+    throw new HttpsError('permission-denied', 'This service agreement does not belong to your account.');
   }
 
   const statusKey = normalizeStatus(agreement.status);
   if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
-    throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
+    throw new HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
   }
 
   const {
@@ -1669,18 +1670,18 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       : null;
 
     if (!freshAgreementSnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+      throw new HttpsError('not-found', 'Service agreement was not found.');
     }
 
     const freshSelection = agreementWithSelectedSolution({ id: freshAgreementSnap.id, ...freshAgreementSnap.data() }, selectedSolutionId);
     if (freshSelection.selectedSolutionId !== selectedSolutionId) {
-      throw new functions.https.HttpsError('failed-precondition', 'The estimate plan options have changed. Reload the estimate before accepting.');
+      throw new HttpsError('failed-precondition', 'The estimate plan options have changed. Reload the estimate before accepting.');
     }
     const freshAgreement = freshSelection.agreement;
     const freshStatusKey = normalizeStatus(freshAgreement.status);
 
     if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
-      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
+      throw new HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
     }
 
     const existingSubscription = subscriptionSnap?.exists
@@ -2009,26 +2010,26 @@ exports.rejectSalesServiceAgreement = functions.https.onCall(async (data, contex
   const rejectionNote = String(receivedData.rejectionNote || receivedData.responseNote || '').trim().slice(0, 2000);
 
   if (!agreementId) {
-    throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
+    throw new HttpsError('invalid-argument', 'agreementId is required.');
   }
 
   const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
   const agreementSnap = await agreementRef.get();
 
   if (!agreementSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    throw new HttpsError('not-found', 'Service agreement was not found.');
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
   const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: agreement });
 
   if (!canAccess) {
-    throw new functions.https.HttpsError('permission-denied', 'This service agreement does not belong to your account.');
+    throw new HttpsError('permission-denied', 'This service agreement does not belong to your account.');
   }
 
   const statusKey = normalizeStatus(agreement.status);
   if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
-    throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to decline.');
+    throw new HttpsError('failed-precondition', 'This service agreement is no longer available to decline.');
   }
 
   const rejectedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -2039,14 +2040,14 @@ exports.rejectSalesServiceAgreement = functions.https.onCall(async (data, contex
     const freshAgreementSnap = await transaction.get(agreementRef);
 
     if (!freshAgreementSnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+      throw new HttpsError('not-found', 'Service agreement was not found.');
     }
 
     const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
     const freshStatusKey = normalizeStatus(freshAgreement.status);
 
     if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
-      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to decline.');
+      throw new HttpsError('failed-precondition', 'This service agreement is no longer available to decline.');
     }
 
     transaction.set(agreementRef, {
@@ -2096,32 +2097,32 @@ exports.rejectPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   const rejectionNote = String(receivedData.rejectionNote || receivedData.responseNote || '').trim().slice(0, 2000);
 
   if (!agreementId) {
-    throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
+    throw new HttpsError('invalid-argument', 'agreementId is required.');
   }
 
   if (!accessToken) {
-    throw new functions.https.HttpsError('invalid-argument', 'Open the service agreement from the email link before responding.');
+    throw new HttpsError('invalid-argument', 'Open the service agreement from the email link before responding.');
   }
 
   if (responseType === 'changesRequested' && rejectionNote.length < 3) {
-    throw new functions.https.HttpsError('invalid-argument', 'Add a short note about what you would like changed.');
+    throw new HttpsError('invalid-argument', 'Add a short note about what you would like changed.');
   }
 
   const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
   const agreementSnap = await agreementRef.get();
 
   if (!agreementSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    throw new HttpsError('not-found', 'Service agreement was not found.');
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
   if (!publicAgreementLinkCanAccess({ agreement, accessToken, email })) {
-    throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+    throw new HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
   }
 
   const statusKey = normalizeStatus(agreement.status);
   if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
-    throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available for a response.');
+    throw new HttpsError('failed-precondition', 'This service agreement is no longer available for a response.');
   }
 
   const rejectedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -2133,17 +2134,17 @@ exports.rejectPublicSalesServiceAgreement = functions.https.onCall(async (data, 
     const freshAgreementSnap = await transaction.get(agreementRef);
 
     if (!freshAgreementSnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+      throw new HttpsError('not-found', 'Service agreement was not found.');
     }
 
     const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
     if (!publicAgreementLinkCanAccess({ agreement: freshAgreement, accessToken, email })) {
-      throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+      throw new HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
     }
 
     const freshStatusKey = normalizeStatus(freshAgreement.status);
     if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
-      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available for a response.');
+      throw new HttpsError('failed-precondition', 'This service agreement is no longer available for a response.');
     }
 
     transaction.set(agreementRef, {
@@ -2202,28 +2203,28 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   const acceptanceAudit = getAgreementAcceptanceAudit(context);
 
   if (!agreementId) {
-    throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
+    throw new HttpsError('invalid-argument', 'agreementId is required.');
   }
 
   if (!accessToken) {
-    throw new functions.https.HttpsError('invalid-argument', 'Open the service agreement from the email link before accepting.');
+    throw new HttpsError('invalid-argument', 'Open the service agreement from the email link before accepting.');
   }
 
   const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
   const agreementSnap = await agreementRef.get();
 
   if (!agreementSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    throw new HttpsError('not-found', 'Service agreement was not found.');
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
   if (!publicAgreementLinkCanAccess({ agreement, accessToken, email })) {
-    throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+    throw new HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
   }
 
   const statusKey = normalizeStatus(agreement.status);
   if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
-    throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
+    throw new HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
   }
 
   const {
@@ -2286,21 +2287,21 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       : null;
 
     if (!freshAgreementSnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+      throw new HttpsError('not-found', 'Service agreement was not found.');
     }
 
     const freshSelection = agreementWithSelectedSolution({ id: freshAgreementSnap.id, ...freshAgreementSnap.data() }, selectedSolutionId);
     if (freshSelection.selectedSolutionId !== selectedSolutionId) {
-      throw new functions.https.HttpsError('failed-precondition', 'The estimate plan options have changed. Reload the estimate before accepting.');
+      throw new HttpsError('failed-precondition', 'The estimate plan options have changed. Reload the estimate before accepting.');
     }
     const freshAgreement = freshSelection.agreement;
     if (!publicAgreementLinkCanAccess({ agreement: freshAgreement, accessToken, email })) {
-      throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+      throw new HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
     }
 
     const freshStatusKey = normalizeStatus(freshAgreement.status);
     if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
-      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
+      throw new HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
     }
 
     const existingSubscription = subscriptionSnap?.exists
@@ -2628,20 +2629,20 @@ exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
   const companyId = String(receivedData.companyId || '').trim();
 
   if (!agreementId || !companyId) {
-    throw new functions.https.HttpsError('invalid-argument', 'agreementId and companyId are required.');
+    throw new HttpsError('invalid-argument', 'agreementId and companyId are required.');
   }
 
   const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
   const agreementSnap = await agreementRef.get();
 
   if (!agreementSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    throw new HttpsError('not-found', 'Service agreement was not found.');
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
 
   if (agreement.companyId !== companyId) {
-    throw new functions.https.HttpsError('permission-denied', 'This service agreement belongs to another company.');
+    throw new HttpsError('permission-denied', 'This service agreement belongs to another company.');
   }
 
   const hasAccess = await userHasAnyCompanyPermission(callableAuth.uid, companyId, [
@@ -2649,7 +2650,7 @@ exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
     DELETE_SERVICE_AGREEMENTS_PERMISSION_ID,
   ]);
   if (!hasAccess) {
-    throw new functions.https.HttpsError('permission-denied', 'You do not have permission to delete service agreements for this company.');
+    throw new HttpsError('permission-denied', 'You do not have permission to delete service agreements for this company.');
   }
 
   const subscriptionsToDelete = new Map();
@@ -2684,7 +2685,7 @@ exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
     (subscription) => subscription.companyId !== companyId
   );
   if (mismatchedSubscription) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'permission-denied',
       `Linked billing subscription ${mismatchedSubscription.id || ''} belongs to another company.`
     );
@@ -2694,7 +2695,7 @@ exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
     (subscription) => !canDeleteBillingSubscriptionRecord(subscription)
   );
   if (liveStripeSubscription) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Cancel the active Stripe billing subscription before deleting this agreement.'
     );
@@ -2729,12 +2730,12 @@ exports.syncSalesBillingSubscriptionFromStripe = functions.https.onCall(async (d
   });
 
   if (!subscription.stripeSubscriptionId) {
-    throw new functions.https.HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
+    throw new HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
   }
 
   const connectedAccount = subscription.stripeConnectedAccountId;
   if (!connectedAccount) {
-    throw new functions.https.HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
+    throw new HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
   }
 
   try {
@@ -2760,7 +2761,7 @@ exports.syncSalesBillingSubscriptionFromStripe = functions.https.onCall(async (d
     };
   } catch (error) {
     console.error('Unable to sync sales billing subscription from Stripe', error);
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'internal',
       error.message || 'Unable to sync billing subscription from Stripe.'
     );
@@ -2810,7 +2811,7 @@ exports.cancelSalesBillingSubscription = functions.https.onCall(async (data, con
 
   const connectedAccount = subscription.stripeConnectedAccountId;
   if (!connectedAccount) {
-    throw new functions.https.HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
+    throw new HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
   }
 
   try {
@@ -2841,7 +2842,7 @@ exports.cancelSalesBillingSubscription = functions.https.onCall(async (data, con
     };
   } catch (error) {
     console.error('Unable to cancel sales billing subscription in Stripe', error);
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'internal',
       error.message || 'Unable to cancel billing subscription.'
     );
@@ -2858,12 +2859,12 @@ exports.resumeSalesBillingSubscription = functions.https.onCall(async (data, con
   });
 
   if (!subscription.stripeSubscriptionId) {
-    throw new functions.https.HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
+    throw new HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
   }
 
   const connectedAccount = subscription.stripeConnectedAccountId;
   if (!connectedAccount) {
-    throw new functions.https.HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
+    throw new HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
   }
 
   try {
@@ -2890,7 +2891,7 @@ exports.resumeSalesBillingSubscription = functions.https.onCall(async (data, con
     };
   } catch (error) {
     console.error('Unable to resume sales billing subscription in Stripe', error);
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'internal',
       error.message || 'Unable to resume billing subscription.'
     );
@@ -2911,15 +2912,15 @@ exports.updateSalesBillingSubscriptionStripeItems = functions.https.onCall(async
   });
 
   if (!subscription.stripeSubscriptionId) {
-    throw new functions.https.HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
+    throw new HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
   }
 
   const connectedAccount = subscription.stripeConnectedAccountId;
   if (!connectedAccount) {
-    throw new functions.https.HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
+    throw new HttpsError('failed-precondition', 'This billing subscription is missing a Stripe connected account id.');
   }
 
-  if (prorationBehavior !== 'none') throw new functions.https.HttpsError('failed-precondition', 'Pricing changes take effect at the next renewal. Immediate adjustments require a separate reviewed invoice.');
+  if (prorationBehavior !== 'none') throw new HttpsError('failed-precondition', 'Pricing changes take effect at the next renewal. Immediate adjustments require a separate reviewed invoice.');
   const {pricing,hash,id} = require('../billingMath');
   const accepted = pricing(subscription);
   const interval = normalizeStripeInterval(subscription.interval || 'month');
@@ -2928,7 +2929,7 @@ exports.updateSalesBillingSubscriptionStripeItems = functions.https.onCall(async
   const options = {stripeAccount:connectedAccount};
   const current = await stripe.subscriptions.retrieve(subscription.stripeSubscriptionId, {}, options);
   if (id(current.customer) !== subscription.stripeCustomerId || current.metadata?.salesBillingSubscriptionId && current.metadata.salesBillingSubscriptionId !== subscription.id)
-    throw new functions.https.HttpsError('permission-denied', 'Stripe subscription ownership does not match.');
+    throw new HttpsError('permission-denied', 'Stripe subscription ownership does not match.');
   const price = await stripe.prices.create({currency:accepted.currency,unit_amount:accepted.totalAmountCents,
     recurring:{interval,interval_count:intervalCount},product_data:{name:subscription.agreementSnapshot?.title || 'Pool service',metadata:{pricingSnapshotHash:priceKey}}},
     {...options,idempotencyKey:`price_${priceKey}`});
@@ -2953,7 +2954,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
     const companyId = String(receivedData.companyId || '').trim();
 
     if (!companyId) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         'invalid-argument',
         'A company id is required.'
       );
@@ -2962,7 +2963,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
     const companySnapshot = await db.collection('companies').doc(companyId).get();
 
     if (!companySnapshot.exists) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         'not-found',
         'Company was not found.'
       );
@@ -2978,14 +2979,14 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
     );
 
     if (!connectedAccount) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         'failed-precondition',
         'This company does not have a Stripe connected account yet.'
       );
     }
 
     if (companyAccountId && connectedAccount !== companyAccountId) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         'permission-denied',
         'Connected account does not belong to this company.'
       );
@@ -2994,7 +2995,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
     const hasAccess = companyData.ownerId === callableAuth.uid || await userHasCompanyAccess(callableAuth.uid, companyId);
 
     if (!hasAccess) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         'permission-denied',
         'You do not have access to this company Stripe account.'
       );
@@ -3087,7 +3088,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
       };
     } catch(error) {
       console.error('Unable to verify connected account billing readiness', error);
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         'internal',
         error.message || 'Unable to verify connected account billing readiness.'
       );
@@ -3119,7 +3120,7 @@ exports.getProductList = functions.https.onCall(async(data,context) => {
       }
     } catch(error) {
       console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to list connected-account products.');
+      throw new HttpsError('internal', error.message || 'Unable to list connected-account products.');
     }
   });
 
@@ -3135,7 +3136,7 @@ exports.createNewProduct = functions.https.onCall(async(data,context) => {
     const currency = String(receivedData.currency || 'usd').toLowerCase();
 
     if (!name) {
-      throw new functions.https.HttpsError('invalid-argument', 'Product name is required.');
+      throw new HttpsError('invalid-argument', 'Product name is required.');
     }
 
     try {
@@ -3170,7 +3171,7 @@ exports.createNewProduct = functions.https.onCall(async(data,context) => {
       return { product };
     } catch(error) {
       console.error(error);
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account product.');
+      throw new HttpsError('internal', error.message || 'Unable to create connected-account product.');
     }
   });
 
@@ -3196,7 +3197,7 @@ exports.createNewProduct = functions.https.onCall(async(data,context) => {
       }
     } catch(error) {
       console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account price.');
+      throw new HttpsError('internal', error.message || 'Unable to create connected-account price.');
     }
   });
   exports.getPriceList = functions.https.onCall(async(data,context) => {
@@ -3229,7 +3230,7 @@ exports.createNewProduct = functions.https.onCall(async(data,context) => {
     } catch(error) {
   
       console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to list connected-account prices.');
+      throw new HttpsError('internal', error.message || 'Unable to list connected-account prices.');
     }
   });
 
@@ -3255,20 +3256,20 @@ exports.getDefaultPrice = functions.https.onCall(async(data,context) => {
     } catch(error) {
   
       console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to retrieve connected-account price.');
+      throw new HttpsError('internal', error.message || 'Unable to retrieve connected-account price.');
     }
   });
   //------------------CRUD Contract------------------
 
 exports.acceptContract = functions.https.onCall(async(data,context) => {
     await requireManagedConnectedAccount({data,context,message:'Sign in to manage billing.'});
-    throw new functions.https.HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
+    throw new HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
   });
   
 
 exports.acceptContract2 = functions.https.onCall(async(data,context) => {
     await requireManagedConnectedAccount({data,context,message:'Sign in to manage billing.'});
-    throw new functions.https.HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
+    throw new HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
   });
   
   exports.getSubcriptionList = functions.https.onCall(async(data,context) => {
@@ -3297,7 +3298,7 @@ exports.acceptContract2 = functions.https.onCall(async(data,context) => {
     } catch(error) {
   
       console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to list connected-account subscriptions.');
+      throw new HttpsError('internal', error.message || 'Unable to list connected-account subscriptions.');
     }
   }); 
   
@@ -3327,6 +3328,6 @@ exports.acceptContract2 = functions.https.onCall(async(data,context) => {
     } catch(error) {
   
       console.error(error)
-      throw new functions.https.HttpsError('internal', error.message || 'Unable to create connected-account customer.');
+      throw new HttpsError('internal', error.message || 'Unable to create connected-account customer.');
     }
   });

@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useState, useContext, useEffect, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { db, storage, functions } from '../../../firebase';
@@ -170,7 +172,7 @@ export default function NewRepairRequest() {
         replace: true
       });
     } catch (err) {
-      setError(err.message || 'Could not send your request. Your details are kept here; please try again.');
+      setError(userFacingErrorMessage(err, err.message || 'Could not send your request. Your details are kept here; please try again.'));
     } finally {
       submitting.current = false;
       setBusy(false);
@@ -179,7 +181,7 @@ export default function NewRepairRequest() {
   };
   const input = 'mt-2 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 text-base';
   const picker = (label, value, set, items, placeholder) => <label className="block text-sm font-semibold">{label}<select disabled={busy} className={input} value={value} onChange={event => set(event.target.value)}><option value="">{placeholder}</option>{items.map(item => <option key={item.id} value={item.id}>{item.label || item.name || item.nickName || item.address?.streetAddress || 'Saved item'}</option>)}</select></label>;
-  return <div className="mx-auto max-w-2xl space-y-5 p-4 sm:p-6"><Link to="/client/repair-requests" className="inline-flex min-h-[44px] items-center text-blue-700">Back to requests</Link><h1 className="text-2xl font-bold">Report a pool problem</h1><p className="text-slate-600">Send a repair request directly to your pool company.</p>{loading ? <p role="status">Loading your account…</p> : <form onSubmit={submit} className="space-y-5 rounded-xl border bg-white p-5">
+  return <div className="mx-auto max-w-2xl space-y-5 p-4 sm:p-6"><Link to="/client/repair-requests" className="inline-flex min-h-[44px] items-center text-blue-700">Back to requests</Link><WorkspaceHeader title={<>Report a pool problem</>} eyebrow="Your pool care" /><p className="text-slate-600">Send a repair request directly to your pool company.</p>{loading ? <p role="status">Loading your account…</p> : <form onSubmit={submit} className="space-y-5 rounded-xl border bg-white p-5">
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-700">{error}</p>}
         {picker('Service address', locationId, setLocationId, locations, 'Choose an address')}
         {!locations.length && <Link to={`/serviceLocation/create?returnTo=${encodeURIComponent('/client/repair-requests/new')}`} className="inline-flex min-h-[44px] items-center font-semibold text-blue-700">Add a service address</Link>}

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState, useContext, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
@@ -117,15 +118,15 @@ export default function SignUp() {
             console.error("Sign-up process failed:", error);
             switch (error.code) {
                 case 'auth/email-already-in-use':
-                    toast.error('This email address is already in use.');
+                    toast.error(userFacingErrorMessage(error, 'This email address is already in use.'));
                     setStep(1); 
                     break;
                 case 'auth/invalid-email':
-                    toast.error('The email address is not valid.');
+                    toast.error(userFacingErrorMessage(error, 'The email address is not valid.'));
                     setStep(1);
                     break;
                 default:
-                    toast.error('An unexpected error occurred. Please try again.');
+                    toast.error(userFacingErrorMessage(error, 'An unexpected error occurred. Please try again.'));
             }
         } finally {
             setLoading(false);

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useContext } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
@@ -169,7 +170,7 @@ const DataBaseItemBulkUpload = () => {
       } catch (err) {
         console.error(err);
         setIsLoading(false);
-        setError("Error processing file. Make sure it is a valid Excel file.");
+        setError(userFacingErrorMessage(err, "Error processing file. Make sure it is a valid Excel file."));
       }
     };
 
@@ -249,7 +250,7 @@ const DataBaseItemBulkUpload = () => {
     } catch (err) {
       console.error(err);
       setIsLoading(false);
-      setError("Failed to upload test items.");
+      setError(userFacingErrorMessage(err, "Failed to upload test items."));
     }
   };
 

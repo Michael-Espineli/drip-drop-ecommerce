@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
@@ -587,7 +588,7 @@ export default function LeadDetail() {
                 }
             } catch (error) {
                 console.error('Error fetching lead details:', error);
-                toast.error('Failed to fetch lead details.');
+                toast.error(userFacingErrorMessage(error, 'Failed to fetch lead details.'));
             } finally {
                 setLoading(false);
             }
@@ -626,7 +627,7 @@ export default function LeadDetail() {
             setCancelDialogTargets(targets);
         } catch (error) {
             console.error('Unable to load lead cancellation targets', error);
-            toast.error('Could not load linked cleanup options.');
+            toast.error(userFacingErrorMessage(error, 'Could not load linked cleanup options.'));
         } finally {
             setLoadingCancelTargets(false);
         }
@@ -696,7 +697,7 @@ export default function LeadDetail() {
             setShowAgreementSendDialog(false);
         } catch (sendError) {
             console.error('Unable to send service agreement from lead', sendError);
-            toast.error(sendError.message || 'Failed to send service agreement email.');
+            toast.error(userFacingErrorMessage(sendError, sendError.message || 'Failed to send service agreement email.'));
         } finally {
             setSendingAgreement(false);
         }
@@ -805,7 +806,7 @@ export default function LeadDetail() {
             return true;
         } catch (acceptError) {
             console.error('Unable to mark service agreement accepted from lead', acceptError);
-            toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
+            toast.error(userFacingErrorMessage(acceptError, acceptError.message || 'Failed to mark service agreement accepted.'));
             return false;
         } finally {
             setAcceptingAgreement(false);
@@ -861,7 +862,7 @@ export default function LeadDetail() {
             setCancelDialogTargets({});
         } catch (error) {
             setLead(originalLead);
-            toast.error(error.message || 'Failed to update status.');
+            toast.error(userFacingErrorMessage(error, error.message || 'Failed to update status.'));
         } finally {
             setSavingStatus(false);
         }
@@ -941,7 +942,7 @@ export default function LeadDetail() {
             toast.success(`Status updated to ${newStatus}`);
         } catch (error) {
             setLead(prev => ({ ...prev, status: originalStatus, lostReason: originalReason }));
-            toast.error('Failed to update status.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update status.'));
         } finally {
             setSavingStatus(false);
         }
@@ -981,7 +982,7 @@ export default function LeadDetail() {
             toast.success('Lead source saved.');
         } catch (error) {
             console.error('Error saving lead source:', error);
-            toast.error('Could not save lead source.');
+            toast.error(userFacingErrorMessage(error, 'Could not save lead source.'));
         } finally {
             setSavingLeadSource(false);
         }
@@ -1027,7 +1028,7 @@ export default function LeadDetail() {
             toast.success('Private notes saved.');
         } catch (error) {
             console.error('Error updating private lead notes:', error);
-            toast.error('Failed to save private notes.');
+            toast.error(userFacingErrorMessage(error, 'Failed to save private notes.'));
         } finally {
             setSavingPrivateNotes(false);
         }
@@ -1058,7 +1059,7 @@ export default function LeadDetail() {
             toast.success('Description updated.');
         } catch (error) {
             console.error('Error updating description:', error);
-            toast.error('Failed to update description.');
+            toast.error(userFacingErrorMessage(error, 'Failed to update description.'));
         } finally {
             setSavingDescription(false);
         }

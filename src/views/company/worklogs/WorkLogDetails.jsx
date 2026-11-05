@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
@@ -109,7 +110,7 @@ const WorkLogDetails = () => {
                     )));
             } catch (error) {
                 console.error("Error fetching work log: ", error);
-                toast.error("Failed to load work log details.");
+                toast.error(userFacingErrorMessage(error, "Failed to load work log details."));
             } finally {
                 setIsLoading(false);
             }

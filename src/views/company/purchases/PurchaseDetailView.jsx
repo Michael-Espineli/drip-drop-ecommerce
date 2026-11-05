@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
@@ -1032,7 +1033,7 @@ const PurchaseDetailView = () => {
         } catch (error) {
             console.log(error);
             console.log("Load Jobs For Purchase");
-            appAlert("Could not load jobs for that date range.");
+            appAlert(userFacingErrorMessage(error, "Could not load jobs for that date range."));
         } finally {
             setJobsLoading(false);
         }
@@ -1111,7 +1112,7 @@ const PurchaseDetailView = () => {
         } catch (error) {
             console.log(error);
             console.log("Connect Job");
-            appAlert("Could not connect this purchased item to the selected job.");
+            appAlert(userFacingErrorMessage(error, "Could not connect this purchased item to the selected job."));
         } finally {
             setUpdating(false);
         }
@@ -1173,7 +1174,7 @@ const PurchaseDetailView = () => {
         } catch (error) {
             console.log(error);
             console.log("Clear Job Connection");
-            appAlert("Could not clear this job connection.");
+            appAlert(userFacingErrorMessage(error, "Could not clear this job connection."));
         } finally {
             setUpdating(false);
         }

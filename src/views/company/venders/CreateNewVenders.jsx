@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
@@ -116,7 +117,7 @@ const CreateNewVendor = () => {
                 }
             } catch (loadError) {
                 console.error("Error loading vendor:", loadError);
-                if (!cancelled) setError(loadError.message || "Unable to load vendor.");
+                if (!cancelled) setError(userFacingErrorMessage(loadError, loadError.message || "Unable to load vendor."));
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -205,7 +206,7 @@ const CreateNewVendor = () => {
             navigate(`/company/vendors/detail/${nextVendorId}`);
         } catch (saveError) {
             console.error("Error saving vendor:", saveError);
-            toast.error(saveError.message || "Failed to save vendor.");
+            toast.error(userFacingErrorMessage(saveError, saveError.message || "Failed to save vendor."));
         } finally {
             setSaving(false);
         }

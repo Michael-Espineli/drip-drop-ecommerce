@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -57,7 +58,7 @@ const LaborContractDetails = () => {
                     navigate('/company/oneTimeLaborContracts');
                 }
             } catch (error) {
-                toast.error("Failed to load contract details.");
+                toast.error(userFacingErrorMessage(error, "Failed to load contract details."));
             } finally {
                 setIsLoading(false);
             }
@@ -81,7 +82,7 @@ const LaborContractDetails = () => {
             setContract(prev => ({ ...prev, ...updateData }));
             toast.success('Contract updated successfully!', { id: toastId });
         } catch (error) {
-            toast.error(`Update failed: ${error.message}`, { id: toastId });
+            toast.error(userFacingErrorMessage(error, `Update failed: ${error.message}`), { id: toastId });
         } finally {
             setIsActionLoading(false);
         }

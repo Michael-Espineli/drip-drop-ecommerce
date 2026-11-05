@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -88,7 +90,7 @@ const NewEquipment = () => {
             });
             navigate('/client/my-pool');
         } catch (err) {
-            setError('Failed to save equipment. Please try again.');
+            setError(userFacingErrorMessage(err, 'Failed to save equipment. Please try again.'));
             console.error(err);
         } finally {
             setLoading(false);
@@ -100,12 +102,12 @@ const NewEquipment = () => {
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
-                <div className="flex items-center gap-4 mb-8">
+                <WorkspaceRecordHeader title={<>Add New Equipment</>} eyebrow="My pool"><div className="flex items-center gap-4 mb-8">
                     <button onClick={() => navigate(-1)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
                         <ArrowLeftIcon className="w-6 h-6" />
                     </button>
-                    <h1 className="text-3xl font-bold text-gray-900">Add New Equipment</h1>
-                </div>
+
+                </div></WorkspaceRecordHeader>
 
                 <form onSubmit={handleSave} className="space-y-8 bg-white rounded-lg shadow-md p-6 md:p-8">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

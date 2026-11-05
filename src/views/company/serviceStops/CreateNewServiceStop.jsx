@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
@@ -597,7 +598,7 @@ const CreateNewServiceStop = () => {
                 ]);
             } catch (error) {
                 console.error("Failed to load service stop scheduler settings:", error);
-                toast.error("Failed to load scheduler settings.");
+                toast.error(userFacingErrorMessage(error, "Failed to load scheduler settings."));
             }
         };
 
@@ -652,7 +653,7 @@ const CreateNewServiceStop = () => {
                 }
             } catch (error) {
                 console.error("Failed to load job service stop data:", error);
-                toast.error("Failed to load job details.");
+                toast.error(userFacingErrorMessage(error, "Failed to load job details."));
             }
         };
 
@@ -710,7 +711,7 @@ const CreateNewServiceStop = () => {
                 setSelectedCustomer(preferredCustomer);
             } catch (error) {
                 console.error("Failed to load standalone service stop context:", error);
-                toast.error("Failed to load customer context.");
+                toast.error(userFacingErrorMessage(error, "Failed to load customer context."));
             }
         };
 
@@ -752,7 +753,7 @@ const CreateNewServiceStop = () => {
                 setServiceLocation(preferredLocation);
             } catch (error) {
                 console.error("Failed to load service locations:", error);
-                toast.error("Failed to load service locations.");
+                toast.error(userFacingErrorMessage(error, "Failed to load service locations."));
             }
         };
 
@@ -916,7 +917,7 @@ const CreateNewServiceStop = () => {
             }
         } catch (error) {
             console.error("Error adding task from service stop:", error);
-            toast.error("Failed to add task.");
+            toast.error(userFacingErrorMessage(error, "Failed to add task."));
         } finally {
             setAddingTask(false);
         }
@@ -976,7 +977,7 @@ const CreateNewServiceStop = () => {
             toast.success(`${savedTasks.length} task${savedTasks.length === 1 ? "" : "s"} added and selected.`);
         } catch (error) {
             console.error("Error applying task group from service stop:", error);
-            toast.error("Failed to apply task group.");
+            toast.error(userFacingErrorMessage(error, "Failed to apply task group."));
         } finally {
             setApplyingTaskGroup(false);
         }

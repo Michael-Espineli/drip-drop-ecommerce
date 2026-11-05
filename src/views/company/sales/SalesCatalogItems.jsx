@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { collection, getDocs, onSnapshot, query } from 'firebase/firestore';
@@ -649,7 +650,7 @@ const SalesCatalogItems = () => {
       toast.success(`${nextTemplates.length} task${nextTemplates.length === 1 ? '' : 's'} added from task group.`);
     } catch (error) {
       console.error('Unable to add task group to service catalog item', error);
-      toast.error(error.message || 'Failed to add task group.');
+      toast.error(userFacingErrorMessage(error, error.message || 'Failed to add task group.'));
     } finally {
       setAddingTaskGroup(false);
     }
@@ -837,7 +838,7 @@ const SalesCatalogItems = () => {
     } catch (error) {
       console.error('Unable to create Stripe object for service catalog item', error);
       if (showToast) {
-        toast.error(error.message || 'Failed to create Stripe object.');
+        toast.error(userFacingErrorMessage(error, error.message || 'Failed to create Stripe object.'));
       }
       throw error;
     } finally {
@@ -869,7 +870,7 @@ const SalesCatalogItems = () => {
           await createStripeObjectForCatalogItem(item, { showToast: false });
           toast.success('Service created with Stripe object.');
         } catch (stripeError) {
-          toast.error(stripeError.message || 'Service created, but Stripe object creation failed.');
+          toast.error(userFacingErrorMessage(stripeError, stripeError.message || 'Service created, but Stripe object creation failed.'));
         }
       } else {
         toast.success('Service updated.');
@@ -882,7 +883,7 @@ const SalesCatalogItems = () => {
       }
     } catch (error) {
       console.error('Unable to save service catalog item', error);
-      toast.error('Failed to save service.');
+      toast.error(userFacingErrorMessage(error, 'Failed to save service.'));
     } finally {
       setSaving(false);
     }
@@ -915,7 +916,7 @@ const SalesCatalogItems = () => {
       if (catalogItemId === item.id) navigate('/company/sales/catalog-items');
     } catch (error) {
       console.error('Unable to archive service catalog item', error);
-      toast.error('Failed to archive service.');
+      toast.error(userFacingErrorMessage(error, 'Failed to archive service.'));
     }
   };
 

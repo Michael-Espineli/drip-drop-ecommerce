@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -63,7 +64,7 @@ const OneTimeLaborContracts = () => {
                 setContracts(contractsList);
             } catch (error) {
                 console.error("Error fetching one-time labor contracts: ", error);
-                toast.error("Could not load one-time contracts.");
+                toast.error(userFacingErrorMessage(error, "Could not load one-time contracts."));
             } finally {
                 setIsLoading(false);
             }

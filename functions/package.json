@@ -11,7 +11,7 @@
     "logs": "firebase functions:log",
     "test:payroll": "node --test payrollCalculation.test.js payrollWorkflow.test.js payrollApproval.test.js payrollStatements.test.js payrollRefreshQueue.test.js",
     "test:payroll-emulator": "node --test payrollRefresh.emulator.test.js",
-    "test:technician-work": "node --test technicianWork.test.js workOfferManagement.test.js jobCloseout.test.js mobileStopCompletion.test.js equipmentCompletion.test.js",
+    "test:technician-work": "node --test technicianWork.test.js workOfferManagement.test.js workOfferRouteSummary.test.js jobCloseout.test.js mobileStopCompletion.test.js equipmentCompletion.test.js",
     "test:workflow-rules": "node --test firestoreWorkflow.rules.test.js",
     "test:equipment-emulator": "node --test equipmentCompletion.emulator.test.js",
     "test:recurring": "node --test recurringAccess.test.js recurringCallables.test.js recurringSchedule.test.js",

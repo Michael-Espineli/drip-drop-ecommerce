@@ -37,7 +37,7 @@ function createPayrollWorkflow(db, options = {}) {
       (old.id === line.id || component(old) === component(line)))));
 
   async function clearZeroDollarTasks(request) {
-    const { HttpsError } = require("firebase-functions/v2/https");
+    const { HttpsError } = require('./appErrors');
     const fail = (code, message) => { throw new HttpsError(code, message); };
     const uid = request.auth?.uid;
     if (!uid) fail("unauthenticated", "Sign in to clear payroll tasks.");
@@ -315,7 +315,7 @@ function createPayrollWorkflow(db, options = {}) {
     if (JSON.stringify(keys.map((key) => before?.[key] ?? null)) !== JSON.stringify(keys.map((key) => after?.[key] ?? null))) await refreshQueue.enqueue(event.params.companyId, event.id, [{ kind: "company" }]);
   }
   async function refreshRequestedStop(request) {
-    const { HttpsError } = require("firebase-functions/v2/https");
+    const { HttpsError } = require('./appErrors');
     if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Sign in to refresh payroll.");
     const { companyId, serviceStopId } = request.data || {};
     if (![companyId, serviceStopId].every((value) => typeof value === "string" && value.trim() && value.length <= 200 && !value.includes("/"))) {

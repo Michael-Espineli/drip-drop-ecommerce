@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -61,7 +62,7 @@ const LaborContracts = () => {
                 setContracts(contractsList);
             } catch (error) {
                 console.error("Error fetching labor contracts: ", error);
-                toast.error("Could not load labor contracts.");
+                toast.error(userFacingErrorMessage(error, "Could not load labor contracts."));
             } finally {
                 setIsLoading(false);
             }

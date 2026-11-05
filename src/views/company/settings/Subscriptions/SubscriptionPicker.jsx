@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from "react";
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { query, collection, getDocs, where } from "firebase/firestore";
@@ -69,7 +70,7 @@ const SubscriptionPicker = () => {
                 }
             } catch (err) {
                 console.error("Error fetching data: ", err);
-                setError("Failed to load subscription data.");
+                setError(userFacingErrorMessage(err, "Failed to load subscription data."));
             } finally {
                 setLoading(false);
             }
@@ -96,7 +97,7 @@ const SubscriptionPicker = () => {
             navigate('/company/settings/subscriptions');
         } catch (err) {
             console.error("Error updating subscription: ", err);
-            toast.error(err.message || "Could not update subscription.", { id: toastId });
+            toast.error(userFacingErrorMessage(err, err.message || "Could not update subscription."), { id: toastId });
         } finally {
             setPreviewInvoice(null);
             setSelectedPlanForPreview(null);
@@ -132,7 +133,7 @@ const SubscriptionPicker = () => {
                 }
             } catch (err) {
                 console.error("Error getting subscription preview: ", err);
-                toast.error(err.message || "Could not generate preview.", { id: toastId });
+                toast.error(userFacingErrorMessage(err, err.message || "Could not generate preview."), { id: toastId });
             } finally {
                 setIsPreviewLoading(false);
             }
@@ -175,7 +176,7 @@ const SubscriptionPicker = () => {
                 }
             } catch (err) {
                 console.error("Error selecting subscription: ", err);
-                toast.error(err.message || "Could not process subscription.", { id: toastId });
+                toast.error(userFacingErrorMessage(err, err.message || "Could not process subscription."), { id: toastId });
             }
         }
     }

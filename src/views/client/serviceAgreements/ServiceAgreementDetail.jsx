@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
@@ -607,7 +608,7 @@ const ServiceAgreementDetail = () => {
           console.error('Unable to load public service agreement', publicError);
           if (isActive) {
             setAgreement(null);
-            setError(publicError.message || 'Unable to verify this service agreement link.');
+            setError(userFacingErrorMessage(publicError, publicError.message || 'Unable to verify this service agreement link.'));
           }
         } finally {
           if (isActive) setLoading(false);
@@ -964,7 +965,7 @@ const ServiceAgreementDetail = () => {
       }
     } catch (acceptError) {
       console.error('Unable to accept service agreement', acceptError);
-      toast.error(acceptError.message || 'Failed to accept service agreement.');
+      toast.error(userFacingErrorMessage(acceptError, acceptError.message || 'Failed to accept service agreement.'));
     } finally {
       setAccepting(false);
     }
@@ -991,7 +992,7 @@ const ServiceAgreementDetail = () => {
       toast.success(`${recordLabel} declined.`);
     } catch (rejectError) {
       console.error('Unable to decline service agreement', rejectError);
-      toast.error(rejectError.message || `Failed to decline ${recordLabel.toLowerCase()}.`);
+      toast.error(userFacingErrorMessage(rejectError, rejectError.message || `Failed to decline ${recordLabel.toLowerCase()}.`));
     } finally {
       setRejecting(false);
     }
@@ -1058,7 +1059,7 @@ const ServiceAgreementDetail = () => {
       throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
     } catch (checkoutError) {
       console.error('Unable to start Stripe Checkout', checkoutError);
-      toast.error(checkoutError.message || 'Failed to start Stripe Checkout.');
+      toast.error(userFacingErrorMessage(checkoutError, checkoutError.message || 'Failed to start Stripe Checkout.'));
     } finally {
       setStartingCheckout(false);
     }

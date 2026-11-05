@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import { jobStatusClass } from '../../../utils/statusPresentation';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { workspaceButtonClass } from '../../../components/workspace/workspaceStyles';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
@@ -1036,7 +1038,7 @@ const Jobs = () => {
             toast.success("Selected jobs updated.", { id: toastId });
         } catch (error) {
             console.error("Error applying batch job update:", error);
-            toast.error(error?.message || "Failed to update selected jobs.", { id: toastId });
+            toast.error(userFacingErrorMessage(error, error?.message || "Failed to update selected jobs."), { id: toastId });
         } finally {
             setBulkUpdating(false);
         }
@@ -1079,33 +1081,7 @@ const Jobs = () => {
         };
     }, [currentJobListView, jobSummary]);
 
-    const getStatusClass = (status) => {
-        switch (status) {
-            case "Draft":
-            case "Unscheduled":
-                return "bg-red-50 text-red-700";
-            case "Estimate":
-            case "In Progress":
-            case "Estimate Pending":
-                return "bg-amber-50 text-amber-700";
-            case "Accepted":
-            case "Scheduled":
-            case "Finished":
-            case "Paid":
-            case "Comped":
-            case JOB_BILLING_STATUS.customerResolved:
-                return "bg-emerald-50 text-emerald-700";
-            case "Invoiced":
-                return "bg-blue-50 text-blue-700";
-            case "Waiting for Parts":
-                return "bg-violet-50 text-violet-700";
-            case JOB_BILLING_STATUS.canceled:
-            case "Expired":
-                return "bg-slate-100 text-slate-700";
-            default:
-                return "bg-slate-100 text-slate-700";
-        }
-    };
+    const getStatusClass = jobStatusClass;
 
     const getSolutionTierClass = (tier) => {
         switch (getIssuePriorityTone(tier)) {

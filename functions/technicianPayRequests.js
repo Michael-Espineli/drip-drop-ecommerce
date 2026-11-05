@@ -1,4 +1,4 @@
-const { HttpsError }=require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const { createTechnicianWorkWorkflow, id, record, rows, date, stable }=require('./technicianWorkWorkflow');
 const { calculatePayLines }=require('./payrollCalculation');
 const fail=(code,message)=>{throw new HttpsError(code,message);};

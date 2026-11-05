@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -379,7 +380,7 @@ const CreateNewPurchase = () => {
         }));
       } catch (error) {
         console.error("Error loading receipt selectors:", error);
-        toast.error("Could not load receipt selectors.");
+        toast.error(userFacingErrorMessage(error, "Could not load receipt selectors."));
       } finally {
         setLoadingSelectors(false);
       }
@@ -746,7 +747,7 @@ const CreateNewPurchase = () => {
       toast.success("Vendor item created.");
     } catch (error) {
       console.error("Error creating vendor item from receipt:", error);
-      toast.error("Failed to create vendor item.");
+      toast.error(userFacingErrorMessage(error, "Failed to create vendor item."));
     } finally {
       setIsCreatingDatabaseItem(false);
     }
@@ -865,7 +866,7 @@ const CreateNewPurchase = () => {
       }
     } catch (error) {
       console.error("Error saving receipt:", error);
-      toast.error("Failed to save receipt.");
+      toast.error(userFacingErrorMessage(error, "Failed to save receipt."));
     } finally {
       setIsSaving(false);
     }

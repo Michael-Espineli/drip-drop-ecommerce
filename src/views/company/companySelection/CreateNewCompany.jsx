@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -65,7 +66,7 @@ const CreateNewCompany = () => {
             setFormData(prev => ({ ...prev, [fieldName]: text }));
         } catch (err) {
             console.error('Failed to read clipboard contents: ', err);
-            setError('Could not paste from clipboard. Please check your browser permissions.')
+            setError(userFacingErrorMessage(err, 'Could not paste from clipboard. Please check your browser permissions.'))
         }
     };
 
@@ -115,9 +116,9 @@ const CreateNewCompany = () => {
             
         } catch (err) {
             if (err.code === 'functions/failed-precondition') {
-                setError('Company creation is not open yet.');
+                setError(userFacingErrorMessage(err, 'Company creation is not open yet.'));
             } else {
-                setError('Failed to create company. Please try again.');
+                setError(userFacingErrorMessage(err, 'Failed to create company. Please try again.'));
             }
             console.error("Function call error:", err);
         } finally {

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getFirestore, doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
@@ -466,7 +467,7 @@ const CreateCustomerFromLead = () => {
                     navigate('/company/leads');
                 }
             } catch (error) {
-                toast.error("Failed to fetch lead details.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch lead details."));
             } finally {
                 setLoading(false);
             }
@@ -704,7 +705,7 @@ const CreateCustomerFromLead = () => {
 
         } catch (error) {
             console.error("Error creating customer from lead:", error);
-            toast.error(error.message || 'Conversion failed.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, error.message || 'Conversion failed.'), { id: toastId });
             setIsSubmitting(false);
         }
     };

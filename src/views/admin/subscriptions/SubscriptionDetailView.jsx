@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
@@ -57,8 +58,8 @@ const SubscriptionDetailView = () => {
       }
     } catch (err) {
       console.error('Error fetching document:', err);
-      setError('Failed to fetch subscription data.');
-      toast.error('Failed to load data.');
+      setError(userFacingErrorMessage(err, 'Failed to fetch subscription data.'));
+      toast.error(userFacingErrorMessage(err, 'Failed to load data.'));
     } finally {
       setLoading(false);
     }
@@ -101,7 +102,7 @@ const SubscriptionDetailView = () => {
       fetchSubscription();
     } catch (err) {
       console.error('Error updating subscription:', err);
-      toast.error(`Update failed: ${err.message}`, { id: toastId });
+      toast.error(userFacingErrorMessage(err, `Update failed: ${err.message}`), { id: toastId });
     }
   };
 

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -190,7 +191,7 @@ function RecurringContractDetailView() {
                 });
             } catch (err) {
                 console.error('Error loading recurring contract detail:', err);
-                setError('Unable to load recurring contract details.');
+                setError(userFacingErrorMessage(err, 'Unable to load recurring contract details.'));
             } finally {
                 setLoading(false);
             }
@@ -222,7 +223,7 @@ function RecurringContractDetailView() {
             }));
         } catch (err) {
             console.error('Error updating recurring contract status:', err);
-            setError('Unable to update recurring contract.');
+            setError(userFacingErrorMessage(err, 'Unable to update recurring contract.'));
         } finally {
             setSaving(false);
         }
@@ -253,7 +254,7 @@ function RecurringContractDetailView() {
             }));
         } catch (err) {
             console.error('Error sending recurring estimate to customer:', err);
-            setError('Unable to send recurring contract to customer.');
+            setError(userFacingErrorMessage(err, 'Unable to send recurring contract to customer.'));
         } finally {
             setSaving(false);
         }

@@ -1,3 +1,7 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import { jobStatusClass } from '../../../utils/statusPresentation';
+import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import { jobExecutionProgress } from "../../../utils/jobExecutionProgress";
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
 import { jobHistoryActorName, formatJobHistoryDate } from "../../../utils/jobHistory";
@@ -1568,7 +1572,7 @@ const JobDetailView = () => {
         );
       } catch (error) {
         console.error("[JobDetailView] Failed to load task groups", error);
-        toast.error("Failed to load task groups.");
+        toast.error(userFacingErrorMessage(error, "Failed to load task groups."));
         setTaskGroupList([]);
       } finally {
         setLoadingTaskGroups(false);
@@ -4002,7 +4006,7 @@ const JobDetailView = () => {
       handleJobTabChange("Planned");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to create change order");
+      toast.error(userFacingErrorMessage(err, "Failed to create change order"));
     } finally {
       setSavingChangeOrder(false);
     }
@@ -4337,65 +4341,9 @@ const JobDetailView = () => {
     return labels[normalized] || raw;
   };
 
-  const getStatusClass = (status) => {
-    switch (formatStatusLabel(status)) {
-      case "Draft":
-      case "Estimate Pending":
-      case "Unscheduled":
-      case "Expired":
-        return "bg-red-100 text-red-800";
-      case "Estimate":
-      case "Sent":
-      case "Viewed":
-      case "In Progress":
-      case "Waiting for Parts":
-        return "bg-yellow-100 text-yellow-800";
-      case "Accepted":
-      case "Scheduled":
-      case "Finished":
-      case "Paid":
-      case "Comped":
-      case JOB_BILLING_STATUS.customerResolved:
-        return "bg-green-100 text-green-800";
-      case "Invoiced":
-        return "bg-blue-100 text-blue-800";
-      case "Canceled":
-      case "Rejected":
-        return "bg-gray-200 text-gray-800";
-      default:
-        return "bg-gray-100 text-gray-800";
-    }
-  };
+  const getStatusClass = jobStatusClass;
 
-  const statusTone = (status) => {
-    switch (formatStatusLabel(status)) {
-      case "Draft":
-      case "Estimate Pending":
-      case "Unscheduled":
-      case "Expired":
-        return "border-slate-200 bg-slate-50 text-slate-700";
-      case "Estimate":
-      case "Sent":
-      case "Viewed":
-      case "In Progress":
-      case "Waiting for Parts":
-        return "border-amber-200 bg-amber-50 text-amber-700";
-      case "Accepted":
-      case "Scheduled":
-      case "Finished":
-      case "Paid":
-      case "Comped":
-      case JOB_BILLING_STATUS.customerResolved:
-        return "border-emerald-200 bg-emerald-50 text-emerald-700";
-      case "Invoiced":
-        return "border-blue-200 bg-blue-50 text-blue-700";
-      case "Canceled":
-      case "Rejected":
-        return "border-rose-200 bg-rose-50 text-rose-700";
-      default:
-        return "border-slate-200 bg-slate-50 text-slate-700";
-    }
-  };
+  const statusTone = jobStatusClass;
 
   const StatusBadge = ({ status }) => (
     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${statusTone(status)}`}>
@@ -4462,7 +4410,7 @@ const JobDetailView = () => {
     },
   });
 
-  const selectStyles = {
+  const selectStyles = workspaceSelectStyles({
     control: (base, state) => ({
       ...base,
       backgroundColor: "#F8FAFC",
@@ -4529,7 +4477,7 @@ const JobDetailView = () => {
       color: "#0F172A",
       fontWeight: 600,
     }),
-  };
+  });
 
   const fieldLabelClass = "block text-xs font-bold uppercase tracking-wide text-slate-600";
   const fieldInputClass =
@@ -5923,7 +5871,7 @@ const JobDetailView = () => {
       });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to create plan");
+      toast.error(userFacingErrorMessage(err, "Failed to create plan"));
     } finally {
       setSavingPlan(false);
     }
@@ -5969,7 +5917,7 @@ const JobDetailView = () => {
       await flushPlanEditorSave();
       return true;
     } catch (error) {
-      toast.error("Could not save plan changes. Retry before switching plans.");
+      toast.error(userFacingErrorMessage(error, "Could not save plan changes. Retry before switching plans."));
       return false;
     }
   };
@@ -5996,7 +5944,7 @@ const JobDetailView = () => {
       return true;
     } catch (err) {
       console.error(err);
-      toast.error(err.message || "Failed to load plan");
+      toast.error(userFacingErrorMessage(err, err.message || "Failed to load plan"));
       return false;
     } finally {
       setLoadingPlanEditorId("");
@@ -6107,7 +6055,7 @@ const JobDetailView = () => {
       handleJobTabChange("Planned");
     } catch (err) {
       console.error(err);
-      toast.error(err.message || "Failed to accept plan");
+      toast.error(userFacingErrorMessage(err, err.message || "Failed to accept plan"));
     } finally {
       setAcceptingPlanId("");
     }
@@ -6538,7 +6486,7 @@ const JobDetailView = () => {
       toast.success("Customer note created.");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to create customer note.");
+      toast.error(userFacingErrorMessage(err, "Failed to create customer note."));
     } finally {
       setSavingCustomerNote(false);
     }
@@ -6691,7 +6639,7 @@ const JobDetailView = () => {
       toast.success("Comment copied to customer notes.");
     } catch (err) {
       console.error(err);
-      toast.error(err?.message || "Failed to copy comment to customer notes.");
+      toast.error(userFacingErrorMessage(err, err?.message || "Failed to copy comment to customer notes."));
     } finally {
       setCopyingCommentToCustomerNoteId("");
     }
@@ -8029,7 +7977,7 @@ const JobDetailView = () => {
       setShowJobFinishConfirm(true);
     } catch (error) {
       console.error("Could not load the work to finish", error);
-      toast.error("Could not load all tasks and products. Try opening Finish Job again.");
+      toast.error(userFacingErrorMessage(error, "Could not load all tasks and products. Try opening Finish Job again."));
     } finally {
       setLoadingJobFinish(false);
     }
@@ -8985,7 +8933,7 @@ const JobDetailView = () => {
       toast.success("Added and selected task");
     } catch (error) {
       console.error("[JobDetailView] Failed to add task while scheduling service stop", error);
-      toast.error("Failed to add task");
+      toast.error(userFacingErrorMessage(error, "Failed to add task"));
     } finally {
       setSavingScheduleTask(false);
     }
@@ -9388,7 +9336,7 @@ const JobDetailView = () => {
       closeScheduleServiceStopModal({ force: true });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to schedule service stop.");
+      toast.error(userFacingErrorMessage(err, "Failed to schedule service stop."));
     } finally {
       setSavingScheduledServiceStop(false);
     }
@@ -9537,7 +9485,7 @@ const JobDetailView = () => {
       closeEditActualServiceStopModal({ force: true });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update service stop.");
+      toast.error(userFacingErrorMessage(err, "Failed to update service stop."));
     } finally {
       setSavingActualServiceStopEdit(false);
     }
@@ -9613,7 +9561,7 @@ const JobDetailView = () => {
       const loaded=await manageTechnicianWork(recentlySelectedCompany,"list",{jobId});setWorkOffers(loaded.offers || []);
       await recordJobHistory({eventType:"Work Offer",title:"Work offer created: "+title,description:workOfferForm.notes || "",metadata:{workOfferId:id,status:result.status}});
       setShowCreateWorkOfferModal(false);toast.success("Work offer created");
-    } catch(error){toast.error(error.message || "Failed to create work offer");}
+    } catch(error){toast.error(userFacingErrorMessage(error, error.message || "Failed to create work offer"));}
     finally{setSavingWorkOffer(false);}
   };
 
@@ -9667,7 +9615,7 @@ const JobDetailView = () => {
       closeContractModal();
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update legacy estimate");
+      toast.error(userFacingErrorMessage(err, "Failed to update legacy estimate"));
     } finally {
       setSavingContract(false);
     }
@@ -9704,7 +9652,7 @@ const JobDetailView = () => {
       closeContractModal();
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete legacy estimate");
+      toast.error(userFacingErrorMessage(err, "Failed to delete legacy estimate"));
     } finally {
       setDeletingContract(false);
     }
@@ -10085,7 +10033,7 @@ const JobDetailView = () => {
       } catch (e) {
         console.error(e);
         setSectionLoading(clearSectionLoadingState());
-        toast.error("Failed to load job details");
+        toast.error(userFacingErrorMessage(e, "Failed to load job details"));
       } finally {
         setLoading(false);
       }
@@ -10415,7 +10363,7 @@ const JobDetailView = () => {
       toast.success("Description saved");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to save description");
+      toast.error(userFacingErrorMessage(err, "Failed to save description"));
     } finally {
       setSavingDescription(false);
     }
@@ -10531,7 +10479,7 @@ const JobDetailView = () => {
         } catch (copyError) {
           copyFailed = true;
           console.error(copyError);
-          toast.error(copyError?.message || "Comment added, but the customer note copy failed.");
+          toast.error(userFacingErrorMessage(copyError, copyError?.message || "Comment added, but the customer note copy failed."));
         }
       }
 
@@ -10542,7 +10490,7 @@ const JobDetailView = () => {
       }
     } catch (err) {
       console.error(err);
-      toast.error("Failed to add comment");
+      toast.error(userFacingErrorMessage(err, "Failed to add comment"));
     } finally {
       setAddingComment(false);
     }
@@ -10563,7 +10511,7 @@ const JobDetailView = () => {
       toast.success(resolved ? "Marked resolved" : "Re-opened");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update comment");
+      toast.error(userFacingErrorMessage(err, "Failed to update comment"));
     }
   };
 
@@ -10597,7 +10545,7 @@ const JobDetailView = () => {
       });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to enter edit mode");
+      toast.error(userFacingErrorMessage(err, "Failed to enter edit mode"));
     }
   };
 
@@ -10852,7 +10800,7 @@ const JobDetailView = () => {
       if (reviewCompletion) await openJobFinishConfirm();
     } catch (err) {
       console.error(err);
-      toast.error("Failed to save changes");
+      toast.error(userFacingErrorMessage(err, "Failed to save changes"));
     }
   };
 
@@ -10957,7 +10905,7 @@ const JobDetailView = () => {
       toast.success(isJobExpired ? "Expired job note refreshed" : "Job canceled");
     } catch (err) {
       console.error(err);
-      toast.error(err?.message || "Failed to cancel job");
+      toast.error(userFacingErrorMessage(err, err?.message || "Failed to cancel job"));
     } finally {
       setExpiringJob(false);
     }
@@ -11048,7 +10996,7 @@ const JobDetailView = () => {
       toast.success(isJobCanceled ? "Canceled job reason refreshed" : "Job canceled");
     } catch (err) {
       console.error(err);
-      toast.error(err?.message || "Failed to cancel job");
+      toast.error(userFacingErrorMessage(err, err?.message || "Failed to cancel job"));
     } finally {
       setCancelingJob(false);
     }
@@ -11156,7 +11104,7 @@ const JobDetailView = () => {
       toast.success(isJobCustomerResolved ? "Customer resolution note refreshed" : "Job closed as customer resolved");
     } catch (err) {
       console.error(err);
-      toast.error(err?.message || "Failed to close job as customer resolved");
+      toast.error(userFacingErrorMessage(err, err?.message || "Failed to close job as customer resolved"));
     } finally {
       setResolvingCustomerHandledJob(false);
     }
@@ -11196,7 +11144,7 @@ const JobDetailView = () => {
       }
     } catch (err) {
       console.error("Unable to verify job delete eligibility", err);
-      toast.error("Could not confirm this job can be deleted.");
+      toast.error(userFacingErrorMessage(err, "Could not confirm this job can be deleted."));
       return;
     }
 
@@ -11257,7 +11205,7 @@ const JobDetailView = () => {
       navigate("/company/jobs/operations", { replace: true });
     } catch (err) {
       console.error(err);
-      toast.error(err?.message || "Failed to delete job");
+      toast.error(userFacingErrorMessage(err, err?.message || "Failed to delete job"));
     } finally {
       setDeletingJob(false);
     }
@@ -11385,7 +11333,7 @@ const JobDetailView = () => {
       toast.success(mode === "add" ? "Template added to job" : "Planned scope replaced with template");
     } catch (error) {
       console.error("Failed to apply job template", error);
-      setJobTemplateApplyError(error.message || "Could not apply the template. Please try again.");
+      setJobTemplateApplyError(userFacingErrorMessage(error, error.message || "Could not apply the template. Please try again."));
     } finally {
       setApplyingJobTemplate(false);
     }
@@ -11646,7 +11594,7 @@ const JobDetailView = () => {
       setTemplateName("");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to create job template");
+      toast.error(userFacingErrorMessage(err, "Failed to create job template"));
     } finally {
       setSavingJobTemplate(false);
     }
@@ -11960,7 +11908,7 @@ const JobDetailView = () => {
 	        catalogItemForJob = await createStripeObjectForServiceCatalogItem(catalogItem);
 	      } catch (stripeError) {
 	        console.error("[JobDetailView] Created catalog service without Stripe object", stripeError);
-	        toast.error(stripeError.message || "Service created, but Stripe object creation failed.");
+	        toast.error(userFacingErrorMessage(stripeError, stripeError.message || "Service created, but Stripe object creation failed."));
 	      }
 
 	      setServiceCatalogItems((items) => (
@@ -11972,7 +11920,7 @@ const JobDetailView = () => {
 	      await addCatalogServiceToJob(catalogItemForJob);
 	    } catch (error) {
 	      console.error("[JobDetailView] Failed to create service catalog item", error);
-	      toast.error(error.message || "Failed to create catalog service.");
+	      toast.error(userFacingErrorMessage(error, error.message || "Failed to create catalog service."));
 	    } finally {
 	      setSavingServiceCatalogCreator(false);
 	    }
@@ -12135,7 +12083,7 @@ const JobDetailView = () => {
       toast.success(existingLine ? "Updated service line" : "Added service line");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to save service line");
+      toast.error(userFacingErrorMessage(err, "Failed to save service line"));
     } finally {
       setSavingLaborLine(false);
     }
@@ -12350,7 +12298,7 @@ const JobDetailView = () => {
       );
     } catch (err) {
       console.error("[JobDetailView] Failed to add catalog service", err);
-      toast.error("Failed to add catalog service.");
+      toast.error(userFacingErrorMessage(err, "Failed to add catalog service."));
     } finally {
       setAddingCatalogServiceId("");
     }
@@ -12384,7 +12332,7 @@ const JobDetailView = () => {
       toast.success("Deleted service line");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete service line");
+      toast.error(userFacingErrorMessage(err, "Failed to delete service line"));
     } finally {
       setSavingLaborLine(false);
     }
@@ -12465,7 +12413,7 @@ const JobDetailView = () => {
         : `Added task to ${getLaborLineDisplayName(targetLine)}`);
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update service line task");
+      toast.error(userFacingErrorMessage(err, "Failed to update service line task"));
     } finally {
       setAttachingLaborLineTaskId("");
     }
@@ -12672,7 +12620,7 @@ const JobDetailView = () => {
       clearNewTask({ preventDefault: () => { } });
     } catch (error) {
       console.error("[JobDetailView] Failed to apply task group", error);
-      toast.error("Failed to add task group.");
+      toast.error(userFacingErrorMessage(error, "Failed to add task group."));
     } finally {
       setApplyingTaskGroup(false);
     }
@@ -13077,7 +13025,7 @@ const JobDetailView = () => {
       toast.success("Updated task");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update task");
+      toast.error(userFacingErrorMessage(err, "Failed to update task"));
     } finally {
       setSavingTaskEdit(false);
     }
@@ -13276,7 +13224,7 @@ const JobDetailView = () => {
       clearNewTask({ preventDefault: () => { } });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to add task");
+      toast.error(userFacingErrorMessage(err, "Failed to add task"));
     }
   };
 
@@ -13455,7 +13403,7 @@ const JobDetailView = () => {
       clearNewPlannedStop({ preventDefault: () => { } }, { force: true });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to add planned stop");
+      toast.error(userFacingErrorMessage(err, "Failed to add planned stop"));
     } finally {
       setSavingPlannedStop(false);
     }
@@ -13508,7 +13456,7 @@ const JobDetailView = () => {
       toast.success("Deleted planned stop");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete planned stop");
+      toast.error(userFacingErrorMessage(err, "Failed to delete planned stop"));
     }
   };
   const deleteTaskItem = async (e, id) => {
@@ -13560,7 +13508,7 @@ const JobDetailView = () => {
       toast.success("Deleted task");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete task");
+      toast.error(userFacingErrorMessage(err, "Failed to delete task"));
     }
   };
 
@@ -13735,7 +13683,7 @@ const JobDetailView = () => {
       toast.success("Database item created");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to create database item");
+      toast.error(userFacingErrorMessage(err, "Failed to create database item"));
     } finally {
       setSavingShoppingDbItem(false);
     }
@@ -13963,7 +13911,7 @@ const JobDetailView = () => {
       toast.success("Updated planned product");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update planned product");
+      toast.error(userFacingErrorMessage(err, "Failed to update planned product"));
     } finally {
       setSavingShoppingEdit(false);
     }
@@ -14190,7 +14138,7 @@ const JobDetailView = () => {
       resetNewShoppingListItemDraft({ keepOpen, keepSubCategory: keepOpen });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to add item");
+      toast.error(userFacingErrorMessage(err, "Failed to add item"));
     } finally {
       savingShoppingItemRef.current = false;
       setSavingShoppingItemAction("");
@@ -14250,7 +14198,7 @@ const JobDetailView = () => {
       toast.success("Deleted item");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete item");
+      toast.error(userFacingErrorMessage(err, "Failed to delete item"));
     }
   };
 
@@ -14332,7 +14280,7 @@ const JobDetailView = () => {
       toast.success("Marked planned product as purchased");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to mark product as purchased");
+      toast.error(userFacingErrorMessage(err, "Failed to mark product as purchased"));
     } finally {
       setMarkingPurchasedShoppingItemId("");
     }
@@ -14597,7 +14545,7 @@ const JobDetailView = () => {
       toast.success("Purchased product removed from job.");
     } catch (error) {
       console.error("Error removing purchased item from job:", error);
-      toast.error("Failed to remove purchased product.");
+      toast.error(userFacingErrorMessage(error, "Failed to remove purchased product."));
     } finally {
       setRemovingPurchasedItemId("");
     }
@@ -15168,7 +15116,7 @@ const JobDetailView = () => {
       );
     } catch (error) {
       console.error("Error loading unassigned purchased items:", error);
-      toast.error("Failed to load unassigned purchased items.");
+      toast.error(userFacingErrorMessage(error, "Failed to load unassigned purchased items."));
     } finally {
       setLoadingAvailablePurchasedItems(false);
     }
@@ -15293,7 +15241,7 @@ const JobDetailView = () => {
       toast.success("Purchased item attached to job.");
     } catch (error) {
       console.error("Error attaching purchased items:", error);
-      toast.error("Failed to attach purchased items.");
+      toast.error(userFacingErrorMessage(error, "Failed to attach purchased items."));
     }
   };
 
@@ -15406,7 +15354,7 @@ const JobDetailView = () => {
       handleJobTabChange("Billing");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to create draft estimate");
+      toast.error(userFacingErrorMessage(err, "Failed to create draft estimate"));
     }
   };
 
@@ -15512,7 +15460,7 @@ const JobDetailView = () => {
       }));
     } catch (error) {
       console.error("[JobDetailView] Unable to apply estimate terms template", error);
-      toast.error("Failed to apply terms template.");
+      toast.error(userFacingErrorMessage(error, "Failed to apply terms template."));
     } finally {
       setApplyingBillingTermsTemplate(false);
     }
@@ -15617,7 +15565,7 @@ const JobDetailView = () => {
       return agreement;
     } catch (err) {
       console.error(err);
-      toast.error(err.message || "Failed to save estimate details");
+      toast.error(userFacingErrorMessage(err, err.message || "Failed to save estimate details"));
       return null;
     } finally {
       setSavingBillingEstimateDraft(false);
@@ -15758,7 +15706,7 @@ const JobDetailView = () => {
         }
       } catch (err) {
         console.error(err);
-        toast.error(err.message || "Failed to send sales estimate email");
+        toast.error(userFacingErrorMessage(err, err.message || "Failed to send sales estimate email"));
       } finally {
         setSendingEstimateEmail(false);
       }
@@ -15813,7 +15761,7 @@ const JobDetailView = () => {
       toast.success("Estimate marked as sent");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to send estimate");
+      toast.error(userFacingErrorMessage(err, "Failed to send estimate"));
     }
   };
   const loadJobWorkflowData = async ({
@@ -15925,7 +15873,7 @@ const JobDetailView = () => {
       toast.success("Estimate marked as accepted");
     } catch (err) {
       console.error(err);
-      toast.error(err.message || "Failed to mark estimate accepted");
+      toast.error(userFacingErrorMessage(err, err.message || "Failed to mark estimate accepted"));
     }
   };
 
@@ -16625,7 +16573,7 @@ const JobDetailView = () => {
       }
     } catch (err) {
       console.error(err);
-      toast.error(err.message || "Failed to send sales invoice email");
+      toast.error(userFacingErrorMessage(err, err.message || "Failed to send sales invoice email"));
     } finally {
       setSendingInvoiceEmail(false);
     }
@@ -16690,7 +16638,7 @@ const JobDetailView = () => {
       );
     } catch (err) {
       console.error(err);
-      toast.error("Failed to mark as invoiced");
+      toast.error(userFacingErrorMessage(err, "Failed to mark as invoiced"));
     } finally {
       setJobInvoiceActionInProgress("");
     }
@@ -16969,7 +16917,7 @@ const JobDetailView = () => {
     const scheduleTaskFieldLabelClass = "block text-xs font-bold uppercase tracking-wide text-slate-600";
     const scheduleTaskInputClass =
       "mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 disabled:cursor-not-allowed disabled:opacity-50";
-    const scheduleSelectStyles = {
+    const scheduleSelectStyles = workspaceSelectStyles({
       control: (base, state) => ({
         ...base,
         minHeight: 40,
@@ -16978,7 +16926,7 @@ const JobDetailView = () => {
         "&:hover": { borderColor: state.isFocused ? "#3b82f6" : "#94a3b8" },
       }),
       menuPortal: (base) => ({ ...base, zIndex: 9999 }),
-    };
+    });
 
     return (
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -20029,10 +19977,10 @@ const JobDetailView = () => {
 
   return (
     <div className="job-detail-view min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-      {(() => { const progress=jobExecutionProgress({tasks:taskList,services:laborLineItems,products:shoppingList,offers:workOffers}); return <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4"><h2 className="font-bold">Remaining Work</h2><p className="mt-1 text-sm">{progress.remainingTasks} tasks · {progress.remainingServices} services · {progress.remainingProductUnits} product units</p><p className="mt-1 text-sm text-slate-600">{progress.stages.unassigned} unassigned · {progress.stages.offered} offered · {progress.stages.acceptedUnscheduled} assigned, unscheduled · {progress.stages.scheduled} scheduled · {progress.stages.blocked} waiting for parts</p></section>; })()}
+
 
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <WorkspaceRecordHeader title={<>{job.type || "Job Details"}</>} eyebrow="Job details"><div className="workspace-record-toolbar">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               {isInitialShellLoading ? (
@@ -20112,7 +20060,7 @@ const JobDetailView = () => {
                       />
                     </div>
                   </div>
-                  <h1 className="mt-3 text-3xl font-bold text-slate-950">{job.type || "Job Details"}</h1>
+
                   <div className="mt-2 flex max-w-3xl flex-col gap-2 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
                     <p>
                       {renderCustomerDetailLink(getCustomerDisplayName())} · Created {formattedDateCreated}
@@ -20185,7 +20133,8 @@ const JobDetailView = () => {
               )}
             </div>
           </div>
-        </section>
+        </div></WorkspaceRecordHeader>
+        {(() => { const progress=jobExecutionProgress({tasks:taskList,services:laborLineItems,products:shoppingList,offers:workOffers}); return <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4"><h2 className="font-bold">Remaining Work</h2><p className="mt-1 text-sm">{progress.remainingTasks} tasks · {progress.remainingServices} services · {progress.remainingProductUnits} product units</p><p className="mt-1 text-sm text-slate-600">{progress.stages.unassigned} unassigned · {progress.stages.offered} offered · {progress.stages.acceptedUnscheduled} assigned, unscheduled · {progress.stages.scheduled} scheduled · {progress.stages.blocked} waiting for parts</p></section>; })()}
 
         {!isInitialShellLoading && (
           <JobProgressTimeline

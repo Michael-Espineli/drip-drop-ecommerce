@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
@@ -79,7 +80,7 @@ const NewCompanyChat = () => {
                 }
             } catch (err) {
                 console.error(err);
-                setError("Failed to load company details.");
+                setError(userFacingErrorMessage(err, "Failed to load company details."));
             }
             setLoading(false);
         };
@@ -125,7 +126,7 @@ const NewCompanyChat = () => {
 
         } catch (err) {
             console.error("Error sending message: ", err);
-            setError("Failed to start conversation. Please try again.");
+            setError(userFacingErrorMessage(err, "Failed to start conversation. Please try again."));
             setIsSending(false);
         }
     };

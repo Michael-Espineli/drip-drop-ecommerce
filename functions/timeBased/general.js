@@ -1,7 +1,8 @@
 const { onSchedule } = require("firebase-functions/scheduler");
 const { onDocumentCreated, onDocumentUpdated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onTaskDispatched } = require("firebase-functions/v2/tasks");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('../appErrors');
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { getFunctions } = require("firebase-admin/functions");
 const { defineSecret } = require('firebase-functions/params');

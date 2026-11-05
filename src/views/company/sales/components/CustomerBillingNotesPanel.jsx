@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -213,7 +214,7 @@ const CustomerBillingNotesPanel = ({
       });
     } catch (error) {
       console.error('Failed to load customer note page:', error);
-      toast.error('Failed to load customer notes.');
+      toast.error(userFacingErrorMessage(error, 'Failed to load customer notes.'));
     } finally {
       setModalLoading(false);
     }
@@ -319,7 +320,7 @@ const CustomerBillingNotesPanel = ({
       toast.success('Billing notes saved.');
     } catch (error) {
       console.error('Failed to save billing notes:', error);
-      toast.error('Failed to save billing notes.');
+      toast.error(userFacingErrorMessage(error, 'Failed to save billing notes.'));
     } finally {
       setSavingBillingNotes(false);
     }
@@ -385,7 +386,7 @@ const CustomerBillingNotesPanel = ({
       toast.success('Customer note added.');
     } catch (error) {
       console.error('Failed to add customer note:', error);
-      toast.error('Failed to add customer note.');
+      toast.error(userFacingErrorMessage(error, 'Failed to add customer note.'));
     } finally {
       setAddingNote(false);
     }

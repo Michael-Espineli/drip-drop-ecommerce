@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { collection, query, onSnapshot, getDoc, doc } from 'firebase/firestore';
@@ -57,7 +58,7 @@ const SavedCompanies = () => {
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-7xl mx-auto">
                 <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">Saved Companies</h1>
+                    <WorkspaceHeader title={<>Saved Companies</>} eyebrow="Your pool care" />
                     <p className="mt-1 text-lg text-gray-600">Your bookmarked companies for future reference.</p>
                 </div>
 

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
 import { arrayRemove, arrayUnion, collection, doc, query, where, orderBy, getDocs, startAfter, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Context } from "../../../context/AuthContext";
@@ -416,7 +417,7 @@ const PurchaseListView = () => {
         setTechIds(usersData.map(user => user.userId));
       } catch (err) {
         console.error("Error fetching company users:", err);
-        setError("Failed to load company users.");
+        setError(userFacingErrorMessage(err, "Failed to load company users."));
       } finally {
         setLoading(false);
       }
@@ -509,7 +510,7 @@ const PurchaseListView = () => {
         setPurchasedItems(itemsData);
       } catch (err) {
         console.error("Error fetching purchased items:", err);
-        setError("Failed to load purchased items.");
+        setError(userFacingErrorMessage(err, "Failed to load purchased items."));
       } finally {
         setLoading(false);
       }
@@ -537,7 +538,7 @@ const PurchaseListView = () => {
       setHasMore(querySnapshot.docs.length === 25);
     } catch (err) {
       console.error("Error fetching more purchased items:", err);
-      setError("Failed to load more purchased items.");
+      setError(userFacingErrorMessage(err, "Failed to load more purchased items."));
     } finally {
       setLoading(false);
     }
@@ -584,7 +585,7 @@ const PurchaseListView = () => {
       XLSX.writeFile(wb, fileName);
     } catch (e) {
       console.error("Excel export failed:", e);
-      appAlert("Excel export failed. Check console for details.");
+      appAlert(userFacingErrorMessage(e, "Excel export failed. Check console for details."));
     }
   };
   const shortDate = (date) => {
@@ -859,7 +860,7 @@ const PurchaseListView = () => {
       return options;
     } catch (err) {
       console.error(err);
-      appAlert("Could not load customers.");
+      appAlert(userFacingErrorMessage(err, "Could not load customers."));
       return [];
     } finally {
       setCustomersLoading(false);
@@ -938,7 +939,7 @@ const PurchaseListView = () => {
       return items;
     } catch (err) {
       console.error(err);
-      appAlert("Could not load shopping list items.");
+      appAlert(userFacingErrorMessage(err, "Could not load shopping list items."));
       return [];
     } finally {
       setShoppingListItemsLoading(false);
@@ -1045,7 +1046,7 @@ const PurchaseListView = () => {
       );
     } catch (err) {
       console.error(err);
-      appAlert("Could not load jobs for that date range.");
+      appAlert(userFacingErrorMessage(err, "Could not load jobs for that date range."));
     } finally {
       setJobsLoading(false);
     }

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useEffect, useRef, useState } from "react";
 import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
 import { collection, doc, getDocs, setDoc } from "firebase/firestore";
@@ -77,7 +78,7 @@ export default function CreatePayrollPayItemDialog({ companyId, userId, initialN
       await setDoc(doc(db, "companies", companyId, "companyPayTypes", payload.id), payload, { merge: true });
       onCreated(payload);
     } catch (err) {
-      setError("Could not create the payroll pay item. Your service draft is still open. Try again.");
+      setError(userFacingErrorMessage(err, "Could not create the payroll pay item. Your service draft is still open. Try again."));
     } finally {
       savingRef.current = false;
       setSaving(false);

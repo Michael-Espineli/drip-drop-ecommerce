@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
@@ -62,7 +64,7 @@ const NewRequest = () => {
 
             } catch (err) {
                 console.error(err);
-                setError("Failed to load initial data. Please try again later.");
+                setError(userFacingErrorMessage(err, "Failed to load initial data. Please try again later."));
             } finally {
                 setLoading(false);
             }
@@ -80,7 +82,7 @@ const NewRequest = () => {
                 return;
             }
             const q = query(collection(db, 'homeownerBodiesOfWater'), where('serviceLocationId', '==', selectedLocation), where('userId', '==', user.uid));
-            let snap; try { snap = await getDocs(q); } catch (_) { setError("Could not load pools. Please try selecting the address again."); return; }
+            let snap; try { snap = await getDocs(q); } catch (_) { setError(userFacingErrorMessage(_, "Could not load pools. Please try selecting the address again.")); return; }
             const bows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setBodiesOfWater(bows);
         };
@@ -97,7 +99,7 @@ const NewRequest = () => {
                 return;
             }
             const q = query(collection(db, 'homeownerEquipment'), where('bodyOfWaterId', '==', selectedBodyOfWater), where('userId', '==', user.uid));
-            let snap; try { snap = await getDocs(q); } catch (_) { setError("Could not load equipment. Please try selecting the pool again."); return; }
+            let snap; try { snap = await getDocs(q); } catch (_) { setError(userFacingErrorMessage(_, "Could not load equipment. Please try selecting the pool again.")); return; }
             const equip = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setEquipment(equip);
         };
@@ -197,7 +199,7 @@ const NewRequest = () => {
 
         } catch (err) {
             console.error("Error creating service request: ", err);
-            setError("Failed to submit request. Please try again.");
+            setError(userFacingErrorMessage(err, "Failed to submit request. Please try again."));
             setIsSubmitting(false);
         }
     };
@@ -211,7 +213,7 @@ const NewRequest = () => {
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto space-y-6">
                 <div>
-                    <h1 className="text-3xl font-bold text-gray-900">Service Request</h1>
+                    <WorkspaceHeader title={<>Service Request</>} eyebrow="Your pool care" />
                 </div>
 
                 {company && (

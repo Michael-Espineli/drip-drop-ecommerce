@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
@@ -558,7 +559,7 @@ const CreateSalesInvoice = () => {
       navigate(`/company/sales/invoices/${invoice.id}`);
     } catch (error) {
       console.error('Unable to save sales invoice', error);
-      toast.error('Failed to save invoice.');
+      toast.error(userFacingErrorMessage(error, 'Failed to save invoice.'));
     } finally {
       setSaving(false);
     }

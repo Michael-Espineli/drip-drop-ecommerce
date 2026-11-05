@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../utils/permissionErrors';
 import { useState, useEffect, useContext } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../utils/config';
@@ -24,7 +25,7 @@ const useCompanyProfile = (companyId) => {
                     setError('No such document!');
                 }
             } catch (err) {
-                setError('Error loading company data');
+                setError(userFacingErrorMessage(err, 'Error loading company data'));
                 console.error(err);
             }
             setLoading(false);

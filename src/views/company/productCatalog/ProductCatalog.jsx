@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { ArrowLeftIcon, PencilSquareIcon, PhotoIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
@@ -362,7 +363,7 @@ const ProductCatalog = () => {
       setProducts(productSnap.docs.map(mapProductDoc));
     } catch (error) {
       console.error("Unable to load product catalog:", error);
-      toast.error("Could not load the Product Catalog.");
+      toast.error(userFacingErrorMessage(error, "Could not load the Product Catalog."));
     } finally {
       setLoading(false);
     }
@@ -394,7 +395,7 @@ const ProductCatalog = () => {
       setVendorItems(connectedItems);
     } catch (error) {
       console.error("Unable to load connected vendor items:", error);
-      toast.error("Could not load linked vendor items.");
+      toast.error(userFacingErrorMessage(error, "Could not load linked vendor items."));
     } finally {
       setVendorItemsLoading(false);
     }
@@ -581,7 +582,7 @@ const ProductCatalog = () => {
       toast.success("Product created.");
     } catch (error) {
       console.error("Unable to create product:", error);
-      toast.error("Could not create this product.");
+      toast.error(userFacingErrorMessage(error, "Could not create this product."));
     } finally {
       setSaving(false);
     }
@@ -634,7 +635,7 @@ const ProductCatalog = () => {
       toast.success("Product updated.");
     } catch (error) {
       console.error("Unable to update product:", error);
-      toast.error("Could not update this product.");
+      toast.error(userFacingErrorMessage(error, "Could not update this product."));
     } finally {
       setSaving(false);
     }

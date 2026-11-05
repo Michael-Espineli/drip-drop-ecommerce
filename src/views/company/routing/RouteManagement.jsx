@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, query } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -829,7 +831,7 @@ const RouteManagement = () => {
       setAssignmentDestinationRoute(null);
     } catch (error) {
       console.error("Error assigning planned route RSS:", error);
-      toast.error(error.message || "Failed to assign recurring service stops.");
+      toast.error(userFacingErrorMessage(error, error.message || "Failed to assign recurring service stops."));
     } finally {
       setSavingAssignment(false);
     }
@@ -853,11 +855,11 @@ const RouteManagement = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <WorkspaceRecordHeader title={<>Planned Routes</>} eyebrow="Company management"><div className="workspace-record-toolbar">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex flex-col gap-2">
               <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Operations</p>
-              <h1 className="text-3xl font-bold text-slate-950">Planned Routes</h1>
+
               <p className="max-w-3xl text-sm text-slate-600">Recurring routes organized by day and technician.</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -884,7 +886,7 @@ const RouteManagement = () => {
               </button>
             </div>
           </div>
-        </section>
+        </div></WorkspaceRecordHeader>
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

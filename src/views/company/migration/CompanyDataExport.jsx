@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import * as XLSX from "xlsx";
@@ -120,7 +121,7 @@ function CompanyDataExport({ exportType: exportTypeOverride = "" }) {
       setLoadedAt(new Date());
     } catch (error) {
       console.error(`Failed to load ${config.title}:`, error);
-      toast.error(`Could not load ${config.title.toLowerCase()}.`);
+      toast.error(userFacingErrorMessage(error, `Could not load ${config.title.toLowerCase()}.`));
       setExportPackage(null);
     } finally {
       setLoading(false);

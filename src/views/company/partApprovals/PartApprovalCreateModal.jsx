@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
@@ -306,7 +307,7 @@ const PartApprovalCreateModal = ({
         }
       } catch (loadError) {
         console.error('Unable to load part approval options', loadError);
-        toast.error('Unable to load part approval options.');
+        toast.error(userFacingErrorMessage(loadError, 'Unable to load part approval options.'));
       } finally {
         if (active) setLoading(false);
       }
@@ -633,7 +634,7 @@ const PartApprovalCreateModal = ({
       onClose?.();
     } catch (saveError) {
       console.error('Unable to create part approval', saveError);
-      toast.error(saveError.message || 'Unable to create part approval.');
+      toast.error(userFacingErrorMessage(saveError, saveError.message || 'Unable to create part approval.'));
     } finally {
       setSaving(false);
     }

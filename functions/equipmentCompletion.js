@@ -1,7 +1,7 @@
 // Maintenance/repair history is an effect of saved work, independent of the client.
 // The planner performs every read before returning writes so closeout can include
 // equipment changes in its existing Firestore transaction.
-const { HttpsError } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const text = value => String(value ?? '').trim();
 const id = value => text(typeof value === 'object' ? value?.id : value);
 const key = value => text(value).replace(/[^a-z0-9]/gi, '').toLowerCase();

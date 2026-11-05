@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { collection, doc, getCountFromServer, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc, Timestamp, where, writeBatch } from "firebase/firestore";
@@ -359,7 +360,7 @@ const CompanySetupGuide = () => {
         });
       } catch (err) {
         console.error("Unable to load company setup guide:", err);
-        setError("Unable to load the setup guide right now.");
+        setError(userFacingErrorMessage(err, "Unable to load the setup guide right now."));
       } finally {
         setLoading(false);
       }
@@ -761,7 +762,7 @@ const CompanySetupGuide = () => {
         }
       } catch (err) {
         console.error("Unable to sync startup guide:", err);
-        if (!cancelled) toast.error("Could not save startup guide progress.");
+        if (!cancelled) toast.error(userFacingErrorMessage(err, "Could not save startup guide progress."));
       } finally {
         guideSyncInFlight.current = false;
         if (!cancelled) setGuideSyncing(false);
@@ -817,7 +818,7 @@ const CompanySetupGuide = () => {
       toast.success("Startup guide skipped.");
     } catch (err) {
       console.error("Unable to skip startup guide:", err);
-      toast.error("Could not skip the startup guide.");
+      toast.error(userFacingErrorMessage(err, "Could not skip the startup guide."));
     } finally {
       setGuideSaving(false);
     }
@@ -901,7 +902,7 @@ const CompanySetupGuide = () => {
       toast.success("Startup guide restarted.");
     } catch (err) {
       console.error("Unable to restart startup guide:", err);
-      toast.error("Could not restart the startup guide.");
+      toast.error(userFacingErrorMessage(err, "Could not restart the startup guide."));
     } finally {
       setGuideSaving(false);
     }

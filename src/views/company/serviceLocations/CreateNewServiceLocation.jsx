@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db } from '../../../utils/config';
@@ -387,7 +388,7 @@ const CreateNewServiceLocation = () => {
             navigate(`/company/customers/details/${selectedCustomer}/operations`);
 
         } catch (error) {
-            toast.error('Error creating service location.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Error creating service location.'), { id: toastId });
             console.error("Error: ", error);
         }
     };

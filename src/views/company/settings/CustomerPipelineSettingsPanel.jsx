@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   deleteDoc,
@@ -251,7 +252,7 @@ const CustomerPipelineSettingsPanel = ({ companyId, onChange, compact = false })
       );
     } catch (error) {
       console.error("Unable to load customer pipeline settings:", error);
-      toast.error("Could not load customer pipeline settings.");
+      toast.error(userFacingErrorMessage(error, "Could not load customer pipeline settings."));
     } finally {
       setLoading(false);
     }
@@ -306,7 +307,7 @@ const CustomerPipelineSettingsPanel = ({ companyId, onChange, compact = false })
       await notifyChanged();
     } catch (error) {
       console.error("Unable to seed pipeline defaults:", error);
-      toast.error("Could not add customer pipeline defaults.");
+      toast.error(userFacingErrorMessage(error, "Could not add customer pipeline defaults."));
     } finally {
       setSavingKey("");
     }
@@ -384,7 +385,7 @@ const CustomerPipelineSettingsPanel = ({ companyId, onChange, compact = false })
       await notifyChanged();
     } catch (error) {
       console.error("Unable to save pipeline item:", error);
-      toast.error("Could not save the customer pipeline item.");
+      toast.error(userFacingErrorMessage(error, "Could not save the customer pipeline item."));
     } finally {
       setSavingKey("");
     }
@@ -410,7 +411,7 @@ const CustomerPipelineSettingsPanel = ({ companyId, onChange, compact = false })
       await notifyChanged();
     } catch (error) {
       console.error("Unable to toggle pipeline item:", error);
-      toast.error("Could not update this pipeline item.");
+      toast.error(userFacingErrorMessage(error, "Could not update this pipeline item."));
     } finally {
       setSavingKey("");
     }
@@ -442,7 +443,7 @@ const CustomerPipelineSettingsPanel = ({ companyId, onChange, compact = false })
       await notifyChanged();
     } catch (error) {
       console.error("Unable to delete pipeline item:", error);
-      toast.error("Could not delete the customer pipeline item.");
+      toast.error(userFacingErrorMessage(error, "Could not delete the customer pipeline item."));
     } finally {
       setSavingKey("");
     }
@@ -477,7 +478,7 @@ const CustomerPipelineSettingsPanel = ({ companyId, onChange, compact = false })
       await notifyChanged();
     } catch (error) {
       console.error("Unable to save lead source:", error);
-      toast.error("Could not save this lead source.");
+      toast.error(userFacingErrorMessage(error, "Could not save this lead source."));
     } finally {
       setSavingKey("");
     }

@@ -1,7 +1,7 @@
+const { HttpsError } = require('../appErrors');
 
 const { onCall } = require("firebase-functions/v2/https");
 const functions = require("firebase-functions");
-const HttpsError = functions.https.HttpsError;
 const functions1 = require('firebase-functions/v1');
 const { getFirestore } = require("firebase-admin/firestore");
 const { v4: uuidv4 } = require('uuid');

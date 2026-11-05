@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
 import { buildCompanyPayType, defaultStopPayCategories, emptyWorkTypeForm, rateTypeOptions, resolveStopPayCategories, stackBehaviorOptions, workCategoryOptions } from "../../../utils/payroll/payTypeSetup";
@@ -1241,7 +1242,7 @@ const Payroll = ({ mode = "payroll" }) => {
       } catch (err) {
         if (cancelled) return;
         console.error("Error loading payroll:", err);
-        setError("Could not load payroll data.");
+        setError(userFacingErrorMessage(err, "Could not load payroll data."));
         notifyPayroll("error", "Could not load payroll data. Please try again.");
       } finally {
         if (!cancelled) setLoading(false);

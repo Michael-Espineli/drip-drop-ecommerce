@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { BugAntIcon, LightBulbIcon } from '@heroicons/react/24/outline';
@@ -71,7 +72,7 @@ export default function Feedback() {
       toast.success('Feedback sent. Thank you!', { id: toastId });
     } catch (error) {
       console.error('Error submitting product feedback:', error);
-      toast.error('Could not send feedback. Please try again.', { id: toastId });
+      toast.error(userFacingErrorMessage(error, 'Could not send feedback. Please try again.'), { id: toastId });
     } finally {
       setIsSubmitting(false);
     }

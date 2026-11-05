@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
@@ -132,7 +133,7 @@ const CompanyDetail = () => {
                 if (!cancelled) {
                     setCompany(null);
                     setReviews([]);
-                    setError('Company details could not be loaded.');
+                    setError(userFacingErrorMessage(err, 'Company details could not be loaded.'));
                 }
             } finally {
                 if (!cancelled) setLoading(false);

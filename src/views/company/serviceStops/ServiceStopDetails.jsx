@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
@@ -1277,7 +1279,7 @@ const ServiceStopDetails = () => {
                 }
             } catch (error) {
                 console.error("Error fetching service stop details: ", error);
-                toast.error("Failed to load service stop details");
+                toast.error(userFacingErrorMessage(error, "Failed to load service stop details"));
             } finally {
                 setLoading(false);
             }
@@ -1420,7 +1422,7 @@ const ServiceStopDetails = () => {
             setPartApprovals(approvalsForStop);
         } catch (error) {
             console.error("Failed to load part approval workflow:", error);
-            toast.error("Failed to load part approvals for this stop");
+            toast.error(userFacingErrorMessage(error, "Failed to load part approvals for this stop"));
         } finally {
             setLoadingPartWorkflow(false);
         }
@@ -1453,7 +1455,7 @@ const ServiceStopDetails = () => {
             );
         } catch (error) {
             console.error("Failed to load service agreements:", error);
-            toast.error("Failed to load service agreements");
+            toast.error(userFacingErrorMessage(error, "Failed to load service agreements"));
         } finally {
             setLoadingServiceAgreements(false);
         }
@@ -1705,7 +1707,7 @@ const ServiceStopDetails = () => {
             toast.success("Service agreement connected.");
         } catch (error) {
             console.error("Failed to connect service agreement:", error);
-            toast.error("Failed to connect service agreement.");
+            toast.error(userFacingErrorMessage(error, "Failed to connect service agreement."));
         } finally {
             setConnectingAgreementId("");
         }
@@ -1810,7 +1812,7 @@ const ServiceStopDetails = () => {
             toast.success(response.testMode ? "Service report sent in test mode." : "Service report sent.", { id: toastId });
         } catch (error) {
             console.error("Failed to send service report:", error);
-            toast.error(error?.message || "Failed to send service report.", { id: toastId });
+            toast.error(userFacingErrorMessage(error, error?.message || "Failed to send service report."), { id: toastId });
         } finally {
             setSendingServiceReport(false);
         }
@@ -1896,7 +1898,7 @@ const ServiceStopDetails = () => {
             toast.success("Stop data saved");
         } catch (error) {
             console.error("Failed to save stop data:", error);
-            toast.error("Failed to save stop data");
+            toast.error(userFacingErrorMessage(error, "Failed to save stop data"));
         } finally {
             setSavingStopData(false);
         }
@@ -1997,7 +1999,7 @@ const ServiceStopDetails = () => {
             toast.success("Equipment observation saved");
         } catch (error) {
             console.error("Failed to save equipment observation:", error);
-            toast.error("Failed to save equipment observation");
+            toast.error(userFacingErrorMessage(error, "Failed to save equipment observation"));
         } finally {
             setSavingEquipmentObservationId("");
         }
@@ -2160,7 +2162,7 @@ const ServiceStopDetails = () => {
             toast.success("Initial survey price saved.");
         } catch (error) {
             console.error("Failed to save initial survey price:", error);
-            toast.error("Failed to save the recommended price.");
+            toast.error(userFacingErrorMessage(error, "Failed to save the recommended price."));
         } finally {
             setSavingServiceAgreementRecommendation(false);
         }
@@ -2462,7 +2464,7 @@ const ServiceStopDetails = () => {
             toast.success("Field job plan saved.");
         } catch (error) {
             console.error("Failed to save field job plan:", error);
-            toast.error("Failed to save the field job plan.");
+            toast.error(userFacingErrorMessage(error, "Failed to save the field job plan."));
         } finally {
             setSavingFieldJobPlan(false);
         }
@@ -2695,7 +2697,7 @@ const ServiceStopDetails = () => {
             toast.success("Service stop updated");
         } catch (error) {
             console.error("Failed to update service stop:", error);
-            toast.error("Failed to update service stop");
+            toast.error(userFacingErrorMessage(error, "Failed to update service stop"));
         } finally {
             setSavingEdit(false);
         }
@@ -2948,7 +2950,7 @@ const ServiceStopDetails = () => {
                 });
             } catch (routeError) {
                 console.warn("Service stop finished, but its route summary could not refresh:", routeError);
-                toast.error("Stop finished, but its route summary could not refresh.");
+                toast.error(userFacingErrorMessage(routeError, "Stop finished, but its route summary could not refresh."));
             }
 
             try {
@@ -2987,7 +2989,7 @@ const ServiceStopDetails = () => {
             toast.success("Service stop finished");
         } catch (error) {
             console.error("Failed to finish service stop:", error);
-            toast.error("Failed to finish service stop");
+            toast.error(userFacingErrorMessage(error, "Failed to finish service stop"));
         } finally {
             setFinishingStop(false);
         }
@@ -3163,7 +3165,7 @@ const ServiceStopDetails = () => {
             await loadPartWorkflow();
         } catch (error) {
             console.error("Failed to approve part in person:", error);
-            toast.error("Failed to approve part");
+            toast.error(userFacingErrorMessage(error, "Failed to approve part"));
         } finally {
             setPartWorkflowActionId("");
         }
@@ -3178,7 +3180,7 @@ const ServiceStopDetails = () => {
             toast.success("Customer approval link copied");
         } catch (error) {
             console.error("Failed to copy approval link:", error);
-            toast.error("Could not copy approval link");
+            toast.error(userFacingErrorMessage(error, "Could not copy approval link"));
         }
     };
 
@@ -3266,7 +3268,7 @@ const ServiceStopDetails = () => {
             await loadPartWorkflow();
         } catch (error) {
             console.error("Failed to mark part installed:", error);
-            toast.error("Failed to mark part installed");
+            toast.error(userFacingErrorMessage(error, "Failed to mark part installed"));
         } finally {
             setPartWorkflowActionId("");
         }
@@ -3526,7 +3528,7 @@ const ServiceStopDetails = () => {
             resetTaskForm();
         } catch (error) {
             console.error(error);
-            toast.error("Failed to add task");
+            toast.error(userFacingErrorMessage(error, "Failed to add task"));
         } finally {
             setSavingTask(false);
         }
@@ -3600,7 +3602,7 @@ const ServiceStopDetails = () => {
             toast.success("Task marked finished");
         } catch (error) {
             console.error(error);
-            toast.error("Failed to finish task");
+            toast.error(userFacingErrorMessage(error, "Failed to finish task"));
         }
     };
 
@@ -3722,7 +3724,7 @@ const ServiceStopDetails = () => {
             navigate("/company/serviceStops");
         } catch (error) {
             console.error("Error deleting service stop:", error);
-            toast.error("Failed to delete service stop");
+            toast.error(userFacingErrorMessage(error, "Failed to delete service stop"));
         } finally {
             setDeleting(false);
             setShowDeleteConfirm(false);
@@ -4007,7 +4009,7 @@ const ServiceStopDetails = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <WorkspaceRecordHeader title={<>Service Stop Details</>} eyebrow="Company operations"><div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <Link
                             to="/company/serviceStops"
@@ -4015,7 +4017,7 @@ const ServiceStopDetails = () => {
                         >
                             &larr; Back to Service Stops
                         </Link>
-                        <h2 className="text-3xl font-bold text-slate-800">Service Stop Details</h2>
+
                         <p className="text-sm text-slate-500">#{serviceStop.internalId || "—"}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -4059,7 +4061,7 @@ const ServiceStopDetails = () => {
                             </button>
                         )}
                     </div>
-                </div>
+                </div></WorkspaceRecordHeader>
 
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
                     <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:col-span-3">

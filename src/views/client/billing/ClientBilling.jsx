@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -277,7 +278,7 @@ const ClientBilling = () => {
       throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
     } catch (checkoutError) {
       console.error('Unable to start billing checkout', checkoutError);
-      toast.error(checkoutError.message || 'Failed to start payment setup.');
+      toast.error(userFacingErrorMessage(checkoutError, checkoutError.message || 'Failed to start payment setup.'));
       setStartingCheckoutId('');
     }
   };

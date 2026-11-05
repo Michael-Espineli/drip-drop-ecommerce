@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useContext, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -62,7 +64,7 @@ const EditServiceRequest = () => {
 
             } catch (err) {
                 console.error("Error fetching data: ", err);
-                setError('Failed to load necessary data.');
+                setError(userFacingErrorMessage(err, 'Failed to load necessary data.'));
             } finally {
                 setLoading(false);
             }
@@ -94,7 +96,7 @@ const EditServiceRequest = () => {
             navigate(`/client/service-requests/${requestId}`);
         } catch (err) {
             console.error("Error updating service request: ", err);
-            setError('Failed to update your request. Please try again.');
+            setError(userFacingErrorMessage(err, 'Failed to update your request. Please try again.'));
         } finally {
             setSubmitting(false);
         }
@@ -108,7 +110,7 @@ const EditServiceRequest = () => {
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md">
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">Edit Service Request for</h1>
+                <WorkspaceHeader title={<>Edit Service Request for</>} eyebrow="Your pool care" />
                 <h2 className="text-2xl font-semibold text-blue-600 mb-6">{company?.name}</h2>
 
                 <form onSubmit={handleSubmit} className="space-y-6">

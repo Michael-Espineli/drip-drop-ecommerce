@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState, useContext, useEffect } from 'react';
 import {
   FaComments,
@@ -267,7 +268,7 @@ const AdminDashboard = () => {
           companyId: selectedCompanyId,
         },
       });
-      toast.error(error.message || 'Could not queue RSS catch-up.', { id: toastId });
+      toast.error(userFacingErrorMessage(error, error.message || 'Could not queue RSS catch-up.'), { id: toastId });
     } finally {
       setIsRefreshingRecurringStops(false);
     }

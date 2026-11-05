@@ -1,3 +1,4 @@
+import '../components/workspace/Workspace.css';
 import React, { useEffect, useState, useContext } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Header from './Header';
@@ -82,10 +83,10 @@ const MainLayout = () => {
                             </div>
                         ) : (
                             <div className="min-h-screen flex flex-col">
-                                <main className="app-main-content flex-grow pt-[5.9375rem]">
+                                <main className="app-main-content workspace-screen flex-grow pt-[5.9375rem]">
                                     <Outlet />
                                 </main>
-                                <Footer />
+                                <Footer workspace={accountType === 'Company'} />
                             </div>
                         )}
                     </div>

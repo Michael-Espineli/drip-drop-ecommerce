@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from './permissionErrors';
+
 let appDialogOpener = null;
 
 const normalizeOptions = (messageOrOptions = {}) => (
@@ -27,6 +29,9 @@ const fallbackDialog = (type, options) => {
 
 const openAppDialog = (type, messageOrOptions) => {
   const options = normalizeOptions(messageOrOptions);
+  if (typeof options.message === 'string' && options.message) {
+    options.message = userFacingErrorMessage(options.message);
+  }
 
   if (!appDialogOpener) {
     return fallbackDialog(type, options);

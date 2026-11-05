@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { netPaymentCents, hasPostedPayment } from '../../../utils/sales/financialMetrics';
 import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
 import { listenClientRecords } from '../../../utils/clientRecords';
@@ -373,7 +375,7 @@ const ClientFinance = () => {
       throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
     } catch (checkoutError) {
       console.error('Unable to start billing checkout', checkoutError);
-      toast.error(checkoutError.message || 'Failed to start payment setup.');
+      toast.error(userFacingErrorMessage(checkoutError, checkoutError.message || 'Failed to start payment setup.'));
       setStartingCheckoutId('');
     }
   };
@@ -383,7 +385,7 @@ const ClientFinance = () => {
       <div className="w-full space-y-6">
         <section className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-950 sm:text-3xl">Finance</h1>
+            <WorkspaceHeader title={<>Finance</>} eyebrow="Your pool care" />
             <p className="mt-2 text-sm text-slate-600">
               Review part approvals, service agreements, invoices, payments, and recurring billing in one place.
             </p>

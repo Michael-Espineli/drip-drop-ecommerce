@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
@@ -96,7 +97,7 @@ export default function ServiceLocations() {
             ])));
         } catch (fetchError) {
             console.error('Service location data error:', fetchError);
-            setError('Failed to load service locations.');
+            setError(userFacingErrorMessage(fetchError, 'Failed to load service locations.'));
         } finally {
             setLoading(false);
         }

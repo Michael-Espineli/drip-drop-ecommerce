@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -141,7 +142,7 @@ const PublicServiceAgreementLanding = () => {
         console.error('Unable to load public service agreement', loadError);
         if (isActive) {
           setAgreement(null);
-          setError(loadError.message || 'Unable to verify this service agreement link.');
+          setError(userFacingErrorMessage(loadError, loadError.message || 'Unable to verify this service agreement link.'));
         }
       } finally {
         if (isActive) setLoading(false);
@@ -282,7 +283,7 @@ const PublicServiceAgreementLanding = () => {
       }));
     } catch (acceptError) {
       console.error('Unable to accept public sales document', acceptError);
-      toast.error(acceptError.message || `Failed to accept ${documentLabelLower}.`);
+      toast.error(userFacingErrorMessage(acceptError, acceptError.message || `Failed to accept ${documentLabelLower}.`));
     } finally {
       setAccepting(false);
     }
@@ -320,7 +321,7 @@ const PublicServiceAgreementLanding = () => {
       }));
     } catch (responseError) {
       console.error('Unable to respond to public service agreement', responseError);
-      toast.error(responseError.message || 'Failed to send your response.');
+      toast.error(userFacingErrorMessage(responseError, responseError.message || 'Failed to send your response.'));
     } finally {
       setResponding('');
     }

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceSectionHeader from '../../../components/workspace/WorkspaceSectionHeader';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useState } from 'react';
@@ -182,7 +183,7 @@ const NavigationOrderSettings = () => {
             toast.success("Navigation order updated.");
         } catch (error) {
             console.error("Failed to save navigation order:", error);
-            toast.error("Failed to save navigation order.");
+            toast.error(userFacingErrorMessage(error, "Failed to save navigation order."));
             setCategoryOrder(normalizeNavigationOrder(dataBaseUser?.settings?.companyNavigationCategoryOrder));
         } finally {
             setIsSaving(false);
@@ -210,7 +211,7 @@ const NavigationOrderSettings = () => {
             toast.success("Book marks updated.");
         } catch (error) {
             console.error("Failed to save book marks:", error);
-            toast.error("Failed to save book marks.");
+            toast.error(userFacingErrorMessage(error, "Failed to save book marks."));
             setSelectedBookmarkPaths(normalizeBookmarkPaths(dataBaseUser?.settings?.companyNavigationBookmarks));
         } finally {
             setIsSavingBookmarks(false);
@@ -424,7 +425,7 @@ const CompanySettings = () => {
             } catch (error) {
                 console.error("Failed to load selected company for settings:", error);
                 if (!cancelled) {
-                    toast.error("Could not load company settings.");
+                    toast.error(userFacingErrorMessage(error, "Could not load company settings."));
                 }
             } finally {
                 if (!cancelled) {

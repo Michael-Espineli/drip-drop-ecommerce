@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useEffect, useState, useContext, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { arrayUnion, collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, updateDoc, deleteDoc, where, serverTimestamp, setDoc } from 'firebase/firestore';
@@ -275,7 +277,7 @@ const RepairRequestDetailView = () => {
       appAlert("Comment copied to customer notes.");
     } catch (error) {
       console.error("Error copying repair request comment to customer notes:", error);
-      appAlert(error?.message || "Failed to copy comment to customer notes.");
+      appAlert(userFacingErrorMessage(error, error?.message || "Failed to copy comment to customer notes."));
     } finally {
       setCopyingCommentToCustomerNoteId("");
     }
@@ -552,7 +554,7 @@ const RepairRequestDetailView = () => {
       appAlert("Repair request moved to Suggested Work.");
     } catch (error) {
       console.error("Error converting repair request to suggested work:", error);
-      appAlert("Failed to convert this repair request to suggested work.");
+      appAlert(userFacingErrorMessage(error, "Failed to convert this repair request to suggested work."));
     } finally {
       setConvertingToSuggestedWork(false);
     }
@@ -612,7 +614,7 @@ const RepairRequestDetailView = () => {
         } catch (copyError) {
           copyFailed = true;
           console.error("Error copying new repair request comment to customer notes:", copyError);
-          appAlert(copyError?.message || "Comment added, but the customer note copy failed.");
+          appAlert(userFacingErrorMessage(copyError, copyError?.message || "Comment added, but the customer note copy failed."));
         }
       }
 
@@ -623,7 +625,7 @@ const RepairRequestDetailView = () => {
       }
     } catch (error) {
       console.error("Error adding repair request comment:", error);
-      appAlert("Failed to add comment.");
+      appAlert(userFacingErrorMessage(error, "Failed to add comment."));
     } finally {
       setAddingComment(false);
     }
@@ -642,7 +644,7 @@ const RepairRequestDetailView = () => {
       });
     } catch (error) {
       console.error("Error updating repair request comment:", error);
-      appAlert("Failed to update comment.");
+      appAlert(userFacingErrorMessage(error, "Failed to update comment."));
     }
   };
 
@@ -658,7 +660,7 @@ const RepairRequestDetailView = () => {
       setSuggestedWorkTier(issuePriorityLevel);
     } catch (error) {
       console.error("Error updating repair request priority:", error);
-      appAlert("Failed to update repair request priority.");
+      appAlert(userFacingErrorMessage(error, "Failed to update repair request priority."));
     } finally {
       setSavingPriority(false);
     }
@@ -695,7 +697,7 @@ const RepairRequestDetailView = () => {
           });
         } catch (equipmentError) {
           console.error("Error updating connected equipment status:", equipmentError);
-          appAlert("Repair request status was updated, but the connected equipment status could not be saved.");
+          appAlert(userFacingErrorMessage(equipmentError, "Repair request status was updated, but the connected equipment status could not be saved."));
         }
       }
 
@@ -705,7 +707,7 @@ const RepairRequestDetailView = () => {
       }));
     } catch (error) {
       console.error("Error updating repair request status:", error);
-      appAlert("Failed to update repair request status.");
+      appAlert(userFacingErrorMessage(error, "Failed to update repair request status."));
       setFormData((prev) => ({
         ...prev,
         status: previousStatus,
@@ -730,7 +732,7 @@ const RepairRequestDetailView = () => {
       });
     } catch (error) {
       console.error("Error updating connected equipment status:", error);
-      appAlert("Failed to update connected equipment status.");
+      appAlert(userFacingErrorMessage(error, "Failed to update connected equipment status."));
     } finally {
       setSavingEquipmentStatus(false);
     }
@@ -757,7 +759,7 @@ const RepairRequestDetailView = () => {
       }));
     } catch (error) {
       console.error("Error updating description:", error);
-      appAlert("Failed to save description.");
+      appAlert(userFacingErrorMessage(error, "Failed to save description."));
     } finally {
       setSavingDescription(false);
     }
@@ -798,7 +800,7 @@ const RepairRequestDetailView = () => {
       setPhotoFiles([]);
     } catch (error) {
       console.error("Error adding repair request photos:", error);
-      appAlert("Failed to add photos to this repair request.");
+      appAlert(userFacingErrorMessage(error, "Failed to add photos to this repair request."));
     } finally {
       setUploadingPhotos(false);
     }
@@ -847,7 +849,7 @@ const RepairRequestDetailView = () => {
       setSelectedJobId("");
     } catch (error) {
       console.error("Error connecting job to repair request:", error);
-      appAlert("Failed to connect the job to this repair request.");
+      appAlert(userFacingErrorMessage(error, "Failed to connect the job to this repair request."));
     } finally {
       setConnectingJob(false);
     }
@@ -870,7 +872,7 @@ const RepairRequestDetailView = () => {
       navigate('/company/repair-requests');
     } catch (error) {
       console.error('Error deleting repair request:', error);
-      appAlert('Failed to delete repair request.');
+      appAlert(userFacingErrorMessage(error, 'Failed to delete repair request.'));
     }
   };
 
@@ -898,13 +900,13 @@ const RepairRequestDetailView = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <WorkspaceRecordHeader title={<>Repair Request Details</>} eyebrow="Company operations"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <Link
               to={"/company/repair-requests"}
               className="app-back-link"
             >&larr; Back to Repair Requests</Link>
-            <h2 className="text-3xl font-bold text-gray-800">Repair Request Details</h2>
+
             <p className="text-sm text-gray-500">{displayRepairRequestStatus(repairRequest.status)} request</p>
           </div>
           <ShareItemButton
@@ -918,7 +920,7 @@ const RepairRequestDetailView = () => {
             collectionPath={sourcePath === "homeowner" ? "homeownerRepairRequests" : `companies/${recentlySelectedCompany}/repairRequests`}
             webPath={`/company/repair-requests/detail/${repairRequestId}`}
           />
-        </div>
+        </div></WorkspaceRecordHeader>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <div className="min-w-0 space-y-6">

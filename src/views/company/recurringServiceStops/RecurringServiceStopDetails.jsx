@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -338,7 +339,7 @@ const RecurringServiceStopDetails = () => {
           title: "Recurring service stop edit options failed to load",
           description: "The recurring service stop detail page could not load company pay types or technicians.",
         });
-        toast.error("Failed to load edit options");
+        toast.error(userFacingErrorMessage(error, "Failed to load edit options"));
       }
     };
 
@@ -388,7 +389,7 @@ const RecurringServiceStopDetails = () => {
         title: "Recurring service stop duration history failed to load",
         description: "The recurring service stop detail page could not load duration history.",
       });
-      toast.error("Failed to load duration history");
+      toast.error(userFacingErrorMessage(error, "Failed to load duration history"));
     } finally {
       setLoadingDurationHistory(false);
     }
@@ -538,10 +539,14 @@ const RecurringServiceStopDetails = () => {
             : [];
         setSelectedDays(daysArr.map((d) => ({ value: d, label: d })));
 
+        // Recent services include today; upcoming services start tomorrow.
+        const tomorrowStart = new Date();
+        tomorrowStart.setHours(24, 0, 0, 0);
+
         const qUpcoming = query(
           collection(db, "companies", recentlySelectedCompany, "serviceStops"),
           where("recurringServiceStopId", "==", recurringServiceStopId),
-          where("serviceDate", ">=", new Date())
+          where("serviceDate", ">=", tomorrowStart)
         );
 
         const upSnap = await getDocs(qUpcoming);
@@ -571,7 +576,8 @@ const RecurringServiceStopDetails = () => {
         const qPast = query(
           collection(db, "companies", recentlySelectedCompany, "serviceStops"),
           where("recurringServiceStopId", "==", recurringServiceStopId),
-          where("serviceDate", "<", new Date()),
+          where("serviceDate", "<", tomorrowStart),
+          orderBy("serviceDate", "desc"),
           limit(5)
         );
 
@@ -602,7 +608,7 @@ const RecurringServiceStopDetails = () => {
           description: "The recurring service stop detail page failed while loading the template, upcoming stops, past stops, or schedule metadata.",
           severity: "critical",
         });
-        toast.error("Failed to load recurring service stop");
+        toast.error(userFacingErrorMessage(error, "Failed to load recurring service stop"));
       } finally {
         setLoading(false);
       }
@@ -724,7 +730,7 @@ const RecurringServiceStopDetails = () => {
         description: "Deleting the recurring service stop or removing it from planned routes failed.",
         severity: "critical",
       });
-      toast.error("Failed to delete");
+      toast.error(userFacingErrorMessage(err, "Failed to delete"));
     }
   };
 
@@ -823,7 +829,7 @@ const RecurringServiceStopDetails = () => {
           startDateInput,
         },
       });
-      toast.error("Failed to save changes");
+      toast.error(userFacingErrorMessage(err, "Failed to save changes"));
     }
   };
 
@@ -845,7 +851,7 @@ const RecurringServiceStopDetails = () => {
           estimatedTimeInput,
         },
       });
-      toast.error(error?.message || "Duration update failed");
+      toast.error(userFacingErrorMessage(error, error?.message || "Duration update failed"));
     } finally {
       setDurationAction("");
     }
@@ -1182,7 +1188,7 @@ const RecurringServiceStopDetails = () => {
           taskType: task?.type || "",
         },
       });
-      toast.error("Failed to delete recurring task");
+      toast.error(userFacingErrorMessage(error, "Failed to delete recurring task"));
     } finally {
       setDeletingTaskKey("");
     }
@@ -1401,7 +1407,7 @@ const RecurringServiceStopDetails = () => {
           newTaskType: newTask.type,
         },
       });
-      toast.error("Failed to add recurring task");
+      toast.error(userFacingErrorMessage(error, "Failed to add recurring task"));
     } finally {
       setSavingTask(false);
     }
@@ -1454,7 +1460,7 @@ const RecurringServiceStopDetails = () => {
           taskGroupName: selectedTaskTemplate?.label || "",
         },
       });
-      toast.error(error.message || "Failed to apply task template");
+      toast.error(userFacingErrorMessage(error, error.message || "Failed to apply task template"));
     } finally {
       setApplyingTaskTemplate(false);
     }

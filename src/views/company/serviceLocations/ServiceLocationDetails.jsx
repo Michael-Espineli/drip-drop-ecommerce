@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -144,7 +145,7 @@ const ServiceLocationDetails = () => {
                 }
             } catch (err) {
                 console.error(err);
-                setError('Failed to fetch service location data.');
+                setError(userFacingErrorMessage(err, 'Failed to fetch service location data.'));
             } finally {
                 setLoading(false);
             }
@@ -201,7 +202,7 @@ const ServiceLocationDetails = () => {
             setEdit(false);
         } catch (err) {
             console.error('Error updating document: ', err);
-            setError('Failed to save changes.');
+            setError(userFacingErrorMessage(err, 'Failed to save changes.'));
         }
     };
 
@@ -219,7 +220,7 @@ const ServiceLocationDetails = () => {
             setServiceLocation(prev => ({ ...prev, notes }));
         } catch (err) {
             console.error('Error updating location notes: ', err);
-            setError('Failed to save location notes.');
+            setError(userFacingErrorMessage(err, 'Failed to save location notes.'));
         } finally {
             setSavingNotes(false);
         }
@@ -276,7 +277,7 @@ const ServiceLocationDetails = () => {
             setPhotoError('');
         } catch (err) {
             console.error('Error uploading location photos: ', err);
-            setPhotoError('Failed to upload location photos.');
+            setPhotoError(userFacingErrorMessage(err, 'Failed to upload location photos.'));
         } finally {
             setUploadingPhotos(false);
         }

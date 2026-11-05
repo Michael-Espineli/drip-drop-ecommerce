@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -155,7 +156,7 @@ const SuggestedWork = () => {
       );
     } catch (error) {
       console.error("Failed to load suggested work:", error);
-      toast.error("Failed to load suggested work.");
+      toast.error(userFacingErrorMessage(error, "Failed to load suggested work."));
     } finally {
       setLoading(false);
     }
@@ -284,7 +285,7 @@ const SuggestedWork = () => {
       await loadSuggestedWork();
     } catch (error) {
       console.error("Failed to create suggested work:", error);
-      toast.error("Failed to create suggested work.");
+      toast.error(userFacingErrorMessage(error, "Failed to create suggested work."));
     } finally {
       setSaving(false);
     }
@@ -333,7 +334,7 @@ const SuggestedWork = () => {
       );
     } catch (error) {
       console.error("Failed to update suggested work:", error);
-      toast.error("Failed to update suggested work.");
+      toast.error(userFacingErrorMessage(error, "Failed to update suggested work."));
     }
   };
 

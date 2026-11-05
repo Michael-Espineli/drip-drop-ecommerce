@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { getAuth, sendEmailVerification, signOut } from 'firebase/auth';
@@ -21,7 +22,7 @@ export default function ClientEmailVerification() {
     try {
       if (await refreshAccount()) setVerified(true);else setMessage('Open the verification link in your email, then check again.');
     } catch (_) {
-      setError('We could not check verification. Please try again.');
+      setError(userFacingErrorMessage(_, 'We could not check verification. Please try again.'));
     } finally {
       setBusy(false);
     }
@@ -40,7 +41,7 @@ export default function ClientEmailVerification() {
       setSentAt(Date.now());
       setMessage('Verification email sent. Check your inbox and spam folder.');
     } catch (_) {
-      setError('We could not send the email. Please wait a minute and try again.');
+      setError(userFacingErrorMessage(_, 'We could not send the email. Please wait a minute and try again.'));
     } finally {
       setBusy(false);
     }

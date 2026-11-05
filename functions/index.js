@@ -1,5 +1,6 @@
 require('dotenv').config({ path: process.env.GCLOUD_PROJECT ? `.env.${process.env.GCLOUD_PROJECT}` : '.env' });
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const functions1 = require('firebase-functions/v1');
 const { getFirestore } = require("firebase-admin/firestore");
 const { defineSecret } = require('firebase-functions/params');

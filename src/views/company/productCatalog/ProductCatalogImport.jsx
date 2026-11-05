@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { arrayUnion, getDocs, orderBy, query, writeBatch } from "firebase/firestore";
@@ -91,7 +92,7 @@ const ProductCatalogImport = () => {
       setRows(buildImportRows(nextVendorItems, nextProducts));
     } catch (error) {
       console.error("Unable to load product reconciliation:", error);
-      toast.error("Could not load vendor items for reconciliation.");
+      toast.error(userFacingErrorMessage(error, "Could not load vendor items for reconciliation."));
     } finally {
       setLoading(false);
     }
@@ -322,7 +323,7 @@ const ProductCatalogImport = () => {
       await loadImportData();
     } catch (error) {
       console.error("Unable to reconcile vendor items to products:", error);
-      toast.error("Could not finish the Product Catalog reconciliation.");
+      toast.error(userFacingErrorMessage(error, "Could not finish the Product Catalog reconciliation."));
       setProgress((current) => ({
         ...current,
         status: "Reconciliation failed. Check the console for details.",

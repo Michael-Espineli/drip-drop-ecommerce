@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -162,7 +163,7 @@ const Vendors = () => {
             setMigrationMessage(`Copied ${data.copied || 0} legacy vendor(s). Skipped ${data.skipped || 0} existing vendor(s).`);
         } catch (error) {
             console.error("Error migrating vendors:", error);
-            setMigrationError(error.message || "Could not migrate vendors.");
+            setMigrationError(userFacingErrorMessage(error, error.message || "Could not migrate vendors."));
         } finally {
             setMigrating(false);
         }

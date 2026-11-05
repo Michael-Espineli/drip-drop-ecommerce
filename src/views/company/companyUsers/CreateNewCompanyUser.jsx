@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from "react";
 import { useNavigate } from 'react-router-dom';
@@ -74,7 +75,7 @@ const CreateNewCompanyUser = () => {
                 setRoleList(roles);
             } catch (error) {
                 console.error("Error fetching roles: ", error);
-                toast.error("Could not load company roles.");
+                toast.error(userFacingErrorMessage(error, "Could not load company roles."));
             } finally {
                 setAreRolesLoading(false);
             }
@@ -178,7 +179,7 @@ const CreateNewCompanyUser = () => {
 
         } catch (error) {
             console.error("Error sending invite: ", error);
-            toast.error(`Error: ${error.message}`, { id: toastId });
+            toast.error(userFacingErrorMessage(error, `Error: ${error.message}`), { id: toastId });
         } finally {
             setIsLoading(false);
         }
@@ -248,7 +249,7 @@ const CreateNewCompanyUser = () => {
 
         } catch (error) {
             console.error("Error adding existing user: ", error);
-            toast.error(`Error: ${error.message}`, { id: toastId });
+            toast.error(userFacingErrorMessage(error, `Error: ${error.message}`), { id: toastId });
         } finally {
             setIsLoading(false);
         }

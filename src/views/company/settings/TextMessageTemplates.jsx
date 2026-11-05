@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -66,7 +67,7 @@ const TextMessageTemplates = () => {
       }, index)));
     } catch (error) {
       console.error("Error loading text templates:", error);
-      toast.error("Could not load text templates.");
+      toast.error(userFacingErrorMessage(error, "Could not load text templates."));
     } finally {
       setIsLoading(false);
     }
@@ -147,7 +148,7 @@ const TextMessageTemplates = () => {
       toast.success("Text template saved.");
     } catch (error) {
       console.error("Error saving text template:", error);
-      toast.error("Could not save text template.");
+      toast.error(userFacingErrorMessage(error, "Could not save text template."));
     } finally {
       setIsSaving(false);
     }
@@ -173,7 +174,7 @@ const TextMessageTemplates = () => {
       await loadTemplates();
     } catch (error) {
       console.error("Error saving default text templates:", error);
-      toast.error("Could not save default templates.");
+      toast.error(userFacingErrorMessage(error, "Could not save default templates."));
     } finally {
       setIsSaving(false);
     }
@@ -205,7 +206,7 @@ const TextMessageTemplates = () => {
       toast.success(payload.active ? "Template activated." : "Template deactivated.");
     } catch (error) {
       console.error("Error toggling text template:", error);
-      toast.error("Could not update template.");
+      toast.error(userFacingErrorMessage(error, "Could not update template."));
     } finally {
       setIsSaving(false);
     }
@@ -234,7 +235,7 @@ const TextMessageTemplates = () => {
       toast.success(template.isBuiltInDefault ? "Template reset." : "Template deleted.");
     } catch (error) {
       console.error("Error deleting text template:", error);
-      toast.error("Could not remove template.");
+      toast.error(userFacingErrorMessage(error, "Could not remove template."));
     } finally {
       setIsSaving(false);
     }

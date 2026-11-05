@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
@@ -185,7 +186,7 @@ const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
         setIsLoading(false);
       } catch (loadError) {
         console.error('Error preparing chat:', loadError);
-        setError('Unable to start this message.');
+        setError(userFacingErrorMessage(loadError, 'Unable to start this message.'));
         setIsLoading(false);
       }
     };
@@ -213,7 +214,7 @@ const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
       navigate(`/companies-chat/detail/${chatId}`, { replace: true });
     } catch (sendError) {
       console.error('Error creating chat:', sendError);
-      setError('Unable to send the first message.');
+      setError(userFacingErrorMessage(sendError, 'Unable to send the first message.'));
       setIsSending(false);
     }
   };

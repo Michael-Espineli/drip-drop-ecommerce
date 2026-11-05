@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { addDoc, collection, getDocs, serverTimestamp, Timestamp } from "firebase/firestore";
@@ -377,7 +378,7 @@ const CompanyUsers = () => {
             setPerformanceNoteDraft(emptyPerformanceNoteDraft);
         } catch (error) {
             console.error("Error saving performance note from company users:", error);
-            toast.error("Failed to save performance note.");
+            toast.error(userFacingErrorMessage(error, "Failed to save performance note."));
         } finally {
             setIsSavingPerformanceNote(false);
         }

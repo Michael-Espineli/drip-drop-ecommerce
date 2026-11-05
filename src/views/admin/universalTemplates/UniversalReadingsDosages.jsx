@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
@@ -175,7 +176,7 @@ function UniversalReadingsDosages() {
       setTemplates(snapshot.docs.map((templateDoc) => ({ id: templateDoc.id, ...templateDoc.data() })));
     } catch (error) {
       console.error('Failed to load universal templates:', error);
-      toast.error('Could not load universal templates.');
+      toast.error(userFacingErrorMessage(error, 'Could not load universal templates.'));
     } finally {
       setLoading(false);
     }
@@ -247,7 +248,7 @@ function UniversalReadingsDosages() {
       loadTemplates();
     } catch (error) {
       console.error('Failed to save universal template:', error);
-      toast.error('Could not save template.');
+      toast.error(userFacingErrorMessage(error, 'Could not save template.'));
     }
   };
 
@@ -267,7 +268,7 @@ function UniversalReadingsDosages() {
       loadTemplates();
     } catch (error) {
       console.error('Failed to delete universal template:', error);
-      toast.error('Could not delete template.');
+      toast.error(userFacingErrorMessage(error, 'Could not delete template.'));
     }
   };
 

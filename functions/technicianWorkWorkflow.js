@@ -1,8 +1,9 @@
-const { HttpsError } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const { createHash, randomUUID } = require('node:crypto');
 const { calculatePayLines, jobPayFields } = require('./payrollCalculation');
 const { loadPayrollBodyOfWaterScope } = require('./payrollBodyOfWaterScope');
 const { started:workStarted, newActiveRoute } = require('./routeState');
+const { workOfferRouteSummary } = require('./workOfferRouteSummary');
 const str = v => String(v ?? '').trim();
 const id = v => str(typeof v === 'object' ? v?.id : v);
 const list = v => Array.isArray(v) ? v : [];
@@ -27,7 +28,7 @@ const scopeSignature = scope => {
   for (const name of ['tasks','services','products','stops']) result[name]=list(scope[name]).map(row=>Object.fromEntries(fields.map(k=>[k,row[k] ?? null])));
   return stable(JSON.stringify(result));
 };
-const presentScope = scope => Object.fromEntries(Object.entries(scope).map(([name,items])=>[name,list(items).map(v=>({id:v.id,name:(v.sourceStopName?v.sourceStopName+' · ':'')+(v.name || v.itemName || v.dbItemName || v.customerName || v.type || 'Work item'),description:v.description || v.instructions || '',status:v.status || v.operationStatus || '',quantity:Number(v.quantity || 1),equipmentName:v.equipmentName || v.equipmentId || '',estimatedTime:Number(v.estimatedTime || v.estimatedMinutes || 0)}))]));
+const presentScope = scope => Object.fromEntries(Object.entries(scope).map(([name,items])=>[name,list(items).map(v=>({id:v.id,name:(v.sourceStopName?v.sourceStopName+' · ':'')+(v.name || v.itemName || v.dbItemName || v.customerName || v.type || 'Work item'),description:v.description || v.instructions || '',status:v.status || v.operationStatus || '',quantity:Number(v.quantity || 1),equipmentName:v.equipmentName || v.equipmentId || '',estimatedTime:Number(v.estimatedTime || v.estimatedMinutes || v.estimatedDuration || 0)}))]));
 const stopIds = o => unique([o.serviceStopId, ...list(o.routeServiceStopIds), ...list(o.serviceStopIds), ...list(o.serviceStopsIds)]);
 const routeIds = r => unique([...list(r.serviceStopsIds), ...list(r.serviceStopIds), ...list(r.rssIds), ...list(r.order).map(v => v.serviceStopId || v.recurringServiceStopId)]);
 const agreementReference = a => { const {rates,settings,workTypes,quotedPayLines,baseCents,totalCents,...reference}=a; return reference; };
@@ -43,6 +44,8 @@ const timestampFields = v => { const result = { ...v }; for (const k of ['servic
 
 function createTechnicianWorkWorkflow(db, now = () => new Date()) {
   const company = companyId => db.collection('companies').doc(companyId);
+  const routeSummaryFor = (t, c, offer, stops) => offer.routeSummary && JSON.stringify([...list(offer.routeSummary.stopIds)].sort()) === JSON.stringify(stops.map(v=>v.id).sort())
+    ? offer.routeSummary : workOfferRouteSummary(t, c, offer, stops, now());
   async function actorFor(t, companyId, uid) {
     return require('./companyActor').companyActor(db, t, companyId, uid);
   }
@@ -211,14 +214,15 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
       if (action === 'quote') {
         if(!can(actor,'322')) fail('permission-denied','You cannot prepare offered work.');
         const draft=timestampFields(data.offer || {}),{scope}=await scopeFor(t,c,draft);
-        if(draft.paySource==='Technician Rate' && !data.technicianId) return {lines:[],baseCents:0,incentiveCents:0,totalCents:null,needsReview:false,personal:false};
+        const routeSummary=await workOfferRouteSummary(t,c,draft,scope.stops,now());
+        if(draft.paySource==='Technician Rate' && !data.technicianId) return {lines:[],baseCents:0,incentiveCents:0,totalCents:null,needsReview:false,personal:false,routeSummary};
         const targetId=id(data.technicianId) || uid;
-        if(targetId!==uid && !can(actor,'324') && !can(actor,'424')) return {lines:[],baseCents:0,incentiveCents:0,totalCents:null,needsReview:false,personal:false};
+        if(targetId!==uid && !can(actor,'324') && !can(actor,'424')) return {lines:[],baseCents:0,incentiveCents:0,totalCents:null,needsReview:false,personal:false,routeSummary};
         const targetUser=targetId===uid?actor.user:rows(await t.get(c.collection('companyUsers').where('userId','==',targetId)))[0];
         if(!targetUser) fail('not-found','Select an active company technician.');
         const target={...actor,uid:targetId,user:targetUser,name:targetUser.userName || targetId};
         const quote=await estimate({t,c,companyId,offer:draft,scope,ctx:targetId===uid?ctx:await context(t,c,target),actor:target});
-        return {...quote,personal:true,lines:quote.lines.map(v=>({...v,title:v.taskName || v.workTypeName || 'Work Pay',sourceTaskId:v.jobTaskId || v.serviceStopTaskId || null}))};
+        return {...quote,routeSummary,personal:true,lines:quote.lines.map(v=>({...v,title:v.taskName || v.workTypeName || 'Work Pay',sourceTaskId:v.jobTaskId || v.serviceStopTaskId || null}))};
       }
       if (action === 'save' || action === 'update') {
         const updating = action === 'update';
@@ -270,6 +274,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (job && purpose !== 'diagnostic' && !scope.tasks.length) fail('failed-precondition','Select the work to offer, or choose an estimate visit.');
         const status = ctx.wide.workOffersRequireApprovalBeforePosting || ctx.wide.workOffersGoLiveByDefault === false ? 'Pending Approval' : incoming.offerType === 'Direct User' ? 'Sent' : 'Posted';
         const offer = { ...incoming, id:offerId, companyId, status, schemaVersion:2, revision:existing ? (existing.revision || 1)+1 : 1, workPurpose:purpose, scopeSnapshot:scope, scopeSignature:scopeSignature(scope), jobTaskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), routeServiceStopIds:scope.stops.map(v=>v.id), serviceStopIds:scope.stops.map(v=>v.id), acceptedByUserId:'', acceptedByUserName:'', claims:[], createdAt:existing?.createdAt || now(), createdByUserId:existing?.createdByUserId || uid, createdByUserName:existing?.createdByUserName || actor.name, updatedAt:now(), rejectionReason:'', workerNotes:incoming.workerNotes || '', adminNotes:incoming.adminNotes || '', serviceStopId:incoming.serviceStopId || '', serviceStopInternalId:incoming.serviceStopInternalId || '', sourceLaborContractId:'', externalCompanyId:'', externalCompanyName:'' };
+        offer.routeSummary=await workOfferRouteSummary(t,c,offer,scope.stops,now());
         if (updating) {
           if (!str(offer.title) || !Number.isFinite(Number(offer.estimatedMinutes || 0)) || Number(offer.estimatedMinutes || 0)<0) fail('invalid-argument','Enter a title and a valid estimated duration.');
           if (offer.offerType==='Direct User' && !offer.offeredToUserId) fail('invalid-argument','Select the technician receiving this offer.');
@@ -396,7 +401,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const finance=can(actor,'420') || can(actor,'424');
         const terms=a=>a?{workerId:a.workerId,workerName:a.workerName,paySource:a.paySource,revision:a.revision,...(a.workerId===uid || finance?{baseCents:a.baseCents,totalCents:a.totalCents,fixedAmountCents:a.fixedAmountCents}:{})}:null;
         const canEdit=can(actor,'324') || can(actor,'322') && offer.createdByUserId===uid;
-        return {pay,scope:presentScope(display),scopeChanged:scopeUnavailable || !!offer.scopeSignature && offer.scopeSignature!==scopeSignature(scope),offer:{...offer,adminNotes:can(actor,'324') || can(actor,'332')?offer.adminNotes:'',scopeSnapshot:presentScope(stored),acceptedTerms:terms(offer.acceptedTerms),claims:claims.map(v=>({...v,agreement:terms(v.agreement)}))},management:{returnableClaimIds:claims.filter(v=>['Accepted','Scheduled'].includes(v.status) && (v.workerId===uid || can(actor,'324'))).map(v=>v.id),canEdit,canDelete:canEdit && !hasAcceptedWork(offer),termsLocked:offerTermsLocked(offer),canIncentivize:can(actor,'328') && ctx.wide.workOfferIncentivesCreatePayrollLines!==false,incentiveLocked:(hasAcceptedWork(offer) || claims.length>0) && !list(offer.remainingStopIds).length}};
+        return {pay,routeSummary:await routeSummaryFor(t,c,offer,display.stops),scope:presentScope(display),scopeChanged:scopeUnavailable || !!offer.scopeSignature && offer.scopeSignature!==scopeSignature(scope),offer:{...offer,adminNotes:can(actor,'324') || can(actor,'332')?offer.adminNotes:'',scopeSnapshot:presentScope(stored),acceptedTerms:terms(offer.acceptedTerms),claims:claims.map(v=>({...v,agreement:terms(v.agreement)}))},management:{returnableClaimIds:claims.filter(v=>['Accepted','Scheduled'].includes(v.status) && (v.workerId===uid || can(actor,'324'))).map(v=>v.id),canEdit,canDelete:canEdit && !hasAcceptedWork(offer),termsLocked:offerTermsLocked(offer),canIncentivize:can(actor,'328') && ctx.wide.workOfferIncentivesCreatePayrollLines!==false,incentiveLocked:(hasAcceptedWork(offer) || claims.length>0) && !list(offer.remainingStopIds).length}};
       }
       if (action === 'preview') {
         await checkEligibility(t,c,actor,offer);
@@ -405,7 +410,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const quotedOffer=all.length ? {...offer,offeredAmountCents:allocation(cents(offer.offeredAmountCents),all,selected),incentive:offer.incentive?.type==='flat'?{...offer.incentive,amountCents:allocation(cents(offer.incentive.amountCents),all,selected)}:offer.incentive} : offer;
         const preview = await estimate({t,c,companyId,offer:quotedOffer,scope:{...scope,stops:scope.stops.filter(v=>selected.includes(v.id))},ctx,actor});
         const availableScope={...scope,stops:scope.stops.filter(v=>available.includes(v.id)),tasks:scope.tasks.filter(v=>!v.sourceStopId || selected.includes(v.sourceStopId)),products:scope.products.filter(v=>!v.sourceStopId || selected.includes(v.sourceStopId))};
-        return { ...preview, hourlyPaySource:ctx.settings.hourlyPaySource || null,scope:presentScope(availableScope), revision:offer.revision || 1 };
+        return { ...preview, routeSummary:await routeSummaryFor(t,c,offer,scope.stops.filter(v=>selected.includes(v.id))), hourlyPaySource:ctx.settings.hourlyPaySource || null,scope:presentScope(availableScope), revision:offer.revision || 1 };
       }
       if (action === 'accept') {
         if(offer.offeredToUserId && offer.offeredToUserId!==uid) fail('permission-denied','Only the named technician can accept this offer.');

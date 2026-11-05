@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
@@ -57,7 +58,7 @@ const ServiceRequests = () => {
                 setRequests(requestsData);
             } catch (err) {
                 console.error("Error processing snapshot: ", err);
-                setError("Failed to process service requests.");
+                setError(userFacingErrorMessage(err, "Failed to process service requests."));
             } finally {
                 setLoading(false);
             }

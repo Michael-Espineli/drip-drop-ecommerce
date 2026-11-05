@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, getDocs, writeBatch } from 'firebase/firestore';
@@ -122,7 +123,7 @@ const AddLead = () => {
                 });
             } catch (error) {
                 console.error('Error loading lead:', error);
-                toast.error('Failed to load lead.');
+                toast.error(userFacingErrorMessage(error, 'Failed to load lead.'));
             } finally {
                 setLoading(false);
             }
@@ -174,7 +175,7 @@ const AddLead = () => {
             toast.success("Lead source added.");
         } catch (error) {
             console.error('Error adding lead source:', error);
-            toast.error('Could not add lead source.');
+            toast.error(userFacingErrorMessage(error, 'Could not add lead source.'));
         }
     };
 
@@ -302,7 +303,7 @@ const AddLead = () => {
 
         } catch (error) {
             console.error(isEditing ? "Error updating lead: " : "Error adding lead: ", error);
-            toast.error(isEditing ? 'Failed to update lead.' : 'Failed to add lead.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, isEditing ? 'Failed to update lead.' : 'Failed to add lead.'), { id: toastId });
             setIsSubmitting(false);
         }
     };
@@ -318,7 +319,7 @@ const AddLead = () => {
             navigate('/company/leads');
         } catch (error) {
             console.error('Error deleting lead:', error);
-            toast.error('Failed to delete lead.');
+            toast.error(userFacingErrorMessage(error, 'Failed to delete lead.'));
             setDeletingLead(false);
             setShowDeleteModal(false);
         }

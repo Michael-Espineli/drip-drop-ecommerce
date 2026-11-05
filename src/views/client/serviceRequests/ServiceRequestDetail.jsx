@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -117,7 +119,7 @@ const ServiceRequestDetail = () => {
             navigate('/client/service-requests');
         } catch (err) {
             console.error("Error deleting document: ", err);
-            setError('Failed to delete the request.');
+            setError(userFacingErrorMessage(err, 'Failed to delete the request.'));
         }
     };
 
@@ -152,7 +154,7 @@ const ServiceRequestDetail = () => {
                 <div className="bg-white rounded-lg shadow-md p-8 mb-6">
                     <div className="flex justify-between items-start mb-4">
                         <div>
-                            <h1 className="text-3xl font-bold text-gray-900">{title}</h1>
+                            <WorkspaceHeader title={<>{title}</>} eyebrow="Your pool care" />
                             <p className="text-sm text-gray-500">
                                 Requested on: {requestedDate ? requestedDate.toLocaleDateString() : 'N/A'}
                             </p>

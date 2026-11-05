@@ -694,7 +694,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                     <span className={`app-sidebar-icon flex h-6 w-6 shrink-0 items-center justify-center ${isActive ? 'app-sidebar-icon-active' : ''} [&>svg]:h-5 [&>svg]:w-5`}>{item.icon}</span>
                                                     <span className={isCollapsed ? 'lg:hidden' : ''}>{item.title}</span>
                                                     {count > 0 && (
-                                                        <span className={`ml-auto rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white ${isCollapsed ? 'lg:absolute lg:-right-1 lg:-top-1 lg:ml-0 lg:flex lg:h-[1.125rem] lg:min-w-[1.125rem] lg:items-center lg:justify-center lg:px-1 lg:text-[0.625rem]' : ''}`}>
+                                                        <span className={`app-sidebar-count ml-auto rounded-full px-2.5 py-0.5 text-xs font-semibold ${['Repair Requests', 'Equipment', 'Part Approvals'].includes(item.title) ? 'app-sidebar-count-attention' : ['Messages', 'Notifications'].includes(item.title) ? 'app-sidebar-count-unread' : ''} ${isCollapsed ? 'lg:absolute lg:-right-1 lg:-top-1 lg:ml-0 lg:flex lg:h-[1.125rem] lg:min-w-[1.125rem] lg:items-center lg:justify-center lg:px-1 lg:text-[0.625rem]' : ''}`}>
                                                             {count > 99 ? '99+' : count}
                                                         </span>
                                                     )}

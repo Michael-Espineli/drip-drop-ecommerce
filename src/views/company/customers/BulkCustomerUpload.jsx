@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
@@ -50,7 +51,7 @@ const BulkCustomerUpload = () => {
       }
     } catch (error) {
       console.error('Error during geocoding:', error);
-      setError('Error during geocoding. Please check your API key and network connection.');
+      setError(userFacingErrorMessage(error, 'Error during geocoding. Please check your API key and network connection.'));
       return { latitude: 0, longitude: 0 };
     }
   };
@@ -251,7 +252,7 @@ const BulkCustomerUpload = () => {
           navigate('/company/customers');
         }, 2000);
       } catch (err) {
-        setError('Error processing file. Make sure it is a valid Excel file.');
+        setError(userFacingErrorMessage(err, 'Error processing file. Make sure it is a valid Excel file.'));
         console.error(err);
       }
     };
@@ -467,7 +468,7 @@ const BulkCustomerUpload = () => {
       setIsLoading(false)
       setError('');
     } catch (err) {
-      setError('Error processing file. Make sure it is a valid Excel file.');
+      setError(userFacingErrorMessage(err, 'Error processing file. Make sure it is a valid Excel file.'));
       console.error(err);
     }
   };

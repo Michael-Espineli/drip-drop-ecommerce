@@ -1,4 +1,5 @@
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const admin = require("firebase-admin");
 const { v4: uuidv4 } = require("uuid");
 

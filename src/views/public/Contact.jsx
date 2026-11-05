@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useState } from 'react';
 import toast from 'react-hot-toast';
 import PublicHeader from '../../layout/PublicHeader';
@@ -47,7 +48,7 @@ export default function Contact() {
             toast.success('Message sent. We will reach out soon.', { id: toastId });
         } catch (error) {
             console.error('Error sending contact message:', error);
-            toast.error('Could not send your message. Please try again.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Could not send your message. Please try again.'), { id: toastId });
         } finally {
             setIsSubmitting(false);
         }

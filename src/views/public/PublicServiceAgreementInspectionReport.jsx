@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -307,7 +308,7 @@ const PublicServiceAgreementInspectionReport = () => {
         console.error('Unable to load public inspection report', loadError);
         if (isActive) {
           setReport(null);
-          setError(loadError.message || 'Unable to verify this inspection report link.');
+          setError(userFacingErrorMessage(loadError, loadError.message || 'Unable to verify this inspection report link.'));
         }
       } finally {
         if (isActive) setLoading(false);

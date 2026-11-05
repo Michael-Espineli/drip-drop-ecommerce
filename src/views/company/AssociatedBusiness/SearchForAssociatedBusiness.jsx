@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -78,7 +79,7 @@ const SearchForAssociatedBusiness = () => {
             setSearchResults(results);
         } catch (error) {
             console.error("Error searching businesses: ", error);
-            toast.error("Search failed. Please try again.");
+            toast.error(userFacingErrorMessage(error, "Search failed. Please try again."));
         } finally {
             setIsLoading(false);
         }
@@ -112,7 +113,7 @@ const SearchForAssociatedBusiness = () => {
             toast.success('Association request sent!', { id: toastId });
         } catch (error) {
             console.error("Error creating association request: ", error);
-            toast.error(`Request failed: ${error.message}`, { id: toastId });
+            toast.error(userFacingErrorMessage(error, `Request failed: ${error.message}`), { id: toastId });
         }
     };
 

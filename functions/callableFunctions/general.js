@@ -1,5 +1,6 @@
 const companyAuthorization = require('../companyAuthorization');
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('../appErrors');
 const functions = require("firebase-functions");
 const functions1 = require('firebase-functions/v1');
 const { getFirestore } = require("firebase-admin/firestore");
@@ -1380,7 +1381,7 @@ exports.createCompanyAlertNotification = functions.https.onCall(async (data, con
   const authUserId = authContext?.uid;
 
   if (!authUserId) {
-    throw new functions.https.HttpsError("unauthenticated", "You must be signed in to create notifications.");
+    throw new HttpsError("unauthenticated", "You must be signed in to create notifications.");
   }
 
   const firestore = getFirestore();
@@ -1392,12 +1393,12 @@ exports.createCompanyAlertNotification = functions.https.onCall(async (data, con
     : "team";
 
   if (!companyId || !title) {
-    throw new functions.https.HttpsError("invalid-argument", "companyId and title are required.");
+    throw new HttpsError("invalid-argument", "companyId and title are required.");
   }
 
   const hasAccess = await userCanAccessCompany(firestore, authUserId, companyId);
   if (!hasAccess) {
-    throw new functions.https.HttpsError("permission-denied", "You do not have access to this company.");
+    throw new HttpsError("permission-denied", "You do not have access to this company.");
   }
 
   const companyRef = firestore.collection("companies").doc(companyId);
@@ -1407,7 +1408,7 @@ exports.createCompanyAlertNotification = functions.https.onCall(async (data, con
   ]);
 
   if (!companySnap.exists) {
-    throw new functions.https.HttpsError("not-found", "Company not found.");
+    throw new HttpsError("not-found", "Company not found.");
   }
 
   const requestedUserIds = [
@@ -1418,7 +1419,7 @@ exports.createCompanyAlertNotification = functions.https.onCall(async (data, con
   const recipients = normalizeAlertRecipients(companyUsersSnap.docs, requestedUserIds);
 
   if (targetScope === "specific" && recipients.length === 0) {
-    throw new functions.https.HttpsError("invalid-argument", "Choose at least one valid company user recipient.");
+    throw new HttpsError("invalid-argument", "Choose at least one valid company user recipient.");
   }
 
   const relatedEntity = normalizeAlertEntity(payload.relatedEntity || {});
@@ -2635,7 +2636,7 @@ exports.createFirstRecurringServiceStop2 = recurringCallable("create", async (da
       },
     });
 
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "internal",
       error?.message || "Unable to create first recurring service stop."
     );
@@ -3099,7 +3100,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
   console.log(receivedData)
   const authUserId = context.auth?.uid;
   if (!authUserId) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "unauthenticated",
       "You must be signed in to create a company."
     );
@@ -3107,7 +3108,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
 
   let ownerId = receivedData.ownerId || authUserId
   if (ownerId !== authUserId) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "permission-denied",
       "You can only create a company for your own user account."
     );
@@ -3124,7 +3125,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
   let yelpURL = receivedData.yelpURL || ""
 
   if (!(await isCompanyCreationEnabled())) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "failed-precondition",
       "Company creation is not available until Drip Drop is live."
     );
@@ -3617,7 +3618,7 @@ exports.createCompanyAdminNotes = functions.https.onCall(async (data, context) =
   try {
     const auth = await getVerifiedCallableAuth(data?.data ?? data ?? {}, context);
     if (!(await companyAuthorization.hasPlatformAdminAccess(auth?.uid, auth?.token))) {
-      throw new functions.https.HttpsError("permission-denied", "Platform administrator access is required.");
+      throw new HttpsError("permission-denied", "Platform administrator access is required.");
     }
     console.log('Updating Company History')
     let receivedData = data.data
@@ -3679,11 +3680,11 @@ exports.updateCompanyAdminFlags = functions.https.onCall(async (data, context) =
   const companyId = String(payload.companyId || "").trim();
 
   if (!authUserId) {
-    throw new functions.https.HttpsError("unauthenticated", "You must be signed in.");
+    throw new HttpsError("unauthenticated", "You must be signed in.");
   }
 
   if (!companyId) {
-    throw new functions.https.HttpsError("invalid-argument", "companyId is required.");
+    throw new HttpsError("invalid-argument", "companyId is required.");
   }
 
   const firestore = getFirestore();
@@ -3691,14 +3692,14 @@ exports.updateCompanyAdminFlags = functions.https.onCall(async (data, context) =
   const userData = userSnap.exists ? userSnap.data() || {} : {};
 
   if (!(await companyAuthorization.hasPlatformAdminAccess(authUserId, verifiedAuth?.token))) {
-    throw new functions.https.HttpsError("permission-denied", "Only platform admins can update company admin flags.");
+    throw new HttpsError("permission-denied", "Only platform admins can update company admin flags.");
   }
 
   const companyRef = firestore.collection("companies").doc(companyId);
   const companySnap = await companyRef.get();
 
   if (!companySnap.exists) {
-    throw new functions.https.HttpsError("not-found", "Company not found.");
+    throw new HttpsError("not-found", "Company not found.");
   }
 
   const updates = {
@@ -3727,7 +3728,7 @@ exports.updateCompanyAdminFlags = functions.https.onCall(async (data, context) =
   }
 
   if (!Object.prototype.hasOwnProperty.call(updates, "hideFromBrowse") && updates.verified !== true) {
-    throw new functions.https.HttpsError("invalid-argument", "No supported company flag was provided.");
+    throw new HttpsError("invalid-argument", "No supported company flag was provided.");
   }
 
   await companyRef.update(updates);
@@ -3871,7 +3872,7 @@ const normalizeAccessArray = (value) => {
 
 const sanitizeCompanyUserAccessUpdates = (updates = {}) => {
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
-    throw new functions.https.HttpsError("invalid-argument", "updates must be an object.");
+    throw new HttpsError("invalid-argument", "updates must be an object.");
   }
 
   const sanitized = {};
@@ -3891,11 +3892,11 @@ const sanitizeCompanyUserAccessUpdates = (updates = {}) => {
       return;
     }
 
-    throw new functions.https.HttpsError("invalid-argument", `${field} cannot be updated by this action.`);
+    throw new HttpsError("invalid-argument", `${field} cannot be updated by this action.`);
   });
 
   if (Object.keys(sanitized).length === 0) {
-    throw new functions.https.HttpsError("invalid-argument", "At least one supported update field is required.");
+    throw new HttpsError("invalid-argument", "At least one supported update field is required.");
   }
 
   return sanitized;
@@ -3920,17 +3921,17 @@ exports.updateCompanyUserAccess = functions.https.onCall(async (data, context) =
   const updates = sanitizeCompanyUserAccessUpdates(payload.updates || {});
 
   if (!authUserId) {
-    throw new functions.https.HttpsError("unauthenticated", "You must be signed in to update company users.");
+    throw new HttpsError("unauthenticated", "You must be signed in to update company users.");
   }
 
   if (!companyId || !companyUserId) {
-    throw new functions.https.HttpsError("invalid-argument", "companyId and companyUserId are required.");
+    throw new HttpsError("invalid-argument", "companyId and companyUserId are required.");
   }
 
   const firestore = getFirestore();
   const canUpdate = await userCanUpdateCompanyUsers(firestore, authUserId, companyId);
   if (!canUpdate) {
-    throw new functions.https.HttpsError("permission-denied", "You do not have permission to update company users.");
+    throw new HttpsError("permission-denied", "You do not have permission to update company users.");
   }
 
   const companyRef = firestore.collection("companies").doc(companyId);
@@ -3941,11 +3942,11 @@ exports.updateCompanyUserAccess = functions.https.onCall(async (data, context) =
   ]);
 
   if (!companySnap.exists) {
-    throw new functions.https.HttpsError("not-found", "Company not found.");
+    throw new HttpsError("not-found", "Company not found.");
   }
 
   if (!companyUserSnap.exists) {
-    throw new functions.https.HttpsError("not-found", "Company user not found.");
+    throw new HttpsError("not-found", "Company user not found.");
   }
 
   const companyData = companySnap.data() || {};
@@ -3959,7 +3960,7 @@ exports.updateCompanyUserAccess = functions.https.onCall(async (data, context) =
   await companyAuthorization.protectMembershipTarget(firestore, accessActor, linkedUserId, existingCompanyUser.roleId);
   if (updates.roleId !== undefined || updates.roleName !== undefined) {
     if (linkedUserId === authUserId && accessActor.company.ownerId !== authUserId) {
-      throw new functions.https.HttpsError("permission-denied", "You cannot change your own role.");
+      throw new HttpsError("permission-denied", "You cannot change your own role.");
     }
     const selectedRole = await companyAuthorization.delegatedRole(firestore, accessActor, updates.roleId || existingCompanyUser.roleId);
     updates.roleId = selectedRole.id;
@@ -4063,17 +4064,17 @@ exports.getCompanyUserContactInfo = functions.https.onCall(async (data, context)
   const companyUserId = String(payload.companyUserId || payload.companyUserDocId || "").trim();
 
   if (!authUserId) {
-    throw new functions.https.HttpsError("unauthenticated", "You must be signed in to view company user contact info.");
+    throw new HttpsError("unauthenticated", "You must be signed in to view company user contact info.");
   }
 
   if (!companyId || !companyUserId) {
-    throw new functions.https.HttpsError("invalid-argument", "companyId and companyUserId are required.");
+    throw new HttpsError("invalid-argument", "companyId and companyUserId are required.");
   }
 
   const firestore = getFirestore();
   const canView = await userCanViewCompanyUsers(firestore, authUserId, companyId);
   if (!canView) {
-    throw new functions.https.HttpsError("permission-denied", "You do not have permission to view company users.");
+    throw new HttpsError("permission-denied", "You do not have permission to view company users.");
   }
 
   const companyUsersRef = firestore.collection("companies").doc(companyId).collection("companyUsers");
@@ -4087,7 +4088,7 @@ exports.getCompanyUserContactInfo = functions.https.onCall(async (data, context)
   }
 
   if (!companyUserSnap.exists) {
-    throw new functions.https.HttpsError("not-found", "Company user not found.");
+    throw new HttpsError("not-found", "Company user not found.");
   }
 
   const companyUser = companyUserSnap.data() || {};
@@ -4669,7 +4670,7 @@ exports.createCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, a
     const inviteSnap = await inviteRef.get();
     const existingInvite = inviteSnap.exists ? inviteSnap.data() || {} : {};
     if (inviteSnap.exists && (existingInvite.companyId !== companyId || normalizeCompanyInviteStatus(existingInvite.status) !== "pending")) {
-      throw new functions.https.HttpsError("permission-denied", "This invitation cannot be overwritten.");
+      throw new HttpsError("permission-denied", "This invitation cannot be overwritten.");
     }
 
     const companyName = getCompanyDisplayName(companyData, payload.companyName || existingInvite.companyName || "DripDrop");
@@ -6127,15 +6128,15 @@ exports.updateServiceStopDayPermanently = recurringCallable("permanentMove", asy
     const newDayOfWeek = dayIndexes[newDay];
 
     if (!companyId) {
-      throw new functions.https.HttpsError("invalid-argument", "companyId is required.");
+      throw new HttpsError("invalid-argument", "companyId is required.");
     }
 
     if (!newTech.userId || !newTech.userName) {
-      throw new functions.https.HttpsError("invalid-argument", "newTech.userId and newTech.userName are required.");
+      throw new HttpsError("invalid-argument", "newTech.userId and newTech.userName are required.");
     }
 
     if (newDayOfWeek === undefined) {
-      throw new functions.https.HttpsError("invalid-argument", "newDay must be a valid day of week.");
+      throw new HttpsError("invalid-argument", "newDay must be a valid day of week.");
     }
 
     const selectedStopIds = [
@@ -6147,7 +6148,7 @@ exports.updateServiceStopDayPermanently = recurringCallable("permanentMove", asy
     ];
 
     if (!selectedStopIds.length) {
-      throw new functions.https.HttpsError("invalid-argument", "At least one service stop id is required.");
+      throw new HttpsError("invalid-argument", "At least one service stop id is required.");
     }
 
     const companyRef = db.collection("companies").doc(companyId);
@@ -6396,15 +6397,15 @@ exports.updateRecurringRouteOrderPermanently = recurringCallable("routeOrder", a
     : [];
 
   if (!companyId) {
-    throw new functions.https.HttpsError("invalid-argument", "companyId required");
+    throw new HttpsError("invalid-argument", "companyId required");
   }
 
   if (!routeId) {
-    throw new functions.https.HttpsError("invalid-argument", "routeId required");
+    throw new HttpsError("invalid-argument", "routeId required");
   }
 
   if (serviceStopOrders.length === 0) {
-    throw new functions.https.HttpsError("invalid-argument", "serviceStopOrders required");
+    throw new HttpsError("invalid-argument", "serviceStopOrders required");
   }
 
   let routeRef = db
@@ -6424,7 +6425,7 @@ exports.updateRecurringRouteOrderPermanently = recurringCallable("routeOrder", a
   }
 
   if (!snap.exists) {
-    throw new functions.https.HttpsError("not-found", "Route not found");
+    throw new HttpsError("not-found", "Route not found");
   }
 
   const routeData = snap.data() || {};
@@ -6530,15 +6531,15 @@ exports.updateRecurringServiceStopsRouteAssignment = recurringCallable("routeAss
   const targetTechName = targetTech.userName || targetTech.name || receivedData.targetTechName || "";
 
   if (!companyId) {
-    throw new functions.https.HttpsError("invalid-argument", "companyId is required.");
+    throw new HttpsError("invalid-argument", "companyId is required.");
   }
 
   if (!recurringServiceStopIds.length) {
-    throw new functions.https.HttpsError("invalid-argument", "At least one recurring service stop id is required.");
+    throw new HttpsError("invalid-argument", "At least one recurring service stop id is required.");
   }
 
   if (!targetDay || !targetTechId || !targetTechName) {
-    throw new functions.https.HttpsError("invalid-argument", "targetDay and targetTech are required.");
+    throw new HttpsError("invalid-argument", "targetDay and targetTech are required.");
   }
 
   try {
@@ -6587,11 +6588,11 @@ exports.updateRecurringServiceStopsRouteAssignment = recurringCallable("routeAss
       },
     });
 
-    if (error instanceof functions.https.HttpsError) {
+    if (error instanceof HttpsError) {
       throw error;
     }
 
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "internal",
       error.message || "Unable to assign recurring service stops."
     );
@@ -6638,7 +6639,7 @@ exports.createHomeOwnerCustomerBasedOnCompany = functions.https.onCall(async (da
 });
 
 exports.makeUpdatesToRecurringRoutes = recurringCallable("routeOrder", async () => {
-  throw new functions.https.HttpsError("unimplemented", "Use updateRecurringRouteOrderPermanently to update route order.");
+  throw new HttpsError("unimplemented", "Use updateRecurringRouteOrderPermanently to update route order.");
 });
 
 function isNonEmptyRouteId(value) {
@@ -6818,7 +6819,7 @@ async function assignRecurringServiceStopsToPlannedRoute({
   ];
 
   if (!companyId || !rssIds.length || !targetDay || !targetTechId) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "invalid-argument",
       "companyId, recurringServiceStopIds, targetDay, and targetTechId are required."
     );
@@ -6842,7 +6843,7 @@ async function assignRecurringServiceStopsToPlannedRoute({
       .filter(Boolean);
 
     if (missingIds.length) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "not-found",
         `Recurring service stop(s) not found: ${missingIds.join(", ")}`
       );
@@ -7010,7 +7011,7 @@ async function syncFutureServiceStopsForRouteAssignment({
   const targetDayIndex = dayIndexes[targetDay];
 
   if (targetDayIndex === undefined) {
-    throw new functions.https.HttpsError("invalid-argument", "targetDay must be a valid day of week.");
+    throw new HttpsError("invalid-argument", "targetDay must be a valid day of week.");
   }
 
   const serviceStopsRef = db.collection("companies").doc(companyId).collection("serviceStops");
@@ -7109,7 +7110,7 @@ async function deleteRecurringServiceStopCascade({
   const recurringSnap = await recurringRef.get();
 
   if (!recurringSnap.exists) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "not-found",
       "Recurring service stop was not found."
     );
@@ -7143,7 +7144,7 @@ exports.deleteRecurringServiceStop = recurringCallable("delete", async (data, co
   const includePastServiceStops = receivedData?.includePastServiceStops !== false;
 
   if (!companyId || !stopId) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "invalid-argument",
       "Missing companyId or stopId."
     );
@@ -7182,7 +7183,7 @@ exports.deleteRecurringRoute = recurringCallable("routeDelete", async (data, con
   const includePastServiceStops = receivedData?.includePastServiceStops !== false;
 
   if (!companyId || !routeId) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "invalid-argument",
       "Missing companyId or routeId."
     );
@@ -7196,7 +7197,7 @@ exports.deleteRecurringRoute = recurringCallable("routeDelete", async (data, con
   const routeSnap = await routeRef.get();
 
   if (!routeSnap.exists) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "not-found",
       "Recurring route was not found."
     );
@@ -7328,7 +7329,7 @@ async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
 
 
 exports.endRecurringServiceStop = recurringCallable("end", async () => {
-  throw new functions.https.HttpsError("unimplemented", "Use updateRecurringServiceStop with an end date to end recurring service.");
+  throw new HttpsError("unimplemented", "Use updateRecurringServiceStop with an end date to end recurring service.");
 });
 
 
@@ -7341,14 +7342,14 @@ exports.updateRecurringServiceStop = recurringCallable("update", async (data, co
   const recurringServiceStop = receivedData.recurringServiceStop;
 
   if (!companyId) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "invalid-argument",
       "companyId is required."
     );
   }
 
   if (!recurringServiceStop || !recurringServiceStop.id) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "invalid-argument",
       "recurringServiceStop with a valid id is required."
     );
@@ -7743,7 +7744,7 @@ exports.updateRecurringServiceStop = recurringCallable("update", async (data, co
     const existingRecurringSnap = await recurringServiceStopRef.get();
 
     if (!existingRecurringSnap.exists) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "not-found",
         "Recurring service stop was not found."
       );
@@ -7917,7 +7918,7 @@ exports.updateRecurringServiceStop = recurringCallable("update", async (data, co
       },
     });
 
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "internal",
       error.message || "Unable to update recurring service stop."
     );

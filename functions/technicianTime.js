@@ -1,4 +1,4 @@
-const { HttpsError }=require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const {randomUUID}=require('node:crypto');
 const {createTechnicianWorkWorkflow,id,record,rows,date,key,stable,routeIds}=require('./technicianWorkWorkflow');
 const {calculatePayLines,reconcilePayLines,selectPayRate}=require('./payrollCalculation');

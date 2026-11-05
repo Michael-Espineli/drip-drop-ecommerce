@@ -1,3 +1,6 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useEffect, useContext } from "react";
 import { useNavigate, Link, useParams, useLocation } from "react-router-dom";
 import { db, storage } from "../../../utils/config";
@@ -380,13 +383,13 @@ const CreateNewRepairRequest = () => {
       navigate("/company/repair-requests");
     } catch (error) {
       console.error("Error creating repair request: ", error);
-      appAlert("Failed to create repair request.");
+      appAlert(userFacingErrorMessage(error, "Failed to create repair request."));
     } finally {
       setSaving(false);
     }
   };
 
-  const selectStyles = {
+  const selectStyles = workspaceSelectStyles({
     control: (provided) => ({
       ...provided,
       backgroundColor: "white",
@@ -402,20 +405,20 @@ const CreateNewRepairRequest = () => {
       borderRadius: "0.75rem",
       overflow: "hidden",
     }),
-  };
+  });
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
       <div className="max-w-screen-md mx-auto">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-3xl font-bold text-gray-800">Create Internal Repair Request</h2>
+        <WorkspaceRecordHeader title={<>Create Internal Repair Request</>} eyebrow="Company operations"><div className="flex justify-between items-center mb-6">
+
           <Link
             to={"/company/repair-requests"}
             className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
           >
             Cancel
           </Link>
-        </div>
+        </div></WorkspaceRecordHeader>
 
         <div className="mb-6">
           <PublicRepairRequestLink companyId={recentlySelectedCompany} />

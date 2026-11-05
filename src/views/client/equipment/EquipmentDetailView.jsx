@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
@@ -86,7 +88,7 @@ const EquipmentDetailView = () => {
 
             } catch (err) {
                 console.error("Error fetching data: ", err);
-                setError('Failed to load equipment details and history.');
+                setError(userFacingErrorMessage(err, 'Failed to load equipment details and history.'));
             } finally {
                 setLoading(false);
             }
@@ -111,7 +113,7 @@ const EquipmentDetailView = () => {
             navigate('/client/equipment');
         } catch (err) {
             console.error("Error deleting equipment: ", err);
-            setError("Failed to delete equipment. Please try again.");
+            setError(userFacingErrorMessage(err, "Failed to delete equipment. Please try again."));
             setIsDeleting(false);
         }
     };
@@ -192,12 +194,12 @@ const EquipmentDetailView = () => {
 };
 
 const Header = ({ name, onBack }) => (
-    <div className="flex items-center gap-4">
+    <WorkspaceRecordHeader title={<>{name}</>} eyebrow="My equipment"><div className="flex items-center gap-4">
         <button onClick={onBack} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
             <ArrowLeftIcon className="w-6 h-6" />
         </button>
-        <h1 className="text-3xl font-bold text-gray-900 truncate">{name}</h1>
-    </div>
+
+    </div></WorkspaceRecordHeader>
 );
 
 const DetailItem = ({ label, value }) => (

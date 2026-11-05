@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -344,7 +345,7 @@ const CompanyWideSettings = () => {
         if (cancelled) return;
         setSettingsLoadError(true);
         console.error("Failed to load company-wide settings:", error);
-        toast.error("Could not load company-wide settings.");
+        toast.error(userFacingErrorMessage(error, "Could not load company-wide settings."));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -554,7 +555,7 @@ const CompanyWideSettings = () => {
       toast.success("Company settings saved.");
     } catch (error) {
       console.error("Failed to save company-wide settings:", error);
-      toast.error("Could not save company settings.");
+      toast.error(userFacingErrorMessage(error, "Could not save company settings."));
     } finally {
       setSaving(false);
     }

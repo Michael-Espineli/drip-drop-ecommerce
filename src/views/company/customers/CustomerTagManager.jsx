@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { collection, doc, getDocs, writeBatch } from "firebase/firestore";
@@ -297,7 +298,7 @@ const CustomerTagManager = () => {
       ));
     } catch (error) {
       console.error("Error loading customer tag helper data:", error);
-      toast.error("Could not load customer tag data.");
+      toast.error(userFacingErrorMessage(error, "Could not load customer tag data."));
     } finally {
       setIsLoading(false);
     }
@@ -354,7 +355,7 @@ const CustomerTagManager = () => {
       toast.success(successMessage(nextCustomersById.size));
     } catch (error) {
       console.error("Error updating customer tags:", error);
-      toast.error("Failed to update customer tags.");
+      toast.error(userFacingErrorMessage(error, "Failed to update customer tags."));
     } finally {
       setIsSaving(false);
     }
@@ -441,7 +442,7 @@ const CustomerTagManager = () => {
       toast.success(`Assigned ${activeTag} to ${getCompanyUserDisplayName(selectedTechnician)}.`);
     } catch (error) {
       console.error("Error assigning tag access to technician:", error);
-      toast.error("Failed to assign tag access.");
+      toast.error(userFacingErrorMessage(error, "Failed to assign tag access."));
     } finally {
       setIsSaving(false);
     }

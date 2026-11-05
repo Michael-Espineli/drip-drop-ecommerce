@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useContext, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc, getDocs, updateDoc } from 'firebase/firestore';
@@ -75,7 +76,7 @@ export default function ScheduleEstimate() {
                 }
             } catch (error) {
                 console.error("Error fetching lead:", error);
-                toast.error("Failed to fetch lead details.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch lead details."));
             } finally {
                 setLoading(false);
             }
@@ -90,7 +91,7 @@ export default function ScheduleEstimate() {
                 }
             } catch (error) {
                 console.error("Error fetching company name:", error);
-                toast.error("Could not fetch company details.");
+                toast.error(userFacingErrorMessage(error, "Could not fetch company details."));
             }
         };
 
@@ -188,7 +189,7 @@ export default function ScheduleEstimate() {
 
         } catch (error) {
             console.error("Error scheduling estimate:", error);
-            toast.error('Failed to schedule estimate.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Failed to schedule estimate.'), { id: toastId });
             setIsSubmitting(false);
         }
     };

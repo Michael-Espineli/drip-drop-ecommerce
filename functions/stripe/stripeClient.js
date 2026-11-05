@@ -1,3 +1,4 @@
+const { HttpsError } = require('../appErrors');
 const functions = require("firebase-functions");
 const stripePackage = require("stripe");
 
@@ -12,7 +13,7 @@ const getStripeApiKey = () => {
   ).trim();
 
   if (!key || key === "sk_test_dummyApiKey") {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "failed-precondition",
       "Stripe API key is not configured for Cloud Functions."
     );

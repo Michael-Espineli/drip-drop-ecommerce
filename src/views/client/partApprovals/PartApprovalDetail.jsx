@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
@@ -183,7 +185,7 @@ const PartApprovalDetail = () => {
       toast.success(action === 'approved' ? 'Part approved.' : 'Part rejected.');
     } catch (responseError) {
       console.error('Unable to respond to part approval', responseError);
-      toast.error(responseError.message || 'Unable to save your response.');
+      toast.error(userFacingErrorMessage(responseError, responseError.message || 'Unable to save your response.'));
     } finally {
       setResponding('');
     }
@@ -217,7 +219,7 @@ const PartApprovalDetail = () => {
           </Link>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-slate-950">{partName}</h1>
+              <WorkspaceHeader title={<>{partName}</>} eyebrow="Your pool care" />
               <p className="mt-2 text-sm text-slate-600">
                 {approval.companyName || 'Pool company'} requested approval before purchasing or installing this part.
               </p>

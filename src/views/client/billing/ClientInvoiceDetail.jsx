@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import {netPaymentCents} from '../../../utils/sales/financialMetrics';
 import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
 import { ClientInvoicePayment } from '../../../components/billing/ClientPaymentActions';
@@ -170,7 +172,7 @@ const ClientInvoiceDetail = () => {
             setInvoice(null);
             setPayments([]);
             setBillingSubscription(null);
-            setError(loadError.message || 'Unable to verify this invoice link.');
+            setError(userFacingErrorMessage(loadError, loadError.message || 'Unable to verify this invoice link.'));
           }
         } finally {
           if (isActive) setLoading(false);
@@ -339,7 +341,7 @@ const ClientInvoiceDetail = () => {
       throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
     } catch (checkoutError) {
       console.error('Unable to start Stripe Checkout', checkoutError);
-      toast.error(checkoutError.message || 'Failed to start Stripe Checkout.');
+      toast.error(userFacingErrorMessage(checkoutError, checkoutError.message || 'Failed to start Stripe Checkout.'));
     } finally {
       setStartingCheckout(false);
     }
@@ -389,16 +391,16 @@ const ClientInvoiceDetail = () => {
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+        <WorkspaceRecordHeader title={<>{invoice.invoiceNumber || 'Invoice'}</>} eyebrow="My billing"><div>
           <Link to={backPath} className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
             <ArrowLeftIcon className="h-4 w-4" />
             {backLabel}
           </Link>
-          <h1 className="text-3xl font-bold text-slate-950">{invoice.invoiceNumber || 'Invoice'}</h1>
+
           <p className="mt-1 text-sm text-slate-500">
             {invoice.companyName || 'Pool company'} sent this invoice to {invoice.email || emailParam || user?.email || 'your account'}.
           </p>
-        </div>
+        </div></WorkspaceRecordHeader>
 
         <StatusBadge status={invoice.status || SalesInvoiceStatus.draft} />
       </div>

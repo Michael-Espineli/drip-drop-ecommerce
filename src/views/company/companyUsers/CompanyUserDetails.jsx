@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { addDoc, doc, query, where, collection, getDocs, getDoc, limit, updateDoc, orderBy, serverTimestamp, Timestamp, writeBatch } from "firebase/firestore";
@@ -902,7 +903,7 @@ const CompanyUserDetails = () => {
                 }
             } catch (error) {
                 console.error("Error fetching user details: ", error);
-                toast.error("Failed to load user details.");
+                toast.error(userFacingErrorMessage(error, "Failed to load user details."));
             } finally {
                 setIsLoading(false);
             }
@@ -964,7 +965,7 @@ const CompanyUserDetails = () => {
                 setRoleList(roles);
             } catch (error) {
                 console.error("Error fetching roles:", error);
-                toast.error("Could not load company roles.");
+                toast.error(userFacingErrorMessage(error, "Could not load company roles."));
             } finally {
                 setAreRolesLoading(false);
             }
@@ -1090,7 +1091,7 @@ const CompanyUserDetails = () => {
             } catch (error) {
                 if (cancelled) return;
                 console.error("Error loading company user rate sheet:", error);
-                setRateSheetError("Could not load this user's rate sheet.");
+                setRateSheetError(userFacingErrorMessage(error, "Could not load this user's rate sheet."));
                 setCompanyWorkTypes([]);
                 setTechnicianRates([]);
                 setLegacyRateSheets([]);
@@ -1269,7 +1270,7 @@ const CompanyUserDetails = () => {
             } catch (error) {
                 if (cancelled) return;
                 console.error("Error loading performance reviews:", error);
-                setPerformanceError("Could not load performance review history.");
+                setPerformanceError(userFacingErrorMessage(error, "Could not load performance review history."));
                 setPerformanceReviews([]);
             } finally {
                 if (!cancelled) setIsPerformanceLoading(false);
@@ -1313,7 +1314,7 @@ const CompanyUserDetails = () => {
             } catch (error) {
                 if (cancelled) return;
                 console.error("Error loading onboarding checklist:", error);
-                setOnboardingError("Could not load onboarding checklist.");
+                setOnboardingError(userFacingErrorMessage(error, "Could not load onboarding checklist."));
                 setOnboardingItems([]);
             } finally {
                 if (!cancelled) setIsOnboardingLoading(false);
@@ -1358,7 +1359,7 @@ const CompanyUserDetails = () => {
             } catch (error) {
                 if (cancelled) return;
                 console.error("Error loading company user files:", error);
-                setFilesError("Could not load this user's files.");
+                setFilesError(userFacingErrorMessage(error, "Could not load this user's files."));
                 setCompanyUserFiles([]);
             } finally {
                 if (!cancelled) setIsFilesLoading(false);
@@ -1824,7 +1825,7 @@ const CompanyUserDetails = () => {
             toast.success(`${results.length} customer note${results.length === 1 ? "" : "s"} created.`);
         } catch (error) {
             console.error("Error copying performance note to customer notes:", error);
-            toast.error(error?.message || "Failed to copy performance note to customer notes.");
+            toast.error(userFacingErrorMessage(error, error?.message || "Failed to copy performance note to customer notes."));
         } finally {
             setCopyingPerformanceReviewId("");
         }
@@ -1964,7 +1965,7 @@ const CompanyUserDetails = () => {
             toast.success("Company user updated.");
         } catch (error) {
             console.error("Error updating company user:", error);
-            toast.error("Failed to update company user.");
+            toast.error(userFacingErrorMessage(error, "Failed to update company user."));
         } finally {
             setIsSavingProfile(false);
         }
@@ -2048,7 +2049,7 @@ const CompanyUserDetails = () => {
             toast.success("Customer tag access updated.");
         } catch (error) {
             console.error("Error updating customer tag access:", error);
-            toast.error("Failed to update customer tag access.");
+            toast.error(userFacingErrorMessage(error, "Failed to update customer tag access."));
         } finally {
             setIsSavingRegionalAccess(false);
         }
@@ -2091,7 +2092,7 @@ const CompanyUserDetails = () => {
             toast.success("Dashboard view access updated.");
         } catch (error) {
             console.error("Error updating dashboard view access:", error);
-            toast.error("Failed to update dashboard view access.");
+            toast.error(userFacingErrorMessage(error, "Failed to update dashboard view access."));
         } finally {
             setIsSavingDashboardScopeAccess(false);
         }
@@ -2126,7 +2127,7 @@ const CompanyUserDetails = () => {
             toast.success("Basic job admin assignment updated.");
         } catch (error) {
             console.error("Error updating work order admin assignment:", error);
-            toast.error("Failed to update scheduled job admin assignment.");
+            toast.error(userFacingErrorMessage(error, "Failed to update scheduled job admin assignment."));
         } finally {
             setIsSavingWorkOrderAdmin(false);
         }
@@ -2162,7 +2163,7 @@ const CompanyUserDetails = () => {
             toast.success("Vehicle access updated.");
         } catch (error) {
             console.error("Error updating vehicle access:", error);
-            toast.error("Failed to update vehicle access.");
+            toast.error(userFacingErrorMessage(error, "Failed to update vehicle access."));
         } finally {
             setIsSavingVehicleAccess(false);
         }
@@ -2243,7 +2244,7 @@ const CompanyUserDetails = () => {
             toast.success("Onboarding checklist copied to user.");
         } catch (error) {
             console.error("Error initializing onboarding checklist:", error);
-            toast.error("Could not copy onboarding checklist.");
+            toast.error(userFacingErrorMessage(error, "Could not copy onboarding checklist."));
         } finally {
             setIsInitializingOnboarding(false);
         }
@@ -2288,7 +2289,7 @@ const CompanyUserDetails = () => {
             toast.success(isComplete ? "Onboarding item completed." : "Onboarding item reopened.");
         } catch (error) {
             console.error("Error updating onboarding item:", error);
-            toast.error("Could not update onboarding item.");
+            toast.error(userFacingErrorMessage(error, "Could not update onboarding item."));
         } finally {
             setUpdatingOnboardingItemId("");
         }
@@ -2388,7 +2389,7 @@ const CompanyUserDetails = () => {
             toast.success(`Uploaded ${uploadedRecords.length} file${uploadedRecords.length === 1 ? "" : "s"}.`);
         } catch (error) {
             console.error("Error uploading company user files:", error);
-            toast.error("Failed to upload technician files.");
+            toast.error(userFacingErrorMessage(error, "Failed to upload technician files."));
         } finally {
             setIsUploadingUserFiles(false);
         }
@@ -2593,7 +2594,7 @@ const CompanyUserDetails = () => {
             toast.success("Performance note saved.");
         } catch (error) {
             console.error("Error saving performance note:", error);
-            toast.error("Failed to save performance note.");
+            toast.error(userFacingErrorMessage(error, "Failed to save performance note."));
         } finally {
             setIsSavingPerformance(false);
             setIsUploadingPerformanceFiles(false);
@@ -2646,7 +2647,7 @@ const CompanyUserDetails = () => {
             toast.success("Performance note updated.");
         } catch (error) {
             console.error("Error updating performance note:", error);
-            toast.error("Failed to update performance note.");
+            toast.error(userFacingErrorMessage(error, "Failed to update performance note."));
         } finally {
             setIsUpdatingPerformanceReview(false);
         }
@@ -2764,7 +2765,7 @@ const CompanyUserDetails = () => {
             toast.success("Summary report saved.");
         } catch (error) {
             console.error("Error saving summary report:", error);
-            toast.error("Failed to save summary report.");
+            toast.error(userFacingErrorMessage(error, "Failed to save summary report."));
         } finally {
             setIsSavingSummary(false);
         }

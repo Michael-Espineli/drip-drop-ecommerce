@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "react-select";
@@ -799,7 +800,7 @@ const AlphaWaterReceiptImport = () => {
         setSelectedTechId((currentTechId) => currentTechId || getCompanyUserId(defaultTech));
       } catch (error) {
         console.error("Error loading receipt import selectors:", error);
-        toast.error("Could not load receipt selectors");
+        toast.error(userFacingErrorMessage(error, "Could not load receipt selectors"));
       } finally {
         setLoading(false);
       }
@@ -1081,7 +1082,7 @@ const AlphaWaterReceiptImport = () => {
           "Try the original Alpha Water email/PDF, or paste the invoice text below and parse again.",
         ].filter(Boolean),
       });
-      toast.error("Could not parse upload");
+      toast.error(userFacingErrorMessage(error, "Could not parse upload"));
     } finally {
       setParsing(false);
       setReceiptLoading(null);
@@ -1330,7 +1331,7 @@ const AlphaWaterReceiptImport = () => {
       resetCreateItemModal();
     } catch (error) {
       console.error("Error creating vendor item from receipt import:", error);
-      toast.error("Could not create vendor item");
+      toast.error(userFacingErrorMessage(error, "Could not create vendor item"));
     } finally {
       setCreatingDatabaseItem(false);
     }
@@ -1370,7 +1371,7 @@ const AlphaWaterReceiptImport = () => {
       toast.success("Vendor item cost updated");
     } catch (error) {
       console.error("Error updating vendor item cost from receipt import:", error);
-      toast.error("Could not update vendor item cost");
+      toast.error(userFacingErrorMessage(error, "Could not update vendor item cost"));
     } finally {
       setDatabaseItemCostUpdating(line.id, false);
     }
@@ -1746,7 +1747,7 @@ const AlphaWaterReceiptImport = () => {
       }
     } catch (error) {
       console.error("Error saving Alpha Water receipt:", error);
-      toast.error("Failed to save receipt");
+      toast.error(userFacingErrorMessage(error, "Failed to save receipt"));
     } finally {
       setSaving(false);
     }

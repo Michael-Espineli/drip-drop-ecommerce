@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { collection, doc, getDoc, getDocs, serverTimestamp, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
@@ -606,7 +607,7 @@ const CompanyInfo = () => {
         }
       } catch (err) {
         console.error(err);
-        toast.error('Failed to fetch company data.');
+        toast.error(userFacingErrorMessage(err, 'Failed to fetch company data.'));
       } finally {
         setIsLoading(false);
       }
@@ -723,7 +724,7 @@ const CompanyInfo = () => {
       toast.success(`Service coverage updated from ${syncResult.locationCount} active service locations.`);
     } catch (error) {
       console.error('Unable to sync service areas', error);
-      toast.error('Unable to update service coverage.');
+      toast.error(userFacingErrorMessage(error, 'Unable to update service coverage.'));
     } finally {
       setSyncingAreas(false);
     }

@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useContext, useEffect } from 'react';
 import { Link } from 'react-router-dom';
@@ -41,7 +42,7 @@ const RepairRequests = () => {
     if (loading) {
         return (
             <div className="p-6 sm:p-8">
-                <h1 className="mb-8 text-2xl font-bold text-gray-900 sm:text-3xl">Repair Requests</h1>
+                <WorkspaceHeader title={<>Repair Requests</>} eyebrow="Your pool care" />
                 <p>Loading repair requests...</p>
             </div>
         );
@@ -51,7 +52,7 @@ const RepairRequests = () => {
         <div className="px-4 py-6 bg-gray-50 min-h-screen md:px-8">
             <div className="max-w-7xl mx-auto">
                 <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Repair Requests</h1>
+                    <WorkspaceHeader title={<>Repair Requests</>} eyebrow="Your pool care" />
                     <Link
                         to="/client/repair-requests/new"
                         className="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-white shadow-md hover:bg-blue-700 sm:py-2"

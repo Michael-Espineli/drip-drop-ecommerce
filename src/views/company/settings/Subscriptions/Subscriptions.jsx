@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useCallback } from "react";
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { query, collection, getDocs, where } from "firebase/firestore";
@@ -62,8 +63,8 @@ export default function Subscriptions() {
             }
         } catch (err) {
             console.error("Error fetching active subscription:", err);
-            setError("Failed to fetch subscription details.");
-            toast.error("Could not fetch subscription details.");
+            setError(userFacingErrorMessage(err, "Failed to fetch subscription details."));
+            toast.error(userFacingErrorMessage(err, "Could not fetch subscription details."));
             return null; // Return null on error
         } finally {
             setLoading(false);
@@ -86,7 +87,7 @@ export default function Subscriptions() {
             }
         } catch (error) {
             console.error("Error fetching payment history:", error);
-            toast.error('Could not load payment history.');
+            toast.error(userFacingErrorMessage(error, 'Could not load payment history.'));
         } finally {
             setLoadingHistory(false);
         }
@@ -162,7 +163,7 @@ export default function Subscriptions() {
             });
         } catch (error) {
             console.error("Cancellation Error:", error);
-            toast.error(`Failed to cancel subscription: ${error.message}`, { id: toastId });
+            toast.error(userFacingErrorMessage(error, `Failed to cancel subscription: ${error.message}`), { id: toastId });
         }
     };
 
@@ -190,7 +191,7 @@ export default function Subscriptions() {
             }
         } catch (error) {
             console.error('Error creating Stripe portal session:', error);
-            toast.error(error.message || 'Could not redirect to portal.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, error.message || 'Could not redirect to portal.'), { id: toastId });
             setIsPortalLoading(false);
         }
     };

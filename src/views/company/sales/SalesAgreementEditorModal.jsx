@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import ServicePayrollTaskEditor from './ServicePayrollTaskEditor';
 import { serializeServiceTasks } from '../../../utils/payroll/servicePayrollPreview';
@@ -823,7 +824,7 @@ const SalesAgreementEditorModal = ({
       toast.success('Catalog item created and added to this agreement.');
     } catch (catalogError) {
       console.error('Unable to create sales catalog item from agreement', catalogError);
-      toast.error(catalogError.message || 'Failed to create catalog item.');
+      toast.error(userFacingErrorMessage(catalogError, catalogError.message || 'Failed to create catalog item.'));
     } finally {
       setSavingCatalogItem(false);
     }
@@ -869,7 +870,7 @@ const SalesAgreementEditorModal = ({
       }));
     } catch (templateError) {
       console.error('Unable to apply terms template', templateError);
-      toast.error('Failed to apply terms template.');
+      toast.error(userFacingErrorMessage(templateError, 'Failed to apply terms template.'));
     } finally {
       setApplyingTermsTemplate(false);
     }
@@ -947,7 +948,7 @@ const SalesAgreementEditorModal = ({
       toast.success('Terms template updated from this agreement.');
     } catch (templateError) {
       console.error('Unable to update source terms template', templateError);
-      toast.error(templateError.message || 'Failed to update terms template.');
+      toast.error(userFacingErrorMessage(templateError, templateError.message || 'Failed to update terms template.'));
     } finally {
       setUpdatingTermsTemplate(false);
     }
@@ -1104,7 +1105,7 @@ const SalesAgreementEditorModal = ({
       closeEditor();
     } catch (saveError) {
       console.error('Unable to update service agreement', saveError);
-      toast.error(saveError.message || 'Failed to update service agreement.');
+      toast.error(userFacingErrorMessage(saveError, saveError.message || 'Failed to update service agreement.'));
     } finally {
       setSavingEdit(false);
     }
@@ -1166,9 +1167,9 @@ const SalesAgreementEditorModal = ({
         selectedCompanyId,
         userId: user?.uid || '',
       });
-      toast.error(isPermissionDeniedError(deleteError)
+      toast.error(userFacingErrorMessage(deleteError, isPermissionDeniedError(deleteError)
         ? 'Firebase denied the delete. Check that this agreement and every linked billing subscription have the selected companyId and that your userAccess record exists for that company.'
-        : deleteError.message || 'Failed to delete service agreement.');
+        : deleteError.message || 'Failed to delete service agreement.'));
     } finally {
       setDeleting(false);
     }

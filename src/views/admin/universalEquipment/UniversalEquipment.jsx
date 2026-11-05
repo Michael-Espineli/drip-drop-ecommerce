@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { db } from '../../../utils/config';
 import {
@@ -173,9 +174,9 @@ const UniversalEquipment = () => {
       console.error('Error loading potential new equipment:', error);
       setEquipmentSuggestions([]);
       setSuggestionsError(
-        error?.code === 'permission-denied'
+        userFacingErrorMessage(error, error?.code === 'permission-denied'
           ? 'Your account is signed in, but Firestore is not recognizing it as a super-master or Drip Drop admin for the potential equipment queue.'
-          : 'Potential equipment could not be loaded. Please refresh and try again.'
+          : 'Potential equipment could not be loaded. Please refresh and try again.')
       );
     } finally {
       setSuggestionsLoading(false);
@@ -788,7 +789,7 @@ const UniversalEquipment = () => {
       ]);
     } catch (error) {
       console.error('Error creating universal equipment from suggestion:', error);
-      setSuggestionsError(error?.message || getPermissionMessage(error, 'create universal equipment from this suggestion'));
+      setSuggestionsError(userFacingErrorMessage(error, error?.message || getPermissionMessage(error, 'create universal equipment from this suggestion')));
     }
   };
 

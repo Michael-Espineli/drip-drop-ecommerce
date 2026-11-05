@@ -1,5 +1,6 @@
 const functions1 = require("firebase-functions/v1");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const admin = require("firebase-admin");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 

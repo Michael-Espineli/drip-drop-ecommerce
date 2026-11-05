@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { listenCompanyTodos } from "../../../utils/companyTodoAccess";
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import {
@@ -867,7 +868,7 @@ const TodoList = () => {
       toast.success(editingBoardId ? "Board updated." : "Board created.");
     } catch (error) {
       console.error("Failed to save todo board:", error);
-      toast.error("Failed to save board.");
+      toast.error(userFacingErrorMessage(error, "Failed to save board."));
     } finally {
       setSavingBoard(false);
     }
@@ -967,7 +968,7 @@ const TodoList = () => {
       toast.success("Todo updated.");
     } catch (error) {
       console.error("Failed to update todo details:", error);
-      toast.error("Failed to update todo.");
+      toast.error(userFacingErrorMessage(error, "Failed to update todo."));
     } finally {
       setSavingTodoEdit(false);
     }
@@ -1124,7 +1125,7 @@ const TodoList = () => {
       toast.success("Todo created.");
     } catch (error) {
       console.error("Failed to create todo:", error);
-      toast.error("Failed to create todo.");
+      toast.error(userFacingErrorMessage(error, "Failed to create todo."));
     } finally {
       setSaving(false);
     }
@@ -1141,7 +1142,7 @@ const TodoList = () => {
       });
     } catch (error) {
       console.error("Failed to update todo:", error);
-      toast.error("Failed to update todo.");
+      toast.error(userFacingErrorMessage(error, "Failed to update todo."));
     }
   };
 

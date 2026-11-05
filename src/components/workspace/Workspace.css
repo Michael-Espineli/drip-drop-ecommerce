@@ -32,6 +32,33 @@
 .workspace-header-badge { padding: .35rem .7rem; border: 1px solid #ffffff30; border-radius: .375rem; background: #ffffff12; color: #dbeafe; font-size: .75rem; font-weight: 600; }
 .workspace-header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .75rem; padding: 1rem 1.5rem; background: var(--color-surface); color: var(--color-text); }
 .workspace-header-actions > div { min-width: 0; max-width: 100%; }
+.workspace-record-controls { width: 100%; }
+.workspace-record-controls > div { min-width: 0; }
+.workspace-record-toolbar { width: 100%; }
+.workspace-wordmark { color: var(--color-primary); }
+.workspace-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding: 1.25rem; border-top: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); font-size: .875rem; }
+.app-sidebar-count { background: var(--workspace-slate-bg); color: var(--workspace-slate-text); border: 1px solid var(--workspace-slate-border); }
+.app-sidebar-count-attention { background: var(--workspace-amber-bg); color: var(--workspace-amber-text); border-color: var(--workspace-amber-border); }
+.app-sidebar-count-unread { background: var(--workspace-blue-bg); color: var(--workspace-blue-text); border-color: var(--workspace-blue-border); }
+.workspace-screen > .workspace-header { margin-bottom: 1.5rem; }
+.workspace-screen :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not([type="file"]):not([type="hidden"]):not([role="combobox"]) {
+    border-color: var(--color-border-strong);
+    border-radius: var(--app-control-radius, .375rem);
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    accent-color: var(--color-primary);
+}
+.workspace-screen :is(input, select):not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not([type="file"]):not([type="hidden"]):not([role="combobox"]) { min-height: 2.25rem; }
+.workspace-screen textarea:not([rows="1"]) { min-height: 6rem; }
+.workspace-screen :is(form[class*="bg-"], [role="dialog"]) { border: 1px solid var(--color-border); border-radius: var(--app-card-radius); }
+.workspace-screen [role="dialog"] { background: var(--color-surface); color: var(--color-text); }
+.workspace-status { display: inline-flex; align-items: center; border: 1px solid; border-radius: 999px; padding: .2rem .6rem; font-size: .75rem; font-weight: 600; line-height: 1.4; }
+.workspace-status-blue { background: var(--workspace-blue-bg); border-color: var(--workspace-blue-border); color: var(--workspace-blue-text); }
+.workspace-status-emerald { background: var(--workspace-emerald-bg); border-color: var(--workspace-emerald-border); color: var(--workspace-emerald-text); }
+.workspace-status-amber { background: var(--workspace-amber-bg); border-color: var(--workspace-amber-border); color: var(--workspace-amber-text); }
+.workspace-status-rose { background: var(--workspace-rose-bg); border-color: var(--workspace-rose-border); color: var(--workspace-rose-text); }
+.workspace-status-violet { background: var(--workspace-violet-bg); border-color: var(--workspace-violet-border); color: var(--workspace-violet-text); }
+.workspace-status-slate { background: var(--workspace-slate-bg); border-color: var(--workspace-slate-border); color: var(--workspace-slate-text); }
 
 .workspace-section-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding: 1.25rem; border-bottom: 1px solid var(--color-border); }
 .workspace-section-heading { display: flex; align-items: center; gap: .75rem; min-width: 0; }
@@ -80,7 +107,8 @@
     .workspace-header-identity, .workspace-header-actions, .workspace-section-header { padding: 1rem; }
     .workspace-header-title { font-size: 1.5rem; }
     .workspace-header-actions { justify-content: flex-start; }
-    .workspace-button { min-height: 2.75rem; }
+    .workspace-button, .workspace-header-actions :is(button, [role="button"], a[class~="inline-flex"]) { min-height: 44px; }
+    .workspace-screen :is(input, select):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([role="combobox"]) { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

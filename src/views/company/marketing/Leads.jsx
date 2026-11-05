@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -227,7 +228,7 @@ export default function Leads() {
             toast.success('Public lead form link copied.');
         } catch (error) {
             console.error('Failed to copy public lead form link', error);
-            toast.error('Could not copy the public lead link.');
+            toast.error(userFacingErrorMessage(error, 'Could not copy the public lead link.'));
         }
     };
 
@@ -344,7 +345,7 @@ export default function Leads() {
             setCancelDialogTargets(targets);
         } catch (error) {
             console.error('Unable to load lead cancellation targets', error);
-            toast.error('Could not load linked cleanup options.');
+            toast.error(userFacingErrorMessage(error, 'Could not load linked cleanup options.'));
         } finally {
             setLoadingCancelTargets(false);
         }
@@ -383,7 +384,7 @@ export default function Leads() {
             setLoadingCancelTargets(false);
         } catch (error) {
             console.error('Unable to cancel lead', error);
-            toast.error(error.message || 'Failed to mark lead cancelled.');
+            toast.error(userFacingErrorMessage(error, error.message || 'Failed to mark lead cancelled.'));
         } finally {
             setCancellingLeadId('');
         }

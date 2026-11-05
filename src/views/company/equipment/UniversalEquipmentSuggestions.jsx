@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -150,7 +151,7 @@ const UniversalEquipmentSuggestions = () => {
       });
     } catch (error) {
       console.error("Failed to load universal equipment suggestions:", error);
-      toast.error("Failed to load suggested universal equipment.");
+      toast.error(userFacingErrorMessage(error, "Failed to load suggested universal equipment."));
     } finally {
       setLoading(false);
     }
@@ -261,7 +262,7 @@ const UniversalEquipmentSuggestions = () => {
     }
 
     if (!canUpdateEquipment) {
-      toast.error("You do not have permission to update equipment.");
+      toast.error("Drip Drop permission denied: You do not have permission to update equipment.");
       return;
     }
 
@@ -317,7 +318,7 @@ const UniversalEquipmentSuggestions = () => {
       await loadSuggestions();
     } catch (error) {
       console.error("Failed to reconcile equipment suggestion:", error);
-      toast.error("Failed to apply catalog match.");
+      toast.error(userFacingErrorMessage(error, "Failed to apply catalog match."));
     } finally {
       setSavingId("");
     }
@@ -335,7 +336,7 @@ const UniversalEquipmentSuggestions = () => {
       await loadSuggestions();
     } catch (error) {
       console.error("Failed to update equipment suggestion:", error);
-      toast.error("Failed to update suggestion.");
+      toast.error(userFacingErrorMessage(error, "Failed to update suggestion."));
     } finally {
       setSavingId("");
     }

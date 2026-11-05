@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { collection, getCountFromServer } from "firebase/firestore";
@@ -125,7 +126,7 @@ function MigrationDashboard() {
       } catch (error) {
         console.error("Failed to load migration dashboard counts:", error);
         if (!cancelled) {
-          setCountError("Could not load migration counts for this company.");
+          setCountError(userFacingErrorMessage(error, "Could not load migration counts for this company."));
         }
       } finally {
         if (!cancelled) {

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -156,7 +157,7 @@ function TesterStripSettings() {
       setProfileMappings(savedSettings.profileMappings || {});
     } catch (error) {
       console.error("Failed to load tester strip settings:", error);
-      toast.error("Could not load tester strip settings.");
+      toast.error(userFacingErrorMessage(error, "Could not load tester strip settings."));
     } finally {
       setLoading(false);
     }
@@ -267,7 +268,7 @@ function TesterStripSettings() {
       toast.success("Tester strip settings saved.");
     } catch (error) {
       console.error("Failed to save tester strip settings:", error);
-      toast.error("Could not save tester strip settings.");
+      toast.error(userFacingErrorMessage(error, "Could not save tester strip settings."));
     } finally {
       setSaving(false);
     }

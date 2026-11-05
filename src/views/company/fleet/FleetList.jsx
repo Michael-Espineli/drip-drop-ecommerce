@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -407,8 +408,8 @@ export default function FleetList() {
       setRecentRoutes(routes);
     } catch (error) {
       console.error("Error loading vehicle routes:", error);
-      toast.error("Failed to load recent vehicle routes.");
-      setRouteFilterError("Could not load recent trips. Check the route indexes.");
+      toast.error(userFacingErrorMessage(error, "Failed to load recent vehicle routes."));
+      setRouteFilterError(userFacingErrorMessage(error, "Could not load recent trips. Check the route indexes."));
     } finally {
       setRoutesLoading(false);
     }
@@ -536,7 +537,7 @@ export default function FleetList() {
       setShowModal(false);
     } catch (error) {
       console.error("Error saving vehicle:", error);
-      toast.error("Failed to save vehicle.");
+      toast.error(userFacingErrorMessage(error, "Failed to save vehicle."));
     } finally {
       setSaving(false);
     }
@@ -571,7 +572,7 @@ export default function FleetList() {
       toast.success("Vehicle deleted.");
     } catch (error) {
       console.error("Error deleting vehicle:", error);
-      toast.error("Failed to delete vehicle.");
+      toast.error(userFacingErrorMessage(error, "Failed to delete vehicle."));
     } finally {
       setSaving(false);
     }

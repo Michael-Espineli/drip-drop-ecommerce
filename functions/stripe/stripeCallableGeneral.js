@@ -1,5 +1,6 @@
 
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require('firebase-functions/v2/https');
+const { HttpsError } = require('../appErrors');
 const functions = require("firebase-functions");
 const {getFirestore} = require("firebase-admin/firestore");
 const { defineSecret } = require('firebase-functions/params');
@@ -273,7 +274,7 @@ const requireCallableAuth = async (data, context) => {
     ].find((candidate) => String(candidate || '').trim());
 
     if (!idToken) {
-        throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
+        throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
     try {
@@ -284,25 +285,25 @@ const requireCallableAuth = async (data, context) => {
         };
     } catch (error) {
         console.error('Unable to verify Stripe callable auth token', error);
-        throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
+        throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 };
 
 const getOwnerCompanyForStripe = async ({ companyId, uid }) => {
     if (!companyId) {
-        throw new functions.https.HttpsError('invalid-argument', 'companyId is required.');
+        throw new HttpsError('invalid-argument', 'companyId is required.');
     }
 
     const companyRef = db.collection('companies').doc(companyId);
     const companySnap = await companyRef.get();
 
     if (!companySnap.exists) {
-        throw new functions.https.HttpsError('not-found', 'Company not found.');
+        throw new HttpsError('not-found', 'Company not found.');
     }
 
     const companyData = companySnap.data() || {};
     if (!(await hasActiveCompanyPermission(db, companyId, uid, ['408']))) {
-        throw new functions.https.HttpsError('permission-denied', 'Connected-account management permission is required.');
+        throw new HttpsError('permission-denied', 'Connected-account management permission is required.');
     }
 
     return { companyRef, companyData };
@@ -418,7 +419,7 @@ exports.createStripeCustomer = functions.https.onCall(async(data, context) => {
     const userId = receivedData.userId || auth.uid;
 
     if (userId !== auth.uid) {
-        throw new functions.https.HttpsError('permission-denied', 'You can only create a Stripe customer for your own user account.');
+        throw new HttpsError('permission-denied', 'You can only create a Stripe customer for your own user account.');
     }
 
     const userRef = getFirestore().collection('users').doc(userId);
@@ -458,7 +459,7 @@ exports.createStripeCustomer = functions.https.onCall(async(data, context) => {
       };
     } catch(error) {
       console.error(error);
-      throw new functions.https.HttpsError('internal', 'Unable to create Stripe customer.', error.message);
+      throw new HttpsError('internal', 'Unable to create Stripe customer.', error.message);
     }
   });
 
@@ -467,7 +468,7 @@ exports.createStripeSubscription = functions.https.onCall(async(data, context) =
     const receivedData = getCallableData(data);
 
     if (!(await isDripDropAdmin(auth))) {
-      throw new functions.https.HttpsError('permission-denied', 'Only Drip Drop admins can create subscription catalog plans.');
+      throw new HttpsError('permission-denied', 'Only Drip Drop admins can create subscription catalog plans.');
     }
 
     const name = String(receivedData.name || '').trim();
@@ -480,11 +481,11 @@ exports.createStripeSubscription = functions.https.onCall(async(data, context) =
     const intervalCount = Math.max(Number(receivedData.intervalCount || 1), 1);
 
     if (!name) {
-      throw new functions.https.HttpsError('invalid-argument', 'Plan name is required.');
+      throw new HttpsError('invalid-argument', 'Plan name is required.');
     }
 
     if (!Number.isFinite(priceCents) || priceCents < 0) {
-      throw new functions.https.HttpsError('invalid-argument', 'Plan price must be zero or greater.');
+      throw new HttpsError('invalid-argument', 'Plan price must be zero or greater.');
     }
 
     try {
@@ -539,7 +540,7 @@ exports.createStripeSubscription = functions.https.onCall(async(data, context) =
       };
     } catch(error) {
       console.error('Unable to create Drip Drop subscription catalog plan', error);
-      throw new functions.https.HttpsError('internal', 'Unable to create subscription plan.', error.message);
+      throw new HttpsError('internal', 'Unable to create subscription plan.', error.message);
     }
   });
 
@@ -615,11 +616,11 @@ exports.createStripeAccountLink = functions.https.onCall(async(data,context) => 
     const accountId = normalizeStripeAccountId(receivedData.accountId || receivedData.account || companyAccountId);
 
     if (!accountId) {
-        throw new functions.https.HttpsError('failed-precondition', 'This company does not have a Stripe connected account yet.');
+        throw new HttpsError('failed-precondition', 'This company does not have a Stripe connected account yet.');
     }
 
     if (companyAccountId && accountId !== companyAccountId) {
-        throw new functions.https.HttpsError('permission-denied', 'Connected account does not belong to this company.');
+        throw new HttpsError('permission-denied', 'Connected account does not belong to this company.');
     }
 
     try {
@@ -672,7 +673,7 @@ exports.createStripeAccountLink = functions.https.onCall(async(data,context) => 
           requestId: error?.requestId,
         }
       );
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         error?.type === 'StripeInvalidRequestError' ? 'failed-precondition' : 'internal',
         message,
         {
@@ -737,7 +738,7 @@ exports.createStripeAccountLink = functions.https.onCall(async(data,context) => 
         "An error occurred when calling the Stripe API to create an account",
         error
       );
-      throw new functions.https.HttpsError('internal', 'Unable to create Stripe connected account.', error.message);
+      throw new HttpsError('internal', 'Unable to create Stripe connected account.', error.message);
     }
   });
   
@@ -752,12 +753,12 @@ exports.createSubscriptionPaymentIntent = functions.https.onCall(async(data,cont
     );
 
     if (!stripePriceId) {
-      throw new functions.https.HttpsError('invalid-argument', 'A valid Stripe price id is required.');
+      throw new HttpsError('invalid-argument', 'A valid Stripe price id is required.');
     }
 
     const publishableKey = getStripePublishableKey();
     if (!publishableKey) {
-      throw new functions.https.HttpsError('failed-precondition', 'Stripe publishable key is not configured for mobile subscription checkout.');
+      throw new HttpsError('failed-precondition', 'Stripe publishable key is not configured for mobile subscription checkout.');
     }
 
     const activePlan = await requireActiveDripDropPlanByPriceId(stripePriceId);
@@ -768,7 +769,7 @@ exports.createSubscriptionPaymentIntent = functions.https.onCall(async(data,cont
         : null;
 
     if (!resolvedCompanyAccess?.companyId && !receivedData.companyId) {
-      throw new functions.https.HttpsError('invalid-argument', 'companyId or a saved company Stripe customer id is required.');
+      throw new HttpsError('invalid-argument', 'companyId or a saved company Stripe customer id is required.');
     }
 
     const companyId = receivedData.companyId || resolvedCompanyAccess.companyId;

@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -152,7 +153,7 @@ const Notifications = () => {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Client</p>
-              <h1 className="mt-2 text-2xl font-bold text-slate-950">Notification Center</h1>
+              <WorkspaceHeader title={<>Notification Center</>} eyebrow="Your pool care" />
             </div>
             <div className="grid grid-cols-2 gap-2 text-center">
               <div className="rounded-md bg-amber-50 px-3 py-2 text-amber-700">

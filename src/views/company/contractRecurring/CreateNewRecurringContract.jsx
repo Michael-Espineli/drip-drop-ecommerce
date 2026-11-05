@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import Select from "react-select";
 import {
@@ -332,7 +333,7 @@ const CreateNewRecurringContract = () => {
                             setServiceLocationList(locations);
                         } catch (error) {
                             console.error(error);
-                            toast.error("Error loading service locations");
+                            toast.error(userFacingErrorMessage(error, "Error loading service locations"));
                         }
                     }
                 }
@@ -355,7 +356,7 @@ const CreateNewRecurringContract = () => {
                 setProductList(normalizedProducts);
             } catch (error) {
                 console.error(error);
-                toast.error("Failed to load recurring contract form");
+                toast.error(userFacingErrorMessage(error, "Failed to load recurring contract form"));
             } finally {
                 setLoading(false);
             }
@@ -402,7 +403,7 @@ const CreateNewRecurringContract = () => {
                 }
             } catch (error) {
                 console.error(error);
-                toast.error("Error loading customer service locations");
+                toast.error(userFacingErrorMessage(error, "Error loading customer service locations"));
             }
         })();
     };
@@ -535,7 +536,7 @@ const CreateNewRecurringContract = () => {
             navigate("/company/recurring-contracts");
         } catch (error) {
             console.error(error);
-            toast.error("Failed to create recurring contract");
+            toast.error(userFacingErrorMessage(error, "Failed to create recurring contract"));
         } finally {
             setCreatingContract(false);
         }

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useContext, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc, updateDoc } from 'firebase/firestore';
@@ -119,7 +120,7 @@ export default function CreateEstimate() {
                 }
             } catch (error) {
                 console.error("Error fetching initial data:", error);
-                toast.error("Failed to fetch initial data.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch initial data."));
             } finally {
                 setLoading(false);
             }
@@ -185,7 +186,7 @@ export default function CreateEstimate() {
             navigate(`/company/leads/${lead.id}`);
         } catch (error) {
             console.error("Error creating estimate:", error);
-            toast.error('Failed to create estimate.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Failed to create estimate.'), { id: toastId });
             setIsSubmitting(false);
         }
     };

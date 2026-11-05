@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from "react";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -358,7 +359,7 @@ const DataBaseItemDetailView = () => {
       toast.success("Vendor item updated.");
     } catch (error) {
       console.log(error);
-      toast.error("Could not update vendor item.");
+      toast.error(userFacingErrorMessage(error, "Could not update vendor item."));
     }
   }
 

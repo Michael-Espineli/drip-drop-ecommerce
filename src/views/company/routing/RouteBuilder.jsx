@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
@@ -632,7 +634,7 @@ const RouteBuilder = () => {
           setDescription('');
         }
       } catch (error) {
-        toast.error("Error checking for existing route.");
+        toast.error(userFacingErrorMessage(error, "Error checking for existing route."));
       } finally {
         setIsLoading(false);
       }
@@ -844,7 +846,7 @@ const RouteBuilder = () => {
 
     } catch (error) {
       console.error("Error saving template: ", error);
-      toast.error(`Failed to save template: ${error?.message || String(error)}`);
+      toast.error(userFacingErrorMessage(error, `Failed to save template: ${error?.message || String(error)}`));
     } finally {
       setIsLoading(false);
       setRouteSaveProgress(null);
@@ -1003,7 +1005,7 @@ const RouteBuilder = () => {
       navigate('/company/route-management');
     } catch (error) {
       console.error("Error deleting route:", error);
-      toast.error("Failed to delete route.");
+      toast.error(userFacingErrorMessage(error, "Failed to delete route."));
     } finally {
       setIsDeletingRoute(false);
     }
@@ -1012,13 +1014,13 @@ const RouteBuilder = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="flex w-full min-h-[calc(100vh-3rem)] flex-col space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <WorkspaceRecordHeader title={<>
+                {editingTemplate ? 'Edit Route' : 'New Route'}
+              </>} eyebrow="Company management"><div className="workspace-record-toolbar">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex flex-col gap-2">
               <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Planned routes</p>
-              <h1 className="text-3xl font-bold text-slate-950">
-                {editingTemplate ? 'Edit Route' : 'New Route'}
-              </h1>
+
               <p className="max-w-3xl text-sm text-slate-600">Build the planned route, assign each stop type, and arrange the stop order.</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1048,7 +1050,7 @@ const RouteBuilder = () => {
               </Button>
             </div>
           </div>
-        </section>
+        </div></WorkspaceRecordHeader>
 
         <DragDropContext onDragEnd={handleOnDragEnd}>
           <div className="grid flex-1 grid-cols-1 items-stretch gap-6 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_480px]">

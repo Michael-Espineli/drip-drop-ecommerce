@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import TimeClockPanel, { ShiftLogHistory } from './TimeClockPanel';
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Link } from 'react-router-dom';
@@ -147,7 +148,7 @@ const WorkLogs = () => {
                 ));
             } catch (error) {
                 console.error("Error fetching routes: ", error);
-                toast.error("Failed to fetch routes for the selected date.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch routes for the selected date."));
             }
         };
 
@@ -194,7 +195,7 @@ const WorkLogs = () => {
                 setWorkLogs(logs);
             } catch (error) {
                 console.error("Error fetching work logs: ", error);
-                toast.error("Failed to fetch work logs.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch work logs."));
             } finally {
                 setIsLoading(false);
             }

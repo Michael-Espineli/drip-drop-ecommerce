@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, lazy } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -122,7 +123,7 @@ const ServiceArea = ({ companyData }) => {
             }
         } catch (error) {
             console.error('Error during geocoding:', error);
-            setError('Error during geocoding. Please check your API key and network connection.');
+            setError(userFacingErrorMessage(error, 'Error during geocoding. Please check your API key and network connection.'));
             return null;
         }
     };

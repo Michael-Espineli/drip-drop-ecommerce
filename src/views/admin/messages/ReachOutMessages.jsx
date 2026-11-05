@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
@@ -55,7 +56,7 @@ function ReachOutMessages() {
       setMessages(nextMessages);
     } catch (error) {
       console.error('Error loading reach out messages:', error);
-      toast.error('Could not load reach out messages.');
+      toast.error(userFacingErrorMessage(error, 'Could not load reach out messages.'));
     } finally {
       setIsLoading(false);
     }
@@ -102,7 +103,7 @@ function ReachOutMessages() {
     } catch (error) {
       console.error('Error updating reach out message status:', error);
       setMessages(previousMessages);
-      toast.error('Could not update status.');
+      toast.error(userFacingErrorMessage(error, 'Could not update status.'));
     }
   };
 

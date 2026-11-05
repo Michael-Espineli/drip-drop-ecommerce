@@ -131,6 +131,20 @@
       ]
     },
     {
+      "collectionGroup": "activeRoutes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "techId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "serviceStops",
       "queryScope": "COLLECTION",
       "fields": [

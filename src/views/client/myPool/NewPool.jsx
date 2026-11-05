@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useContext } from 'react';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../../utils/config';
@@ -41,7 +42,7 @@ const NewPool = () => {
             toast.success('New pool location added!');
             navigate('/client/my-pool');
         } catch (error) {
-            toast.error('Failed to add new pool location.');
+            toast.error(userFacingErrorMessage(error, 'Failed to add new pool location.'));
             console.error("Error adding document: ", error);
         } finally {
             setIsSubmitting(false);

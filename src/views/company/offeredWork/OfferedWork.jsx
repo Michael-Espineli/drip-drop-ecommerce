@@ -1,3 +1,6 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import RouteWorkOfferSummary from './RouteWorkOfferSummary';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import WorkOfferReview from './WorkOfferReview';
 import WorkOfferActionsMenu from './WorkOfferActionsMenu';
 import WorkOfferReturnDialog from './WorkOfferReturnDialog';
@@ -548,7 +551,7 @@ const OfferedWork = () => {
       setCompanySettings(normalizeCompanyWorkSettings(settingsSnap.exists() ? settingsSnap.data() : {}));
     } catch (error) {
       console.error("Failed to load offered work:", error);
-      toast.error("Failed to load offered work.");
+      toast.error(userFacingErrorMessage(error, "Failed to load offered work."));
     } finally {
       setLoading(false);
     }
@@ -804,7 +807,7 @@ const OfferedWork = () => {
         setJobs(jobsSnap.docs.map((item) => ({ id: item.id, ...item.data() })));
       } catch (error) {
         console.error("Failed to load offer creation context:", error);
-        toast.error("Could not load routes and jobs for offer creation.");
+        toast.error(userFacingErrorMessage(error, "Could not load routes and jobs for offer creation."));
       } finally {
         if (!cancelled) setCreationLoading(false);
       }
@@ -919,7 +922,7 @@ const OfferedWork = () => {
       return;
     }
     if (offerForm.workOfferCategory === "partialRoute" && !canSplitOffers) {
-      toast.error("You do not have permission to split offered work.");
+      toast.error("Drip Drop permission denied: You do not have permission to split offered work.");
       return;
     }
     if (isRouteOffer && !selectedRoute) {
@@ -1110,7 +1113,7 @@ const OfferedWork = () => {
       toast.success("Work offer created.");
     } catch (error) {
       console.error("Failed to create work offer:", error);
-      toast.error("Could not create work offer.");
+      toast.error(userFacingErrorMessage(error, "Could not create work offer."));
     } finally {
       setSavingOffer(false);
     }
@@ -1128,14 +1131,14 @@ const OfferedWork = () => {
       const claim = offer.claims?.find(v => v.status === "Acceptance Pending Approval");
       await manageTechnicianWork(recentlySelectedCompany, "approve", { offerId: offer.id, ...(claim ? {claimId: claim.id} : {}) });
       await refreshOffer(offer.id); toast.success("Work approval saved.");
-    } catch (error) { toast.error(error.message || "Could not approve work."); }
+    } catch (error) { toast.error(userFacingErrorMessage(error, error.message || "Could not approve work.")); }
     finally { setOfferActionId(""); }
   };
 
   const rejectPendingClaim = async (offer, claim) => {
     setOfferActionId(offer.id);
     try { await manageTechnicianWork(recentlySelectedCompany, "rejectClaim", {offerId:offer.id,claimId:claim.id}); await refreshOffer(offer.id);toast.success("Coverage claim rejected."); }
-    catch(error){toast.error(error.message);}finally{setOfferActionId("");}
+    catch(error){toast.error(userFacingErrorMessage(error, error.message));}finally{setOfferActionId("");}
   };
   const openOfferManagement = (offer, tab = "details") => setOfferDetails({ offer, tab });
 
@@ -1204,7 +1207,7 @@ const OfferedWork = () => {
       toast.success("Work offer board saved.");
     } catch (error) {
       console.error("Failed to save work offer board:", error);
-      toast.error("Could not save work offer board.");
+      toast.error(userFacingErrorMessage(error, "Could not save work offer board."));
     } finally {
       setSavingBoard(false);
     }
@@ -1226,11 +1229,11 @@ const OfferedWork = () => {
       {scheduleOffer && <WorkOfferSchedule companyId={recentlySelectedCompany} offer={scheduleOffer} onClose={()=>setScheduleOffer(null)} onScheduled={async()=>{await refreshOffer(scheduleOffer.id);toast.success("Work scheduled.");}}/>}
       {reviewOffer && <WorkOfferReview companyId={recentlySelectedCompany} offer={reviewOffer} onClose={()=>setReviewOffer(null)} onAccepted={async result=>{ try { await refreshOffer(result.offerId); } catch { toast.error("Acceptance saved. Refresh the list to see the change."); } toast.success(result.status === "Accepted" ? "Work accepted." : "Acceptance sent for approval."); if (result.status === "Accepted" && reviewOffer.allowsTechnicianSelfScheduling && reviewOffer.jobId && !reviewOffer.routeId) setScheduleOffer({ ...reviewOffer, status: "Accepted" }); }} />}
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-theme bg-surface p-5 shadow-sm">
+        <WorkspaceRecordHeader title={<>Offered Work Management</>} eyebrow="Company management"><div className="workspace-record-toolbar">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-3xl">
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Work offer management</p>
-              <h1 className="mt-1 text-3xl font-bold text-theme">Offered Work Management</h1>
+
+
               <p className="mt-1 text-sm text-theme-subtle">
                 Manage what has been posted, sent, claimed, approved, scheduled, and incentivized.
               </p>
@@ -1280,7 +1283,7 @@ const OfferedWork = () => {
               Showing direct offers, your route offers, and board posts from boards you belong to.
             </div>
           )}
-        </section>
+        </div></WorkspaceRecordHeader>
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <SummaryTile icon={FiClock} label="Open Offers" value={summary.open} detail={`${summary.board} board posts included`} tone="amber" />
@@ -1513,7 +1516,7 @@ const OfferedWork = () => {
                           <p className="text-sm font-semibold text-theme-muted">
                             {offer.stopCount || offerServiceStopIds(offer).length || getWorkOfferTaskCount(offer)} item{(offer.stopCount || offerServiceStopIds(offer).length || getWorkOfferTaskCount(offer)) === 1 ? "" : "s"}
                           </p>
-                          <p className="mt-1 text-xs text-theme-subtle">{formatDurationMinutes(offer.estimatedMinutes)}</p>
+                          {offer.routeId ? <RouteWorkOfferSummary offer={offer} compact/> : <p className="mt-1 text-xs text-theme-subtle">{formatDurationMinutes(offer.estimatedMinutes)}</p>}
                         </td>
                         <td className="px-5 py-3">
                           <p className="text-sm font-semibold text-theme-muted">{offer.paySource === "Technician Rate" && offer.estimatedPayTotalCents == null ? "Personal rate" : moneyFromCents(totalPayCents)}</p>

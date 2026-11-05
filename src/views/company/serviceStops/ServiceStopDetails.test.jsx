@@ -1,11 +1,12 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { getDoc, getDocs, updateDoc, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { Context } from '../../../context/AuthContext';
 import { runWorkCompletionEffects } from '../../../utils/workCompletionEffects';
 import ServiceStopDetails from './ServiceStopDetails';
+import toast from 'react-hot-toast';
 
 let mockPermissions;
 let mockRouteFailure;
@@ -69,7 +70,7 @@ beforeEach(() => {
 });
 
 const openStop = async () => {
-  await act(async () => { render(
+  render(
     <MemoryRouter initialEntries={['/company/serviceStops/detail/visit']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Context.Provider value={{ recentlySelectedCompany: 'company', user: { uid: 'admin' } }}>
         <Routes>
@@ -78,7 +79,7 @@ const openStop = async () => {
         </Routes>
       </Context.Provider>
     </MemoryRouter>
-  ); });
+  );
   fireEvent.click(await screen.findByRole('button', { name: 'Edit', exact: true }));
   return screen.findByRole('dialog', { name: 'Admin Edit' });
 };
@@ -133,4 +134,16 @@ test('stop editors without job edit permission only see the keep-open option', a
   const dialog = await openFinishStop();
   expect(within(dialog).queryByRole('radio', { name: /^Finish linked job/ })).not.toBeInTheDocument();
   expect(within(dialog).queryByRole('radio', { name: /^Schedule next stop/ })).not.toBeInTheDocument();
+});
+
+test.each([
+  [{ code: 'permission-denied', message: 'Missing or insufficient permissions.' }, 'Firebase Firestore permission denied'],
+  [{ code: 'functions/permission-denied', message: 'Your role cannot finish this stop.', details: { permissionSource: 'drip-drop' } }, 'Drip Drop permission denied'],
+])('Finish displays the denying layer and keeps the stop open', async (error, label) => {
+  const dialog = await openFinishStop();
+  runWorkCompletionEffects.mockRejectedValueOnce(error);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Stop', exact: true }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining(label)));
+  expect(screen.queryByTestId('job-destination')).not.toBeInTheDocument();
+  expect(updateDoc).not.toHaveBeenCalledWith('companies/company/serviceStops/visit', expect.objectContaining({ operationStatus: 'Finished' }));
 });

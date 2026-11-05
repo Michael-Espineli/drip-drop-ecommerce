@@ -409,3 +409,45 @@ test('returning one split claim preserves other technicians and never reopens re
  assert.equal(f.db.records.get(company+'/serviceStops/three').techId,'admin');
  assert.equal(f.db.records.get(company+'/workOffers/offer').claims.length,3);
 });
+
+test('route offer totals are derived on the server and stay scoped through list, preview, and accepted details',async()=>{
+ const historicalDay=new Date('2026-10-19T08:00:00Z');
+ const f=fixture({
+  [company+'/serviceStops/one']:{techId:'admin',serviceDate:day,recurringServiceStopId:'r1',estimatedDuration:30},
+  [company+'/serviceStops/two']:{techId:'admin',serviceDate:day,recurringServiceStopId:'r2',estimatedDuration:45},
+  [company+'/serviceStops/old1']:{recurringServiceStopId:'r1'},
+  [company+'/serviceStops/old2']:{recurringServiceStopId:'r2'},
+  [company+'/activeRoutes/source']:{techId:'admin',date:day,serviceStopsIds:['one','two']},
+  [company+'/activeRoutes/history']:{techId:'admin',date:historicalDay,status:'Finished',serviceStopsIds:['old1','old2'],durationSeconds:10800,distanceMiles:24.5},
+ });
+ await f.save({jobId:'',jobTaskIds:[],routeId:'source',routeSplitAllowed:true,paySource:'Offered Amount',offeredAmountCents:10000,routeSummary:{stopIds:['one','two'],totalMinutes:1,totalDistanceMiles:1}});
+ const saved=f.db.records.get(company+'/workOffers/offer');
+ assert.equal(saved.routeSummary.totalMinutes,180);assert.equal(saved.routeSummary.totalDistanceMiles,24.5);
+ assert.deepEqual((await f.call('list',{},'tech')).offers[0].routeSummary,saved.routeSummary);
+ const full=await f.call('preview',{offerId:'offer'},'tech');assert.equal(full.routeSummary.totalMinutes,180);assert.equal(full.scope.stops[0].estimatedTime,30);
+ const partial=await f.call('preview',{offerId:'offer',stopIds:['one']},'tech');assert.equal(partial.routeSummary.totalMinutes,null);assert.equal(partial.routeSummary.totalDistanceMiles,null);assert.equal(partial.routeSummary.serviceMinutes,30);
+ await f.call('accept',{offerId:'offer',stopIds:['one'],claimId:'A'},'tech');
+ const details=await f.call('details',{offerId:'offer'},'tech');assert.deepEqual(details.routeSummary.stopIds,['one']);assert.equal(details.routeSummary.totalDistanceMiles,null);
+ const remaining=await f.call('preview',{offerId:'offer'},'other');assert.deepEqual(remaining.routeSummary.stopIds,['two']);assert.equal(remaining.routeSummary.serviceMinutes,45);
+});
+
+test('draft and legacy route offers load route totals without requiring personalized pay',async()=>{
+ const f=fixture({[company+'/serviceStops/one']:{techId:'admin',serviceDate:day,estimatedDuration:30},[company+'/activeRoutes/source']:{techId:'admin',date:day,serviceStopsIds:['one']}});
+ const draft=await f.call('quote',{offer:{routeId:'source',paySource:'Technician Rate'}});
+ assert.equal(draft.totalCents,null);assert.equal(draft.routeSummary.serviceMinutes,30);assert.equal(draft.routeSummary.totalDistanceMiles,null);
+ await f.save({jobId:'',jobTaskIds:[],routeId:'source',paySource:'Offered Amount',offeredAmountCents:10000});
+ const old=f.db.records.get(company+'/workOffers/offer');delete old.routeSummary;
+ const details=await f.call('details',{offerId:'offer'},'tech');assert.equal(details.routeSummary.serviceMinutes,30);
+});
+
+test('recurring route offer summaries use the dated offered stops and matching completed runs',async()=>{
+ const f=fixture({
+  [company+'/recurringRoutes/recurring']:{techId:'admin',rssIds:['r1','r2']},
+  [company+'/serviceStops/one']:{techId:'admin',serviceDate:day,recurringServiceStopId:'r1',estimatedDuration:30},
+  [company+'/serviceStops/two']:{techId:'admin',serviceDate:day,recurringServiceStopId:'r2',estimatedDuration:45},
+  [company+'/serviceStops/old']:{recurringServiceStopId:'r2',operationStatus:'Finished'},
+  [company+'/activeRoutes/history']:{techId:'admin',date:new Date('2026-10-19'),status:'Finished',serviceStopsIds:['old'],durationSeconds:3600,distanceMiles:12},
+ });
+ await f.save({jobId:'',jobTaskIds:[],routeId:'recurring',routeSource:'recurringRoutes',routeDate:day,requestedRecurringStopIds:['r2'],paySource:'Offered Amount',offeredAmountCents:5000});
+ const saved=f.db.records.get(company+'/workOffers/offer');assert.deepEqual(saved.routeSummary.stopIds,['two']);assert.equal(saved.routeSummary.totalMinutes,60);assert.equal(saved.routeSummary.totalDistanceMiles,12);assert.equal(saved.routeSummary.serviceMinutes,45);
+});

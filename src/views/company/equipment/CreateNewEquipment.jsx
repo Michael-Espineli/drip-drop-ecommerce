@@ -1,3 +1,6 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
@@ -490,24 +493,24 @@ const CreateNewEquipment = () => {
             navigate(`/company/equipment/detail/${equipmentId}`);
         } catch (error) {
             console.error("Error creating new equipment: ", error);
-            appAlert("Failed to create equipment. Please check the console for details.");
+            appAlert(userFacingErrorMessage(error, "Failed to create equipment. Please check the console for details."));
         }
     };
 
-    const selectStyles = {
+    const selectStyles = workspaceSelectStyles({
         control: (provided) => ({ ...provided, backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.5rem', padding: '0.3rem' }),
         menu: (provided) => ({ ...provided, zIndex: 20 }),
-    };
+    });
 
     return (
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
             <div className="max-w-screen-xl mx-auto">
-                <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-3xl font-bold text-gray-800">{isReplacementFlow ? 'Create Replacement Equipment' : 'Create New Equipment'}</h2>
+                <WorkspaceRecordHeader title={<>{isReplacementFlow ? 'Create Replacement Equipment' : 'Create New Equipment'}</>} eyebrow="Company operations"><div className="flex justify-between items-center mb-6">
+
                     <Link to={isReplacementFlow ? `/company/equipment/detail/${replacementContext.replacesEquipmentId}` : '/company/equipment'} className='py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition'>
                         Cancel
                     </Link>
-                </div>
+                </div></WorkspaceRecordHeader>
 
                 <form onSubmit={handleCreate} className="bg-white shadow-lg rounded-xl p-6 space-y-6">
                     {isReplacementFlow && (

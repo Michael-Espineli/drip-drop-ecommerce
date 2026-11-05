@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -1348,7 +1350,7 @@ const EquipmentDetail = () => {
       toast.success("Make and model updated");
     } catch (error) {
       console.error("Error updating equipment make/model:", error);
-      toast.error("Failed to update make and model");
+      toast.error(userFacingErrorMessage(error, "Failed to update make and model"));
     }
   };
 
@@ -1493,7 +1495,7 @@ const EquipmentDetail = () => {
       toast.success(partsCopied ? `Catalog match applied. ${partsCopied} parts copied.` : "Catalog match applied.");
     } catch (error) {
       console.error("Error applying universal equipment suggestion:", error);
-      toast.error("Failed to apply catalog match");
+      toast.error(userFacingErrorMessage(error, "Failed to apply catalog match"));
     } finally {
       setApplyingCatalogSuggestion(false);
     }
@@ -1553,7 +1555,7 @@ const EquipmentDetail = () => {
       }
     } catch (error) {
       console.error("Error replacing equipment:", error);
-      toast.error("Failed to mark equipment as replaced");
+      toast.error(userFacingErrorMessage(error, "Failed to mark equipment as replaced"));
     } finally {
       setIsReplacingEquipment(false);
     }
@@ -1569,7 +1571,7 @@ const EquipmentDetail = () => {
       navigate("/company/equipment");
     } catch (error) {
       console.error("Error deleting equipment:", error);
-      toast.error("Failed to delete equipment");
+      toast.error(userFacingErrorMessage(error, "Failed to delete equipment"));
     }
   };
 
@@ -1645,7 +1647,7 @@ const EquipmentDetail = () => {
       setMaintenanceNotes("");
     } catch (error) {
 
-      toast.error("Failed to create Maintenance Record");
+      toast.error(userFacingErrorMessage(error, "Failed to create Maintenance Record"));
       console.error("Error creating maintenance history:", error);
     }
   };
@@ -1855,14 +1857,14 @@ const EquipmentDetail = () => {
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <WorkspaceRecordHeader title={getEquipmentDisplayName()} eyebrow="Equipment details"><div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
 
             <Link
               to="/company/equipment"
               className="app-back-link"
             >&larr; Back to Equipment List</Link>
-            <h2 className="text-3xl font-bold text-gray-800">Equipment</h2>
+
             <p className="text-gray-600 mt-1">
               <span className="font-semibold text-gray-800">{equipment?.name || "—"}</span>{" "}
               <Link
@@ -2003,7 +2005,7 @@ const EquipmentDetail = () => {
               </Menu>
             )}
           </div>
-        </div>
+        </div></WorkspaceRecordHeader>
 
         {readyCatalogSuggestion && (
           <div className="rounded-xl border border-purple-200 bg-purple-50 p-5 shadow-sm">

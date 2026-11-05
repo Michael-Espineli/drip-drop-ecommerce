@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { doc, onSnapshot, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
@@ -79,7 +80,7 @@ const ContractDetailView = () => {
                         contractData.senderId !== recentlySelectedCompany &&
                         contractData.receiverId !== user.uid
                     ) {
-                        toast.error("You don't have permission to view this contract.");
+                        toast.error("Drip Drop permission denied: You don't have permission to view this contract.");
                         navigate('/company/dashboard');
                         return;
                     }
@@ -127,7 +128,7 @@ const ContractDetailView = () => {
             toast.success(`Contract has been ${newStatus}.`, { id: toastId });
         } catch (error) {
             console.error(`Error updating contract:`, error);
-            toast.error(`Failed to update contract.`, { id: toastId });
+            toast.error(userFacingErrorMessage(error, `Failed to update contract.`), { id: toastId });
         } finally {
             setIsSubmitting(false);
         }
@@ -171,7 +172,7 @@ const ContractDetailView = () => {
             toast.success('Contract details updated.', { id: toastId });
         } catch (error) {
             console.error('Error updating contract details:', error);
-            toast.error('Failed to update contract details.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Failed to update contract details.'), { id: toastId });
         } finally {
             setIsSavingDetails(false);
         }
@@ -190,7 +191,7 @@ const ContractDetailView = () => {
             toast.success('Notes updated.', { id: toastId });
         } catch (error) {
             console.error('Error updating notes:', error);
-            toast.error('Failed to update notes.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Failed to update notes.'), { id: toastId });
         } finally {
             setIsSavingNotes(false);
         }
@@ -202,7 +203,7 @@ const ContractDetailView = () => {
             toast.success('Contract link copied.');
         } catch (error) {
             console.error('Failed to copy contract link:', error);
-            toast.error('Failed to copy contract link.');
+            toast.error(userFacingErrorMessage(error, 'Failed to copy contract link.'));
         }
     };
 

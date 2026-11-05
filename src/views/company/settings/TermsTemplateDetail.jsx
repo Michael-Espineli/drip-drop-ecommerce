@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { deleteDoc } from 'firebase/firestore';
@@ -136,7 +137,7 @@ const TermsTemplateDetail = () => {
                 setEditedClauses(clauseDrafts(termsList));
             } catch (error) {
                 console.error("Error fetching data: ", error);
-                toast.error("Failed to fetch template details.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch template details."));
             } finally {
                 setIsLoading(false);
             }
@@ -224,7 +225,7 @@ const TermsTemplateDetail = () => {
             toast.success("Template updated successfully!");
         } catch (error) {
             console.error("Error updating template: ", error);
-            toast.error("Failed to update template.");
+            toast.error(userFacingErrorMessage(error, "Failed to update template."));
         } finally {
             setIsSaving(false);
         }
@@ -247,7 +248,7 @@ const TermsTemplateDetail = () => {
             navigate("/company/settings/terms-templates");
         } catch (error) {
             console.error("Error deleting template: ", error);
-            toast.error("Failed to delete template.");
+            toast.error(userFacingErrorMessage(error, "Failed to delete template."));
         }
     };
 
@@ -267,7 +268,7 @@ const TermsTemplateDetail = () => {
             navigate(`/company/settings/terms-templates/${duplicatedTemplate.id}`);
         } catch (error) {
             console.error("Error duplicating template: ", error);
-            toast.error(error.message || "Failed to duplicate template.");
+            toast.error(userFacingErrorMessage(error, error.message || "Failed to duplicate template."));
         } finally {
             setIsDuplicating(false);
         }

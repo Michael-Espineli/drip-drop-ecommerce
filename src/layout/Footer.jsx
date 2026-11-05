@@ -1,7 +1,17 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 
-const Footer = () => {
+const Footer = ({ workspace = false }) => {
+    if (workspace) return (
+        <footer className="workspace-footer">
+            <p>© {new Date().getFullYear()} Drip Drop</p>
+            <nav aria-label="Workspace support" className="flex flex-wrap gap-4">
+                <Link to="/feedback">Support & feedback</Link>
+                <Link to="/privacyPolicy">Privacy</Link>
+                <Link to="/termsOfService">Terms</Link>
+            </nav>
+        </footer>
+    );
     return (
         <footer className="bg-slate-950 text-white">
             <div className="container mx-auto px-4 py-16">

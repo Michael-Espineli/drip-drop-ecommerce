@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -545,7 +546,7 @@ const StripeBillingSnapshotPage = () => {
             } catch (error) {
                 console.error("Failed to load selected company for Stripe billing snapshot:", error);
                 if (!cancelled) {
-                    toast.error("Could not load company billing settings.");
+                    toast.error(userFacingErrorMessage(error, "Could not load company billing settings."));
                 }
             } finally {
                 if (!cancelled) {
@@ -802,7 +803,7 @@ const StripeBillingSnapshotPage = () => {
             toast.success(nextEnabled ? "Billing automation turned on." : "Billing automation turned off.");
         } catch (error) {
             console.error("Unable to update billing automation setting:", error);
-            toast.error(error.message || "Could not update billing automation.");
+            toast.error(userFacingErrorMessage(error, error.message || "Could not update billing automation."));
         } finally {
             setBillingAutomationSaving(false);
         }
@@ -850,7 +851,7 @@ const StripeBillingSnapshotPage = () => {
             toast.success(nextEnabled ? "Shopping item invoice automation turned on." : "Shopping item invoice automation turned off.");
         } catch (error) {
             console.error("Unable to update shopping item invoice automation setting:", error);
-            toast.error(error.message || "Could not update shopping item invoice automation.");
+            toast.error(userFacingErrorMessage(error, error.message || "Could not update shopping item invoice automation."));
         } finally {
             setInstallInvoiceAutomationSaving(false);
         }

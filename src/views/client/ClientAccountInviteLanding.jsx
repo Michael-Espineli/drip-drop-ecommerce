@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -119,9 +120,9 @@ export default function ClientAccountInviteLanding() {
         if (!cancelled) {
           const isCallableInternalError = String(loadError.code || '').includes('internal') || loadError.message === 'internal';
           setError(
-            isCallableInternalError
+            userFacingErrorMessage(loadError, isCallableInternalError
               ? 'This invite link could not be verified. Please ask the company for a new client invite link.'
-              : loadError.message || 'Could not load this customer invite.'
+              : loadError.message || 'Could not load this customer invite.')
           );
         }
       } finally {
@@ -144,7 +145,7 @@ export default function ClientAccountInviteLanding() {
       toast.success('Invite link copied.');
     } catch (copyError) {
       console.error('Failed to copy invite link', copyError);
-      toast.error('Could not copy the invite link.');
+      toast.error(userFacingErrorMessage(copyError, 'Could not copy the invite link.'));
     }
   };
 
@@ -184,7 +185,7 @@ export default function ClientAccountInviteLanding() {
       navigate('/client/dashboard');
     } catch (claimError) {
       console.error('Failed to claim customer account invite', claimError);
-      toast.error(claimError.message || 'Could not connect this customer account.');
+      toast.error(userFacingErrorMessage(claimError, claimError.message || 'Could not connect this customer account.'));
     } finally {
       setClaiming(false);
     }

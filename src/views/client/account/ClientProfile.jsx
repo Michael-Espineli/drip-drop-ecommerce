@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useContext, useEffect, useState } from 'react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
@@ -54,7 +56,7 @@ export default function ClientProfile() {
       setEditing(false);
       setSaved(true);
     } catch (err) {
-      setError('Your changes could not be saved. Please try again.');
+      setError(userFacingErrorMessage(err, 'Your changes could not be saved. Please try again.'));
     } finally {
       setSaving(false);
     }
@@ -62,12 +64,12 @@ export default function ClientProfile() {
   if (!user) return <p className="p-6">Sign in to view your profile.</p>;
   const profile = fieldsFrom(dataBaseUser, user);
   return <div className="mx-auto max-w-2xl space-y-6 p-4 sm:p-6">
-        <header className="flex items-center justify-between gap-3"><h1 className="text-2xl font-bold text-slate-950">My profile</h1>
+        <WorkspaceRecordHeader title={<>My profile</>} eyebrow="My account"><header className="flex items-center justify-between gap-3">
             {!editing && <button onClick={() => {
         setEditing(true);
         setSaved(false);
       }} className="min-h-[44px] rounded-lg border border-slate-300 px-4 font-semibold">Edit profile</button>}
-        </header>
+        </header></WorkspaceRecordHeader>
         <section className="rounded-xl border border-slate-200 bg-white p-5">
             {editing ? <form onSubmit={save} className="space-y-5">
                 {[['firstName', 'First name', 'given-name', 'text'], ['lastName', 'Last name', 'family-name', 'text'], ['phoneNumber', 'Phone number', 'tel', 'tel']].map(([name, label, autoComplete, type]) => <label key={name} className="block text-sm font-semibold">{label}<input name={name} type={type} autoComplete={autoComplete} value={form[name]} onChange={change} required={name !== 'phoneNumber'} className="mt-2 min-h-[44px] w-full rounded-lg border border-slate-300 px-3 text-base" /></label>)}

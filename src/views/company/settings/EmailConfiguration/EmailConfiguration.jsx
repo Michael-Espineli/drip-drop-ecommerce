@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
@@ -345,7 +346,7 @@ export default function EmailConfiguration() {
         );
       } catch (err) {
         console.error(err);
-        toast.error("Could not load email configuration.");
+        toast.error(userFacingErrorMessage(err, "Could not load email configuration."));
       } finally {
         setIsLoading(false);
       }
@@ -392,7 +393,7 @@ export default function EmailConfiguration() {
       toast.success("Email configuration saved.");
     } catch (error) {
       console.error(error);
-      toast.error("Could not save email configuration.");
+      toast.error(userFacingErrorMessage(error, "Could not save email configuration."));
     } finally {
       setIsSavingGeneral(false);
     }
@@ -442,7 +443,7 @@ export default function EmailConfiguration() {
       toast.success(`${categoryKey} email template saved.`);
     } catch (error) {
       console.error(error);
-      toast.error("Could not save service email template.");
+      toast.error(userFacingErrorMessage(error, "Could not save service email template."));
     } finally {
       setSavingCategoryKey("");
     }
@@ -493,7 +494,7 @@ export default function EmailConfiguration() {
       toast.success(enabled ? "Customer email enabled." : "Customer email disabled.");
     } catch (error) {
       console.error(error);
-      toast.error("Could not update customer email setting.");
+      toast.error(userFacingErrorMessage(error, "Could not update customer email setting."));
     } finally {
       setSavingCustomerId("");
     }
@@ -545,7 +546,7 @@ export default function EmailConfiguration() {
       toast.success(enabled ? "All customer emails enabled." : "All customer emails disabled.");
     } catch (error) {
       console.error(error);
-      toast.error("Could not update customer email settings.");
+      toast.error(userFacingErrorMessage(error, "Could not update customer email settings."));
     } finally {
       setSavingCustomerId("");
     }

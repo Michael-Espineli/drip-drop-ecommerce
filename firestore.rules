@@ -585,6 +585,41 @@ service cloud.firestore {
           "actualDuration", "completionDate", "completionSource", "completionRequestId", "timeLogIds"
         ]);
       }
+      function completionRequestFields() {
+        return ["completionWorkStatus", "completionWorkRequestId", "completionWorkQueuedAt", "completionWorkQueuedByUserId", "completionWorkSendServiceReport"];
+      }
+      function completionWorkFields() {
+        return ["id", "requestId", "companyId", "serviceStopId", "status", "queuedAt", "queuedByUserId", "sendServiceReport", "operationStatus", "serviceDate", "techId", "techName", "attempts"];
+      }
+      // Validate both documents after the batch, without granting client access to
+      // server-owned results or permitting a standalone/replayed queue request.
+      function validCompletionRequest(stopId) {
+        let path = /databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId);
+        let before = get(path).data;
+        let stop = getAfter(path).data;
+        let work = getAfter(/databases/$(database)/documents/companies/$(companyId)/serviceStopCompletionWork/$(stopId)).data;
+        return stop.operationStatus == "Finished" && stop.completionWorkStatus == "queued"
+          && stop.completionWorkRequestId is string && stop.completionWorkRequestId.size() > 0 && stop.completionWorkRequestId.size() <= 200
+          && stop.completionWorkRequestId != before.get("completionWorkRequestId", "")
+          && stop.completionWorkQueuedAt == request.time && stop.completionWorkQueuedByUserId == request.auth.uid
+          && stop.completionWorkSendServiceReport is bool
+          && work.id == stopId && work.companyId == companyId && work.serviceStopId == stopId
+          && work.requestId == stop.completionWorkRequestId && work.status == "queued" && work.operationStatus == "Finished"
+          && work.queuedAt == request.time && work.queuedByUserId == request.auth.uid && work.attempts == 0
+          && work.sendServiceReport == stop.completionWorkSendServiceReport
+          && work.serviceDate == stop.serviceDate && work.techId == stop.techId && work.techName == stop.tech;
+      }
+      function stopCompletionUpdate() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return changed.hasOnly(completionRequestFields().concat(["operationStatus", "endTime", "duration"]))
+          && changed.hasAny(completionRequestFields());
+      }
+      function preservesCompletionResults() {
+        return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          "completionWorkProcessedAt", "completionWorkErrorMessages", "serviceReportLastResult",
+          "payrollLastProcessedAt", "payrollLastResult", "activeRouteLastSyncResult"
+        ]);
+      }
       function roleGrantAllowed(roleId, data) {
         return data.get("permissionIdList", null) is list && (
           isCompanyOwner(companyId) || (roleId != "1" && roleId != get(userAccessPath(companyId)).data.get("roleId", "")
@@ -915,7 +950,9 @@ service cloud.firestore {
       match /serviceStops/{stopId} {
         allow read: if permitted("240") || assignedStop(resource.data);
         allow create: if hasCompanyAccess(companyId) && ((request.resource.data.get("jobId", "") != "" && get(jobPath(request.resource.data.jobId)) == null) || permitted("242")) && validInitialJobStop(stopId, request.resource.data) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
-        allow update: if hasCompanyAccess(companyId) && ((assignedStop(resource.data) && executionUpdate()) || permitted("244")) && (preservesPayTerms() || canManagePay());
+        allow update: if ((assignedStop(resource.data) && (executionUpdate() || stopCompletionUpdate())) || permitted("244")) && (preservesPayTerms() || canManagePay())
+          && preservesCompletionResults()
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(completionRequestFields()) || validCompletionRequest(stopId));
         allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "246");
         match /{subcollection}/{nested=**} {
           allow read: if subcollection != "tasks" && (permitted("240") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data));
@@ -928,11 +965,18 @@ service cloud.firestore {
           allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "244");
         }
       }
+      match /serviceStopCompletionWork/{stopId} {
+        function canQueue() { return assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data) || permitted("244"); }
+        allow read: if permitted("240") || permitted("244") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data);
+        allow create: if request.resource.data.keys().hasOnly(completionWorkFields()) && canQueue() && validCompletionRequest(stopId);
+        allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(completionWorkFields()) && canQueue() && validCompletionRequest(stopId);
+        allow delete: if false;
+      }
       match /workOrders/{jobId} {
         allow read: if permitted("20") || resource.data.get("createdByUserId", "") == request.auth.uid;
         allow create: if validJobCreate(jobId, request.resource.data);
-        allow update: if (canEditJob(resource.data) || (hasCompanyAccess(companyId) && resource.data.get("createdByUserId", "") == request.auth.uid
-          && executionUpdate() && request.resource.data.get("operationStatus", "") in ["Draft", "Scheduled", "In Progress"])) && (preservesPayTerms() || canManagePay())
+        allow update: if ((hasCompanyAccess(companyId) && resource.data.get("createdByUserId", "") == request.auth.uid
+          && executionUpdate() && request.resource.data.get("operationStatus", "") in ["Draft", "Scheduled", "In Progress"]) || canEditJob(resource.data)) && (preservesPayTerms() || canManagePay())
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["createdByUserId", "sourceTemplateId"]);
         allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "26");
         match /tasks/{taskId} {

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
@@ -356,7 +357,7 @@ const CompanyPartApprovalHistory = () => {
         setApprovals([]);
         setHasNextPage(false);
         setNextCursor(null);
-        setError(loadError.message || 'Unable to load historic part approvals.');
+        setError(userFacingErrorMessage(loadError, loadError.message || 'Unable to load historic part approvals.'));
       } finally {
         if (active) setLoading(false);
       }

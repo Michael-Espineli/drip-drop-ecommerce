@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "react-select";
@@ -511,7 +512,7 @@ const HeritageReceiptImport = () => {
         setSelectedTechId((currentTechId) => currentTechId || getCompanyUserId(defaultTech));
       } catch (error) {
         console.error("Error loading Heritage import selectors:", error);
-        toast.error("Could not load receipt selectors");
+        toast.error(userFacingErrorMessage(error, "Could not load receipt selectors"));
       } finally {
         setLoading(false);
       }
@@ -675,7 +676,7 @@ const HeritageReceiptImport = () => {
       }
     } catch (error) {
       console.error("Error parsing Heritage upload:", error);
-      toast.error("Could not parse upload");
+      toast.error(userFacingErrorMessage(error, "Could not parse upload"));
     } finally {
       setParsing(false);
       setReceiptLoading(null);
@@ -782,7 +783,7 @@ const HeritageReceiptImport = () => {
       toast.success("Vendor item cost updated");
     } catch (error) {
       console.error("Error updating vendor item cost from Heritage import:", error);
-      toast.error("Could not update vendor item cost");
+      toast.error(userFacingErrorMessage(error, "Could not update vendor item cost"));
     } finally {
       setDatabaseItemCostUpdating(line.id, false);
     }
@@ -1106,7 +1107,7 @@ const HeritageReceiptImport = () => {
       }
     } catch (error) {
       console.error("Error saving Heritage receipt:", error);
-      toast.error("Failed to save receipt");
+      toast.error(userFacingErrorMessage(error, "Failed to save receipt"));
     } finally {
       setSaving(false);
     }

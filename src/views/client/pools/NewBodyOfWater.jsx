@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -96,7 +98,7 @@ const NewBodyOfWater = () => {
             await batch.commit();
             navigate('/client/my-pool');
         } catch (err) {
-            setError('Failed to save. Please try again.');
+            setError(userFacingErrorMessage(err, 'Failed to save. Please try again.'));
             console.error(err);
         } finally {
             setLoading(false);
@@ -112,7 +114,7 @@ const NewBodyOfWater = () => {
                     <button onClick={() => navigate(-1)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
                         <ArrowLeftIcon className="w-6 h-6" />
                     </button>
-                    <h1 className="text-3xl font-bold text-gray-900">Add New Pool or Spa</h1>
+                    <WorkspaceHeader title={<>Add New Pool or Spa</>} eyebrow="Your pool care" />
                 </div>
 
                 <form onSubmit={handleSave} className="space-y-8 bg-white rounded-lg shadow-md p-6 md:p-8">

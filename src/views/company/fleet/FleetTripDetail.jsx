@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -164,7 +165,7 @@ export default function FleetTripDetail() {
         setVehicle(vehicleSnap?.exists?.() ? { id: vehicleSnap.id, ...vehicleSnap.data() } : null);
       } catch (loadError) {
         console.error("Error loading fleet trip detail:", loadError);
-        setError("Could not load trip details.");
+        setError(userFacingErrorMessage(loadError, "Could not load trip details."));
       } finally {
         setLoading(false);
       }

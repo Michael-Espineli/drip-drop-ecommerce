@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -43,7 +44,7 @@ const AssociatedBusinessList = () => {
                 setAssociatedBusinesses(businessesList);
             } catch (error) {
                 console.error("Error fetching associated businesses: ", error);
-                toast.error("Could not load associated businesses.");
+                toast.error(userFacingErrorMessage(error, "Could not load associated businesses."));
             } finally {
                 setIsLoading(false);
             }

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
@@ -281,7 +282,7 @@ export default function PublicPage() {
                 console.error('Error loading service area map preview', mapLoadError);
                 if (!cancelled) {
                     setMapLocations([]);
-                    setMapError('Could not load the service area map.');
+                    setMapError(userFacingErrorMessage(mapLoadError, 'Could not load the service area map.'));
                 }
             }
         };
@@ -318,7 +319,7 @@ export default function PublicPage() {
             toast.success(`${label} copied.`);
         } catch (copyError) {
             console.error(`Could not copy ${label}`, copyError);
-            toast.error(`Could not copy ${label}.`);
+            toast.error(userFacingErrorMessage(copyError, `Could not copy ${label}.`));
         }
     };
 
@@ -362,7 +363,7 @@ export default function PublicPage() {
             toast.success('Public page saved.', { id: toastId });
         } catch (saveError) {
             console.error('Error saving public page', saveError);
-            toast.error('Could not save public page.', { id: toastId });
+            toast.error(userFacingErrorMessage(saveError, 'Could not save public page.'), { id: toastId });
         } finally {
             setSaving(false);
         }

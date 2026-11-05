@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, lazy } from 'react';
 import Header from './components/Header';
 import { Context } from '../../../context/AuthContext';
@@ -86,7 +87,7 @@ const ServiceArea = ({ companyData }) => {
             }
         } catch (error) {
             console.error('Error during geocoding:', error);
-            setError('Error during geocoding. Please check your API key and network connection.');
+            setError(userFacingErrorMessage(error, 'Error during geocoding. Please check your API key and network connection.'));
             return null;
         }
     };
@@ -151,7 +152,7 @@ const B2BView = ({ companyData }) => {
             setBusinesses([AssociatedBusiness.fromFirestore({ data: () => associatedBusinessData })]);
         } catch (error) {
             console.error("Error saving associated business: ", error);
-            appAlert('Failed to save associated business.');
+            appAlert(userFacingErrorMessage(error, 'Failed to save associated business.'));
         }
     };
 
@@ -168,7 +169,7 @@ const B2BView = ({ companyData }) => {
             setBusinesses([]);
         } catch (error) {
             console.error("Error unsaving associated business: ", error);
-            appAlert('Failed to unsave associated business.');
+            appAlert(userFacingErrorMessage(error, 'Failed to unsave associated business.'));
         }
     };
 

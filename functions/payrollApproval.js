@@ -1,4 +1,4 @@
-const { HttpsError } = require("firebase-functions/v2/https");
+const { HttpsError } = require('./appErrors');
 const { Timestamp } = require("firebase-admin/firestore");
 const { canClearZeroTask } = require("./payrollCalculation");
 

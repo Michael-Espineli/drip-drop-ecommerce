@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -203,7 +204,7 @@ const CreateBodyOfWater = () => {
                 }
             } catch (error) {
                 console.error(error);
-                toast.error('Unable to load customer/location context.');
+                toast.error(userFacingErrorMessage(error, 'Unable to load customer/location context.'));
             } finally {
                 setContextLoading(false);
             }
@@ -345,7 +346,7 @@ const CreateBodyOfWater = () => {
             navigate(`/company/bodiesOfWater/detail/${bodyOfWaterId}`);
         } catch (error) {
             console.error('Error creating body of water: ', error);
-            toast.error('Failed to create body of water.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Failed to create body of water.'), { id: toastId });
         } finally {
             setLoading(false);
         }

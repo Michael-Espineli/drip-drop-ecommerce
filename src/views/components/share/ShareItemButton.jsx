@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -206,7 +207,7 @@ const ShareItemButton = ({
       toast.success("Link copied.");
     } catch (error) {
       console.error("Unable to copy share link:", error);
-      toast.error("Could not copy link.");
+      toast.error(userFacingErrorMessage(error, "Could not copy link."));
     }
   };
 
@@ -230,7 +231,7 @@ const ShareItemButton = ({
       closeShare();
     } catch (error) {
       console.error("Unable to share item in messages:", error);
-      toast.error("Could not send share.");
+      toast.error(userFacingErrorMessage(error, "Could not send share."));
     } finally {
       setSending(false);
     }

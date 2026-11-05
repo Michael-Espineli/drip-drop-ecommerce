@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -418,7 +419,7 @@ export default function PublicServiceRequest() {
                 if (!cancelled) setCompany(response.company || {});
             } catch (loadError) {
                 console.error('Failed to load public lead intake company', loadError);
-                if (!cancelled) setError(loadError.message || 'Could not load this request form.');
+                if (!cancelled) setError(userFacingErrorMessage(loadError, loadError.message || 'Could not load this request form.'));
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -561,7 +562,7 @@ export default function PublicServiceRequest() {
             toast.success('Public request link copied.');
         } catch (copyError) {
             console.error('Could not copy public request link', copyError);
-            toast.error('Could not copy the request link.');
+            toast.error(userFacingErrorMessage(copyError, 'Could not copy the request link.'));
         }
     };
 
@@ -629,8 +630,8 @@ export default function PublicServiceRequest() {
             toast.success('Service request sent.');
         } catch (submitError) {
             console.error('Failed to submit public service request', submitError);
-            setError(submitError.message || 'Could not submit this request.');
-            toast.error(submitError.message || 'Could not submit this request.');
+            setError(userFacingErrorMessage(submitError, submitError.message || 'Could not submit this request.'));
+            toast.error(userFacingErrorMessage(submitError, submitError.message || 'Could not submit this request.'));
         } finally {
             setSubmitting(false);
         }

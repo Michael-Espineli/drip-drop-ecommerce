@@ -10,6 +10,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { isFirebaseClientStorageError } from './firebaseNetwork';
+import { permissionErrorInfo } from './permissionErrors';
 
 export const APP_ERRORS_COLLECTION = 'appErrors';
 
@@ -165,6 +166,8 @@ export const reportAppError = async (error, options = {}) => {
     ...(options.data || {}),
     errorName: normalizedError.name,
     errorCode: normalizedError.code,
+    permissionSource: permissionErrorInfo(error)?.source || '',
+    requiredPermissionId: permissionErrorInfo(error)?.permissionId || '',
   });
   const stack = trimString(options.stack || normalizedError.stack, MAX_STACK_LENGTH);
   const payload = {

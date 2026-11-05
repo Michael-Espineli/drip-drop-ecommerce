@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { canDelegateCompanyRole } from "../../../utils/companyPermissionAccess";
 import React, { useState, useEffect, useContext } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -260,7 +261,7 @@ const RoleDetails = () => {
           setError("Role not found.");
         }
       } catch (err) {
-        setError("Failed to fetch role data.");
+        setError(userFacingErrorMessage(err, "Failed to fetch role data."));
         console.error("Error fetching role:", err);
       } finally {
         setLoading(false);
@@ -375,7 +376,7 @@ const RoleDetails = () => {
       }
       setEditMode(false);
     } catch (err) {
-      setError("Failed to update role.");
+      setError(userFacingErrorMessage(err, "Failed to update role."));
       console.error("Error updating role:", err);
     }
   };

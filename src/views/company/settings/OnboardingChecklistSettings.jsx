@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { collection, deleteDoc, doc, getDocs, orderBy, query, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
@@ -95,7 +96,7 @@ const OnboardingChecklistSettings = () => {
       setItems(snapshot.docs.map((itemDoc, index) => normalizeTemplateItem({ id: itemDoc.id, ...itemDoc.data() }, index * 10)));
     } catch (error) {
       console.error("Error loading onboarding templates:", error);
-      toast.error("Could not load onboarding checklist.");
+      toast.error(userFacingErrorMessage(error, "Could not load onboarding checklist."));
     } finally {
       setIsLoading(false);
     }
@@ -125,7 +126,7 @@ const OnboardingChecklistSettings = () => {
       await loadItems();
     } catch (error) {
       console.error("Error seeding onboarding defaults:", error);
-      toast.error("Could not add default checklist.");
+      toast.error(userFacingErrorMessage(error, "Could not add default checklist."));
     } finally {
       setIsSaving(false);
     }
@@ -178,7 +179,7 @@ const OnboardingChecklistSettings = () => {
       toast.success("Onboarding item saved.");
     } catch (error) {
       console.error("Error saving onboarding item:", error);
-      toast.error("Could not save onboarding item.");
+      toast.error(userFacingErrorMessage(error, "Could not save onboarding item."));
     } finally {
       setIsSaving(false);
     }
@@ -202,7 +203,7 @@ const OnboardingChecklistSettings = () => {
       toast.success("Onboarding item deleted.");
     } catch (error) {
       console.error("Error deleting onboarding item:", error);
-      toast.error("Could not delete onboarding item.");
+      toast.error(userFacingErrorMessage(error, "Could not delete onboarding item."));
     } finally {
       setIsSaving(false);
     }

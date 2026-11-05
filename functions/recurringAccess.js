@@ -1,4 +1,4 @@
-const { HttpsError } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 
 const text = (value) => typeof value === 'string' ? value.trim() : '';
 const key = (value) => text(value).replace(/[^a-z0-9]/gi, '').toLowerCase();

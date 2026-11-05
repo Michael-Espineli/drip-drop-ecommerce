@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../../utils/permissionErrors';
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -65,7 +66,7 @@ const BillingReadinessCard = ({
       setStripeReadiness(result.data);
     } catch (error) {
       console.error('Unable to verify Stripe billing readiness', error);
-      setStripeReadinessError(error.message || 'Unable to verify Stripe billing readiness.');
+      setStripeReadinessError(userFacingErrorMessage(error, error.message || 'Unable to verify Stripe billing readiness.'));
     } finally {
       setStripeReadinessLoading(false);
     }
@@ -112,7 +113,7 @@ const BillingReadinessCard = ({
       window.location.href = accountLinkUrl;
     } catch (error) {
       console.error('Unable to open Stripe setup', error);
-      toast.error(error.details?.message || error.message || 'Unable to open Stripe setup.');
+      toast.error(userFacingErrorMessage(error, error.details?.message || error.message || 'Unable to open Stripe setup.'));
     } finally {
       setAccountLinkLoading(false);
     }

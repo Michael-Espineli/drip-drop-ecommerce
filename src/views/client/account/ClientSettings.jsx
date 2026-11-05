@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { Switch } from '@headlessui/react';
@@ -41,7 +43,7 @@ const ClientSettings = () => {
             setDataBaseUser(prev => ({...prev, settings: newSettings}));
         } catch (err) {
             console.error("Error updating settings:", err);
-            setError("Failed to save setting. Please try again.");
+            setError(userFacingErrorMessage(err, "Failed to save setting. Please try again."));
             // Revert on failure
             setSettings(previousSettings);
         } finally {
@@ -55,8 +57,8 @@ const ClientSettings = () => {
 
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
-            <div className="max-w-4xl mx-auto">
-                <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
+            <WorkspaceRecordHeader title={<>Settings</>} eyebrow="My account"><div className="max-w-4xl mx-auto">
+
 
                 <div className="mt-8 bg-white rounded-lg shadow-md overflow-hidden">
                     <div className="p-6">
@@ -87,7 +89,7 @@ const ClientSettings = () => {
                     </ul>
                     {error && <p role="alert" className="p-4 text-sm text-center text-red-600 bg-red-50">{error}</p>}
                 </div>
-            </div>
+            </div></WorkspaceRecordHeader>
         </div>
     );
 };

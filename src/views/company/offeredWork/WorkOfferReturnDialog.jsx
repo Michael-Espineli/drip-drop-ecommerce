@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState } from "react";
 import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
 import { manageTechnicianWork } from "../../../utils/technicianWorkflow";
@@ -14,7 +15,7 @@ export default function WorkOfferReturnDialog({ companyId, offer, claim, onClose
       const result = await manageTechnicianWork(companyId, "withdraw", { offerId: offer.id, claimId: claim.id, reason: reason.trim() });
       await onReturned(result);
       onClose();
-    } catch (failure) { setError(failure.message || "Could not return this work."); }
+    } catch (failure) { setError(userFacingErrorMessage(failure, failure.message || "Could not return this work.")); }
     finally { setBusy(false); }
   };
   return <Dialog open onClose={() => { if (!busy) onClose(); }} className="relative z-[60]">

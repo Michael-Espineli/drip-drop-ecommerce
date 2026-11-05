@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { collection, doc, getDoc, query, where, onSnapshot } from 'firebase/firestore';
@@ -119,7 +120,7 @@ const ServiceRequests = () => {
         <div className="px-4 py-6 bg-gray-50 min-h-screen md:px-8">
             <div className="max-w-7xl mx-auto">
                 <div className="mb-8">
-                    <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">My Service Requests</h1>
+                    <WorkspaceHeader title={<>My Service Requests</>} eyebrow="Your pool care" />
                     <p className="mt-1 text-base text-gray-600 sm:text-lg">Track the status of all your service requests.</p>
                 </div>
 

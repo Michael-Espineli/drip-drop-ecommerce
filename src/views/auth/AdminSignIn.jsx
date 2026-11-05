@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
@@ -37,10 +38,10 @@ export default function AdminSignIn() {
                 case 'auth/user-not-found':
                 case 'auth/wrong-password':
                 case 'auth/invalid-credential':
-                    toast.error('Invalid credentials for admin access.');
+                    toast.error(userFacingErrorMessage(error, 'Invalid credentials for admin access.'));
                     break;
                 default:
-                    toast.error('An unexpected error occurred.');
+                    toast.error(userFacingErrorMessage(error, 'An unexpected error occurred.'));
                     break;
             }
         } finally {

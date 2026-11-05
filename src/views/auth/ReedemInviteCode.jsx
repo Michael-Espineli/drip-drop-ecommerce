@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useMemo, useState, useEffect, useContext, useCallback } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { getAuth, createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
@@ -100,7 +101,7 @@ export default function RedeemInviteCode() {
         } catch (err) {
             console.error("Error checking invite:", err);
             setInvite(null);
-            toast.error(err.message || 'Could not verify the invite code.');
+            toast.error(userFacingErrorMessage(err, err.message || 'Could not verify the invite code.'));
             return null;
         } finally {
             setLoading(false);
@@ -157,7 +158,7 @@ export default function RedeemInviteCode() {
                     await sendEmailVerification(newUser);
                 } catch (verificationError) {
                     console.error("Error sending verification email:", verificationError);
-                    toast.error("Account created, but the verification email could not be sent. You can resend it from company selection.");
+                    toast.error(userFacingErrorMessage(verificationError, "Account created, but the verification email could not be sent. You can resend it from company selection."));
                 }
             }
 
@@ -169,9 +170,9 @@ export default function RedeemInviteCode() {
             navigate(confirmEmailOnInviteEnabled && !newUser.emailVerified ? '/company/selector?verifyEmail=1' : '/company/dashboard');
         } catch (err) {
             console.error("Sign up error:", err);
-            toast.error(err.code === 'auth/email-already-in-use' 
+            toast.error(userFacingErrorMessage(err, err.code === 'auth/email-already-in-use'
                 ? 'This email is already in use. Please sign in to accept the invite.' 
-                : 'Failed to create account.');
+                : 'Failed to create account.'));
         } finally {
             setLoading(false);
         }
@@ -188,7 +189,7 @@ export default function RedeemInviteCode() {
             navigate('/company/dashboard');
         } catch (err) {
             console.error("Error accepting invite:", err);
-            toast.error('There was an error accepting the invite.');
+            toast.error(userFacingErrorMessage(err, 'There was an error accepting the invite.'));
         } finally {
             setLoading(false);
         }

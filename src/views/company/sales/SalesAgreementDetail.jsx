@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import ServicePayrollTaskEditor from './ServicePayrollTaskEditor';
 import { serializeServiceTasks } from '../../../utils/payroll/servicePayrollPreview';
@@ -1469,7 +1470,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
     if (!canViewServiceAgreements) {
       setAgreement(null);
       setLoading(false);
-      setError(`You do not have permission to view ${detailMode === 'estimate' ? 'estimates' : 'service agreements'}.`);
+      setError(`Drip Drop permission denied: You do not have permission to view ${detailMode === 'estimate' ? 'estimates' : 'service agreements'}.`);
       return undefined;
     }
 
@@ -2244,7 +2245,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       navigate(`/company/sales/agreements/${renewal.id}`);
     } catch (renewalError) {
       console.error('Unable to create renewal agreement', renewalError);
-      toast.error(renewalError.message || 'Failed to create renewal agreement.');
+      toast.error(userFacingErrorMessage(renewalError, renewalError.message || 'Failed to create renewal agreement.'));
     } finally {
       setCreatingRenewal(false);
     }
@@ -2314,7 +2315,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       setShowSendDialog(false);
     } catch (sendError) {
       console.error('Unable to send service agreement email', sendError);
-      toast.error(sendError.message || 'Failed to send service agreement email.');
+      toast.error(userFacingErrorMessage(sendError, sendError.message || 'Failed to send service agreement email.'));
     } finally {
       setSending(false);
     }
@@ -2534,7 +2535,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       toast.success('Catalog item created and added to this agreement.');
     } catch (catalogError) {
       console.error('Unable to create sales catalog item from agreement', catalogError);
-      toast.error(catalogError.message || 'Failed to create catalog item.');
+      toast.error(userFacingErrorMessage(catalogError, catalogError.message || 'Failed to create catalog item.'));
     } finally {
       setSavingCatalogItem(false);
     }
@@ -2580,7 +2581,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       }));
     } catch (templateError) {
       console.error('Unable to apply terms template', templateError);
-      toast.error('Failed to apply terms template.');
+      toast.error(userFacingErrorMessage(templateError, 'Failed to apply terms template.'));
     } finally {
       setApplyingTermsTemplate(false);
     }
@@ -2658,7 +2659,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       toast.success('Terms template updated from this agreement.');
     } catch (templateError) {
       console.error('Unable to update source terms template', templateError);
-      toast.error(templateError.message || 'Failed to update terms template.');
+      toast.error(userFacingErrorMessage(templateError, templateError.message || 'Failed to update terms template.'));
     } finally {
       setUpdatingTermsTemplate(false);
     }
@@ -2815,7 +2816,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       closeEditor();
     } catch (saveError) {
       console.error('Unable to update sales document', saveError);
-      toast.error(saveError.message || `Failed to update ${documentLabelLower}.`);
+      toast.error(userFacingErrorMessage(saveError, saveError.message || `Failed to update ${documentLabelLower}.`));
     } finally {
       setSavingEdit(false);
     }
@@ -2875,9 +2876,9 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
         selectedCompanyId,
         userId: user?.uid || '',
       });
-      toast.error(isPermissionDeniedError(deleteError)
+      toast.error(userFacingErrorMessage(deleteError, isPermissionDeniedError(deleteError)
         ? 'Firebase denied the delete. Check that this agreement and every linked billing subscription have the selected companyId and that your userAccess record exists for that company.'
-        : deleteError.message || 'Failed to delete service agreement.');
+        : deleteError.message || 'Failed to delete service agreement.'));
     } finally {
       setDeleting(false);
     }
@@ -2991,7 +2992,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       closeAcceptanceModal();
     } catch (acceptError) {
       console.error('Unable to mark service agreement accepted', acceptError);
-      toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
+      toast.error(userFacingErrorMessage(acceptError, acceptError.message || 'Failed to mark service agreement accepted.'));
     } finally {
       setMarkingAccepted(false);
     }
@@ -3015,7 +3016,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
         : 'Billing subscription created.');
     } catch (billingError) {
       console.error('Unable to create billing subscription from agreement', billingError);
-      toast.error(billingError.message || 'Failed to create billing subscription.');
+      toast.error(userFacingErrorMessage(billingError, billingError.message || 'Failed to create billing subscription.'));
     } finally {
       setCreatingBilling(false);
     }
@@ -3061,7 +3062,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
     } catch (checkoutError) {
       console.error('Unable to start Stripe Checkout', checkoutError);
-      toast.error(checkoutError.message || 'Failed to start Stripe Checkout.');
+      toast.error(userFacingErrorMessage(checkoutError, checkoutError.message || 'Failed to start Stripe Checkout.'));
       setStartingStripeCheckout(false);
     }
   };

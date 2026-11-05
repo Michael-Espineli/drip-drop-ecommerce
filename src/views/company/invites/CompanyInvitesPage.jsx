@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../../utils/config';
@@ -100,7 +101,7 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
             toast.success('Invite link copied.');
         } catch (error) {
             console.error('Error copying invite link:', error);
-            toast.error('Invite link could not be copied.');
+            toast.error(userFacingErrorMessage(error, 'Invite link could not be copied.'));
         }
     };
 
@@ -142,7 +143,7 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
             }
         } catch (error) {
             console.error('Error managing company invite:', error);
-            toast.error(error.message || 'Invite could not be updated.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, error.message || 'Invite could not be updated.'), { id: toastId });
         } finally {
             setActionLoadingId('');
         }

@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../components/workspace/WorkspaceRecordHeader';
 
 import React, { useState, useContext, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
@@ -171,7 +173,7 @@ const MyPool = () => {
                 });
 
             } catch (error) {
-                if (active) setLoadError('Your pool details could not be loaded. Please try again.');
+                if (active) setLoadError(userFacingErrorMessage(error, 'Your pool details could not be loaded. Please try again.'));
             } finally {
                 if (active) {
                     setInitialLoad(false);
@@ -289,7 +291,7 @@ const MyPool = () => {
             closeEditLocation();
         } catch (error) {
             console.error('Error updating homeowner service location:', error);
-            setLocationActionError('Failed to update service location.');
+            setLocationActionError(userFacingErrorMessage(error, 'Failed to update service location.'));
         } finally {
             setSavingLocation(false);
         }
@@ -338,7 +340,7 @@ const MyPool = () => {
             closeEditLocation();
         } catch (error) {
             console.error('Error deleting homeowner service location:', error);
-            setLocationActionError('Failed to delete service location.');
+            setLocationActionError(userFacingErrorMessage(error, 'Failed to delete service location.'));
         } finally {
             setSavingLocation(false);
         }
@@ -423,8 +425,8 @@ const getLocationLabel = (location) => (
 );
 
 const Header = ({ locations, selected, onSelect }) => (
-    <div className="flex flex-col justify-between gap-4 mb-8 md:flex-row md:items-center">
-        <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">My Pool Dashboard</h1>
+    <WorkspaceRecordHeader title={<>My Pool Dashboard</>} eyebrow="My pool"><div className="flex flex-col justify-between gap-4 mb-8 md:flex-row md:items-center">
+
         <div className="flex w-full flex-col gap-3 sm:flex-row md:w-auto md:items-center">
             <select
                 value={selected}
@@ -441,7 +443,7 @@ const Header = ({ locations, selected, onSelect }) => (
                 <span>Add Location</span>
             </Link>
         </div>
-    </div>
+    </div></WorkspaceRecordHeader>
 );
 
 const ServiceLocationManager = ({ locations, selectedLocation, selectedLocationRecord, onEdit, onDelete, disabled, error }) => {

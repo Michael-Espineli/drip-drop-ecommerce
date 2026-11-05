@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -145,7 +146,7 @@ function AdminUserList({ mode = 'users' }) {
       } catch (error) {
         console.error('Failed to load admin user list:', error);
         if (!cancelled) {
-          setErrorMessage(error.message || 'Could not load users.');
+          setErrorMessage(userFacingErrorMessage(error, error.message || 'Could not load users.'));
         }
       } finally {
         if (!cancelled) {

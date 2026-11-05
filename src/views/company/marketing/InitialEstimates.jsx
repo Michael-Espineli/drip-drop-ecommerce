@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -409,7 +410,7 @@ const InitialEstimates = () => {
       setAgreementModalStop(null);
     } catch (connectionError) {
       console.error('Unable to connect service agreement:', connectionError);
-      toast.error('Failed to connect service agreement.');
+      toast.error(userFacingErrorMessage(connectionError, 'Failed to connect service agreement.'));
     } finally {
       setConnectingAgreementId('');
     }

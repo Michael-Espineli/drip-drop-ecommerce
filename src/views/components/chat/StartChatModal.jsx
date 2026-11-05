@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
@@ -252,7 +253,7 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
         if (!cancelled) setTargets(nextTargets);
       } catch (loadError) {
         console.error('Unable to load chat targets:', loadError);
-        if (!cancelled) setError('Unable to load message options.');
+        if (!cancelled) setError(userFacingErrorMessage(loadError, 'Unable to load message options.'));
       } finally {
         if (!cancelled) setLoading(false);
       }

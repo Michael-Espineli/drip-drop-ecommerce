@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import {
   collection,
@@ -799,7 +800,7 @@ function PoolProspectLists() {
       toast.success(`Read ${parsedWorkbookRows.length} row${parsedWorkbookRows.length === 1 ? '' : 's'} from ${file.name}.`);
     } catch (error) {
       console.error('Unable to parse pool prospect workbook:', error);
-      toast.error('Could not read that Excel file.');
+      toast.error(userFacingErrorMessage(error, 'Could not read that Excel file.'));
     }
   };
 
@@ -921,7 +922,7 @@ function PoolProspectLists() {
       toast.success(`${isCreatingList ? 'Created list with' : 'Imported'} ${importRows.length} pool address${importRows.length === 1 ? '' : 'es'}.`);
     } catch (error) {
       console.error('Unable to import pool prospect workbook:', error);
-      toast.error('Could not import those pool addresses.');
+      toast.error(userFacingErrorMessage(error, 'Could not import those pool addresses.'));
     } finally {
       setImporting(false);
     }
@@ -1018,7 +1019,7 @@ function PoolProspectLists() {
       toast.success(`Saved ${rowsToSave.length} pool address${rowsToSave.length === 1 ? '' : 'es'}.`);
     } catch (error) {
       console.error('Unable to save pool prospect list:', error);
-      toast.error('Could not save pool prospect list.');
+      toast.error(userFacingErrorMessage(error, 'Could not save pool prospect list.'));
     } finally {
       setSaving(false);
     }
@@ -1096,7 +1097,7 @@ function PoolProspectLists() {
       toast.success('Pool finder run queued.');
     } catch (error) {
       console.error('Unable to create pool finder run:', error);
-      toast.error('Could not start pool finder.');
+      toast.error(userFacingErrorMessage(error, 'Could not start pool finder.'));
     } finally {
       setFinding(false);
     }
@@ -1142,7 +1143,7 @@ function PoolProspectLists() {
       toast.success('Pool prospect list deleted.');
     } catch (error) {
       console.error('Unable to delete pool prospect list:', error);
-      toast.error('Could not delete pool prospect list.');
+      toast.error(userFacingErrorMessage(error, 'Could not delete pool prospect list.'));
     } finally {
       setDeletingId('');
     }
@@ -1206,7 +1207,7 @@ function PoolProspectLists() {
       toast.success('Marked as no pool.');
     } catch (error) {
       console.error('Unable to save pool feedback:', error);
-      toast.error('Could not save feedback.');
+      toast.error(userFacingErrorMessage(error, 'Could not save feedback.'));
     } finally {
       setFeedbackSavingId('');
     }
@@ -1283,7 +1284,7 @@ function PoolProspectLists() {
       toast.success('Pool address added.');
     } catch (error) {
       console.error('Unable to add missed pool:', error);
-      toast.error('Could not add missed pool.');
+      toast.error(userFacingErrorMessage(error, 'Could not add missed pool.'));
     } finally {
       setAddingMissedPool(false);
     }

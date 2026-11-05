@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../../utils/config';
@@ -327,7 +329,7 @@ const CreateNewCustomer = () => {
             toast.success('Customer created successfully!', { id: toastId });
             navigate('/company/customers');
         } catch (error) {
-            toast.error('Error creating customer.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Error creating customer.'), { id: toastId });
             console.error("Error: ", error);
         }
     };
@@ -337,10 +339,10 @@ const CreateNewCustomer = () => {
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
                 <UpgradeModal isOpen={showUpgradeModal} onClose={() => setShowUpgradeModal(false)} featureName="Active Customers" />
-                <div>
-                    <h1 className='text-3xl font-bold text-gray-900 mb-6'>Create New Customer</h1>
+                <WorkspaceRecordHeader title={<>Create New Customer</>} eyebrow="Company relationships"><div>
+
                     <p className="text-gray-600 mt-1">Create a new customer and add their service locations and bodies of water.</p>
-                </div>
+                </div></WorkspaceRecordHeader>
                 <form onSubmit={handleCreate} className="bg-white p-8 rounded-2xl shadow-lg space-y-8">
 
                     <InfoSection title="Customer Details">

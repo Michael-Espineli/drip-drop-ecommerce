@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -569,7 +570,7 @@ const ReadingsAndDosages = () => {
             setDatabaseItemsLoaded(true);
         } catch (error) {
             console.error('Could not fetch database products:', error);
-            toast.error('Could not load database products.');
+            toast.error(userFacingErrorMessage(error, 'Could not load database products.'));
         } finally {
             setDatabaseItemsLoading(false);
         }
@@ -622,7 +623,7 @@ const ReadingsAndDosages = () => {
             setDatabaseItemSearchTerm('');
         } catch (error) {
             console.error('Failed to update linked database products:', error);
-            toast.error('Could not update linked database products.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Could not update linked database products.'), { id: toastId });
         }
     };
 
@@ -718,7 +719,7 @@ const ReadingsAndDosages = () => {
             setAmountInput('');
         } catch (error) {
             console.error('Failed to save template:', error);
-            toast.error('Could not save template.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Could not save template.'), { id: toastId });
         }
     };
 
@@ -749,7 +750,7 @@ const ReadingsAndDosages = () => {
             setForm((current) => ({ ...current, amount: formatAmountList(nextAmounts) }));
         } catch (error) {
             console.error('Failed to add amount:', error);
-            toast.error('Could not add amount.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Could not add amount.'), { id: toastId });
         }
     };
 
@@ -768,7 +769,7 @@ const ReadingsAndDosages = () => {
             setForm((current) => ({ ...current, amount: formatAmountList(nextAmounts) }));
         } catch (error) {
             console.error('Failed to remove amount:', error);
-            toast.error('Could not remove amount.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Could not remove amount.'), { id: toastId });
         }
     };
 
@@ -791,7 +792,7 @@ const ReadingsAndDosages = () => {
             backToList();
         } catch (error) {
             console.error('Failed to delete template:', error);
-            toast.error('Could not delete template.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Could not delete template.'), { id: toastId });
         }
     };
 
@@ -819,7 +820,7 @@ const ReadingsAndDosages = () => {
             setMode('detail');
         } catch (error) {
             console.error('Failed to add universal template:', error);
-            toast.error('Could not add universal template.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, 'Could not add universal template.'), { id: toastId });
         }
     };
 

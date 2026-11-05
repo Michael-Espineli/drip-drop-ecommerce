@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
@@ -79,7 +81,7 @@ const BodyOfWaterDetailView = () => {
 
             } catch (err) {
                 console.error("Error fetching data:", err);
-                setError('Failed to load pool data.');
+                setError(userFacingErrorMessage(err, 'Failed to load pool data.'));
             } finally {
                 setLoading(false);
             }
@@ -108,7 +110,7 @@ const BodyOfWaterDetailView = () => {
             setIsEditing(false);
         } catch (err) {
             console.error("Error updating document: ", err);
-            setError("Failed to save changes. Please try again.");
+            setError(userFacingErrorMessage(err, "Failed to save changes. Please try again."));
         } finally {
             setIsSaving(false);
         }
@@ -166,7 +168,7 @@ const Header = ({ name, onBack, isOwner, isEditing, onEdit, onSave, onCancel, is
             <button onClick={onBack} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
                 <ArrowLeftIcon className="w-6 h-6" />
             </button>
-            <h1 className="text-3xl font-bold text-gray-900">{name}</h1>
+            <WorkspaceHeader title={<>{name}</>} eyebrow="Your pool care" />
         </div>
         {isOwner && (
             <div className="flex items-center gap-2">

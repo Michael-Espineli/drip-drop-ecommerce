@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, {useState, useContext} from 'react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Link, useNavigate } from 'react-router-dom';
@@ -76,7 +77,7 @@ const AddNewSubscription = () => {
             navigate(`/admin/subscriptions/detail/${subscriptionId}`);
         } catch (error) {
             console.error(error);
-            toast.error(error.message || 'Failed to create subscription plan.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, error.message || 'Failed to create subscription plan.'), { id: toastId });
         }
 
     }

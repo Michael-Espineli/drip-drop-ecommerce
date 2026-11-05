@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { collection, doc, getDocs, Timestamp, updateDoc } from "firebase/firestore";
@@ -711,7 +712,7 @@ const ShoppingPurchaseReconciliation = () => {
       setPurchasedItems(enrichWithDatabaseItems(normalizedPurchasedItems, databaseItemsById));
     } catch (error) {
       console.error(error);
-      appAlert("Could not load shopping and purchased items.");
+      appAlert(userFacingErrorMessage(error, "Could not load shopping and purchased items."));
     } finally {
       setLoading(false);
     }
@@ -817,7 +818,7 @@ const ShoppingPurchaseReconciliation = () => {
       setSelection(null);
     } catch (error) {
       console.error(error);
-      appAlert("Could not connect these items.");
+      appAlert(userFacingErrorMessage(error, "Could not connect these items."));
     } finally {
       setUpdatingKey("");
     }
@@ -846,7 +847,7 @@ const ShoppingPurchaseReconciliation = () => {
       await loadData();
     } catch (error) {
       console.error(error);
-      appAlert("Could not clear this connection.");
+      appAlert(userFacingErrorMessage(error, "Could not clear this connection."));
     } finally {
       setUpdatingKey("");
     }

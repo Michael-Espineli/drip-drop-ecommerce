@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { collection, doc, getDoc, getDocs, updateDoc, Timestamp } from "firebase/firestore";
@@ -772,9 +773,9 @@ const ShoppingListDetailView = () => {
             console.error("Error updating shopping item status", error);
             if (statusSaved) {
                 await fetchItem();
-                toast.error("Status saved, but a linked update could not be completed.");
+                toast.error(userFacingErrorMessage(error, "Status saved, but a linked update could not be completed."));
             } else {
-                toast.error("Could not update status. Please try again.");
+                toast.error(userFacingErrorMessage(error, "Could not update status. Please try again."));
             }
         } finally {
             setUpdating(false);

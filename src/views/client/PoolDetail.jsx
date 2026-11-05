@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
@@ -34,7 +35,7 @@ const PoolDetail = () => {
                 }
             } catch (err) {
                 console.error("Error fetching pool details: ", err);
-                setError("Failed to load pool details. Please try again.");
+                setError(userFacingErrorMessage(err, "Failed to load pool details. Please try again."));
             } finally {
                 setLoading(false);
             }

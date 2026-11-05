@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
@@ -68,13 +69,13 @@ export default function HomeOwnerSignIn() {
                 case 'auth/user-not-found':
                 case 'auth/wrong-password':
                 case 'auth/invalid-credential':
-                    toast.error('Invalid email or password.');
+                    toast.error(userFacingErrorMessage(error, 'Invalid email or password.'));
                     break;
                 case 'auth/invalid-email':
-                    toast.error('Please enter a valid email address.');
+                    toast.error(userFacingErrorMessage(error, 'Please enter a valid email address.'));
                     break;
                 default:
-                    toast.error('An unexpected error occurred. Please try again.');
+                    toast.error(userFacingErrorMessage(error, 'An unexpected error occurred. Please try again.'));
                     break;
             }
         } finally {
@@ -100,16 +101,16 @@ export default function HomeOwnerSignIn() {
             console.error("Firebase Password Reset Error:", error);
             switch (error.code) {
                 case 'auth/invalid-email':
-                    toast.error('Please enter a valid email address.');
+                    toast.error(userFacingErrorMessage(error, 'Please enter a valid email address.'));
                     break;
                 case 'auth/user-not-found':
-                    toast.error('No account found for that email address.');
+                    toast.error(userFacingErrorMessage(error, 'No account found for that email address.'));
                     break;
                 case PASSWORD_RESET_RECENTLY_SENT_CODE:
-                    toast.error('A reset email was just sent. Please wait a minute before sending another one.');
+                    toast.error(userFacingErrorMessage(error, 'A reset email was just sent. Please wait a minute before sending another one.'));
                     break;
                 default:
-                    toast.error('Unable to send reset email. Please try again.');
+                    toast.error(userFacingErrorMessage(error, 'Unable to send reset email. Please try again.'));
                     break;
             }
         } finally {

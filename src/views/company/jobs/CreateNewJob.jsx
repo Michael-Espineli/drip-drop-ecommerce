@@ -1,3 +1,6 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import JobPayrollFields from "./JobPayrollFields";
 import useServicePayrollData from "../../../hooks/useServicePayrollData";
@@ -668,7 +671,7 @@ const CreateNewJob = () => {
             ? createJobSections[activeCreateSectionIndex + 1]
             : "";
 
-    const selectStyles = {
+    const selectStyles = workspaceSelectStyles({
         control: (provided, state) => ({
             ...provided,
             backgroundColor: "white",
@@ -686,7 +689,7 @@ const CreateNewJob = () => {
             borderRadius: "0.375rem",
             overflow: "hidden",
         }),
-    };
+    });
 
     const fieldLabelClasses = "mb-2 block text-sm font-semibold text-slate-700";
     const fieldInputClasses = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
@@ -1328,7 +1331,7 @@ const CreateNewJob = () => {
                 }
             } catch (error) {
                 console.error("Error loading create job data:", error);
-                appAlert("Failed to load create job data.");
+                appAlert(userFacingErrorMessage(error, "Failed to load create job data."));
             } finally {
                 setLoading(false);
             }
@@ -1786,7 +1789,7 @@ const CreateNewJob = () => {
             setTemplateApplied(true);
         } catch (error) {
             console.error("Error applying job template:", error);
-            appAlert("Failed to apply job template.");
+            appAlert(userFacingErrorMessage(error, "Failed to apply job template."));
         } finally {
             setLoadingTemplate(false);
         }
@@ -1869,7 +1872,7 @@ const CreateNewJob = () => {
             setTaskList(tasks);
         } catch (error) {
             console.error("Error loading task group:", error);
-            appAlert("Failed to load task group.");
+            appAlert(userFacingErrorMessage(error, "Failed to load task group."));
         }
     };
 
@@ -2503,7 +2506,7 @@ const CreateNewJob = () => {
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating new job:", error);
-            appAlert(["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : "Failed to create job. Please try again.");
+            appAlert(userFacingErrorMessage(error, ["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : "Failed to create job. Please try again."));
         } finally {
             setCreating(false);
         }
@@ -3351,7 +3354,7 @@ const CreateNewJob = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-950 sm:px-3 lg:px-4">
             <div className="w-full space-y-5">
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <WorkspaceRecordHeader title={<>Create New Job</>} eyebrow="Company operations"><div className="workspace-record-toolbar">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
                             <Link
@@ -3360,8 +3363,8 @@ const CreateNewJob = () => {
                             >
                                 &larr; Back to Jobs
                             </Link>
-                            <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Company Operations</p>
-                            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-950">Create New Job</h1>
+
+
                             <p className="mt-1 max-w-3xl text-sm text-slate-500">
                                 {selectedTemplate
                                     ? `Started from template: ${selectedTemplate.name}`
@@ -3390,7 +3393,7 @@ const CreateNewJob = () => {
                             </button>
                         </div>
                     </div>
-                </section>
+                </div></WorkspaceRecordHeader>
 
                 <section className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
                     <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">

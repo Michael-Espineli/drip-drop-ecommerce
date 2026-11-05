@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
@@ -450,7 +451,7 @@ function TesterStripProfiles() {
       setSelectedProfileId(cleanProfile.id);
     } catch (error) {
       console.error('Failed to save tester strip profile:', error);
-      toast.error('Could not save tester strip profile.');
+      toast.error(userFacingErrorMessage(error, 'Could not save tester strip profile.'));
     } finally {
       setSaving(false);
     }
@@ -465,7 +466,7 @@ function TesterStripProfiles() {
       setSelectedProfileId(AQUACHEK_7_IN_1_PROFILE.id);
     } catch (error) {
       console.error('Failed to seed AquaChek profile:', error);
-      toast.error('Could not seed AquaChek profile.');
+      toast.error(userFacingErrorMessage(error, 'Could not seed AquaChek profile.'));
     } finally {
       setSeeding(false);
     }
@@ -489,7 +490,7 @@ function TesterStripProfiles() {
       setDraftProfile(null);
     } catch (error) {
       console.error('Failed to delete tester strip profile:', error);
-      toast.error('Could not delete tester strip profile.');
+      toast.error(userFacingErrorMessage(error, 'Could not delete tester strip profile.'));
     }
   };
 

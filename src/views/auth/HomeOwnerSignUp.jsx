@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
@@ -104,19 +105,19 @@ export default function HomeOwnerSignUp() {
             toast.success('Profile created!');
 
             // 3. Navigate to the invite or dashboard
-            try { await sendEmailVerification(user, { url: `${window.location.origin}${clientVerificationPath(redirectPath)}` }); } catch (_) { toast.error('Your account was created. Use Resend on the next screen to verify your email.'); }
+            try { await sendEmailVerification(user, { url: `${window.location.origin}${clientVerificationPath(redirectPath)}` }); } catch (_) { toast.error(userFacingErrorMessage(_, 'Your account was created. Use Resend on the next screen to verify your email.')); }
             navigate(user.emailVerified ? safeClientReturnPath(redirectPath) : clientVerificationPath(redirectPath));
         } catch (error) {
             console.error("Homeowner sign-up failed:", error);
             switch (error.code) {
                 case 'auth/email-already-in-use':
-                    toast.error('This email is already in use.');
+                    toast.error(userFacingErrorMessage(error, 'This email is already in use.'));
                     break;
                 case 'auth/invalid-email':
-                    toast.error('Please enter a valid email address.');
+                    toast.error(userFacingErrorMessage(error, 'Please enter a valid email address.'));
                     break;
                 default:
-                    toast.error(auth.currentUser ? 'Your account exists. Please retry to finish setting up your profile.' : 'An unexpected error occurred. Please try again.');
+                    toast.error(userFacingErrorMessage(error, auth.currentUser ? 'Your account exists. Please retry to finish setting up your profile.' : 'An unexpected error occurred. Please try again.'));
             }
         } finally {
             setLoading(false);

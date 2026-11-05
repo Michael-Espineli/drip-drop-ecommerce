@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
@@ -64,7 +66,7 @@ const RepairRequestDetail = () => {
                 }
             } catch (err) {
                 console.error("Error fetching repair request details:", err);
-                setError('Failed to fetch repair request details.');
+                setError(userFacingErrorMessage(err, 'Failed to fetch repair request details.'));
             } finally {
                 setLoading(false);
             }
@@ -92,7 +94,7 @@ const RepairRequestDetail = () => {
             <div className="max-w-4xl mx-auto p-4 md:p-8">
                 <div className="bg-white shadow-lg rounded-lg overflow-hidden">
                     <div className="p-6 border-b border-gray-200">
-                        <h1 className="text-3xl font-bold text-gray-800">Repair Request Details</h1>
+                        <WorkspaceHeader title={<>Repair Request Details</>} eyebrow="Your pool care" />
                         <p className="text-sm text-gray-500 mt-1">Submitted on {new Date(request.date.seconds * 1000).toLocaleDateString()}</p>
                     </div>
 

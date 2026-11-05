@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { db } from "../../../utils/config";
@@ -115,7 +116,7 @@ const BodiesOfWaterDetails = () => {
         }
       } catch (err) {
         console.error(err);
-        setError("Failed to fetch body of water data.");
+        setError(userFacingErrorMessage(err, "Failed to fetch body of water data."));
       } finally {
         setLoading(false);
       }
@@ -154,7 +155,7 @@ const BodiesOfWaterDetails = () => {
       setEdit(false);
     } catch (err) {
       console.error("Error updating document: ", err);
-      setError("Failed to save changes.");
+      setError(userFacingErrorMessage(err, "Failed to save changes."));
     }
   };
 
@@ -204,7 +205,7 @@ const BodiesOfWaterDetails = () => {
       toast.success("Water history added.");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to add water history.");
+      toast.error(userFacingErrorMessage(err, "Failed to add water history."));
     } finally {
       setSavingHistory(false);
     }

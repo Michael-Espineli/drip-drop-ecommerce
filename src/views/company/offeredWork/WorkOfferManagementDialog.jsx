@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import RouteWorkOfferSummary from './RouteWorkOfferSummary';
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import WorkOfferReturnDialog from "./WorkOfferReturnDialog";
 import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
@@ -73,7 +75,7 @@ export default function WorkOfferManagementDialog({ companyId, offer, workers = 
       setMode(previous => (previous === "edit" && !result.management?.canEdit) || (previous === "incentive" && !result.management?.canIncentivize) ? "details" : previous);
       setForm(formFor(result.offer || offer));
       setIncentive(incentiveFor(result.offer || offer));
-    } catch (failure) { setError(failure.message || "Could not load this work offer."); }
+    } catch (failure) { setError(userFacingErrorMessage(failure, failure.message || "Could not load this work offer.")); }
     finally { setLoading(false); }
   }, [companyId, offer]);
   useEffect(() => { setDetails(null); load(); }, [load]);
@@ -128,7 +130,7 @@ export default function WorkOfferManagementDialog({ companyId, offer, workers = 
     try {
       const result = await manageTechnicianWork(companyId, "update", { offerId: current.id, revision: current.revision || 1, changes });
       toast.success("Work offer updated."); setMode("details"); await load(); await notify({ ...result, type: "updated" });
-    } catch (failure) { setError(failure.message || "Could not save this work offer."); }
+    } catch (failure) { setError(userFacingErrorMessage(failure, failure.message || "Could not save this work offer.")); }
     finally { setBusy(false); }
   };
   const saveIncentive = async event => {
@@ -139,7 +141,7 @@ export default function WorkOfferManagementDialog({ companyId, offer, workers = 
       const value = { type: incentive.type, amountCents: incentive.type === "flat" ? Math.round(Number(incentive.amount) * 100) : 0, percentage: incentive.type === "percentage" ? Number(incentive.percentage) : 0, notes: incentive.notes };
       const result = await manageTechnicianWork(companyId, "incentive", { offerId: current.id, revision: current.revision || 1, incentive: value });
       toast.success(value.type === "none" ? "Incentive removed." : "Incentive saved."); setMode("details"); await load(); await notify({ ...result, type: "incentive" });
-    } catch (failure) { setError(failure.message || "Could not save the incentive."); }
+    } catch (failure) { setError(userFacingErrorMessage(failure, failure.message || "Could not save the incentive.")); }
     finally { setBusy(false); }
   };
   const remove = async () => {
@@ -148,7 +150,7 @@ export default function WorkOfferManagementDialog({ companyId, offer, workers = 
     try {
       const result = await manageTechnicianWork(companyId, "delete", { offerId: current.id, revision: current.revision || 1 });
       toast.success("Work offer deleted."); await notify({ ...result, type: "deleted" }); onClose();
-    } catch (failure) { setError(failure.message || "Could not delete this work offer."); }
+    } catch (failure) { setError(userFacingErrorMessage(failure, failure.message || "Could not delete this work offer.")); }
     finally { setBusy(false); }
   };
 
@@ -212,6 +214,7 @@ export default function WorkOfferManagementDialog({ companyId, offer, workers = 
                       <dl className="grid gap-4 sm:grid-cols-2"><Detail label="Customer">{current.customerName || current.routeName || "Not set"}</Detail><Detail label="Location">{current.serviceLocationName || current.address?.streetAddress || "Not set"}</Detail></dl>
                     </OfferSection>
                     <OfferSection title="Work scope" icon={FiCheckSquare}>
+                      <RouteWorkOfferSummary offer={current} summary={details.routeSummary ?? current.routeSummary}/>
                       {editTerms && current.jobId && current.workPurpose !== "diagnostic" ? <fieldset><legend className="mb-2 text-xs font-bold uppercase tracking-wide text-theme-subtle">Offered tasks</legend><div className="divide-y divide-slate-200">{options.tasks.filter(task => form.jobTaskIds.includes(task.id) || ((!task.claimedWorkOfferId || task.claimedWorkOfferId === current.id) && !["Finished", "Completed", "Cancelled"].includes(task.status))).map(task => <label className="flex items-start gap-3 py-3 text-sm" key={task.id}><input className="mt-0.5 h-4 w-4 rounded border-theme" type="checkbox" checked={form.jobTaskIds.includes(task.id)} onChange={event => change("jobTaskIds", event.target.checked ? [...form.jobTaskIds, task.id] : form.jobTaskIds.filter(id => id !== task.id))} /><span>{task.name || task.description || task.id}</span></label>)}</div></fieldset> : <ScopeList kind="tasks" items={details.scope?.tasks} />}
                       {["services", "products", "stops"].map(kind => <ScopeList key={kind} kind={kind} items={details.scope?.[kind]} />)}
                     </OfferSection>

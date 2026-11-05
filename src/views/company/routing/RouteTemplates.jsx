@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
@@ -28,7 +29,7 @@ const RouteTemplates = () => {
                 setRouteTemplates(templates);
             } catch (error) {
                 console.error("Error fetching route templates: ", error);
-                toast.error("Failed to fetch route templates.");
+                toast.error(userFacingErrorMessage(error, "Failed to fetch route templates."));
             } finally {
                 setIsLoading(false);
             }
@@ -64,7 +65,7 @@ const RouteTemplates = () => {
             setIsDeleteModalOpen(false);
         } catch (error) {
             console.error("Error deleting template: ", error);
-            toast.error("Failed to delete template.");
+            toast.error(userFacingErrorMessage(error, "Failed to delete template."));
         } finally {
             setIsDeleting(false);
         }

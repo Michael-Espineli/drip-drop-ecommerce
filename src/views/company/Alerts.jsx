@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -297,7 +298,7 @@ const Alerts = () => {
         : "Alert created.");
     } catch (error) {
       console.error("Failed to create alert:", error);
-      toast.error("Failed to create alert.");
+      toast.error(userFacingErrorMessage(error, "Failed to create alert."));
     } finally {
       setSaving(false);
     }
@@ -328,7 +329,7 @@ const Alerts = () => {
       await Promise.all(updates);
     } catch (error) {
       console.error("Failed to update alert:", error);
-      toast.error("Failed to update alert.");
+      toast.error(userFacingErrorMessage(error, "Failed to update alert."));
     }
   };
 

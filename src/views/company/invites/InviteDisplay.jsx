@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import { Link } from "react-router-dom";
@@ -176,7 +177,7 @@ const copyText = async (value, successMessage) => {
     toast.success(successMessage);
   } catch (error) {
     console.error("Error copying invite text:", error);
-    toast.error("Copy failed.");
+    toast.error(userFacingErrorMessage(error, "Copy failed."));
   }
 };
 
@@ -494,7 +495,7 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
         if (!cancelled) {
           setCompany(null);
           setCompanyReviews([]);
-          setCompanyError("Company information could not be loaded.");
+          setCompanyError(userFacingErrorMessage(error, "Company information could not be loaded."));
         }
       } finally {
         if (!cancelled) setCompanyLoading(false);

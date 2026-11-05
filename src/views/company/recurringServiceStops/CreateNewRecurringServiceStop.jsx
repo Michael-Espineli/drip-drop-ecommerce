@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -636,7 +637,7 @@ const CreateNewRecurringServiceStop = () => {
                         requestedServiceLocationId,
                     },
                 });
-                toast.error("Failed to load necessary data.");
+                toast.error(userFacingErrorMessage(error, "Failed to load necessary data."));
             } finally {
                 setIsLoading(false);
             }
@@ -757,7 +758,7 @@ const CreateNewRecurringServiceStop = () => {
                 console.error("Error loading route preview:", error);
                 if (isMounted) {
                     setRoutePreview({ route: null, stops: [] });
-                    setRoutePreviewError("Route preview could not be loaded.");
+                    setRoutePreviewError(userFacingErrorMessage(error, "Route preview could not be loaded."));
                 }
             } finally {
                 if (isMounted) setIsRoutePreviewLoading(false);
@@ -796,7 +797,7 @@ const CreateNewRecurringServiceStop = () => {
                         selectedCustomerId: selectedCustomer.id || selectedCustomer.value || "",
                     },
                 });
-                toast.error("Failed to load service locations.");
+                toast.error(userFacingErrorMessage(error, "Failed to load service locations."));
             }
         }
     };
@@ -967,7 +968,7 @@ const CreateNewRecurringServiceStop = () => {
                     newRSSData,
                 },
             });
-            toast.error('Failed to create stop. Please try again.', { id: toastId || internalId });
+            toast.error(userFacingErrorMessage(error, 'Failed to create stop. Please try again.'), { id: toastId || internalId });
         }
     };
 

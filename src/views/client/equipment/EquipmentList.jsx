@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
@@ -112,7 +113,7 @@ const Header = ({ onBack, onNew }) => (
             <button onClick={onBack} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
                 <ArrowLeftIcon className="w-6 h-6" />
             </button>
-            <h1 className="text-3xl font-bold text-gray-900">My Equipment</h1>
+            <WorkspaceHeader title={<>My Equipment</>} eyebrow="Your pool care" />
         </div>
         <button onClick={onNew} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700">
             <PlusIcon className="w-5 h-5" />

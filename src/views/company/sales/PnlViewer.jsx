@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
@@ -492,7 +493,7 @@ const PnlViewer = () => {
     } catch (error) {
       console.error('Unable to load PNL viewer data', error);
       setErrors([error.message || 'Unable to load PNL viewer data.']);
-      toast.error('PNL viewer data could not be loaded.');
+      toast.error(userFacingErrorMessage(error, 'PNL viewer data could not be loaded.'));
     } finally {
       setLoading(false);
     }

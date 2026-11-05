@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { listenClientRecords } from '../../../utils/clientRecords';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -189,7 +190,7 @@ const ServiceAgreements = () => {
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-950 sm:text-3xl">Estimates</h1>
+          <WorkspaceHeader title={<>Estimates</>} eyebrow="Your pool care" />
           <p className="mt-1 text-sm text-slate-500">
             Review estimates and service agreements from pool service companies.
           </p>

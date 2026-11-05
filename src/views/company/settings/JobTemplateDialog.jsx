@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import "./JobTemplateTheme.css";
 import React, { useState } from "react";
 import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
@@ -66,7 +67,7 @@ export default function JobTemplateDialog({ mode, form, setForm, services, produ
               <ScopeSection title="Services" helper="Add catalog services with their included tasks and pricing.">
                 <Select classNamePrefix="template-select" aria-label="Add a catalog service" value={null} options={services.map((service) => ({ ...service, value: service.id, label: `${service.name} · ${money(service.unitAmountCents)}` }))} isLoading={loadingCatalogs} isDisabled={loadingCatalogs || busy}
                   placeholder="Search services to add…" noOptionsMessage={() => "No available services"}
-                  onChange={(service) => { try { setScope(addServiceToTemplateDraft(scope, service, products)); setDraftError(""); } catch (failure) { setDraftError(failure.message); } }} menuPosition="fixed" styles={{ menuPortal: (base) => ({ ...base, zIndex: 70 }) }} />
+                  onChange={(service) => { try { setScope(addServiceToTemplateDraft(scope, service, products)); setDraftError(""); } catch (failure) { setDraftError(userFacingErrorMessage(failure, failure.message)); } }} menuPosition="fixed" styles={{ menuPortal: (base) => ({ ...base, zIndex: 70 }) }} />
                 {scope.laborLineItems.map((line) => <div key={line.id} className="rounded-lg bg-slate-50 p-3">
                   <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold">{line.name}</p><p className="text-xs text-slate-500">{line.quantity} × {money(line.unitPriceCents)} · {line.taskTemplateIds.length} included tasks</p></div>{removeButton("laborLineItems", line)}</div>
                   <div className="mt-2"><span className="text-xs font-semibold text-slate-600">Included tasks</span>{taskChoices(line.taskTemplateIds, (taskIds) => updateItem("laborLineItems", line.id, { taskTemplateIds: taskIds, taskIds, laborLineTaskIds: taskIds }))}</div>

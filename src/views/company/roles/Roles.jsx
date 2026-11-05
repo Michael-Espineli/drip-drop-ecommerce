@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import React, { useState, useEffect, useContext } from "react";
 import { query, collection, getDocs, doc, setDoc } from "firebase/firestore";
@@ -55,7 +56,7 @@ const Roles = () => {
         setRoleList(roles);
       } catch (fetchError) {
         console.error("Failed to load roles:", fetchError);
-        setError("Failed to load company roles.");
+        setError(userFacingErrorMessage(fetchError, "Failed to load company roles."));
       } finally {
         setLoading(false);
       }
@@ -72,7 +73,7 @@ const Roles = () => {
       const reference = doc(collection(db, "companies", recentlySelectedCompany, "roles"));
       await setDoc(reference, { id: reference.id, name: newName.trim(), description: newDescription.trim(), color: "#0ea5e9", permissionIdList: [], listOfUserIdsToManage: [] });
       navigate(`/company/roles/${reference.id}`);
-    } catch (failure) { setError(failure.code === "permission-denied" ? "This role cannot be created with your current access." : "Could not create the role. Your details are still here."); }
+    } catch (failure) { setError(userFacingErrorMessage(failure, failure.code === "permission-denied" ? "This role cannot be created with your current access." : "Could not create the role. Your details are still here.")); }
     finally { setCreating(false); }
   };
 

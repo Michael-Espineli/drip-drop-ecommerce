@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import {parts as billingDateParts,zonedDate} from '../../../utils/sales/billingCalendar';
 import { canManageCustomerBilling } from '../../../utils/companyPermissionAccess';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
@@ -394,7 +395,7 @@ const SalesBillingSubscriptionDetail = () => {
       ? null
       : Number(draft.applicationFeePercent);
     try { new Intl.DateTimeFormat('en-US',{timeZone:draft.billingTimeZone}).format(new Date()); }
-    catch (_) { toast.error('Choose a valid billing timezone, such as America/Los_Angeles.'); return; }
+    catch (_) { toast.error(userFacingErrorMessage(_, 'Choose a valid billing timezone, such as America/Los_Angeles.')); return; }
     const manualBillingNextInvoiceAt = dateTimeFromInput(draft.manualBillingNextInvoiceAt,draft.billingTimeZone);
 
     if (amountCents < 0) {
@@ -462,7 +463,7 @@ const SalesBillingSubscriptionDetail = () => {
       setEditing(false);
     } catch (saveError) {
       console.error('Unable to update billing subscription', saveError);
-      toast.error(saveError.message || 'Failed to update billing subscription.');
+      toast.error(userFacingErrorMessage(saveError, saveError.message || 'Failed to update billing subscription.'));
     } finally {
       setSaving(false);
     }
@@ -498,7 +499,7 @@ const SalesBillingSubscriptionDetail = () => {
       throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
     } catch (checkoutError) {
       console.error('Unable to start Stripe Checkout', checkoutError);
-      toast.error(checkoutError.message || 'Failed to start Stripe Checkout.');
+      toast.error(userFacingErrorMessage(checkoutError, checkoutError.message || 'Failed to start Stripe Checkout.'));
       setStartingCheckout(false);
     }
   };
@@ -519,7 +520,7 @@ const SalesBillingSubscriptionDetail = () => {
       navigate(`/company/sales/invoices/${result.invoiceId}`);
     } catch (invoiceError) {
       console.error('Unable to create manual recurring invoice', invoiceError);
-      toast.error(invoiceError.message || 'Failed to create manual invoice.');
+      toast.error(userFacingErrorMessage(invoiceError, invoiceError.message || 'Failed to create manual invoice.'));
     } finally {
       setCreatingManualInvoice(false);
     }
@@ -541,7 +542,7 @@ const SalesBillingSubscriptionDetail = () => {
       toast.success(successMessage || result.data?.message || 'Stripe subscription updated.');
     } catch (actionError) {
       console.error(`Unable to run Stripe action ${callableName}`, actionError);
-      toast.error(actionError.message || 'Unable to update Stripe subscription.');
+      toast.error(userFacingErrorMessage(actionError, actionError.message || 'Unable to update Stripe subscription.'));
     } finally {
       setStripeAction('');
     }
@@ -603,7 +604,7 @@ const SalesBillingSubscriptionDetail = () => {
       navigate('/company/sales/subscriptions');
     } catch (deleteError) {
       console.error('Unable to delete billing subscription', deleteError);
-      toast.error(deleteError.message || 'Failed to delete billing subscription.');
+      toast.error(userFacingErrorMessage(deleteError, deleteError.message || 'Failed to delete billing subscription.'));
     } finally {
       setDeleting(false);
     }

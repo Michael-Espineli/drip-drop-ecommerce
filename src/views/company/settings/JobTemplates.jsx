@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import "./JobTemplateTheme.css";
 import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import { DocumentDuplicateIcon, EllipsisVerticalIcon, ChevronDownIcon, PencilSquareIcon, TrashIcon } from "@heroicons/react/24/outline";
@@ -500,7 +501,7 @@ const JobTemplates = () => {
         setTemplates(templatesWithCounts);
       } catch (err) {
         console.error("Error loading job templates:", err);
-        setError("Could not load job templates.");
+        setError(userFacingErrorMessage(err, "Could not load job templates."));
       } finally {
         setLoading(false);
       }
@@ -547,7 +548,7 @@ const JobTemplates = () => {
         );
       } catch (err) {
         console.error("Error loading template picker catalogs:", err);
-        if (!cancelled) setActionError("Could not load service and product pickers.");
+        if (!cancelled) setActionError(userFacingErrorMessage(err, "Could not load service and product pickers."));
       } finally {
         if (!cancelled) {
           setLoadingServiceCatalogItems(false);
@@ -688,7 +689,7 @@ const JobTemplates = () => {
       setActionMessage("Default admin saved.");
     } catch (err) {
       console.error("Error saving default admin:", err);
-      setActionError("Could not save default admin.");
+      setActionError(userFacingErrorMessage(err, "Could not save default admin."));
     } finally {
       setSavingDefaultAdmin(false);
     }
@@ -748,7 +749,7 @@ const JobTemplates = () => {
       });
     } catch (err) {
       console.error("Error loading template details:", err);
-      setActionError("Could not load template details.");
+      setActionError(userFacingErrorMessage(err, "Could not load template details."));
     } finally {
       setDetailLoading(false);
     }
@@ -995,7 +996,7 @@ const JobTemplates = () => {
       setActionMessage("Sales catalog item created and selected.");
     } catch (err) {
       console.error("Error creating sales catalog item from job template:", err);
-      setActionError("Could not create sales catalog item.");
+      setActionError(userFacingErrorMessage(err, "Could not create sales catalog item."));
     } finally {
       setCreatingServiceCatalogItem(false);
     }
@@ -1058,7 +1059,7 @@ const JobTemplates = () => {
       setActionMessage("Database product created and selected.");
     } catch (err) {
       console.error("Error creating product from job template:", err);
-      setActionError("Could not create product.");
+      setActionError(userFacingErrorMessage(err, "Could not create product."));
     } finally {
       setCreatingDatabaseProduct(false);
     }
@@ -1275,7 +1276,7 @@ const JobTemplates = () => {
       setItemForm({});
     } catch (err) {
       console.error("Error saving template detail:", err);
-      setActionError("Could not save template detail.");
+      setActionError(userFacingErrorMessage(err, "Could not save template detail."));
     } finally {
       setSavingItem(false);
     }
@@ -1305,7 +1306,7 @@ const JobTemplates = () => {
       setActionMessage("Template detail deleted.");
     } catch (err) {
       console.error("Error deleting template detail:", err);
-      setActionError("Could not delete template detail.");
+      setActionError(userFacingErrorMessage(err, "Could not delete template detail."));
     } finally {
       setSavingItem(false);
     }
@@ -1350,7 +1351,7 @@ const JobTemplates = () => {
       setActionMessage("Job template deleted.");
     } catch (err) {
       console.error("Error deleting job template:", err);
-      setActionError("Could not delete job template.");
+      setActionError(userFacingErrorMessage(err, "Could not delete job template."));
     } finally {
       setDeletingTemplate(false);
     }
@@ -1428,7 +1429,7 @@ const JobTemplates = () => {
       setTemplateForm(emptyTemplateForm());
     } catch (err) {
       console.error("Error saving job template:", err);
-      setActionError(err.code === "permission-denied" ? "You do not have permission to manage job templates." : err.message || "Could not save job template. Your changes are still here; try again.");
+      setActionError(userFacingErrorMessage(err, err.code === "permission-denied" ? "You do not have permission to manage job templates." : err.message || "Could not save job template. Your changes are still here; try again."));
     } finally {
       setSaving(false);
     }

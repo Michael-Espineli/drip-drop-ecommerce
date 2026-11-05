@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { netPaymentCents, hasPostedPayment, monthlyRecurringCents } from '../../../utils/sales/financialMetrics';
 import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
@@ -626,7 +627,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
       closeRecordPaymentModal();
     } catch (error) {
       console.error('Failed to record payment', error);
-      toast.error(error.message || 'Failed to record payment.');
+      toast.error(userFacingErrorMessage(error, error.message || 'Failed to record payment.'));
       setSavingPayment(false);
     }
   };
@@ -658,7 +659,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
       }
     } catch (error) {
       console.error('Unable to send invoice reminder', error);
-      toast.error(error.message || 'Failed to send invoice reminder.');
+      toast.error(userFacingErrorMessage(error, error.message || 'Failed to send invoice reminder.'));
     } finally {
       setSendingInvoiceId('');
     }
@@ -681,7 +682,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
       navigate(`/company/sales/invoices/${result.invoiceId}`);
     } catch (error) {
       console.error('Unable to create recurring manual invoice', error);
-      toast.error(error.message || 'Failed to create recurring invoice.');
+      toast.error(userFacingErrorMessage(error, error.message || 'Failed to create recurring invoice.'));
     } finally {
       setCreatingInvoiceId('');
     }
@@ -718,7 +719,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
       throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
     } catch (error) {
       console.error('Unable to start subscription Checkout', error);
-      toast.error(error.message || 'Failed to start Stripe Checkout.');
+      toast.error(userFacingErrorMessage(error, error.message || 'Failed to start Stripe Checkout.'));
       setStartingCheckoutId('');
     }
   };

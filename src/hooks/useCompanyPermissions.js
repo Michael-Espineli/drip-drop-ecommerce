@@ -1,6 +1,7 @@
 import { useContext, useCallback } from "react";
 import { Context } from "../context/AuthContext";
 import { appAlert } from "../utils/appDialog";
+import { companyPermissionError, userFacingErrorMessage } from "../utils/permissionErrors";
 
 export default function useCompanyPermissions() {
   const {
@@ -18,8 +19,8 @@ export default function useCompanyPermissions() {
   const requirePermission = useCallback((permissionId, action = "perform this action") => {
     if (can(permissionId)) return true;
     appAlert({
-      title: "Permission Required",
-      message: `You do not have permission to ${action}.`,
+      title: "Drip Drop Permission Required",
+      message: userFacingErrorMessage(companyPermissionError(permissionId, action)),
     });
     return false;
   }, [can]);

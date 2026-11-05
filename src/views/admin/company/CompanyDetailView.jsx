@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -228,7 +229,7 @@ const CompanyDetailView = () => {
       toast.success(successMessage);
     } catch (error) {
       console.error("Failed to update company admin flags:", error);
-      toast.error(error.message || "Failed to update company.");
+      toast.error(userFacingErrorMessage(error, error.message || "Failed to update company."));
     } finally {
       setIsSavingCompanyFlags(false);
     }

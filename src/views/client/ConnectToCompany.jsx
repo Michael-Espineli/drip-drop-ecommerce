@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
+import WorkspaceHeader from '../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
@@ -52,10 +54,10 @@ export default function ConnectToCompany() {
         replace: true
       });
     } catch (err) {
-      setError(err.message || 'Could not connect. Please try again.');
+      setError(userFacingErrorMessage(err, err.message || 'Could not connect. Please try again.'));
     } finally {
       setBusy(false);
     }
   };
-  return <main className="mx-auto max-w-lg space-y-5 p-5"><h1 className="text-2xl font-bold">Connect your pool company</h1><p className="text-slate-600">Connect your existing customer account with {company?.name || 'your pool company'} to see your properties, service history, and billing. Use the same email your company has on file.</p>{error && <p role="alert" className="rounded-lg bg-red-50 p-4 text-red-700">{error}</p>}<button disabled={!company || !customerId || busy} onClick={connect} className="min-h-[44px] w-full rounded-lg bg-blue-600 px-4 font-semibold text-white disabled:opacity-50">{busy ? 'Connecting…' : 'Connect my account'}</button><Link to="/client/dashboard" className="inline-flex min-h-[44px] items-center text-blue-700">Back to home</Link></main>;
+  return <main className="mx-auto max-w-lg space-y-5 p-5"><WorkspaceHeader title={<>Connect your pool company</>} eyebrow="Your pool care" /><p className="text-slate-600">Connect your existing customer account with {company?.name || 'your pool company'} to see your properties, service history, and billing. Use the same email your company has on file.</p>{error && <p role="alert" className="rounded-lg bg-red-50 p-4 text-red-700">{error}</p>}<button disabled={!company || !customerId || busy} onClick={connect} className="min-h-[44px] w-full rounded-lg bg-blue-600 px-4 font-semibold text-white disabled:opacity-50">{busy ? 'Connecting…' : 'Connect my account'}</button><Link to="/client/dashboard" className="inline-flex min-h-[44px] items-center text-blue-700">Back to home</Link></main>;
 }

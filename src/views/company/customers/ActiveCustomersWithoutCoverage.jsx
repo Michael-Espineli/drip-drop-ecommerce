@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { collection, doc, getDocs, query, updateDoc, where } from "firebase/firestore";
@@ -269,7 +270,7 @@ const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
       } catch (loadError) {
         console.error("Unable to load active customer coverage", loadError);
         if (!cancelled) {
-          setError(`Unable to load ${config.title.toLowerCase()}.`);
+          setError(userFacingErrorMessage(loadError, `Unable to load ${config.title.toLowerCase()}.`));
           setCustomers([]);
           setCoveredCustomerIds(new Set());
           setCoverageRecordCount(0);
@@ -347,7 +348,7 @@ const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
       toast.success(`Customer marked inactive. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`);
     } catch (statusError) {
       console.error("Failed to update customer status.", statusError);
-      toast.error("Failed to update customer status.");
+      toast.error(userFacingErrorMessage(statusError, "Failed to update customer status."));
     } finally {
       setDeactivatingCustomerId("");
     }

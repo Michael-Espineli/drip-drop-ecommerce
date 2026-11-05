@@ -1,3 +1,4 @@
+import { jobStatusClass } from '../../utils/statusPresentation';
 import WorkspaceSectionHeader from '../../components/workspace/WorkspaceSectionHeader';
 import WorkspaceHeader from '../../components/workspace/WorkspaceHeader';
 import useCompanyRepairRequests from '../../hooks/useCompanyRepairRequests';
@@ -1102,7 +1103,7 @@ const OperationsOverviewSection = ({ overview }) => (
                                 <p className="truncate text-sm font-bold text-slate-900">{job.internalId || job.jobName || job.customerName || 'Job'}</p>
                                 <p className="mt-0.5 truncate text-xs text-slate-500">{job.customerName || job.description || 'Customer not set'}</p>
                             </div>
-                            <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">
+                            <span className={jobStatusClass(job.operationStatus || job.status || "Open")}>
                                 {job.operationStatus || job.status || 'Open'}
                             </span>
                         </div>
@@ -1285,7 +1286,7 @@ const PersonalDashboardView = ({
                                         <p className="truncate text-sm font-bold text-slate-900">{job.internalId || job.jobName || job.customerName || 'Job'}</p>
                                         <p className="mt-0.5 truncate text-xs text-slate-500">{job.customerName || job.description || 'No customer saved'}</p>
                                     </div>
-                                    <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">
+                                    <span className={jobStatusClass(job.operationStatus || job.status || "Open")}>
                                         {job.operationStatus || 'Open'}
                                     </span>
                                 </div>

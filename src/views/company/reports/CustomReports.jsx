@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   addDoc,
@@ -298,7 +299,7 @@ const CustomReports = () => {
       setCustomReports(normalizeDocs(reportsSnap));
     } catch (error) {
       console.error("Failed to load custom reports:", error);
-      toast.error(`Could not load custom reports: ${error.message}`);
+      toast.error(userFacingErrorMessage(error, `Could not load custom reports: ${error.message}`));
     } finally {
       setIsLoading(false);
     }
@@ -336,7 +337,7 @@ const CustomReports = () => {
         setForm((currentForm) => withTemplateDefaults(currentForm, readingTemplates));
       } catch (error) {
         console.error("Failed to load custom report control options:", error);
-        toast.error(`Could not load report controls: ${error.message}`);
+        toast.error(userFacingErrorMessage(error, `Could not load report controls: ${error.message}`));
       }
     };
 
@@ -462,7 +463,7 @@ const CustomReports = () => {
     }
 
     if (payrollOnlyReportTypes.has(form.reportType) && !canViewPayrollInformation) {
-      toast.error("Payroll reports require payroll information permission.");
+      toast.error("Drip Drop permission denied: Payroll reports require payroll information permission.");
       return false;
     }
 
@@ -533,7 +534,7 @@ const CustomReports = () => {
       await fetchCustomReports();
     } catch (error) {
       console.error("Failed to save custom report:", error);
-      toast.error(`Could not save custom report: ${error.message}`, { id: toastId });
+      toast.error(userFacingErrorMessage(error, `Could not save custom report: ${error.message}`), { id: toastId });
     } finally {
       setIsSaving(false);
     }
@@ -559,7 +560,7 @@ const CustomReports = () => {
       toast.success("Custom report deleted.", { id: toastId });
     } catch (error) {
       console.error("Failed to delete custom report:", error);
-      toast.error(`Could not delete custom report: ${error.message}`, { id: toastId });
+      toast.error(userFacingErrorMessage(error, `Could not delete custom report: ${error.message}`), { id: toastId });
     } finally {
       setDeletingReportId("");
     }

@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -162,7 +163,7 @@ export default function FleetVehicleDetail() {
         });
       } catch (loadError) {
         console.error("Error loading fleet vehicle:", loadError);
-        setError("Could not load vehicle details.");
+        setError(userFacingErrorMessage(loadError, "Could not load vehicle details."));
       } finally {
         setLoading(false);
       }
@@ -230,8 +231,8 @@ export default function FleetVehicleDetail() {
       setLoadedHistoryLabel(`${formatDate(startDate)} - ${formatDate(endDate)}`);
     } catch (loadError) {
       console.error("Error loading vehicle trip history:", loadError);
-      toast.error("Failed to load vehicle trip history.");
-      setRouteFilterError("Could not load trips. Try a smaller date range or check the route indexes.");
+      toast.error(userFacingErrorMessage(loadError, "Failed to load vehicle trip history."));
+      setRouteFilterError(userFacingErrorMessage(loadError, "Could not load trips. Try a smaller date range or check the route indexes."));
     } finally {
       setRoutesLoading(false);
     }

@@ -1,4 +1,4 @@
-const { HttpsError } = require('firebase-functions/v2/https');
+const { HttpsError } = require('./appErrors');
 const text = value => String(value ?? '').trim();
 const key = value => text(value).replace(/[^a-z0-9]/gi, '').toLowerCase();
 const active = value => value?.active !== false && value?.accessActive !== false && value?.isActive !== false && value?.revoked !== true &&

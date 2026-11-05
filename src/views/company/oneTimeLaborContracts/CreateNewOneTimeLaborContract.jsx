@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -109,7 +110,7 @@ const CreateNewOneTimeLaborContract = () => {
 
         } catch (error) {
             console.error("Error creating contract: ", error);
-            toast.error(`Failed to create contract: ${error.message}`, { id: toastId });
+            toast.error(userFacingErrorMessage(error, `Failed to create contract: ${error.message}`), { id: toastId });
         } finally {
             setIsLoading(false);
         }

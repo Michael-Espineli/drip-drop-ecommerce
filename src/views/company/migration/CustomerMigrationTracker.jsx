@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -1179,7 +1180,7 @@ function CustomerMigrationTracker() {
       }));
     } catch (error) {
       console.error("Unable to load customer pipeline:", error);
-      toast.error("Could not load the customer pipeline.");
+      toast.error(userFacingErrorMessage(error, "Could not load the customer pipeline."));
     } finally {
       setLoading(false);
     }
@@ -1247,7 +1248,7 @@ function CustomerMigrationTracker() {
       toast.success(`Added ${committedCount} customer(s) to the pipeline.`);
     } catch (error) {
       console.error("Unable to sync pipeline customers:", error);
-      toast.error("Could not sync customers to the pipeline.");
+      toast.error(userFacingErrorMessage(error, "Could not sync customers to the pipeline."));
     } finally {
       setSavingKey("");
     }
@@ -1280,7 +1281,7 @@ function CustomerMigrationTracker() {
       toast.success(`Added ${createdRows.length} lead(s) to the pipeline.`);
     } catch (error) {
       console.error("Unable to sync leads to pipeline:", error);
-      toast.error("Could not sync leads to the pipeline.");
+      toast.error(userFacingErrorMessage(error, "Could not sync leads to the pipeline."));
     } finally {
       setSavingKey("");
     }
@@ -1326,7 +1327,7 @@ function CustomerMigrationTracker() {
       toast.success("Pipeline row added.");
     } catch (error) {
       console.error("Unable to add manual pipeline row:", error);
-      toast.error("Could not add this pipeline row.");
+      toast.error(userFacingErrorMessage(error, "Could not add this pipeline row."));
     } finally {
       setSavingKey("");
     }
@@ -1407,7 +1408,7 @@ function CustomerMigrationTracker() {
       )));
     } catch (error) {
       console.error("Unable to update pipeline signoff:", error);
-      toast.error("Could not save this signoff.");
+      toast.error(userFacingErrorMessage(error, "Could not save this signoff."));
     } finally {
       setSavingKey("");
     }
@@ -1439,7 +1440,7 @@ function CustomerMigrationTracker() {
       )));
     } catch (error) {
       console.error("Unable to save pipeline note:", error);
-      toast.error("Could not save this note.");
+      toast.error(userFacingErrorMessage(error, "Could not save this note."));
     }
   };
 
@@ -1575,7 +1576,7 @@ function CustomerMigrationTracker() {
       closeSourceModal();
     } catch (error) {
       console.error("Unable to update pipeline source:", error);
-      toast.error("Could not update this source.");
+      toast.error(userFacingErrorMessage(error, "Could not update this source."));
     } finally {
       setSavingKey("");
     }
@@ -1862,7 +1863,7 @@ function CustomerMigrationTracker() {
       closeStatusModal();
     } catch (error) {
       console.error("Unable to update pipeline status:", error);
-      toast.error("Could not update this pipeline status.");
+      toast.error(userFacingErrorMessage(error, "Could not update this pipeline status."));
     } finally {
       setSavingKey("");
     }

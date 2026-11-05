@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { listenClientRecords } from '../../../utils/clientRecords';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -185,7 +186,7 @@ const PartApprovals = () => {
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900 sm:p-6 lg:p-8">
       <div className="w-full space-y-6">
         <section>
-          <h1 className="text-2xl font-bold text-slate-950 sm:text-3xl">Part Approvals</h1>
+          <WorkspaceHeader title={<>Part Approvals</>} eyebrow="Your pool care" />
           <p className="mt-2 text-sm text-slate-600">
             Review requested pool parts before the company purchases or installs them.
           </p>

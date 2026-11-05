@@ -1,3 +1,6 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
@@ -69,7 +72,7 @@ import {
 } from "../../../utils/jobEquipmentScope";
 import { REPAIR_REQUEST_STATUS, getRepairRequestIssuePriority } from "../../../utils/models/RepairRequest";
 
-const selectStyles = {
+const selectStyles = workspaceSelectStyles({
     control: (base, state) => ({
         ...base,
         minHeight: "42px",
@@ -81,7 +84,7 @@ const selectStyles = {
         },
     }),
     menu: (base) => ({ ...base, zIndex: 40 }),
-};
+});
 
 const inputBase = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100";
 
@@ -781,7 +784,7 @@ const BasicWorkOrderCreate = () => {
                 })));
             } catch (error) {
                 console.error("Error loading basic job data:", error);
-                toast.error("Could not load job scheduling form data.");
+                toast.error(userFacingErrorMessage(error, "Could not load job scheduling form data."));
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -894,7 +897,7 @@ const BasicWorkOrderCreate = () => {
                 } : null);
             } catch (error) {
                 console.error("Error loading service locations:", error);
-                toast.error("Could not load service locations.");
+                toast.error(userFacingErrorMessage(error, "Could not load service locations."));
             }
         };
 
@@ -995,7 +998,7 @@ const BasicWorkOrderCreate = () => {
                 });
             } catch (error) {
                 console.error("Error loading location assets:", error);
-                toast.error("Could not load equipment for this service location.");
+                toast.error(userFacingErrorMessage(error, "Could not load equipment for this service location."));
             } finally {
                 if (!cancelled) setLoadingLocationAssets(false);
             }
@@ -1060,7 +1063,7 @@ const BasicWorkOrderCreate = () => {
                 setDescription((current) => current || selectedTemplate.description || "");
             } catch (error) {
                 console.error("Error loading template details:", error);
-                toast.error("Could not load template details.");
+                toast.error(userFacingErrorMessage(error, "Could not load template details."));
             } finally {
                 if (!cancelled) setLoadingTemplateDetails(false);
             }
@@ -2152,7 +2155,7 @@ const BasicWorkOrderCreate = () => {
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating basic job:", error);
-            toast.error(["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : "Failed to create and schedule job.");
+            toast.error(userFacingErrorMessage(error, ["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : "Failed to create and schedule job."));
         } finally {
             setCreating(false);
         }
@@ -2185,12 +2188,12 @@ const BasicWorkOrderCreate = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
             <div className="mx-auto max-w-6xl space-y-5">
-                <div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
+                <WorkspaceRecordHeader title={<>Create and Schedule Job</>} eyebrow="Company operations"><div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                         <Link to="/company/jobs" className="text-sm font-semibold text-blue-700 hover:text-blue-900">
                             Back to Jobs
                         </Link>
-                        <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">Create and Schedule Job</h1>
+
                         <p className="mt-1 text-sm text-slate-500">
                             Choose a template or custom scope, assign a technician, and schedule the first visit.
                         </p>
@@ -2200,7 +2203,7 @@ const BasicWorkOrderCreate = () => {
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated Price</p>
                         <p className="mt-1 text-2xl font-bold text-slate-950">{moneyFromCents(generatedPriceCents)}</p>
                     </div>
-                </div>
+                </div></WorkspaceRecordHeader>
 
                 {requestedTemplateUnavailable && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
                     The requested template is inactive or unavailable to your role. Choose another available template{canUseCustom ? " or create a custom job" : ""}.

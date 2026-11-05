@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import * as XLSX from "xlsx";
@@ -454,7 +455,7 @@ function CustomerExportImport() {
         setManualSkippedRecordIds([]);
         setExpandedPreviewCustomerIds([]);
         setDiagnosticText("");
-        toast.error("Could not parse this workbook.");
+        toast.error(userFacingErrorMessage(error, "Could not parse this workbook."));
       }
     };
 
@@ -677,7 +678,7 @@ function CustomerExportImport() {
       );
     } catch (error) {
       console.error("Failed to import customer export:", error);
-      toast.error("Import failed before all records were saved.");
+      toast.error(userFacingErrorMessage(error, "Import failed before all records were saved."));
     } finally {
       setUploading(false);
     }
@@ -755,7 +756,7 @@ function CustomerExportImport() {
       toast.success(`Deleted ${deletedCount} customer export migration records.`);
     } catch (error) {
       console.error("Failed to delete customer export migration records:", error);
-      toast.error("Could not delete the customer export migration records.");
+      toast.error(userFacingErrorMessage(error, "Could not delete the customer export migration records."));
     } finally {
       setDeletingMigration(false);
     }
@@ -885,7 +886,7 @@ function CustomerExportImport() {
       toast.success("Diagnostic report copied. Paste it back into Codex.");
     } catch (error) {
       console.warn("Could not copy diagnostic report:", error);
-      toast.error("Could not copy automatically. Select and copy the report below.");
+      toast.error(userFacingErrorMessage(error, "Could not copy automatically. Select and copy the report below."));
     }
   };
 
@@ -1226,7 +1227,7 @@ function CustomerExportImport() {
                     toast.success("Diagnostic report copied.");
                   } catch (error) {
                     console.warn("Could not copy diagnostic report:", error);
-                    toast.error("Select and copy the report from the box below.");
+                    toast.error(userFacingErrorMessage(error, "Select and copy the report from the box below."));
                   }
                 }}
                 className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"

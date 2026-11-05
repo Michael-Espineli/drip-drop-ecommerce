@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -231,7 +232,7 @@ const CreateJobFlowLauncher = ({
       }).filter(isActiveJobTemplate));
     } catch (error) {
       console.error("Error fetching job templates:", error);
-      appAlert("Failed to load job templates.");
+      appAlert(userFacingErrorMessage(error, "Failed to load job templates."));
     } finally {
       setLoadingTemplates(false);
     }

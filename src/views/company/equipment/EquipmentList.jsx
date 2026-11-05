@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
@@ -1154,7 +1155,7 @@ export default function EquipmentList() {
         console.error("Error loading equipment schedule template details:", error);
         if (!cancelled) {
           setScheduleTemplateDetails(scheduleTemplateDetailsEmpty());
-          toast.error("Could not load template details.");
+          toast.error(userFacingErrorMessage(error, "Could not load template details."));
         }
       } finally {
         if (!cancelled) setLoadingScheduleTemplateDetails(false);
@@ -1579,7 +1580,7 @@ export default function EquipmentList() {
       } catch (error) {
         console.error("Equipment Data Error!:", error);
         if (!cancelled) {
-          setEquipmentError("Could not load equipment for the selected view.");
+          setEquipmentError(userFacingErrorMessage(error, "Could not load equipment for the selected view."));
           setEquipmentList([]);
           setTypes([]);
           setTopCounts(EMPTY_TOP_COUNTS);
@@ -2535,7 +2536,7 @@ export default function EquipmentList() {
       toast.success("Equipment updated");
     } catch (error) {
       console.error("Error updating equipment:", error);
-      toast.error("Failed to update equipment");
+      toast.error(userFacingErrorMessage(error, "Failed to update equipment"));
     }
   };
 
@@ -2554,7 +2555,7 @@ export default function EquipmentList() {
       toast.success("Notes updated");
     } catch (error) {
       console.error("Error updating equipment notes:", error);
-      toast.error("Failed to update notes");
+      toast.error(userFacingErrorMessage(error, "Failed to update notes"));
     }
   };
 
@@ -2600,7 +2601,7 @@ export default function EquipmentList() {
         ...current,
         [equipment.id]: "Could not save",
       }));
-      toast.error("Failed to update notes");
+      toast.error(userFacingErrorMessage(error, "Failed to update notes"));
     } finally {
       setSavingNoteIds((current) => {
         const next = { ...current };
@@ -2630,7 +2631,7 @@ export default function EquipmentList() {
       toast.success("Status updated");
     } catch (error) {
       console.error("Error updating equipment status:", error);
-      toast.error("Failed to update status");
+      toast.error(userFacingErrorMessage(error, "Failed to update status"));
     }
   };
 
@@ -2774,7 +2775,7 @@ export default function EquipmentList() {
     if (!selectedQuickEquipment || !recentlySelectedCompany) return;
 
     if (!canScheduleTemplateSelf) {
-      toast.error("You do not have permission to schedule template jobs.");
+      toast.error("Drip Drop permission denied: You do not have permission to schedule template jobs.");
       return;
     }
 
@@ -3674,7 +3675,7 @@ export default function EquipmentList() {
       toast.success(`${scheduleJobIntentConfig.label} scheduled.`);
     } catch (error) {
       console.error("Error scheduling equipment job:", error);
-      toast.error(error.code === "job-scope-too-large" ? error.message : `Failed to schedule ${scheduleJobIntentConfig.label.toLowerCase()}.`);
+      toast.error(userFacingErrorMessage(error, error.code === "job-scope-too-large" ? error.message : `Failed to schedule ${scheduleJobIntentConfig.label.toLowerCase()}.`));
     } finally {
       setSchedulingJob(false);
     }
@@ -3738,7 +3739,7 @@ export default function EquipmentList() {
       toast.success("Maintenance record saved");
     } catch (error) {
       console.error("Error creating maintenance history:", error);
-      toast.error("Failed to create maintenance record");
+      toast.error(userFacingErrorMessage(error, "Failed to create maintenance record"));
     }
   };
 
@@ -3812,7 +3813,7 @@ export default function EquipmentList() {
       toast.success("Repair record saved");
     } catch (error) {
       console.error("Error creating repair history:", error);
-      toast.error("Failed to create repair record");
+      toast.error(userFacingErrorMessage(error, "Failed to create repair record"));
     }
   };
 
@@ -3906,7 +3907,7 @@ export default function EquipmentList() {
       XLSX.writeFile(wb, fileName);
     } catch (e) {
       console.error("Excel export failed:", e);
-      appAlert("Excel export failed. Check console for details.");
+      appAlert(userFacingErrorMessage(e, "Excel export failed. Check console for details."));
     }
   };
 

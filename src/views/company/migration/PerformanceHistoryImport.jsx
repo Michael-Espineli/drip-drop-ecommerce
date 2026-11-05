@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import * as XLSX from "xlsx";
@@ -138,7 +139,7 @@ function PerformanceHistoryImport() {
       );
     } catch (error) {
       console.error("Failed to load company users for performance import:", error);
-      toast.error("Could not load company users for technician mapping.");
+      toast.error(userFacingErrorMessage(error, "Could not load company users for technician mapping."));
       setCompanyUsers([]);
     } finally {
       setCompanyUsersLoading(false);
@@ -288,7 +289,7 @@ function PerformanceHistoryImport() {
       } catch (error) {
         console.error("Failed to parse performance history workbook:", error);
         setParseIssues(["Could not read this Excel file as a performance history import workbook."]);
-        toast.error("Could not parse this workbook.");
+        toast.error(userFacingErrorMessage(error, "Could not parse this workbook."));
       }
     };
 
@@ -420,7 +421,7 @@ function PerformanceHistoryImport() {
       toast.success(`Imported ${importableRecords.length} performance history rows.`);
     } catch (error) {
       console.error("Failed to import performance history workbook:", error);
-      toast.error("Performance history import failed before all rows were saved.");
+      toast.error(userFacingErrorMessage(error, "Performance history import failed before all rows were saved."));
     } finally {
       setUploading(false);
     }

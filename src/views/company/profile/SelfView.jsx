@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, lazy } from 'react';
 import Header from './components/Header';
 import { doc, updateDoc, query, collection, getDocs } from 'firebase/firestore';
@@ -102,7 +103,7 @@ const ServiceArea = ({ companyData, editMode, handleChange }) => {
             }
         } catch (error) {
             console.error('Error during geocoding:', error);
-            setError('Error during geocoding. Please check your API key and network connection.');
+            setError(userFacingErrorMessage(error, 'Error during geocoding. Please check your API key and network connection.'));
             return null;
         }
     };

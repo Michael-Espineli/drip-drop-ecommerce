@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { httpsCallable } from "firebase/functions";
@@ -164,7 +165,7 @@ const RepairRequestForm = ({ companyId }) => {
       setPhotos([]);
     } catch (failure) {
       const actionable = ["functions/invalid-argument", "functions/resource-exhausted", "functions/not-found", "functions/aborted"].includes(failure.code);
-      setError(actionable ? failure.message : "We couldn't submit your repair request. Your details are still here. Please try again.");
+      setError(userFacingErrorMessage(failure, actionable ? failure.message : "We couldn't submit your repair request. Your details are still here. Please try again."));
     } finally {
       submitting.current = false;
       setSaving(false);

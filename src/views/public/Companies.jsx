@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
@@ -102,7 +103,7 @@ export default function Companies() {
                 if (!cancelled) setCompanies(Array.isArray(response.companies) ? response.companies : []);
             } catch (loadError) {
                 console.error('Failed to load public companies', loadError);
-                if (!cancelled) setError(loadError.message || 'Could not load companies.');
+                if (!cancelled) setError(userFacingErrorMessage(loadError, loadError.message || 'Could not load companies.'));
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -128,7 +129,7 @@ export default function Companies() {
             toast.success('Public profile link copied.');
         } catch (copyError) {
             console.error('Could not copy public profile link', copyError);
-            toast.error('Could not copy the profile link.');
+            toast.error(userFacingErrorMessage(copyError, 'Could not copy the profile link.'));
         }
     };
 

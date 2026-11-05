@@ -1,3 +1,5 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { writeBatch, doc } from 'firebase/firestore';
@@ -196,7 +198,7 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
             destination.searchParams.set('locationId', serviceLocationId);
             navigate(`${destination.pathname}${destination.search}`);
         } catch (err) {
-            setError('Failed to save. Please try again.');
+            setError(userFacingErrorMessage(err, 'Failed to save. Please try again.'));
             console.error(err);
         } finally {
             setLoading(false);
@@ -214,7 +216,7 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
                     <button type="button" aria-label="Go back" onClick={() => navigate(-1)} className="min-h-[44px] min-w-[44px] p-2 text-gray-600 hover:bg-gray-100 rounded-full">
                         <ArrowLeftIcon className="w-6 h-6" />
                     </button>
-                    <h1 className="text-3xl font-bold text-gray-900">{title}</h1>
+                    <WorkspaceHeader title={<>{title}</>} eyebrow="Your pool care" />
                 </div>
 
                 <form onSubmit={handleSave} className="space-y-8 bg-white rounded-lg shadow-md p-6 md:p-8">

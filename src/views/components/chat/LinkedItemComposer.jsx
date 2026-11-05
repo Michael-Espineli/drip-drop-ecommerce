@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowPathIcon,
@@ -68,7 +69,7 @@ const LinkedItemComposer = ({
       setSelectedItemKey(nextItems[0] ? getItemKey(nextItems[0]) : '');
     } catch (loadError) {
       console.error('Unable to load linked item picker:', loadError);
-      setError('Unable to load records.');
+      setError(userFacingErrorMessage(loadError, 'Unable to load records.'));
       setItems([]);
     } finally {
       setLoading(false);

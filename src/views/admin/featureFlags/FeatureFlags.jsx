@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   collection,
@@ -138,7 +139,7 @@ function FeatureFlags() {
       toast.success(`Updated ${writes.length} feature flags.`);
     } catch (error) {
       console.error(error);
-      toast.error('Failed to create feature flags.');
+      toast.error(userFacingErrorMessage(error, 'Failed to create feature flags.'));
     } finally {
       setSeeding(false);
     }
@@ -229,7 +230,7 @@ function FeatureFlags() {
       toast.success('Feature flag name saved.');
     } catch (error) {
       console.error(error);
-      toast.error('Failed to save feature flag name.');
+      toast.error(userFacingErrorMessage(error, 'Failed to save feature flag name.'));
       setDraftNames((currentDrafts) => ({
         ...currentDrafts,
         [flag.id]: flag.name || '',
@@ -268,7 +269,7 @@ function FeatureFlags() {
       toast.success('Feature flag release date saved.');
     } catch (error) {
       console.error(error);
-      toast.error('Failed to save release date.');
+      toast.error(userFacingErrorMessage(error, 'Failed to save release date.'));
       setDraftReleaseDates((currentDrafts) => ({
         ...currentDrafts,
         [flag.id]: currentValue,
@@ -288,7 +289,7 @@ function FeatureFlags() {
       });
     } catch (error) {
       console.error(error);
-      toast.error('Failed to update feature flag.');
+      toast.error(userFacingErrorMessage(error, 'Failed to update feature flag.'));
     } finally {
       setSaving(flag.id, false);
     }

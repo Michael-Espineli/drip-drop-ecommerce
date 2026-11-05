@@ -131,6 +131,48 @@
       ]
     },
     {
+      "collectionGroup": "activeRoutes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "techId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "serviceStops",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "recurringServiceStopId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "serviceDate",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "serviceStops",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "recurringServiceStopId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "serviceDate",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "serviceStops",
       "queryScope": "COLLECTION",
       "fields": [

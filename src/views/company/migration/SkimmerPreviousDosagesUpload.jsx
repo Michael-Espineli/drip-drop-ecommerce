@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import Select from "react-select";
@@ -860,7 +861,7 @@ function SkimmerPreviousDosagesUpload() {
         setDosageTemplates(dosageTemplatesSnapshot.docs.map((dosageDoc) => ({ id: dosageDoc.id, ...dosageDoc.data() })));
       } catch (error) {
         console.error("Failed to load migration matching data:", error);
-        toast.error("Could not load company data for matching.");
+        toast.error(userFacingErrorMessage(error, "Could not load company data for matching."));
       } finally {
         if (!cancelled) setCompanyDataLoading(false);
       }
@@ -1418,7 +1419,7 @@ function SkimmerPreviousDosagesUpload() {
         toast.success(`Added ${poolName} as a body of water.`);
       } catch (error) {
         console.error("Failed to add Skimmer body of water:", error);
-        toast.error(`Could not add ${poolName}.`);
+        toast.error(userFacingErrorMessage(error, `Could not add ${poolName}.`));
       } finally {
         setCreatingBodyOfWaterIds((current) => {
           const next = { ...current };
@@ -1579,9 +1580,9 @@ function SkimmerPreviousDosagesUpload() {
     } catch (error) {
       console.error("Failed to upload Skimmer service history:", error);
       toast.error(
-        savedCount > 0
+        userFacingErrorMessage(error, savedCount > 0
           ? `Upload stopped after ${savedCount} records. Saved records were removed from the pending list.`
-          : "Upload failed before any records were saved."
+          : "Upload failed before any records were saved.")
       );
     } finally {
       setUploading(false);
@@ -1632,7 +1633,7 @@ function SkimmerPreviousDosagesUpload() {
       toast.success(`Deleted ${deletedCount} Skimmer service history records.`);
     } catch (error) {
       console.error("Failed to delete Skimmer service history records:", error);
-      toast.error("Could not delete the Skimmer service history records.");
+      toast.error(userFacingErrorMessage(error, "Could not delete the Skimmer service history records."));
     } finally {
       setDeletingHistory(false);
     }

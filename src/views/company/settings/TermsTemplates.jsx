@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -248,7 +249,7 @@ const TermsTemplates = () => {
             navigate(`/company/settings/terms-templates/${newTemplate.id}`);
         } catch (error) {
             console.error('Error saving template: ', error);
-            toast.error('Failed to save template.');
+            toast.error(userFacingErrorMessage(error, 'Failed to save template.'));
         } finally {
             setIsSaving(false);
         }
@@ -270,7 +271,7 @@ const TermsTemplates = () => {
             navigate(`/company/settings/terms-templates/${duplicatedTemplate.id}`);
         } catch (error) {
             console.error('Error duplicating template: ', error);
-            toast.error(error.message || 'Failed to duplicate template.');
+            toast.error(userFacingErrorMessage(error, error.message || 'Failed to duplicate template.'));
         } finally {
             setDuplicatingTemplateId('');
         }

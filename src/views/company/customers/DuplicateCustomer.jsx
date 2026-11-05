@@ -1,3 +1,4 @@
+import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { collection, getDocs } from 'firebase/firestore';
@@ -138,7 +139,7 @@ const DuplicateCustomer = () => {
                     }), {})
                 );
             } catch (error) {
-                toast.error(error.message || 'Unable to load customer.');
+                toast.error(userFacingErrorMessage(error, error.message || 'Unable to load customer.'));
                 navigate('/company/customers');
             } finally {
                 setLoading(false);
@@ -237,7 +238,7 @@ const DuplicateCustomer = () => {
             navigate(`/company/customers/details/${result.customerId}/profile`);
         } catch (error) {
             console.error('Customer duplication failed:', error);
-            toast.error(error.message || 'Unable to duplicate customer.', { id: toastId });
+            toast.error(userFacingErrorMessage(error, error.message || 'Unable to duplicate customer.'), { id: toastId });
         } finally {
             setSaving(false);
         }
