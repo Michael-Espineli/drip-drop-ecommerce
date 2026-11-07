@@ -4,6 +4,10 @@ Feature flag: `feature_flag_004` (`Sales`)
 
 Email delivery flag: `feature_flag_012` (`Turn on real emails`)
 
+## Development rollout — November 6, 2026
+
+Development billing/parts functions, additive Firestore rules, hosting and separate verified Stripe platform/Connect test webhooks are deployed to `the-pool-app-dev`. Actual card save/charge/retry/refunds, ACH microdeposit verification/processing/webhook settlement, native checkout API and Stripe subscription invoice editing/credit/void/write-off/full external receipt pass. Real-provider checks fixed v2 callable authentication, an unsupported setup parameter and Stripe's out-of-band paid response shape. Checks: 213 backend, 13 extra compatibility and 651 web tests, scoped lint and development build. The existing 18 test connected accounts still need their own onboarding/capabilities; acceptance used an isolated ready test account. Production remains unchanged. See [current rollout, owner actions and remaining scope](../../outputs/stripe-development-2026-11-06/README.md). The missing-key/local-only notes below describe the earlier snapshot and are superseded for development only.
+
 ## Billing continuation — November 6, 2026 (local review)
 
 Saved card/ACH setup and authorized office collection for DripDrop invoices, Stripe subscription-invoice draft/credit/void/write-off/full external receipt commands, native invoice actions, opt-in non-Stripe collection reminders, dated cash activity, historical balance review and bank-statement payout confirmation are implemented locally. Accounts v1 readiness now derives mode from the server credential and checks ACH separately; new US onboarding requests ACH capability. Production, Stripe configuration and financial records remain unchanged.

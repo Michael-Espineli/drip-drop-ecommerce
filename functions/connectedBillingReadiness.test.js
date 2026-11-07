@@ -15,3 +15,8 @@ test('new owner-created US accounts request bank debit capability during onboard
  await platform.createNewStripeAccount.run({companyId:'new'},{auth:{uid:'owner',token:{email:'owner@example.test'}}});assert.equal(created.country,'US');assert.equal(created.capabilities.us_bank_account_ach_payments.requested,true);assert.equal(db.records.get('companies/new').stripeConnectedAccountId,'acct_new');
 });
 after(async()=>admin.app().delete());
+test('a real v2-style signed-in request reaches readiness without a duplicate ID token in its payload',async()=>{
+ const result=await connected.verifyConnectedAccountBillingReadiness.run({data:{companyId:'company'},auth:{uid:'owner',token:{}},rawRequest:{on(){}}});
+ assert.equal(result.accountId,'acct_company');assert.equal(result.achPaymentsEnabled,false);
+ await assert.rejects(connected.verifyConnectedAccountBillingReadiness.run({data:{companyId:'company',auth:{uid:'owner'}},rawRequest:{on(){}}}),{code:'unauthenticated'});
+});

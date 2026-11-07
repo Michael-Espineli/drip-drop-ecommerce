@@ -1,7 +1,9 @@
 import { CheckoutProvider } from '@stripe/react-stripe-js/checkout';
 import { loadStripe } from '@stripe/stripe-js';
+import {firebaseEnvironment} from '../../../../firebase';
+import {stripePublishableKeyForEnvironment} from '../../../../utils/stripeEnvironment';
 
-const stripePublishableKey = process.env.REACT_APP_STRIPE_PUBLISHABLE_KEY || '';
+const stripePublishableKey = stripePublishableKeyForEnvironment(firebaseEnvironment);
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : Promise.resolve(null);
 
 const SubscriptionCheckOut= () => {

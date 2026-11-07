@@ -1,7 +1,7 @@
+const {legacyCallable}=require('../legacyCallable');
 
 const { onCall } = require('firebase-functions/v2/https');
 const { HttpsError } = require('../appErrors');
-const functions = require("firebase-functions");
 const {getFirestore} = require("firebase-admin/firestore");
 const { defineSecret } = require('firebase-functions/params');
 const { v4: uuidv4 } = require('uuid');
@@ -413,7 +413,7 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
 
 // --- Other functions --- 
 
-exports.createStripeCustomer = functions.https.onCall(async(data, context) => {
+exports.createStripeCustomer = legacyCallable(async(data, context) => {
     const auth = await requireCallableAuth(data, context);
     const receivedData = getCallableData(data);
     const userId = receivedData.userId || auth.uid;
@@ -463,7 +463,7 @@ exports.createStripeCustomer = functions.https.onCall(async(data, context) => {
     }
   });
 
-exports.createStripeSubscription = functions.https.onCall(async(data, context) => {
+exports.createStripeSubscription = legacyCallable(async(data, context) => {
     const auth = await requireCallableAuth(data, context);
     const receivedData = getCallableData(data);
 
@@ -607,7 +607,7 @@ exports.getstripeSubscriptions = onCall(async (request) => {
 
 exports.createSubscriptionCheckoutSessionNewCustomer = exports.createSubscriptionCheckoutSession;
  
-exports.createStripeAccountLink = functions.https.onCall(async(data,context) => {
+exports.createStripeAccountLink = legacyCallable(async(data,context) => {
     const auth = await requireCallableAuth(data, context);
     const receivedData = getCallableData(data);
     const companyId = receivedData.companyId;
@@ -685,7 +685,7 @@ exports.createStripeAccountLink = functions.https.onCall(async(data,context) => 
     }
   });
   
-  exports.createNewStripeAccount = functions.https.onCall(async(data,context) => {
+  exports.createNewStripeAccount = legacyCallable(async(data,context) => {
     const auth = await requireCallableAuth(data, context);
     let receivedData = getCallableData(data);
     const companyId = receivedData.companyId;
@@ -743,7 +743,7 @@ exports.createStripeAccountLink = functions.https.onCall(async(data,context) => 
     }
   });
   
-exports.createSubscriptionPaymentIntent = functions.https.onCall(async(data,context) => {
+exports.createSubscriptionPaymentIntent = legacyCallable(async(data,context) => {
     const auth = await requireCallableAuth(data, context);
     const receivedData = getCallableData(data);
     const stripePriceId = normalizeStripePriceId(receivedData.priceId || receivedData.stripePriceId);

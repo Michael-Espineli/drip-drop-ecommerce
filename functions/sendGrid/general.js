@@ -1,3 +1,4 @@
+const {legacyCallable}=require('../legacyCallable');
 const { HttpsError } = require('../appErrors');
 
 const { onCall } = require("firebase-functions/v2/https");
@@ -1458,7 +1459,7 @@ const buildPublicInspectionReportSnapshot = async (agreement = {}) => {
     };
 };
 
-exports.getPublicServiceAgreement = functions.https.onCall(async (data) => {
+exports.getPublicServiceAgreement = legacyCallable(async (data) => {
     const payload = getCallableData(data);
     const agreementId = String(payload.agreementId || "").trim();
     const accessToken = String(payload.accessToken || payload.reviewToken || "").trim();
@@ -1477,7 +1478,7 @@ exports.getPublicServiceAgreement = functions.https.onCall(async (data) => {
     };
 });
 
-exports.getPublicServiceAgreementInspectionReport = functions.https.onCall(async (data) => {
+exports.getPublicServiceAgreementInspectionReport = legacyCallable(async (data) => {
     const payload = getCallableData(data);
     const agreementId = String(payload.agreementId || "").trim();
     const accessToken = String(payload.accessToken || payload.reviewToken || "").trim();
@@ -1493,7 +1494,7 @@ exports.getPublicServiceAgreementInspectionReport = functions.https.onCall(async
     };
 });
 
-exports.getPublicSalesInvoice = functions.https.onCall(async (data) => {
+exports.getPublicSalesInvoice = legacyCallable(async (data) => {
     const payload = getCallableData(data);
     const invoiceId = String(payload.invoiceId || "").trim();
     const accessToken = String(payload.accessToken || payload.reviewToken || "").trim();
@@ -1533,7 +1534,7 @@ exports.getPublicSalesInvoice = functions.https.onCall(async (data) => {
 });
 
 //----------Send Grid Functions//----------Send Grid Functions
-exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context) => {
+exports.sendServiceAgreementEmail = legacyCallable(async (data, context) => {
     console.log("Send Service Agreement Email");
 
     const callableAuth = await getCallableAuth(
@@ -2112,7 +2113,7 @@ const sendSalesInvoiceEmailCore = async ({
 
 exports.sendSalesInvoiceEmailForAutomation = sendSalesInvoiceEmailCore;
 
-exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => {
+exports.sendSalesInvoiceEmail = legacyCallable(async (data, context) => {
     console.log("Send Sales Invoice Email");
 
     const callableAuth = await getCallableAuth(
@@ -2516,7 +2517,7 @@ exports.sendServiceReportOnFinishCore = sendServiceReportOnFinishCore;
 exports.sendServiceReportOnFinish = functions.https.onCall(
     recurringReportAccess.wrap("report", (payload) => sendServiceReportOnFinishCore(payload))
 );
-exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
+exports.sendJobEstimateEmail = legacyCallable(async (data, context) => {
 
     console.log('Send Job Estiamte Email')
 
@@ -2634,7 +2635,7 @@ exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
     }
 });
 
-exports.sendInvoiceEmail = functions.https.onCall(async (data, context) => {
+exports.sendInvoiceEmail = legacyCallable(async (data, context) => {
 
     console.log('Send Service Report On Finish')
 
@@ -2724,7 +2725,7 @@ exports.sendInvoiceEmail = functions.https.onCall(async (data, context) => {
     }
 });
 
-exports.sendPaymentConfirmationEmail = functions.https.onCall(async (data, context) => {
+exports.sendPaymentConfirmationEmail = legacyCallable(async (data, context) => {
     const callableAuth = await getCallableAuth(data, context, 'Sign in to send a payment confirmation.');
 
     console.log('Send Service Report On Finish')

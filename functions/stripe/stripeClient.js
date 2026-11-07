@@ -19,6 +19,14 @@ const getStripeApiKey = () => {
     );
   }
 
+  const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+  if (project === 'the-pool-app-dev' && !/^(sk|rk)_test_/.test(key)) {
+    throw new HttpsError('failed-precondition', 'Development billing requires a Stripe test key.');
+  }
+  if (project === 'the-pool-app-3e652' && !/^(sk|rk)_live_/.test(key)) {
+    throw new HttpsError('failed-precondition', 'Production billing requires a Stripe live key.');
+  }
+
   return key;
 };
 

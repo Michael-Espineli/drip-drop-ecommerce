@@ -62,7 +62,7 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
   const success=new URL('/customer/payment-method-setup',returnTo.origin);success.searchParams.set('paymentSetup','returned');
   const canceled=new URL('/customer/payment-method-setup',returnTo.origin);canceled.searchParams.set('paymentSetup','canceled');
   const params={mode:'setup',customer:customerIdStripe,payment_method_types:[method==='ach'?'us_bank_account':'card'],...(method==='ach'?{currency:'usd'}:{}),
-   metadata,setup_intent_data:{usage:'off_session',metadata},custom_text:{submit:{message:attempt.consent}},success_url:success.toString(),cancel_url:canceled.toString()};
+   metadata,setup_intent_data:{metadata},custom_text:{submit:{message:attempt.consent}},success_url:success.toString(),cancel_url:canceled.toString()};
   const session=attempt.sessionId?await stripe.checkout.sessions.retrieve(attempt.sessionId,{},options):await stripe.checkout.sessions.create(params,{...options,idempotencyKey:`saved_setup_${profileId}_${attemptRef.id}`});
   await attemptRef.set({sessionId:session.id,status:session.status,setupIntentId:id(session.setup_intent),updatedAt:now()},{merge:true});
   if(session.setup_intent)await syncSetup(id(session.setup_intent),connected);

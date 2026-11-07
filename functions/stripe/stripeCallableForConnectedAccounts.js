@@ -1,7 +1,7 @@
+const {legacyCallable}=require('../legacyCallable');
 
 const { onCall } = require('firebase-functions/v2/https');
 const { HttpsError } = require('../appErrors');
-const functions = require("firebase-functions");
 const functions1 = require('firebase-functions/v1');
 const {getFirestore} = require("firebase-admin/firestore");
 const { defineSecret } = require('firebase-functions/params');
@@ -643,7 +643,7 @@ const prepareLinkedJobAcceptance = async ({
   });
 };
 
-exports.applyJobPlanWorkspace = functions.https.onCall(async (data, context) => {
+exports.applyJobPlanWorkspace = legacyCallable(async (data, context) => {
   const auth = await getCallableAuth(data, context, 'Sign in to update a job plan.');
   const request = getCallableData(data);
   const { companyId, jobId, planId, mode } = request;
@@ -1488,7 +1488,7 @@ const createConnectedAccountStripeObjectForSalesCatalogItem = async ({
   };
 };
 
-exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (data, context) => {
+exports.createStripeObjectForSalesCatalogItem = legacyCallable(async (data, context) => {
   const callableAuth = await getCallableAuth(
     data,
     context,
@@ -1574,7 +1574,7 @@ exports.createStripeObjectForSalesCatalogItem = functions.https.onCall(async (da
   }
 });
 
-exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, context) => {
+exports.acceptSalesServiceAgreement = legacyCallable(async (data, context) => {
   const callableAuth = await getCallableAuth(data, context, 'You must be signed in to accept a service agreement.');
   const receivedData = getCallableData(data);
   const agreementId = receivedData.agreementId;
@@ -2014,7 +2014,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   };
 });
 
-exports.rejectSalesServiceAgreement = functions.https.onCall(async (data, context) => {
+exports.rejectSalesServiceAgreement = legacyCallable(async (data, context) => {
   const callableAuth = await getCallableAuth(data, context, 'You must be signed in to decline a service agreement.');
   const receivedData = getCallableData(data);
   const agreementId = String(receivedData.agreementId || '').trim();
@@ -2097,7 +2097,7 @@ exports.rejectSalesServiceAgreement = functions.https.onCall(async (data, contex
   };
 });
 
-exports.rejectPublicSalesServiceAgreement = functions.https.onCall(async (data, context) => {
+exports.rejectPublicSalesServiceAgreement = legacyCallable(async (data, context) => {
   const receivedData = getCallableData(data);
   const agreementId = String(receivedData.agreementId || '').trim();
   const accessToken = String(receivedData.accessToken || receivedData.reviewToken || '').trim();
@@ -2203,7 +2203,7 @@ exports.rejectPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   };
 });
 
-exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, context) => {
+exports.acceptPublicSalesServiceAgreement = legacyCallable(async (data, context) => {
   const receivedData = getCallableData(data);
   const agreementId = receivedData.agreementId;
   const accessToken = String(receivedData.accessToken || receivedData.reviewToken || '').trim();
@@ -2638,7 +2638,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   };
 });
 
-exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
+exports.deleteSalesAgreement = legacyCallable(async (data, context) => {
   const callableAuth = await getCallableAuth(data, context, 'You must be signed in to delete a service agreement.');
   const receivedData = getCallableData(data);
   const agreementId = String(receivedData.agreementId || '').trim();
@@ -2731,12 +2731,12 @@ exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
   };
 });
 
-exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(async (data, context) => {
+exports.createSalesBillingSubscriptionCheckoutSession = legacyCallable(async (data, context) => {
   const auth = await getCallableAuth(data, context, 'Sign in to start billing setup.');
   return require('../subscriptionCheckout').createSubscriptionCheckout(db, stripe).start({ auth, data: getCallableData(data) });
 });
 
-exports.syncSalesBillingSubscriptionFromStripe = functions.https.onCall(async (data, context) => {
+exports.syncSalesBillingSubscriptionFromStripe = legacyCallable(async (data, context) => {
   const receivedData = data.data || data;
   const { billingSubscriptionId, companyId } = receivedData;
   const { subscriptionRef, subscription } = await requireCompanyManagerForSalesSubscription({
@@ -2784,7 +2784,7 @@ exports.syncSalesBillingSubscriptionFromStripe = functions.https.onCall(async (d
   }
 });
 
-exports.cancelSalesBillingSubscription = functions.https.onCall(async (data, context) => {
+exports.cancelSalesBillingSubscription = legacyCallable(async (data, context) => {
   const receivedData = data.data || data;
   const {
     billingSubscriptionId,
@@ -2841,7 +2841,7 @@ exports.cancelSalesBillingSubscription = functions.https.onCall(async (data, con
   }
 });
 
-exports.resumeSalesBillingSubscription = functions.https.onCall(async (data, context) => {
+exports.resumeSalesBillingSubscription = legacyCallable(async (data, context) => {
   const receivedData = data.data || data;
   const { billingSubscriptionId, companyId } = receivedData;
   const { subscriptionRef, subscription } = await requireCompanyManagerForSalesSubscription({
@@ -2892,7 +2892,7 @@ exports.resumeSalesBillingSubscription = functions.https.onCall(async (data, con
   }
 });
 
-exports.updateSalesBillingSubscriptionStripeItems = functions.https.onCall(async (data, context) => {
+exports.updateSalesBillingSubscriptionStripeItems = legacyCallable(async (data, context) => {
   const receivedData = data.data || data;
   const {
     billingSubscriptionId,
@@ -2940,7 +2940,7 @@ exports.updateSalesBillingSubscriptionStripeItems = functions.https.onCall(async
 });
 
 
-exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(data, context) => {
+exports.verifyConnectedAccountBillingReadiness = legacyCallable(async(data, context) => {
     const callableAuth = await getCallableAuth(
       data,
       context,
@@ -3098,7 +3098,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
 
 
 
-exports.getProductList = functions.https.onCall(async(data,context) => {
+exports.getProductList = legacyCallable(async(data,context) => {
     const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
       data,
       context,
@@ -3125,7 +3125,7 @@ exports.getProductList = functions.https.onCall(async(data,context) => {
     }
   });
 
-exports.createNewProduct = functions.https.onCall(async(data,context) => {
+exports.createNewProduct = legacyCallable(async(data,context) => {
     const { connectedAccount, companyId, receivedData } = await requireManagedConnectedAccount({
       data,
       context,
@@ -3177,7 +3177,7 @@ exports.createNewProduct = functions.https.onCall(async(data,context) => {
   });
 
   //------------------CRUD Price------------------
-  exports.createNewPrice = functions.https.onCall(async(data,context) => {
+  exports.createNewPrice = legacyCallable(async(data,context) => {
     const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
       data,
       context,
@@ -3201,7 +3201,7 @@ exports.createNewProduct = functions.https.onCall(async(data,context) => {
       throw new HttpsError('internal', error.message || 'Unable to create connected-account price.');
     }
   });
-  exports.getPriceList = functions.https.onCall(async(data,context) => {
+  exports.getPriceList = legacyCallable(async(data,context) => {
     const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
       data,
       context,
@@ -3236,7 +3236,7 @@ exports.createNewProduct = functions.https.onCall(async(data,context) => {
   });
 
   
-exports.getDefaultPrice = functions.https.onCall(async(data,context) => {
+exports.getDefaultPrice = legacyCallable(async(data,context) => {
     const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
       data,
       context,
@@ -3262,18 +3262,18 @@ exports.getDefaultPrice = functions.https.onCall(async(data,context) => {
   });
   //------------------CRUD Contract------------------
 
-exports.acceptContract = functions.https.onCall(async(data,context) => {
+exports.acceptContract = legacyCallable(async(data,context) => {
     await requireManagedConnectedAccount({data,context,message:'Sign in to manage billing.'});
     throw new HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
   });
   
 
-exports.acceptContract2 = functions.https.onCall(async(data,context) => {
+exports.acceptContract2 = legacyCallable(async(data,context) => {
     await requireManagedConnectedAccount({data,context,message:'Sign in to manage billing.'});
     throw new HttpsError('failed-precondition','Use the agreement’s current billing setup. Legacy contract checkout cannot create an untracked recurring charge.');
   });
   
-  exports.getSubcriptionList = functions.https.onCall(async(data,context) => {
+  exports.getSubcriptionList = legacyCallable(async(data,context) => {
     const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
       data,
       context,
@@ -3304,7 +3304,7 @@ exports.acceptContract2 = functions.https.onCall(async(data,context) => {
   }); 
   
   //------------------CRUD Customer------------------
-  exports.setUpConnectedAccountCustomer = functions.https.onCall(async(data,context) => {
+  exports.setUpConnectedAccountCustomer = legacyCallable(async(data,context) => {
     const { connectedAccount, receivedData } = await requireManagedConnectedAccount({
       data,
       context,

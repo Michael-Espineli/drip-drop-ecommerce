@@ -2,7 +2,7 @@
   "name": "functions",
   "description": "Cloud Functions for Firebase",
   "scripts": {
-    "test:billing": "node --test connectedBillingReadiness.test.js collectionReminders.test.js savedCustomerPayments.test.js stripeInvoiceCommands.test.js billingReconciliation.test.js salesInvoiceCommands.test.js billingCallables.test.js billingAcceptance.test.js billingRepairs.test.js salesPaymentCommands.test.js salesPaymentReceipts.test.js stripeWebhookSetup.test.js jobInvoiceCreation.test.js homeownerPortal.test.js subscriptionCheckout.test.js stripeLifecycle.test.js manualRecurringBilling.test.js payoutReconciliation.test.js jobBilling.test.js nativePlatformBilling.test.js partApprovalBilling.test.js partApprovalEmail.test.js recurringPartCharges.test.js",
+    "test:billing": "node --test legacyCallable.test.js stripeEnvironment.test.js emailDelivery.test.js connectedBillingReadiness.test.js collectionReminders.test.js savedCustomerPayments.test.js stripeInvoiceCommands.test.js billingReconciliation.test.js salesInvoiceCommands.test.js billingCallables.test.js billingAcceptance.test.js billingRepairs.test.js salesPaymentCommands.test.js salesPaymentReceipts.test.js stripeWebhookSetup.test.js jobInvoiceCreation.test.js homeownerPortal.test.js subscriptionCheckout.test.js stripeLifecycle.test.js manualRecurringBilling.test.js payoutReconciliation.test.js jobBilling.test.js nativePlatformBilling.test.js partApprovalBilling.test.js partApprovalEmail.test.js recurringPartCharges.test.js",
     "test:job-plans": "node --test jobPlanWorkspace.test.js jobScopePricing.test.js",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",

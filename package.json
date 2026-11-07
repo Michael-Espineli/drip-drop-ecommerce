@@ -44,7 +44,7 @@
     "start:emulate": "REACT_APP_FIREBASE_ENV=development REACT_APP_USE_FIREBASE_EMULATORS=true react-scripts start",
     "start:prod-config": "REACT_APP_FIREBASE_ENV=production react-scripts start",
     "build": "npm run build:prod",
-    "build:dev": "REACT_APP_FIREBASE_ENV=development react-scripts build",
+    "build:dev": "node scripts/build-development.cjs",
     "build:prod": "REACT_APP_FIREBASE_ENV=production react-scripts build",
     "deploy:dev": "npm run build:dev && firebase deploy --only hosting,functions,storage,firestore:rules --project development",
     "deploy:dev:rules": "firebase deploy --only storage,firestore:rules --project development",

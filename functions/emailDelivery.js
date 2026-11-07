@@ -14,17 +14,18 @@ const isFeatureFlagEnabled = async (flagId) => {
 const resolveCompanyEmailDeliveryRecipient = (intendedTo) => {
   const recipient = String(intendedTo || "").trim();
   if (!recipient) throw new Error("A company email recipient is required.");
+  const forceTest = process.env.FORCE_TEST_EMAIL_DELIVERY === 'true';
   return {
     intendedTo: recipient,
-    actualTo: recipient,
-    testMode: false,
-    realEmailsEnabled: true,
+    actualTo: forceTest ? EMAIL_TEST_RECIPIENT : recipient,
+    testMode: forceTest,
+    realEmailsEnabled: !forceTest,
     realEmailsFeatureFlagId: null,
   };
 };
 
 const resolveEmailDeliveryRecipient = async (intendedTo) => {
-  const realEmailsEnabled = await isFeatureFlagEnabled(REAL_EMAILS_FEATURE_FLAG_ID);
+  const realEmailsEnabled = process.env.FORCE_TEST_EMAIL_DELIVERY !== 'true' && await isFeatureFlagEnabled(REAL_EMAILS_FEATURE_FLAG_ID);
   const normalizedIntendedTo = String(intendedTo || "").trim();
 
   return {

@@ -85,7 +85,10 @@ function createStripeInvoiceCommands(db,stripe,now=()=>new Date(),sync){
    else if(action==='credit')result=await stripe.creditNotes.create(params,keyOptions);
    else result=await stripe.invoices.pay(command.stripeInvoiceId,params,keyOptions);
    await commandRef.set({processorResult:{id:result.id,status:result.status || 'accepted'},status:'processorAccepted'},{merge:true});
-   if(action==='recordExternalPayment'&&(result.amount_paid!==payment.amountCents||result.paid_out_of_band!==true))await invoiceRef.set({paymentReviewRequired:true,paymentReviewReason:'externalStripeBalanceChanged'},{merge:true});
+   // Stripe can mark paid_out_of_band invoices paid while amount_paid remains
+   // zero and amount_remaining retains the original balance. The immutable
+   // command is the receipt evidence; Stripe confirms the paid transition.
+   if(action==='recordExternalPayment'&&(result.status!=='paid'||result.paid_out_of_band!==true||Number(result.amount_paid)>0&&result.amount_paid!==payment.amountCents))await invoiceRef.set({paymentReviewRequired:true,paymentReviewReason:'externalStripeBalanceChanged'},{merge:true});
   }
   if(action==='recordExternalPayment')await invoiceRef.set({externalPaymentDetails:{...payment,actorUserId:command.actorUserId,commandId}},{merge:true});
   const event={id:`invoice_command_${hash(commandRef.path)}`,type:'invoice.updated',account:command.connectedAccount,data:{object:{id:command.stripeInvoiceId}}};

@@ -58,7 +58,7 @@ test('a hostile payment callback cannot change another company or customer balan
 test('independent ACH setup is Stripe hosted, off-session, auditable, and never stores raw bank details',async()=>{
  const f=fixture('us_bank_account'),setupRequest=request({requestId:'setup',paymentMethodType:'ach',returnUrl:'https://dripdrop-poolapp.com/company/sales/invoices/invoice'});
  const first=await f.worker.setup(setupRequest);assert.equal(first.url,'https://checkout.stripe.com/test');const params=f.calls[0].setup;
- assert.equal(params.mode,'setup');assert.deepEqual(params.payment_method_types,['us_bank_account']);assert.equal(params.setup_intent_data.usage,'off_session');assert.match(params.custom_text.submit.message,/does not pay an invoice today/);
+ assert.equal(params.mode,'setup');assert.deepEqual(params.payment_method_types,['us_bank_account']);assert.equal(params.setup_intent_data.usage,undefined); // Checkout setup mode creates an off-session SetupIntent by default.assert.match(params.custom_text.submit.message,/does not pay an invoice today/);
  assert.equal(new URL(params.success_url).pathname,'/customer/payment-method-setup');assert.equal(new URL(params.cancel_url).pathname,'/customer/payment-method-setup');
  f.stripe.setupIntent={id:'seti_saved',metadata:params.setup_intent_data.metadata,customer:'cus_saved',payment_method:'pm_saved',mandate:'mandate_bank',usage:'off_session',status:'succeeded',created:Math.floor(now.getTime()/1000)};
  f.methods.pm_saved.us_bank_account.account_number='should-not-be-saved';await f.worker.syncSetup('seti_saved','acct_pool');

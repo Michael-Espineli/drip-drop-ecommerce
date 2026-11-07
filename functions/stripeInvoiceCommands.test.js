@@ -37,3 +37,9 @@ test('draft edits require paused finalization and only known Stripe lines; voids
 test('another mutation and changed retry cannot override an uncertain Stripe request',async()=>{
  const f=fixture();f.lose();await assert.rejects(f.worker.manage(request()));await assert.rejects(f.worker.manage(request({requestId:'other',action:'void'})),/original request/);await assert.rejects(f.worker.manage(request({amountCents:2000})),{code:'already-exists'});assert.equal(f.calls.length,1);
 });
+test('out-of-band paid confirmation accepts Stripe zero payment fields without creating a false balance review',async()=>{
+ const f=fixture();f.stripe.invoices.pay=async()=>({id:'in_invoice',status:'paid',paid_out_of_band:true,amount_paid:0,amount_remaining:10000});
+ await f.worker.manage(request({action:'recordExternalPayment',payment:{amountCents:10000,method:'check',referenceNumber:'Check 123',receivedAtMillis:now.getTime()}}));
+ assert.equal(f.db.records.get('salesInvoices/invoice').paymentReviewRequired,undefined);
+ assert.equal(f.db.records.get('salesInvoices/invoice').externalPaymentDetails.amountCents,10000);
+});

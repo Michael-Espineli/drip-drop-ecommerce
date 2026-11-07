@@ -49,3 +49,12 @@ test("the company invitation sender delivers live while customer messages remain
   assert.equal((await resolveEmailDeliveryRecipient("client@example.test")).actualTo, "mespineli@dripdrop-poolapp.com");
 });
 after(() => admin.app().delete());
+test('development override redirects company and customer messages even when live email flags are enabled',async()=>{
+ const previous=process.env.FORCE_TEST_EMAIL_DELIVERY;
+ process.env.FORCE_TEST_EMAIL_DELIVERY='true';
+ try{
+  db.set('featureFlags/feature_flag_012',{enabled:true});
+  assert.equal((await resolveEmailDeliveryRecipient('client@example.test')).actualTo,'mespineli@dripdrop-poolapp.com');
+  const company=resolveCompanyEmailDeliveryRecipient('staff@example.test');assert.equal(company.actualTo,'mespineli@dripdrop-poolapp.com');assert.equal(company.testMode,true);
+ }finally{if(previous===undefined)delete process.env.FORCE_TEST_EMAIL_DELIVERY;else process.env.FORCE_TEST_EMAIL_DELIVERY=previous;}
+});
