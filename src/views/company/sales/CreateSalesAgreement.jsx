@@ -1,5 +1,5 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
 import { collection, doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
@@ -8,7 +8,6 @@ import {
   FaFileSignature,
   FaPlus,
   FaSave,
-  FaTimes,
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
@@ -34,8 +33,12 @@ import {
   rateTypeOptions,
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
-import { dosageLabel, sortDosageTemplates } from '../../../utils/dosageItemLinks';
-import { applyTermsTemplateAgreementDefaults } from '../../../utils/terms/termsTemplateAgreementDefaults';
+import { sortDosageTemplates } from '../../../utils/dosageItemLinks';
+import { applyTermsTemplateAgreementDefaults, termsTemplateDefaultsFromAgreementDraft } from '../../../utils/terms/termsTemplateAgreementDefaults';
+import ChemicalDosagePicker from './ChemicalDosagePicker';
+import SalesCatalogItems from './SalesCatalogItems';
+import TermsTemplateEditorDialog from '../settings/TermsTemplateEditorDialog';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -85,15 +88,6 @@ const normalizeCommaList = (value) => (
       .map((item) => String(item || '').trim())
       .filter(Boolean)
   ))
-);
-
-const dosageTemplateKeys = (template = {}) => (
-  [
-    template.id,
-    template.templateId,
-    template.dosageTemplateId,
-    template.universalTemplateId,
-  ].map((value) => String(value || '').trim()).filter(Boolean)
 );
 
 const termDescription = (term) => {
@@ -326,14 +320,14 @@ const customerRelationshipId = (customer = {}) => (
 );
 
 const leadCustomerId = (lead = {}) => (
-  lead.companyCustomerId ||
-  lead.customerId ||
+  lead?.companyCustomerId ||
+  lead?.customerId ||
   ''
 );
 
 const leadServiceLocationId = (lead = {}) => (
-  lead.companyServiceLocationId ||
-  lead.serviceLocationId ||
+  lead?.companyServiceLocationId ||
+  lead?.serviceLocationId ||
   ''
 );
 
@@ -413,120 +407,10 @@ const selectStyles = {
   }),
 };
 
-const ChemicalDosagePicker = ({
-  id,
-  label,
-  selectedIds = [],
-  dosageTemplates = [],
-  loading = false,
-  onChange,
-}) => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const normalizedSelectedIds = normalizeCommaList(selectedIds);
-  const selectedSet = new Set(normalizedSelectedIds);
-  const templateById = new Map();
-
-  dosageTemplates.forEach((template) => {
-    dosageTemplateKeys(template).forEach((key) => templateById.set(key, template));
-  });
-
-  const filteredTemplates = dosageTemplates.filter((template) => (
-    dosageLabel(template).toLowerCase().includes(searchTerm.trim().toLowerCase())
-  ));
-
-  const toggleSelection = (dosageId) => {
-    const nextIds = selectedSet.has(dosageId)
-      ? normalizedSelectedIds.filter((currentId) => currentId !== dosageId)
-      : [...normalizedSelectedIds, dosageId];
-
-    onChange(nextIds);
-  };
-
-  return (
-    <div className="rounded-md border border-slate-200 bg-white p-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <label className="text-sm font-semibold text-slate-700" htmlFor={id}>
-          {label}
-        </label>
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {normalizedSelectedIds.length} selected
-        </span>
-      </div>
-
-      {normalizedSelectedIds.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {normalizedSelectedIds.map((dosageId) => {
-            const template = templateById.get(dosageId);
-            const labelText = template ? dosageLabel(template) : dosageId;
-            return (
-              <span
-                key={dosageId}
-                className="inline-flex max-w-full items-center gap-2 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800"
-              >
-                <span className="truncate">{labelText}</span>
-                <button
-                  type="button"
-                  onClick={() => toggleSelection(dosageId)}
-                  className="text-blue-500 transition hover:text-rose-600"
-                  aria-label={`Remove ${labelText}`}
-                >
-                  <FaTimes className="text-[10px]" />
-                </button>
-              </span>
-            );
-          })}
-        </div>
-      )}
-
-      <input
-        id={id}
-        type="search"
-        value={searchTerm}
-        onChange={(event) => setSearchTerm(event.target.value)}
-        className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-        placeholder="Search dosage templates"
-      />
-
-      <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-slate-50">
-        {loading ? (
-          <div className="p-3 text-sm text-slate-500">Loading dosage templates...</div>
-        ) : filteredTemplates.length ? (
-          filteredTemplates.map((template) => {
-            const dosageId = dosageTemplateKeys(template)[0];
-            if (!dosageId) return null;
-
-            return (
-              <label
-                key={dosageId}
-                className="flex cursor-pointer items-start gap-3 border-b border-slate-200 px-3 py-2 text-sm last:border-b-0 hover:bg-blue-50"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedSet.has(dosageId)}
-                  onChange={() => toggleSelection(dosageId)}
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="min-w-0">
-                  <span className="block truncate font-semibold text-slate-900">{dosageLabel(template)}</span>
-                  {template.chemType && (
-                    <span className="block truncate text-xs text-slate-500">{template.chemType}</span>
-                  )}
-                </span>
-              </label>
-            );
-          })
-        ) : (
-          <div className="p-3 text-sm text-slate-500">
-            No dosage templates found.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
 const CreateSalesAgreement = () => {
   const navigate = useNavigate();
+  const { can } = useCompanyPermissions();
   const [searchParams] = useSearchParams();
   const {
     recentlySelectedCompany,
@@ -563,6 +447,18 @@ const CreateSalesAgreement = () => {
   const [sourceServiceStop, setSourceServiceStop] = useState(null);
   const [sourceContextLoaded, setSourceContextLoaded] = useState(false);
   const [sourcePrefillApplied, setSourcePrefillApplied] = useState(false);
+  const [templateEditor, setTemplateEditor] = useState(null);
+  const templateEditorOpen = useRef(false);
+  const appliedTemplateTerms = useRef('');
+  const [catalogEditor, setCatalogEditor] = useState(null);
+  const canCreateCatalogItem = ['24', '28', '72', '404', '920'].some((permission) => can(permission));
+  const canEditCatalogItem = can('404');
+
+  useEffect(() => {
+    templateEditorOpen.current = false;
+    setTemplateEditor(null);
+    setCatalogEditor(null);
+  }, [recentlySelectedCompany]);
 
   const [form, setForm] = useState({
     title: '',
@@ -737,7 +633,7 @@ const CreateSalesAgreement = () => {
 
   useEffect(() => {
     if (sourcePrefillApplied) return;
-    if (!sourceContextLoaded) return;
+    if (loading || !sourceContextLoaded) return;
     if (!sourceLeadId && !sourceServiceStopId && !queryCustomerId && !queryServiceLocationId) return;
 
     const customerId = queryCustomerId || leadCustomerId(sourceLead) || sourceServiceStop?.customerId || '';
@@ -778,6 +674,7 @@ const CreateSalesAgreement = () => {
     setSourcePrefillApplied(true);
   }, [
     customers,
+    loading,
     queryCustomerId,
     queryServiceLocationId,
     sourceContextLoaded,
@@ -803,6 +700,8 @@ const CreateSalesAgreement = () => {
         setTermsTemplates(templates);
         setLoadingTermsTemplates(false);
         setForm((current) => {
+          // Opening an editor must not change the agreement, even if a local save snapshot arrives.
+          if (templateEditorOpen.current || current.terms.trim() || current.termsList.length) return current;
           const nextTemplateId = current.termsTemplateId || templates[0]?.id || '';
           const nextTemplate = templates.find((template) => template.id === nextTemplateId) || null;
           const shouldApplyTemplate = !current.termsTemplateId && nextTemplate;
@@ -833,6 +732,7 @@ const CreateSalesAgreement = () => {
 
   useEffect(() => {
     if (!recentlySelectedCompany || !form.termsTemplateId) {
+      appliedTemplateTerms.current = '';
       setForm((current) => ({
         ...current,
         termsList: [],
@@ -840,6 +740,7 @@ const CreateSalesAgreement = () => {
       setTermsLoading(false);
       return undefined;
     }
+    if (appliedTemplateTerms.current === `${recentlySelectedCompany}/${form.termsTemplateId}`) return undefined;
 
     let isActive = true;
     const templateId = form.termsTemplateId;
@@ -935,6 +836,42 @@ const CreateSalesAgreement = () => {
     }));
   };
 
+  const openTemplateEditor = (template = null, initialDraft = null) => {
+    if (!recentlySelectedCompany || !can(template ? '884' : '882')) return;
+    templateEditorOpen.current = true;
+    setTemplateEditor({ template, initialDraft });
+  };
+
+  const closeTemplateEditor = () => {
+    templateEditorOpen.current = false;
+    setTemplateEditor(null);
+  };
+
+  const handleTemplateSaved = (template, templateTerms) => {
+    appliedTemplateTerms.current = `${recentlySelectedCompany}/${template.id}`;
+    setTermsTemplates((current) => [...current.filter((item) => item.id !== template.id), template]
+      .sort((left, right) => left.name.localeCompare(right.name)));
+    setForm((current) => applyTermsTemplateAgreementDefaults({
+      ...current,
+      termsTemplateId: template.id,
+      termsTemplateName: template.name,
+      termsTemplateDescription: template.description,
+      terms: template.content,
+      termsList: normalizeAgreementTerms(templateTerms),
+    }, template));
+    closeTemplateEditor();
+    toast.success('Template saved and applied to this agreement.');
+  };
+
+  const handleCatalogSaved = (item) => {
+    setCatalogItems((current) => [...current.filter((entry) => entry.id !== item.id), item]
+      .sort((left, right) => left.name.localeCompare(right.name)));
+    setSelectedCatalogItemId(item.id);
+    setSelectedCatalogQuantity(String(item.defaultQuantity || 1));
+    setShowCatalogItemSelector(true);
+    setCatalogEditor(null);
+  };
+
   const applyTermsTemplateToForm = async (templateId) => {
     const template = termsTemplates.find((item) => item.id === templateId) || null;
 
@@ -959,6 +896,7 @@ const CreateSalesAgreement = () => {
 
     try {
       const templateTerms = recentlySelectedCompany ? await getTerms(recentlySelectedCompany, template.id) : [];
+      appliedTemplateTerms.current = `${recentlySelectedCompany}/${template.id}`;
       setForm((current) => (
         applyTermsTemplateAgreementDefaults(
           {
@@ -1373,7 +1311,7 @@ const CreateSalesAgreement = () => {
                     id="termsTemplateId"
                     value={form.termsTemplateId}
                     onChange={(event) => applyTermsTemplateToForm(event.target.value)}
-                    disabled={loadingTermsTemplates || applyingTermsTemplate}
+                    disabled={loadingTermsTemplates || applyingTermsTemplate || termsLoading}
                     className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                   >
                     <option value="">
@@ -1383,6 +1321,10 @@ const CreateSalesAgreement = () => {
                       <option key={template.id} value={template.id}>{template.name}</option>
                     ))}
                   </select>
+                  <div className="mt-2 flex flex-wrap gap-3">
+                    {can('882') && <button type="button" onClick={() => openTemplateEditor()} disabled={!recentlySelectedCompany || applyingTermsTemplate || termsLoading} className="text-sm font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50">Create Template</button>}
+                    {can('884') && <button type="button" onClick={() => openTemplateEditor(selectedTemplate)} disabled={!selectedTemplate || applyingTermsTemplate || termsLoading} className="text-sm font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50">Edit Template</button>}
+                  </div>
                   {applyingTermsTemplate && (
                     <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
                   )}
@@ -1512,9 +1454,14 @@ const CreateSalesAgreement = () => {
                     Customer-facing pricing rows for this service agreement.
                   </p>
                 </div>
-                <Link to="/company/sales/catalog-items" className="text-sm font-semibold text-blue-700 hover:text-blue-800">
-                  Manage catalog
-                </Link>
+                {canCreateCatalogItem && <button
+                  type="button"
+                  onClick={() => setCatalogEditor({ item: null })}
+                  disabled={!recentlySelectedCompany}
+                  className="text-sm font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50"
+                >
+                  Create Catalog Item
+                </button>}
               </div>
 
               <div className="mt-4 space-y-3">
@@ -1607,7 +1554,7 @@ const CreateSalesAgreement = () => {
                 </div>
 
                 {showCatalogItemSelector && (
-                  <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_120px_auto]">
+                  <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_120px]">
                     <select
                       value={selectedCatalogItemId}
                       onChange={(event) => {
@@ -1635,6 +1582,15 @@ const CreateSalesAgreement = () => {
                       className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                       aria-label="Catalog item quantity"
                     />
+                    <div className="flex flex-wrap justify-end gap-2 sm:col-span-2">
+                    {canEditCatalogItem && <button
+                      type="button"
+                      onClick={() => setCatalogEditor({ item: selectedCatalogItem })}
+                      disabled={!selectedCatalogItem}
+                      className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Edit Selected Catalog Item
+                    </button>}
                     <button
                       type="button"
                       onClick={() => addCatalogLineItem()}
@@ -1644,6 +1600,7 @@ const CreateSalesAgreement = () => {
                       <FaPlus className="text-xs" />
                       Add Selected
                     </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1863,12 +1820,10 @@ const CreateSalesAgreement = () => {
                     Add or adjust agreement-specific terms before saving the draft.
                   </p>
                 </div>
-                <Link
-                  to="/company/settings/terms-templates"
-                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Manage Templates
-                </Link>
+                <div className="flex flex-wrap gap-2">
+                  {can('884') && <button type="button" onClick={() => openTemplateEditor(selectedTemplate)} disabled={!selectedTemplate || termsLoading || applyingTermsTemplate} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Edit Template Terms</button>}
+                  {can('882') && <button type="button" onClick={() => openTemplateEditor(null, { ...form, ...termsTemplateDefaultsFromAgreementDraft(form) })} disabled={!recentlySelectedCompany || termsLoading || applyingTermsTemplate} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Save Terms as Template</button>}
+                </div>
               </div>
 
               <div className="mt-4">
@@ -1910,6 +1865,7 @@ const CreateSalesAgreement = () => {
                       </div>
                       <textarea
                         value={term.description}
+                        aria-label={`Agreement term ${index + 1}`}
                         onChange={(event) => updateTermLine(term.id, event.target.value)}
                         rows={2}
                         placeholder="Agreement term line"
@@ -1988,6 +1944,23 @@ const CreateSalesAgreement = () => {
             </section>
           </aside>
         </form>
+        {templateEditor && <TermsTemplateEditorDialog
+          key={`${recentlySelectedCompany}-${templateEditor.template?.id || 'new'}`}
+          companyId={recentlySelectedCompany}
+          template={templateEditor.template}
+          initialDraft={templateEditor.initialDraft}
+          dosageTemplates={dosageTemplates}
+          loadingDosages={loadingDosageTemplates}
+          onSaved={handleTemplateSaved}
+          onClose={closeTemplateEditor}
+        />}
+        {catalogEditor && <SalesCatalogItems
+          key={`${recentlySelectedCompany}-${catalogEditor.item?.id || 'new'}`}
+          editorOnly
+          editorItem={catalogEditor.item}
+          onSaved={handleCatalogSaved}
+          onClose={() => setCatalogEditor(null)}
+        />}
       </div>
     </div>
   );

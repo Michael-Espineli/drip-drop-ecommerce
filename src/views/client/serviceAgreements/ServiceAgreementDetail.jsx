@@ -1,4 +1,8 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import { agreementServiceSetup } from '../../../utils/sales/agreementServiceSetup';
+import { isCustomerVisibleAgreement } from '../../../utils/sales/customerAgreementVisibility';
+import { clientServiceAgreementPath } from '../../../utils/clientNavigation';
+import ServiceAgreementAcceptanceCard, { emptyAgreementAcceptance } from '../../../components/sales/ServiceAgreementAcceptanceCard';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
@@ -13,7 +17,6 @@ import {
   CreditCardIcon,
   DocumentTextIcon,
   ExclamationTriangleIcon,
-  XCircleIcon,
 } from '@heroicons/react/24/outline';
 import PaymentMethodSelector from '../../../components/sales/PaymentMethodSelector';
 import LineItemSectionTables from '../../../components/billing/LineItemSectionTables';
@@ -545,18 +548,16 @@ const ServiceAgreementDetail = () => {
   const userId = user?.uid;
   const userEmail = user?.email;
   const [agreement, setAgreement] = useState(null);
+  const [acceptance, setAcceptance] = useState(emptyAgreementAcceptance);
+  const { note: acceptanceNote, acceptedTerms, acceptedPricing, acceptedAutopayNotice, signatureName } = acceptance;
+  const updateAcceptance = patch => setAcceptance(current => ({ ...current, ...patch }));
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [accepting, setAccepting] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
+  const [responding, setResponding] = useState('');
   const [startingCheckout, setStartingCheckout] = useState(false);
-  const [acceptanceNote, setAcceptanceNote] = useState('');
-  const [rejectionNote, setRejectionNote] = useState('');
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
-  const [acceptedPricing, setAcceptedPricing] = useState(false);
-  const [acceptedAutopayNotice, setAcceptedAutopayNotice] = useState(false);
-  const [signatureName, setSignatureName] = useState('');
+  const [responseNote, setResponseNote] = useState('');
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState(SalesPaymentMethodType.ach);
   const [customerBillingPreference, setCustomerBillingPreference] = useState('requestInvoice');
@@ -597,7 +598,7 @@ const ServiceAgreementDetail = () => {
           if (!isActive) return;
 
           const nextAgreement = result.data?.agreement;
-          if (!nextAgreement) {
+          if (!nextAgreement || !isCustomerVisibleAgreement(nextAgreement)) {
             setAgreement(null);
             setError('Service agreement not found.');
             return;
@@ -633,6 +634,12 @@ const ServiceAgreementDetail = () => {
         }
 
         const nextAgreement = { id: snapshot.id, ...snapshot.data() };
+        if (!isCustomerVisibleAgreement(nextAgreement)) {
+          setAgreement(null);
+          setError('This service agreement is not available for review.');
+          setLoading(false);
+          return;
+        }
         if (userId && !customerCanViewAgreement(nextAgreement, { uid: userId, email: userEmail })) {
           setAgreement(null);
           setError('This service agreement does not belong to your account.');
@@ -645,6 +652,7 @@ const ServiceAgreementDetail = () => {
       },
       (snapshotError) => {
         console.error('Unable to load service agreement', snapshotError);
+        setAgreement(null);
         setError(snapshotError.message || 'Unable to load service agreement.');
         setLoading(false);
       }
@@ -678,7 +686,7 @@ const ServiceAgreementDetail = () => {
   useEffect(() => {
     if (!agreement || signatureName) return;
 
-    setSignatureName(agreement.customerName || user?.displayName || user?.email || emailParam || '');
+    setAcceptance(current => ({ ...current, signatureName: agreement.customerName || user?.displayName || user?.email || emailParam || '' }));
   }, [agreement, emailParam, signatureName, user?.displayName, user?.email]);
 
   useEffect(() => {
@@ -749,7 +757,7 @@ const ServiceAgreementDetail = () => {
   const isEstimate = isEstimateAgreement(agreement || {});
   const supersedesAgreementId = renewalPreviousAgreementId(agreement || {});
   const isSignedIn = Boolean(userId);
-  const agreementReviewPath = `${location.pathname || `/customer/service-agreements/${agreementId}`}${location.search || ''}`;
+  const agreementReviewPath = clientServiceAgreementPath(agreementId);
   const redirectParam = encodeURIComponent(agreementReviewPath);
   const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
   const signUpEmail = agreement?.email || emailParam;
@@ -762,6 +770,7 @@ const ServiceAgreementDetail = () => {
     !isAccepted &&
     !isClosed &&
     !accepting &&
+    !responding &&
     (isSignedIn || canAcceptFromEmailLink)
   );
   const canReject = Boolean(
@@ -769,7 +778,8 @@ const ServiceAgreementDetail = () => {
     isSignedIn &&
     !isAccepted &&
     !isClosed &&
-    !rejecting
+    !responding &&
+    !accepting
   );
   const billingPreferenceOptions = isEstimate
     ? [
@@ -816,46 +826,15 @@ const ServiceAgreementDetail = () => {
   const companyName = agreement?.companyName || 'Pool company';
   const customerName = agreement?.customerName || 'Customer';
   const customerEmail = agreement?.email || user?.email || 'Not provided';
-  const recurringServiceStopId = firstText(
-    agreement?.recurringServiceStopId,
-    billingSubscription?.recurringServiceStopId
-  );
-  const recurringRouteId = firstText(
-    agreement?.recurringRouteId,
-    billingSubscription?.recurringRouteId
-  );
-  const recurringSetupStatusKey = normalizeStatus(
-    agreement?.operationsSetupStatus ||
-    billingSubscription?.operationsSetupStatus ||
-    ''
-  );
-  const recurringSetupReady = Boolean(
-    recurringServiceStopId ||
-    recurringRouteId ||
-    [
-      'recurringservicestopcreated',
-      'recurringservicestopandroutecreated',
-      'recurringroutecreated',
-      'recurringrouteassigned',
-      'servicestopcreated',
-      'ready',
-      'complete',
-      'completed',
-    ].includes(recurringSetupStatusKey)
-  );
-  const showRecurringSetupStatus = Boolean(isAccepted && !isEstimate);
-  const recurringSetupUpdatedAt = agreement?.operationsSetupUpdatedAt ||
-    billingSubscription?.operationsSetupUpdatedAt ||
-    agreement?.recurringServiceStopCreatedAt ||
-    billingSubscription?.recurringServiceStopCreatedAt ||
-    agreement?.acceptedAt ||
-    agreement?.updatedAt;
-  const recurringSetupStatusLabel = recurringSetupReady
-    ? 'Recurring service setup started'
-    : 'Waiting on company setup';
-  const recurringSetupMessage = recurringSetupReady
-    ? `${companyName} created your recurring service stop${recurringRouteId ? ' and added it to a recurring route' : ''}.`
-    : `${companyName} is setting up your recurring service stop and route.`;
+  const {
+    recurringServiceStopId,
+    recurringRouteId,
+    started: recurringSetupReady,
+    visible: showRecurringSetupStatus,
+    updatedAt: recurringSetupUpdatedAt,
+    label: recurringSetupStatusLabel,
+    message: recurringSetupMessage,
+  } = agreementServiceSetup(agreement || {}, billingSubscription || {});
   const recurringSetupToneClass = recurringSetupReady
     ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
     : 'border-amber-200 bg-amber-50 text-amber-800';
@@ -972,30 +951,35 @@ const ServiceAgreementDetail = () => {
     }
   };
 
-  const rejectAgreement = async () => {
+  const respondToAgreement = async (responseType = 'rejected') => {
     if (!isSignedIn) {
       toast.error('Sign in to decline this record.');
       return;
     }
 
     if (!canReject) return;
+    if (responseType === 'changesRequested' && responseNote.trim().length < 3) {
+      toast.error('Add a short note about what you would like changed.');
+      return;
+    }
 
-    setRejecting(true);
+    setResponding(responseType);
     try {
       const rejectCallable = httpsCallable(functions, 'rejectSalesServiceAgreement');
       const authPayload = await getCallableAuthPayload();
       await rejectCallable({
         ...authPayload,
         agreementId: agreement.id,
-        rejectionNote,
+        rejectionNote: responseNote.trim(),
+        responseType,
       });
 
-      toast.success(`${recordLabel} declined.`);
+      toast.success(responseType === 'changesRequested' ? 'Change request sent.' : `${recordLabel} declined.`);
     } catch (rejectError) {
       console.error('Unable to decline service agreement', rejectError);
       toast.error(userFacingErrorMessage(rejectError, rejectError.message || `Failed to decline ${recordLabel.toLowerCase()}.`));
     } finally {
-      setRejecting(false);
+      setResponding('');
     }
   };
 
@@ -1367,6 +1351,54 @@ const ServiceAgreementDetail = () => {
         </div>
 
         <aside className="space-y-5">
+          <ServiceAgreementAcceptanceCard
+            id="client-agreement-response"
+            recordLabel={recordLabel}
+            isEstimate={isEstimate}
+            fields={[
+              ['Customer', agreement.customerName || user?.email],
+              ['Sent', formatDate(agreement.sentAt || agreement.createdAt)],
+              ['Expires', formatDate(agreement.expiresAt)],
+              ['Billing Setup', billingSubscription?.id ? labelize(billingSubscription.status || billingSubscription.stripeStatus) : labelize(agreement.billingFlowStatus || 'after acceptance')],
+            ]}
+            isAccepted={isAccepted}
+            isClosed={isClosed}
+            closedMessage={agreement.customerResponseType === 'changesRequested' ? 'Your change request has been sent to the company.' : ''}
+            renewalNotice={supersedesAgreementId ? 'I understand this agreement replaces my previous service agreement.' : ''}
+            paymentNotice="I understand my billing choice. If I choose pay right away, I may be asked to set up online payment or autopay."
+            value={acceptance}
+            onChange={updateAcceptance}
+            onAccept={acceptAgreement}
+            canAccept={canAccept}
+            accepting={accepting}
+            responseNote={responseNote}
+            onResponseNoteChange={setResponseNote}
+            onRespond={isSignedIn ? respondToAgreement : undefined}
+            canRespond={canReject}
+            responding={responding}
+          />
+
+          {!isAccepted && !isClosed && <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-950">Billing Choice</h2>
+            <p className="mt-1 text-sm text-slate-500">Choose how you would like to be billed when you accept.</p>
+            <div className="mt-4 grid gap-2">
+              {billingPreferenceOptions.map(option => <button
+                key={option.value}
+                type="button"
+                onClick={() => setCustomerBillingPreference(option.value)}
+                disabled={accepting || Boolean(responding)}
+                aria-pressed={customerBillingPreference === option.value}
+                className={[
+                  'rounded-md border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60',
+                  customerBillingPreference === option.value ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-100' : 'border-slate-200 bg-white hover:bg-slate-100',
+                ].join(' ')}
+              >
+                <span className="block text-sm font-bold text-slate-950">{option.label}</span>
+                <span className="mt-1 block text-xs text-slate-500">{option.helper}</span>
+              </button>)}
+            </div>
+          </section>}
+
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
               <DocumentTextIcon className="h-5 w-5 text-slate-400" />
@@ -1380,174 +1412,6 @@ const ServiceAgreementDetail = () => {
               <ArrowDownTrayIcon className="h-5 w-5" />
               Download PDF
             </button>
-          </section>
-
-          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 id="client-agreement-response" tabIndex={-1} className="scroll-mt-20 text-lg font-bold text-slate-950">Acceptance</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Accepting records your approval and saves the billing choice for the company.
-            </p>
-
-            <dl className="mt-5 space-y-4">
-              <Field label="Customer" value={agreement.customerName || user?.email} />
-              <Field label="Sent" value={formatDate(agreement.sentAt || agreement.createdAt)} />
-              <Field label="Expires" value={formatDate(agreement.expiresAt)} />
-              <Field label="Billing Setup" value={billingSubscription?.id ? labelize(billingSubscription.status || billingSubscription.stripeStatus) : 'Not created'} />
-            </dl>
-
-            {!isAccepted && !isClosed && (
-              <div className="mt-5 space-y-4">
-                {!isSignedIn && (
-                  <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                    <p className="font-semibold">Secure email link</p>
-                    <p className="mt-1">
-                      This private email link lets you review and accept the agreement. Sign in or create a homeowner account when you want portal access and billing setup.
-                    </p>
-                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                      <Link
-                        to={signInPath}
-                        className="inline-flex justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
-                      >
-                        Sign In
-                      </Link>
-                      <Link
-                        to={signUpPath}
-                        className="inline-flex justify-center rounded-md border border-blue-300 bg-white px-3 py-2 text-xs font-bold text-blue-800 hover:bg-blue-100"
-                      >
-                        Create Account
-                      </Link>
-                    </div>
-                  </div>
-                )}
-
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Billing Choice</p>
-                  <div className="mt-3 grid gap-2">
-                    {billingPreferenceOptions.map((option) => {
-                      const selected = customerBillingPreference === option.value;
-
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => setCustomerBillingPreference(option.value)}
-                          disabled={isAccepted || isClosed || accepting}
-                          className={[
-                            'rounded-md border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60',
-                            selected
-                              ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-100'
-                              : 'border-slate-200 bg-white hover:bg-slate-100',
-                          ].join(' ')}
-                        >
-                          <span className="block text-sm font-bold text-slate-950">{option.label}</span>
-                          <span className="mt-1 block text-xs text-slate-500">{option.helper}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <label className="block text-sm font-semibold text-slate-700" htmlFor="acceptanceNote">
-                  Note
-                  <textarea
-                    id="acceptanceNote"
-                    value={acceptanceNote}
-                    onChange={(event) => setAcceptanceNote(event.target.value)}
-                    className="mt-1 h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="Optional"
-                  />
-                </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={acceptedTerms}
-                    onChange={(event) => setAcceptedTerms(event.target.checked)}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="text-slate-700">
-                    I reviewed the agreement, pricing, and terms.
-                    {supersedesAgreementId ? ' I understand this agreement replaces my previous service agreement.' : ''}
-                  </span>
-                </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={acceptedPricing}
-                    onChange={(event) => setAcceptedPricing(event.target.checked)}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="text-slate-700">
-                    I reviewed the price, billing frequency, and invoice terms.
-                  </span>
-                </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={acceptedAutopayNotice}
-                    onChange={(event) => setAcceptedAutopayNotice(event.target.checked)}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="text-slate-700">
-                    I understand my billing choice. If I choose pay right away, I may be asked to set up online payment or autopay.
-                  </span>
-                </label>
-
-                <label className="block text-sm font-semibold text-slate-700" htmlFor="signatureName">
-                  Signature Name
-                  <input
-                    id="signatureName"
-                    type="text"
-                    value={signatureName}
-                    onChange={(event) => setSignatureName(event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="Full name"
-                  />
-                </label>
-
-                <button
-                  type="button"
-                  onClick={acceptAgreement}
-                  disabled={!canAccept || accepting}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <CheckCircleIcon className="h-5 w-5" />
-                  {accepting ? 'Accepting...' : `Accept ${recordLabel}`}
-                </button>
-
-                {isSignedIn && (
-                  <div className="rounded-md border border-rose-200 bg-rose-50 p-3">
-                    <label className="block text-sm font-semibold text-rose-800" htmlFor="rejectionNote">
-                      Decline Note
-                      <textarea
-                        id="rejectionNote"
-                        value={rejectionNote}
-                        onChange={(event) => setRejectionNote(event.target.value)}
-                        className="mt-1 h-20 w-full rounded-md border border-rose-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-100"
-                        placeholder="Optional"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={rejectAgreement}
-                      disabled={!canReject || rejecting}
-                      className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-rose-300 bg-white px-4 py-3 text-sm font-bold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <XCircleIcon className="h-5 w-5" />
-                      {rejecting ? 'Declining...' : `Decline ${recordLabel}`}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {isClosed && (
-              <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                This agreement is no longer available for acceptance.
-              </div>
-            )}
           </section>
 
           {showRecurringSetupStatus && (

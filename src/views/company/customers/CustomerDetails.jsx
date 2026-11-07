@@ -5875,7 +5875,6 @@ export default function CustomerDetails() {
                         </div>
 
                         <div className="flex flex-wrap gap-2">
-                            {profileHeaderActions}
                             <ShareItemButton
                                 type="customer"
                                 recordId={customerId}
@@ -5923,7 +5922,7 @@ export default function CustomerDetails() {
                                     {customer.active ? 'Make Inactive' : 'Make Active'}
                                 </button>
                             )}
-
+                            {profileHeaderActions}
                         </div>
                     </div>
                 </div></WorkspaceRecordHeader>

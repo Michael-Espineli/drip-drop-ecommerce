@@ -1,6 +1,7 @@
 import React, { useContext, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Context } from '../../context/AuthContext';
+import { listenClientRecords } from '../../utils/clientRecords';
 import RecentChatsWidget from './Messages/RecentChatsWidget';
 import {
     WrenchScrewdriverIcon,
@@ -529,8 +530,8 @@ const ApprovalsAndEstimatesWidget = () => {
             }
         );
 
-        const agreementsUnsubscribe = onSnapshot(
-            query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid)),
+        const agreementsUnsubscribe = listenClientRecords(
+            { db, user, collectionName: salesCollectionNames.agreements },
             (snapshot) => {
                 setAgreements(sortFreshest(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))).slice(0, 5));
                 markLoaded();
@@ -548,7 +549,7 @@ const ApprovalsAndEstimatesWidget = () => {
     }, [user]);
 
     const pendingApprovals = approvals.filter((approval) => normalizeSalesStatus(approval.status || approval.approvalStatus) === 'pending');
-    const pendingAgreements = agreements.filter((agreement) => ['sent', 'revised', 'draft'].includes(normalizeSalesStatus(agreement.status)));
+    const pendingAgreements = agreements.filter((agreement) => ['sent', 'revised'].includes(normalizeSalesStatus(agreement.status)));
     const reviewItems = sortFreshest([
         ...pendingApprovals.map((approval) => ({
             id: `approval-${approval.id}`,

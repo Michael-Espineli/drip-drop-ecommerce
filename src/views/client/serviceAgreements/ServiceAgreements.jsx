@@ -162,7 +162,7 @@ const ServiceAgreements = () => {
   }, [user]);
 
   const summary = useMemo(() => {
-    const pending = agreements.filter((agreement) => ['sent', 'revised', 'draft'].includes(normalizeStatus(agreement.status)));
+    const pending = agreements.filter((agreement) => ['sent', 'revised'].includes(normalizeStatus(agreement.status)));
     const accepted = agreements.filter((agreement) => normalizeStatus(agreement.status) === normalizeStatus(SalesAgreementStatus.accepted));
 
     return {
@@ -198,7 +198,7 @@ const ServiceAgreements = () => {
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <StatTile icon={ClockIcon} label="Needs Review" value={summary.pendingCount} helper="Sent, revised, or draft records" />
+        <StatTile icon={ClockIcon} label="Needs Review" value={summary.pendingCount} helper="Sent or revised records" />
         <StatTile icon={CheckCircleIcon} label="Accepted" value={summary.acceptedCount} helper="Approved records" />
         <StatTile icon={DocumentTextIcon} label="Visible Value" value={formatCurrency(summary.totalValueCents)} helper="Total estimate and agreement amount" />
       </div>

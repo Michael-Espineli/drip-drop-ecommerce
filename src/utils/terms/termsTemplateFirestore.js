@@ -62,6 +62,23 @@ export const saveTermsTemplate = async (companyId, termsTemplate) => {
   return template;
 };
 
+// Save the template and its term lines together so pickers never see a partial template.
+export const saveTermsTemplateWithTerms = async (companyId, template, terms, previousTerms = []) => {
+  const model = template instanceof TermsTemplate ? template : new TermsTemplate(template);
+  const clauses = terms
+    .map((term) => new ContractTerm({ ...term, description: String(term.description || '').trim() }))
+    .filter((term) => term.description);
+  const clauseIds = new Set(clauses.map((term) => term.id));
+  const batch = writeBatch(db);
+  batch.set(termsTemplateDoc(companyId, model.id), model.toFirestore(), { merge: true });
+  clauses.forEach((term) => batch.set(termDoc(companyId, model.id, term.id), term.toFirestore()));
+  previousTerms.filter((term) => !clauseIds.has(term.id)).forEach((term) => {
+    batch.delete(termDoc(companyId, model.id, term.id));
+  });
+  await batch.commit();
+  return { template: model, terms: clauses };
+};
+
 export const getNextTermsTemplateDuplicateName = (sourceName, existingTemplates = []) => {
   const baseName = String(sourceName || '').trim() || 'Terms Template';
   const existingNames = new Set(

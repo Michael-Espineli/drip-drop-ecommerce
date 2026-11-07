@@ -246,8 +246,13 @@ service cloud.firestore {
     function canReadSalesAgreementRecord(data) {
       return signedIn()
         && (
-          (data.get('customerUserId', '') == request.auth.uid)
-          || (!hasLinkedSalesCustomerUser(data) && emailMatchesSignedInUser(data))
+          (
+            data.get('status', '') in ['sent', 'revised', 'accepted', 'superseded', 'canceled', 'rejected', 'expired']
+            && (
+              data.get('customerUserId', '') == request.auth.uid
+              || (!hasLinkedSalesCustomerUser(data) && emailMatchesSignedInUser(data))
+            )
+          )
           || (
             data.get('companyId', '') is string
             && hasCompanyAccess(data.get('companyId', ''))

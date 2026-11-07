@@ -1160,6 +1160,10 @@ const publicServiceAgreementSnapshot = (agreement = {}, options = {}) => {
         acceptedAt: serializeDateValue(agreement.acceptedAt),
         acceptedByUserName: agreement.acceptedByUserName || "",
         acceptedByEmail: agreement.acceptedByEmail || "",
+        rejectedAt: serializeDateValue(agreement.rejectedAt),
+        rejectedByEmail: agreement.rejectedByEmail || "",
+        rejectedNote: agreement.rejectedNote || "",
+        customerResponseType: agreement.customerResponseType || "",
         supersedesAgreementId: agreement.supersedesAgreementId || "",
         previousAgreementId: agreement.previousAgreementId || "",
         renewalSourceAgreementId: agreement.renewalSourceAgreementId || "",
@@ -1359,7 +1363,7 @@ const loadPublicServiceAgreementForToken = async ({
         throw new HttpsError("permission-denied", "This email address does not match the service agreement recipient.");
     }
 
-    if (normalizeStatusKey(agreement.status) === "draft") {
+    if (!["sent", "revised", "accepted", "superseded", "canceled", "rejected", "expired"].includes(normalizeStatusKey(agreement.status))) {
         throw new HttpsError("failed-precondition", "This service agreement has not been sent yet.");
     }
 

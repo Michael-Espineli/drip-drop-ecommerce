@@ -3,7 +3,9 @@ import React, { useEffect, useState, useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Context } from '../context/AuthContext';
 import { COMPANY_PINNED_CATEGORY, getNav } from '../navigation/index';
-import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon, Cog6ToothIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { splitSidebarNavigation } from '../navigation/companyNavigationPreferences';
+import NavigationOrderDialog from '../components/navigation/NavigationOrderDialog';
+import { ArrowLeftOnRectangleIcon, ChevronDownIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon, Cog6ToothIcon, EllipsisHorizontalIcon, PencilSquareIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { db } from '../utils/config';
@@ -168,16 +170,28 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
     const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, partApprovals: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
+    const [isNavigationEditorOpen, setIsNavigationEditorOpen] = useState(false);
+    const [isAllTheRestOpen, setIsAllTheRestOpen] = useState(false);
+    const { main: mainNavItemsByCategory, allTheRest: allTheRestItems } = splitSidebarNavigation(
+        navItemsByCategory,
+        role === 'Company' ? dataBaseUser?.settings?.companyNavigationAllTheRest : []
+    );
+    const activeRestItemPath = allTheRestItems.find((item) => item.path.toLowerCase() === pathname.toLowerCase())?.path;
+
+    useEffect(() => {
+        if (activeRestItemPath) setIsAllTheRestOpen(true);
+    }, [activeRestItemPath]);
+
     const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
-    const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
+    const bookmarkItems = getBookmarkedNavItems(mainNavItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
     const navigationSections = [
-        ...(navItemsByCategory[COMPANY_PINNED_CATEGORY]?.length
+        ...(mainNavItemsByCategory[COMPANY_PINNED_CATEGORY]?.length
             ? [{
                 key: COMPANY_PINNED_CATEGORY,
                 category: COMPANY_PINNED_CATEGORY,
                 label: 'Dashboard Items',
-                items: navItemsByCategory[COMPANY_PINNED_CATEGORY],
+                items: mainNavItemsByCategory[COMPANY_PINNED_CATEGORY],
             }]
             : []),
         ...(bookmarkItems.length
@@ -188,7 +202,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 items: bookmarkItems,
             }]
             : []),
-        ...Object.entries(navItemsByCategory)
+        ...Object.entries(mainNavItemsByCategory)
             .filter(([category]) => category !== COMPANY_PINNED_CATEGORY)
             .map(([category, items]) => ({
                 key: category,
@@ -615,6 +629,51 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     );
     const showSettingsFooterLink = role === 'Company' && (companyRoleLoading || hasCompanyPermission('800'));
 
+    const renderNavigationItem = (item, sectionKey) => {
+        const isActive = pathname.toLowerCase() === item.path.toLowerCase();
+        const count =
+            item.title === 'Leads'
+                ? counts.leads
+                : item.title === 'Messages'
+                    ? counts.messages
+                    : item.title === 'Notifications'
+                        ? counts.notifications
+                    : item.title === 'Todo List'
+                        ? counts.todoItems
+                        : item.title === 'Shopping List'
+                            ? (counts.shopping || 0) + (counts.legacyShopping || 0)
+                            : item.title === 'Repair Requests'
+                                ? counts.repairRequests
+                                : item.title === 'Part Approvals'
+                                    ? counts.partApprovals
+                                : item.title === 'Finished Jobs'
+                                    ? counts.finishedJobs
+                                    : item.title === 'Jobs'
+                                        ? counts.actionableJobs
+                                        : item.title === 'Offered Work'
+                                            ? counts.offeredWork
+                                        : item.title === 'Equipment'
+                                            ? counts.equipmentMaintenance
+                                        : 0;
+
+        return (
+            <li key={`${sectionKey}-${item.path}-${item.title}`}>
+                <Link
+                    to={getPath(item.path)}
+                    title={item.title}
+                    className={`app-sidebar-link relative flex w-full items-center justify-start gap-3 rounded-md px-3 py-2 font-semibold transition-all ${isCollapsed ? 'lg:justify-center lg:gap-0 lg:px-2' : ''} ${isActive ? 'app-sidebar-link-active' : ''}`}>
+                    <span className={`app-sidebar-icon flex h-6 w-6 shrink-0 items-center justify-center ${isActive ? 'app-sidebar-icon-active' : ''} [&>svg]:h-5 [&>svg]:w-5`}>{item.icon}</span>
+                    <span className={isCollapsed ? 'lg:hidden' : ''}>{item.title}</span>
+                    {count > 0 && (
+                        <span className={`app-sidebar-count ml-auto rounded-full px-2.5 py-0.5 text-xs font-semibold ${['Repair Requests', 'Equipment', 'Part Approvals'].includes(item.title) ? 'app-sidebar-count-attention' : ['Messages', 'Notifications'].includes(item.title) ? 'app-sidebar-count-unread' : ''} ${isCollapsed ? 'lg:absolute lg:-right-1 lg:-top-1 lg:ml-0 lg:flex lg:h-[1.125rem] lg:min-w-[1.125rem] lg:items-center lg:justify-center lg:px-1 lg:text-[0.625rem]' : ''}`}>
+                            {count > 99 ? '99+' : count}
+                        </span>
+                    )}
+                </Link>
+            </li>
+        );
+    };
+
     return (
         <div>
             {/* Overlay for mobile view */}
@@ -677,53 +736,44 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                     <h3 className={`app-sidebar-section-title px-3 py-2 text-xs font-bold uppercase tracking-wider ${isCollapsed ? 'lg:hidden' : ''}`}>{section.label}</h3>
                                 )}
                                 <ul className='flex flex-col gap-1'>
-                                    {section.items.map(item => {
-                                        const isActive = pathname.toLowerCase() === item.path.toLowerCase();
-                                        const count =
-                                            item.title === 'Leads'
-                                                ? counts.leads
-                                                : item.title === 'Messages'
-                                                    ? counts.messages
-                                                    : item.title === 'Notifications'
-                                                        ? counts.notifications
-                                                    : item.title === 'Todo List'
-                                                        ? counts.todoItems
-                                                        : item.title === 'Shopping List'
-                                                            ? (counts.shopping || 0) + (counts.legacyShopping || 0)
-                                                            : item.title === 'Repair Requests'
-                                                                ? counts.repairRequests
-                                                                : item.title === 'Part Approvals'
-                                                                    ? counts.partApprovals
-                                                                : item.title === 'Finished Jobs'
-                                                                    ? counts.finishedJobs
-                                                                    : item.title === 'Jobs'
-                                                                        ? counts.actionableJobs
-                                                                        : item.title === 'Offered Work'
-                                                                            ? counts.offeredWork
-                                                                        : item.title === 'Equipment'
-                                                                            ? counts.equipmentMaintenance
-                                                                        : 0;
-
-                                        return (
-                                            <li key={`${section.key}-${item.path}-${item.title}`}>
-                                                <Link
-                                                    to={getPath(item.path)}
-                                                    title={item.title}
-                                                    className={`app-sidebar-link relative flex w-full items-center justify-start gap-3 rounded-md px-3 py-2 font-semibold transition-all ${isCollapsed ? 'lg:justify-center lg:gap-0 lg:px-2' : ''} ${isActive ? 'app-sidebar-link-active' : ''}`}>
-                                                    <span className={`app-sidebar-icon flex h-6 w-6 shrink-0 items-center justify-center ${isActive ? 'app-sidebar-icon-active' : ''} [&>svg]:h-5 [&>svg]:w-5`}>{item.icon}</span>
-                                                    <span className={isCollapsed ? 'lg:hidden' : ''}>{item.title}</span>
-                                                    {count > 0 && (
-                                                        <span className={`app-sidebar-count ml-auto rounded-full px-2.5 py-0.5 text-xs font-semibold ${['Repair Requests', 'Equipment', 'Part Approvals'].includes(item.title) ? 'app-sidebar-count-attention' : ['Messages', 'Notifications'].includes(item.title) ? 'app-sidebar-count-unread' : ''} ${isCollapsed ? 'lg:absolute lg:-right-1 lg:-top-1 lg:ml-0 lg:flex lg:h-[1.125rem] lg:min-w-[1.125rem] lg:items-center lg:justify-center lg:px-1 lg:text-[0.625rem]' : ''}`}>
-                                                            {count > 99 ? '99+' : count}
-                                                        </span>
-                                                    )}
-                                                </Link>
-                                            </li>
-                                        );
-                                    })}
+                                    {section.items.map((item) => renderNavigationItem(item, section.key))}
                                 </ul>
                             </div>
                         ))}
+                        {role === 'Company' && (
+                            <div className="mb-3 border-t border-slate-200/20 pt-3">
+                                {allTheRestItems.length > 0 && (
+                                    <div className="mb-2">
+                                        <button
+                                            type="button"
+                                            aria-label="All the rest"
+                                            aria-expanded={isAllTheRestOpen}
+                                            aria-controls="sidebar-all-the-rest"
+                                            title="All the rest"
+                                            onClick={() => setIsAllTheRestOpen((open) => !open)}
+                                            className={`app-sidebar-link flex w-full items-center gap-3 rounded-md px-3 py-2 font-semibold transition-all ${isCollapsed ? 'lg:justify-center lg:gap-0 lg:px-2' : ''}`}
+                                        >
+                                            <EllipsisHorizontalIcon className="app-sidebar-icon h-6 w-6 shrink-0" />
+                                            <span className={`min-w-0 flex-1 text-left ${isCollapsed ? 'lg:hidden' : ''}`}>All the rest</span>
+                                            <ChevronDownIcon className={`h-4 w-4 shrink-0 transition-transform ${isAllTheRestOpen ? 'rotate-180' : ''} ${isCollapsed ? 'lg:hidden' : ''}`} />
+                                        </button>
+                                        <ul id="sidebar-all-the-rest" aria-label="All the rest links" hidden={!isAllTheRestOpen} className={isAllTheRestOpen ? 'mt-1 flex flex-col gap-1' : 'hidden'}>
+                                            {allTheRestItems.map((item) => renderNavigationItem(item, 'all-the-rest'))}
+                                        </ul>
+                                    </div>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => setIsNavigationEditorOpen(true)}
+                                    title="Edit sidebar"
+                                    aria-label="Edit sidebar"
+                                    className={`app-sidebar-link flex w-full items-center gap-3 rounded-md px-3 py-2 font-semibold transition-all ${isCollapsed ? 'lg:justify-center lg:gap-0 lg:px-2' : ''}`}
+                                >
+                                    <PencilSquareIcon className="app-sidebar-icon h-6 w-6 shrink-0" />
+                                    <span className={isCollapsed ? 'lg:hidden' : ''}>Edit sidebar</span>
+                                </button>
+                            </div>
+                        )}
                     </nav>
 
                     {/* Footer actions */}
@@ -749,6 +799,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                     </div>
                 </div>
             </div>
+            {role === 'Company' && isNavigationEditorOpen && <NavigationOrderDialog onClose={() => setIsNavigationEditorOpen(false)} />}
         </div>
     );
 };

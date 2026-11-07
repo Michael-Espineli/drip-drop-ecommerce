@@ -28,6 +28,20 @@ To deploy the development website and functions to `the-pool-app-dev`:
 npm run deploy:dev
 ```
 
+Development deployments include the Firestore indexes in `firestore.indexes.json`.
+The client company invitation check needs the `customers.portalEmailNormalized`
+ascending collection group index. To deploy indexes separately, run
+`npm run deploy:dev:indexes` and wait for the index to show `READY` in Firestore
+before checking invitations again.
+
+Run `npm run check:dev:indexes` to compare all declared composite and field indexes
+with development. It fails on missing definitions or duplicate local composites
+and allows additional cloud indexes. The development deployment scripts run this
+check after deployment. Index definitions may exist while Firestore is still
+building them; wait for `READY` before relying on a newly added query. Keep new
+query requirements in `firestore.indexes.json`, including collection group field
+indexes. Check the checker itself with `npm run test:indexes`.
+
 For production:
 
 ```sh

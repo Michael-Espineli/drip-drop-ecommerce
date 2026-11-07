@@ -1,6 +1,6 @@
 import { userFacingErrorMessage } from '../../utils/permissionErrors';
-import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
+import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
@@ -17,6 +17,10 @@ import {
   formatServiceFrequency,
 } from '../../utils/sales/agreementCadence';
 import { chemicalBillingLabel } from '../../utils/sales/chemicalBilling';
+import { Context } from '../../context/AuthContext';
+import { clientServiceAgreementPath } from '../../utils/clientNavigation';
+import { isCustomerVisibleAgreement } from '../../utils/sales/customerAgreementVisibility';
+import ServiceAgreementAcceptanceCard, { emptyAgreementAcceptance } from '../../components/sales/ServiceAgreementAcceptanceCard';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -91,24 +95,26 @@ const Field = ({ label, value }) => (
 
 const PublicServiceAgreementLanding = () => {
   const { agreementId } = useParams();
+  const { user, accountType } = useContext(Context);
+  const profileAgreementPath = clientServiceAgreementPath(agreementId);
+  const openInProfile = Boolean(user?.uid && accountType === 'Client');
   const location = useLocation();
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const emailParam = queryParams.get('email') || '';
   const accessToken = queryParams.get('accessToken') || queryParams.get('reviewToken') || '';
   const [agreement, setAgreement] = useState(null);
+  const [acceptance, setAcceptance] = useState(emptyAgreementAcceptance);
+  const { note: acceptanceNote, acceptedTerms, acceptedPricing, acceptedAutopayNotice, signatureName } = acceptance;
+  const updateAcceptance = patch => setAcceptance(current => ({ ...current, ...patch }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
-  const [acceptedPricing, setAcceptedPricing] = useState(false);
-  const [acceptedAutopayNotice, setAcceptedAutopayNotice] = useState(false);
-  const [signatureName, setSignatureName] = useState('');
-  const [acceptanceNote, setAcceptanceNote] = useState('');
   const [responseNote, setResponseNote] = useState('');
   const [accepting, setAccepting] = useState(false);
   const [responding, setResponding] = useState('');
   const [selectedPlanId, setSelectedPlanId] = useState('');
 
   useEffect(() => {
+    if (openInProfile) return undefined;
     if (!agreementId) {
       setError('Missing service agreement id.');
       setLoading(false);
@@ -136,8 +142,9 @@ const PublicServiceAgreementLanding = () => {
         });
 
         if (!isActive) return;
-        setAgreement(result.data?.agreement || null);
-        if (!result.data?.agreement) setError('Service agreement not found.');
+        const nextAgreement = result.data?.agreement;
+        setAgreement(nextAgreement && isCustomerVisibleAgreement(nextAgreement) ? nextAgreement : null);
+        if (!nextAgreement || !isCustomerVisibleAgreement(nextAgreement)) setError('Service agreement not found.');
       } catch (loadError) {
         console.error('Unable to load public service agreement', loadError);
         if (isActive) {
@@ -154,7 +161,7 @@ const PublicServiceAgreementLanding = () => {
     return () => {
       isActive = false;
     };
-  }, [accessToken, agreementId, emailParam]);
+  }, [accessToken, agreementId, emailParam, openInProfile]);
 
   const lineItems = Array.isArray(agreement?.lineItems) ? agreement.lineItems : [];
   const planOptions = Array.isArray(agreement?.planOptions) ? agreement.planOptions : Array.isArray(agreement?.solutionOptions) ? agreement.solutionOptions : [];
@@ -187,7 +194,7 @@ const PublicServiceAgreementLanding = () => {
   const customerResponseType = agreement?.customerResponseType || '';
   const customerRequestedChanges = isRejected && customerResponseType === 'changesRequested';
   const isClosed = ['canceled', 'rejected', 'expired', 'superseded'].includes(statusKey);
-  const redirectParam = encodeURIComponent(`${location.pathname}${location.search || ''}`);
+  const redirectParam = encodeURIComponent(profileAgreementPath);
   const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
   const signUpPath = `/homeownerSignUp?redirect=${redirectParam}${agreement?.email || emailParam ? `&email=${encodeURIComponent(agreement?.email || emailParam)}` : ''}`;
   const inspectionReportIncluded = agreement?.includeInspectionReport === true;
@@ -205,7 +212,7 @@ const PublicServiceAgreementLanding = () => {
   useEffect(() => {
     if (!agreement || signatureName) return;
 
-    setSignatureName(agreement.customerName || agreement.email || emailParam || '');
+    setAcceptance(current => ({ ...current, signatureName: agreement.customerName || agreement.email || emailParam || '' }));
   }, [agreement, emailParam, signatureName]);
 
   useEffect(() => {
@@ -289,7 +296,7 @@ const PublicServiceAgreementLanding = () => {
     }
   };
 
-  const respondToEstimate = async (responseType) => {
+  const respondToAgreement = async (responseType) => {
     if (!agreement || responding || accepting || isAccepted || isClosed) return;
 
     if (responseType === 'changesRequested' && responseNote.trim().length < 3) {
@@ -309,7 +316,7 @@ const PublicServiceAgreementLanding = () => {
         rejectionNote: responseNote.trim(),
       });
 
-      toast.success(responseType === 'changesRequested' ? 'Change request sent.' : 'Estimate declined.');
+      toast.success(responseType === 'changesRequested' ? 'Change request sent.' : `${documentLabel} declined.`);
       setAgreement((current) => ({
         ...(current || agreement),
         status: SalesAgreementStatus.rejected,
@@ -326,6 +333,8 @@ const PublicServiceAgreementLanding = () => {
       setResponding('');
     }
   };
+
+  if (openInProfile) return <Navigate to={profileAgreementPath} replace />;
 
   if (loading) {
     return (
@@ -402,11 +411,11 @@ const PublicServiceAgreementLanding = () => {
               <ExclamationTriangleIcon className="mt-0.5 h-5 w-5 flex-none" />
               <div>
                 <p className="font-bold">
-                  {customerRequestedChanges ? 'Change request sent' : 'Estimate declined'}
+                  {customerRequestedChanges ? 'Change request sent' : `${documentLabel} declined`}
                 </p>
                 <p className="mt-1">
                   {customerRequestedChanges
-                    ? 'The company received your requested changes and can follow up with a revised estimate.'
+                    ? `The company received your requested changes and can follow up with a revised ${documentLabelLower}.`
                     : 'The company received your response.'}
                 </p>
                 {agreement.rejectedNote && (
@@ -609,134 +618,27 @@ const PublicServiceAgreementLanding = () => {
           </div>
 
           <aside className="space-y-5">
-            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-bold text-slate-950">Acceptance</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Accepting records your approval. Payment setup appears only when the company has online billing turned on.
-              </p>
-
-              <dl className="mt-5 space-y-4">
-                <Field label="Customer" value={agreement.customerName || agreement.email || emailParam} />
-                <Field label="Sent" value={formatDate(agreement.sentAt || agreement.createdAt)} />
-                <Field label="Expires" value={formatDate(agreement.expiresAt)} />
-                <Field label="Billing Setup" value={labelize(agreement.billingFlowStatus || 'after acceptance')} />
-              </dl>
-
-              {!isAccepted && !isClosed && (
-                <div className="mt-5 space-y-4">
-                  <label className="block text-sm font-semibold text-slate-700" htmlFor="acceptanceNote">
-                    Note
-                    <textarea
-                      id="acceptanceNote"
-                      value={acceptanceNote}
-                      onChange={(event) => setAcceptanceNote(event.target.value)}
-                      className="mt-1 h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      placeholder="Optional"
-                    />
-                  </label>
-
-                  <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={acceptedTerms}
-                      onChange={(event) => setAcceptedTerms(event.target.checked)}
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="text-slate-700">
-                      I reviewed the {documentLabelLower}, pricing, and terms.
-                    </span>
-                  </label>
-
-                  <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={acceptedPricing}
-                      onChange={(event) => setAcceptedPricing(event.target.checked)}
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="text-slate-700">
-                      I reviewed the price, billing frequency, and invoice terms.
-                    </span>
-                  </label>
-
-                  <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={acceptedAutopayNotice}
-                      onChange={(event) => setAcceptedAutopayNotice(event.target.checked)}
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="text-slate-700">
-                      {isJobEstimate
-                        ? 'I understand the accepted estimate can be invoiced after the work is complete.'
-                        : 'I understand this agreement can be used to set up recurring online billing.'}
-                    </span>
-                  </label>
-
-                  <label className="block text-sm font-semibold text-slate-700" htmlFor="signatureName">
-                    Signature Name
-                    <input
-                      id="signatureName"
-                      type="text"
-                      value={signatureName}
-                      onChange={(event) => setSignatureName(event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      placeholder="Full name"
-                    />
-                  </label>
-
-                  <button
-                    type="button"
-                    onClick={acceptAgreement}
-                    disabled={accepting || Boolean(responding)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <CheckCircleIcon className="h-5 w-5" />
-                    {accepting ? 'Accepting...' : `Accept ${documentLabel}`}
-                  </button>
-
-                  <div className="rounded-md border border-slate-200 bg-white p-3">
-                    <label className="block text-sm font-semibold text-slate-700" htmlFor="responseNote">
-                      Questions or requested changes
-                      <textarea
-                        id="responseNote"
-                        value={responseNote}
-                        onChange={(event) => setResponseNote(event.target.value)}
-                        className="mt-1 h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        placeholder="Tell the company what you would like changed, or why you are declining."
-                      />
-                    </label>
-
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <button
-                        type="button"
-                        onClick={() => respondToEstimate('changesRequested')}
-                        disabled={accepting || Boolean(responding)}
-                        className="inline-flex justify-center rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {responding === 'changesRequested' ? 'Sending...' : 'Request Changes'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => respondToEstimate('rejected')}
-                        disabled={accepting || Boolean(responding)}
-                        className="inline-flex justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-bold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {responding === 'rejected' ? 'Sending...' : 'Decline Estimate'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {isClosed && (
-                <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                  {customerRequestedChanges
-                    ? 'Your change request has been sent to the company.'
-                    : `This ${documentLabelLower} is no longer available for acceptance.`}
-                </div>
-              )}
-            </section>
+            <ServiceAgreementAcceptanceCard
+              recordLabel={documentLabel}
+              isEstimate={isJobEstimate}
+              fields={[
+                ['Customer', agreement.customerName || agreement.email || emailParam],
+                ['Sent', formatDate(agreement.sentAt || agreement.createdAt)],
+                ['Expires', formatDate(agreement.expiresAt)],
+                ['Billing Setup', labelize(agreement.billingFlowStatus || 'after acceptance')],
+              ]}
+              isAccepted={isAccepted}
+              isClosed={isClosed}
+              closedMessage={customerRequestedChanges ? 'Your change request has been sent to the company.' : ''}
+              value={acceptance}
+              onChange={updateAcceptance}
+              onAccept={acceptAgreement}
+              accepting={accepting}
+              responseNote={responseNote}
+              onResponseNoteChange={setResponseNote}
+              onRespond={respondToAgreement}
+              responding={responding}
+            />
 
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">

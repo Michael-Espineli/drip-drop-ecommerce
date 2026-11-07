@@ -18,13 +18,11 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
-  FaCheckCircle,
   FaCopy,
   FaCreditCard,
   FaDownload,
   FaEdit,
   FaEnvelope,
-  FaExclamationTriangle,
   FaFileSignature,
   FaHistory,
   FaMapMarkerAlt,
@@ -468,19 +466,6 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const ReadinessRow = ({ ready, title, helper }) => (
-  <div className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-    {ready ? (
-      <FaCheckCircle className="mt-0.5 shrink-0 text-emerald-600" />
-    ) : (
-      <FaExclamationTriangle className="mt-0.5 shrink-0 text-amber-600" />
-    )}
-    <div>
-      <p className="font-semibold text-slate-900">{title}</p>
-      {helper && <p className="mt-1 text-sm text-slate-500">{helper}</p>}
-    </div>
-  </div>
-);
 
 const locationLine = (location = {}) => [
   location.streetAddress,
@@ -1982,6 +1967,13 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
     ? agreement.serviceLocationIds.filter(Boolean)
     : locations.map((location) => location.serviceLocationId || location.id).filter(Boolean);
   const firstServiceLocationId = agreementServiceLocationIds[0] || '';
+  const primaryServiceLocation = locations.find((location) => (
+    (location.serviceLocationId || location.id) === firstServiceLocationId
+  )) || locations[0];
+  const primaryServiceLocationLabel = primaryServiceLocation
+    ? [primaryServiceLocation.nickName, locationLine(primaryServiceLocation)].filter(Boolean).join(' · ') || 'Location details not saved'
+    : firstServiceLocationId ? 'Location details not saved' : 'Not set';
+
   const recurringServiceStopId = agreement?.recurringServiceStopId
     || billingSubscription?.recurringServiceStopId
     || billingSubscription?.agreementSnapshot?.recurringServiceStopId
@@ -3335,7 +3327,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
           <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_360px]">
             <main className="space-y-6 lg:order-2">
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Customer Snapshot</h2>
+                <h2 className="text-lg font-bold text-slate-950">Customer &amp; Service Locations</h2>
                 <dl className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
@@ -3370,26 +3362,25 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                     {agreement.description}
                   </p>
                 )}
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <FaMapMarkerAlt className="text-slate-400" />
-                  <h2 className="text-lg font-bold text-slate-950">Service Locations</h2>
-                </div>
-                <div className="mt-4 grid gap-3">
-                  {locations.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                      No location snapshot saved.
-                    </div>
-                  ) : (
-                    locations.map((location) => (
-                      <div key={location.id || location.streetAddress} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <p className="font-semibold text-slate-900">{location.nickName || 'Service Location'}</p>
-                        <p className="mt-1 text-sm text-slate-500">{locationLine(location)}</p>
+                <div className="mt-5 border-t border-slate-200 pt-5">
+                  <div className="flex items-center gap-2">
+                    <FaMapMarkerAlt className="text-slate-400" />
+                    <h3 className="text-base font-bold text-slate-950">Service Locations</h3>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {locations.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                        No location snapshot saved.
                       </div>
-                    ))
-                  )}
+                    ) : (
+                      locations.map((location) => (
+                        <div key={location.id || location.streetAddress} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <p className="font-semibold text-slate-900">{location.nickName || 'Service Location'}</p>
+                          <p className="mt-1 text-sm text-slate-500">{locationLine(location)}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </section>
 
@@ -3516,7 +3507,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                     </div>
                     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                       <dt className="text-slate-500">Service Location</dt>
-                      <dd className="mt-1 break-all font-semibold text-slate-900">{firstServiceLocationId || 'Not set'}</dd>
+                      <dd className="mt-1 font-semibold text-slate-900">{primaryServiceLocationLabel}</dd>
                     </div>
                   </dl>
 
@@ -3671,12 +3662,115 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
 
             <aside className="space-y-6 lg:order-1">
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Send Readiness</h2>
-                <div className="mt-4 space-y-3">
-                  {readinessItems.map((item) => (
-                    <ReadinessRow key={item.title} {...item} />
-                  ))}
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-bold text-slate-950">Acceptance</h2>
+                  {acceptanceIsCurrent ? (
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                      Current
+                    </span>
+                  ) : hasAcceptanceAudit ? (
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                      Previous Version
+                    </span>
+                  ) : (
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                      Not Accepted
+                    </span>
+                  )}
                 </div>
+
+                {hasAcceptanceAudit ? (
+                  <dl className="mt-4 space-y-3 text-sm">
+                    <div>
+                      <dt className="text-slate-500">Accepted At</dt>
+                      <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.acceptedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">Marked By</dt>
+                      <dd className="mt-1 font-semibold text-slate-900">
+                        {agreement.acceptedByUserName || agreement.acceptedByEmail || 'Unknown'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">Source</dt>
+                      <dd className="mt-1 font-semibold text-slate-900">{acceptanceSourceLabel(agreement.acceptedSource)}</dd>
+                    </div>
+                    {agreementIsJobEstimate && (
+                      <div>
+                        <dt className="text-slate-500">Accepted Plan</dt>
+                        <dd className="mt-1 font-semibold text-slate-900">
+                          {agreement.acceptedPlanTitle || agreement.acceptedSolutionTitle || (selectedEstimatePlanOption ? salesPlanOptionTitle(selectedEstimatePlanOption) : 'Not selected')}
+                        </dd>
+                      </div>
+                    )}
+                    {agreement.acceptedNote && (
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-slate-700">
+                        {agreement.acceptedNote}
+                      </div>
+                    )}
+                    {!acceptanceIsCurrent && (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
+                        This {documentLabelLower} was edited after acceptance. Send the revised version or mark the new version accepted.
+                      </div>
+                    )}
+                  </dl>
+                ) : (
+                  <p className="mt-4 text-sm text-slate-500">
+                    Mark accepted when the homeowner approves outside the portal, or after the customer portal records acceptance directly.
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={openAcceptanceModal}
+                  disabled={!canMarkAccepted}
+                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaUserCheck className="text-xs" />
+                  Mark Accepted
+                </button>
+              </section>
+
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-bold text-slate-950">Email Delivery</h2>
+                  {emailTestMode && (
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                      Test Mode
+                    </span>
+                  )}
+                </div>
+                <dl className="mt-4 space-y-3 text-sm">
+                  <div>
+                    <dt className="text-slate-500">Sent At</dt>
+                    <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.sentAt)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">To</dt>
+                    <dd className="mt-1 break-all font-semibold text-slate-900">{emailDelivery.to || agreement.email || 'Not sent'}</dd>
+                  </div>
+                  {emailDelivery.intendedTo && emailDelivery.intendedTo !== emailDelivery.to && (
+                    <div>
+                      <dt className="text-slate-500">Customer Email</dt>
+                      <dd className="mt-1 break-all font-semibold text-slate-900">{emailDelivery.intendedTo}</dd>
+                    </div>
+                  )}
+                  {emailTestMode && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
+                      Real customer email is off until feature_flag_012 is enabled.
+                    </div>
+                  )}
+                  <div>
+                    <dt className="text-slate-500">Real Emails Flag</dt>
+                    <dd className="mt-1 font-semibold text-slate-900">
+                      {emailDelivery.realEmailsEnabled === true || emailDelivery.realEmailsEnabled === 'true' ? 'Enabled' : 'Disabled'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Email Message</dt>
+                    <dd className="mt-1 font-semibold text-slate-900">{emailDelivery.messageId ? 'Sent' : 'Not set'}</dd>
+                  </div>
+                </dl>
               </section>
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -3945,118 +4039,6 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                     View Billing Subscriptions
                   </Link>
                 )}
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-slate-950">Acceptance</h2>
-                  {acceptanceIsCurrent ? (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                      Current
-                    </span>
-                  ) : hasAcceptanceAudit ? (
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                      Previous Version
-                    </span>
-                  ) : (
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                      Not Accepted
-                    </span>
-                  )}
-                </div>
-
-                {hasAcceptanceAudit ? (
-                  <dl className="mt-4 space-y-3 text-sm">
-                    <div>
-                      <dt className="text-slate-500">Accepted At</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.acceptedAt)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Marked By</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">
-                        {agreement.acceptedByUserName || agreement.acceptedByEmail || 'Unknown'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Source</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">{acceptanceSourceLabel(agreement.acceptedSource)}</dd>
-                    </div>
-                    {agreementIsJobEstimate && (
-                      <div>
-                        <dt className="text-slate-500">Accepted Plan</dt>
-                        <dd className="mt-1 font-semibold text-slate-900">
-                          {agreement.acceptedPlanTitle || agreement.acceptedSolutionTitle || (selectedEstimatePlanOption ? salesPlanOptionTitle(selectedEstimatePlanOption) : 'Not selected')}
-                        </dd>
-                      </div>
-                    )}
-                    {agreement.acceptedNote && (
-                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-slate-700">
-                        {agreement.acceptedNote}
-                      </div>
-                    )}
-                    {!acceptanceIsCurrent && (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                        This {documentLabelLower} was edited after acceptance. Send the revised version or mark the new version accepted.
-                      </div>
-                    )}
-                  </dl>
-                ) : (
-                  <p className="mt-4 text-sm text-slate-500">
-                    Mark accepted when the homeowner approves outside the portal, or after the customer portal records acceptance directly.
-                  </p>
-                )}
-
-                <button
-                  type="button"
-                  onClick={openAcceptanceModal}
-                  disabled={!canMarkAccepted}
-                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaUserCheck className="text-xs" />
-                  Mark Accepted
-                </button>
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-slate-950">Email Delivery</h2>
-                  {emailTestMode && (
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                      Test Mode
-                    </span>
-                  )}
-                </div>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div>
-                    <dt className="text-slate-500">Sent At</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.sentAt)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-slate-500">To</dt>
-                    <dd className="mt-1 break-all font-semibold text-slate-900">{emailDelivery.to || agreement.email || 'Not sent'}</dd>
-                  </div>
-                  {emailDelivery.intendedTo && emailDelivery.intendedTo !== emailDelivery.to && (
-                    <div>
-                      <dt className="text-slate-500">Customer Email</dt>
-                      <dd className="mt-1 break-all font-semibold text-slate-900">{emailDelivery.intendedTo}</dd>
-                    </div>
-                  )}
-                  {emailTestMode && (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                      Real customer email is off until feature_flag_012 is enabled.
-                    </div>
-                  )}
-                  <div>
-                    <dt className="text-slate-500">Real Emails Flag</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">
-                      {emailDelivery.realEmailsEnabled === true || emailDelivery.realEmailsEnabled === 'true' ? 'Enabled' : 'Disabled'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-slate-500">Email Message</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{emailDelivery.messageId ? 'Sent' : 'Not set'}</dd>
-                  </div>
-                </dl>
               </section>
             </aside>
 

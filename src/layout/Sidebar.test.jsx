@@ -11,6 +11,8 @@ jest.mock('../context/AuthContext', () => ({ Context: require('react').createCon
 jest.mock('../utils/config', () => ({ db: {} }));
 jest.mock('firebase/auth', () => ({ getAuth: jest.fn(), signOut: jest.fn() }));
 jest.mock('firebase/firestore', () => ({
+  doc: (_, ...parts) => parts.join('/'),
+  updateDoc: jest.fn(async () => {}),
   collection: (_, ...parts) => parts.join('/'),
   query: (path, ...filters) => ({ path, filters }),
   where: (field, operator, value) => ({ field, operator, value }),
@@ -25,7 +27,7 @@ jest.mock('../utils/firestoreCounts', () => ({
 }));
 jest.mock('../utils/chatMessaging', () => ({ isChatUnreadFor: jest.fn(), listenVisibleChats: jest.fn() }));
 jest.mock('../navigation/index', () => ({
-  COMPANY_PINNED_CATEGORY: 'Pinned',
+  ...jest.requireActual('../navigation/index'),
   getNav: () => ({ Operations: [{ path: '/company/part-approvals', title: 'Part Approvals', role: 'Company' }, { path: '/company/repair-requests', title: 'Repair Requests', role: 'Company' }] }),
 }));
 
@@ -57,8 +59,8 @@ beforeEach(() => {
   });
 });
 
-const sidebar = (value = context, props = {}) => (
-  <MemoryRouter>
+const sidebar = (value = context, props = {}, initialEntries = ['/']) => (
+  <MemoryRouter initialEntries={initialEntries}>
     <Context.Provider value={value}>
       <Sidebar showSidebar setShowSidebar={jest.fn()} isCollapsed={false} setIsCollapsed={jest.fn()} {...props} />
     </Context.Provider>
@@ -215,4 +217,59 @@ test('logout relies on the auth listener and succeeds without an extra context c
     expect(signOut).toHaveBeenCalledTimes(1);
     expect(errorLog).not.toHaveBeenCalled();
   } finally { errorLog.mockRestore(); }
+});
+
+test('the editor shortcut is the last control in scrolling navigation and opens the shared dialog', async () => {
+  await renderSidebar();
+  const navigation = screen.getByRole('navigation');
+  const shortcut = within(navigation).getByRole('button', { name: 'Edit sidebar' });
+  expect(navigation.lastElementChild.lastElementChild).toBe(shortcut);
+  expect(screen.getByRole('button', { name: /logout/i }).closest('nav')).toBeNull();
+  fireEvent.click(shortcut);
+  expect(await screen.findByRole('dialog', { name: 'Edit Navigation Order' })).toBeInTheDocument();
+});
+
+test('moved bookmarked links appear once under the dropdown and keep their live badges', async () => {
+  await renderSidebar({ ...context, dataBaseUser: { settings: {
+    companyNavigationAllTheRest: ['/company/part-approvals'],
+    companyNavigationBookmarks: ['/company/part-approvals'],
+  } } });
+  const dropdown = screen.getByRole('button', { name: 'All the rest', expanded: false });
+  expect(screen.queryByRole('link', { name: 'Part Approvals' })).not.toBeInTheDocument();
+  fireEvent.click(dropdown);
+  const rest = screen.getByRole('list', { name: 'All the rest links' });
+  expect(screen.getAllByRole('link', { name: 'Part Approvals' })).toHaveLength(1);
+  emit(subscriptions[0], [{ status: 'pending' }, { status: 'pending' }]);
+  expect(within(rest).getByRole('link', { name: 'Part Approvals 2' })).toBeInTheDocument();
+  expect(screen.queryByText('Book Marks')).not.toBeInTheDocument();
+  fireEvent.click(dropdown);
+  expect(screen.queryByRole('link', { name: 'Part Approvals 2' })).not.toBeInTheDocument();
+});
+
+test('automatically expands All the rest when it contains the current page, including collapsed navigation', async () => {
+  render(sidebar({ ...context, dataBaseUser: { settings: { companyNavigationAllTheRest: ['/company/part-approvals'] } } }, { isCollapsed: true }, ['/company/part-approvals']));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'All the rest' })).toHaveAttribute('aria-expanded', 'true'));
+  expect(screen.getByRole('link', { name: 'Part Approvals' })).toHaveClass('app-sidebar-link-active');
+});
+
+test('empty categories disappear and restoring preferences puts links back in their category and bookmarks', async () => {
+  const settings = { companyNavigationAllTheRest: ['/company/part-approvals', '/company/repair-requests'], companyNavigationBookmarks: ['/company/part-approvals'] };
+  const view = await renderSidebar({ ...context, dataBaseUser: { settings } });
+  expect(screen.queryByRole('heading', { name: 'Operations' })).not.toBeInTheDocument();
+  view.rerender(sidebar({ ...context, dataBaseUser: { settings: { ...settings, companyNavigationAllTheRest: [] } } }));
+  await waitFor(() => expect(screen.getAllByRole('link', { name: 'Part Approvals' })).toHaveLength(2));
+  expect(screen.getByRole('heading', { name: 'Operations' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'All the rest' })).not.toBeInTheDocument();
+});
+
+test('unknown or inaccessible saved paths do not create links in All the rest', async () => {
+  await renderSidebar({ ...context, dataBaseUser: { settings: { companyNavigationAllTheRest: ['/admin/users', '/company/customers', '/company/setup-guide', '/company/does-not-exist'] } } });
+  expect(screen.queryByRole('button', { name: 'All the rest' })).not.toBeInTheDocument();
+});
+
+test('the new company editor and dropdown do not appear for admin accounts', async () => {
+  await renderSidebar({ ...context, role: 'Admin', dataBaseUser: { settings: { companyNavigationAllTheRest: ['/company/part-approvals'] } } });
+  expect(screen.queryByRole('button', { name: 'Edit sidebar' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'All the rest' })).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Part Approvals' })).toBeInTheDocument();
 });

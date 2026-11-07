@@ -320,6 +320,7 @@ const userCanAccessSalesRecord = async ({ auth, record }) => {
 };
 
 const publicAgreementLinkCanAccess = ({ agreement, accessToken, email }) => {
+  if (!customerCanReviewAgreementStatus(agreement)) return false;
   const savedAccessToken = String(agreement?.emailDelivery?.reviewAccessToken || '').trim();
   const requestedAccessToken = String(accessToken || '').trim();
 
@@ -338,6 +339,18 @@ const publicAgreementLinkCanAccess = ({ agreement, accessToken, email }) => {
 };
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const customerCanReviewAgreementStatus = (agreement) => (
+  ['sent', 'revised', 'accepted', 'superseded', 'canceled', 'rejected', 'expired'].includes(normalizeStatus(agreement?.status))
+);
+
+const userCanAccessSalesAgreement = async ({ auth, record }) => {
+  if (!auth || !record) return false;
+  if (!customerCanReviewAgreementStatus(record)) {
+    return hasActiveCompanyPermission(db, record.companyId, auth.uid, ['404']);
+  }
+  return userCanAccessSalesRecord({ auth, record });
+};
 
 const companyCustomerBillingEnabled = (companyData = {}) => (
   companyData.customerBillingEnabled === true ||
@@ -1602,7 +1615,7 @@ exports.acceptSalesServiceAgreement = legacyCallable(async (data, context) => {
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
-  const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: agreement });
+  const canAccess = await userCanAccessSalesAgreement({ auth: callableAuth, record: agreement });
 
   if (!canAccess) {
     throw new HttpsError('permission-denied', 'This service agreement does not belong to your account.');
@@ -1684,6 +1697,9 @@ exports.acceptSalesServiceAgreement = legacyCallable(async (data, context) => {
       throw new HttpsError('failed-precondition', 'The estimate plan options have changed. Reload the estimate before accepting.');
     }
     const freshAgreement = freshSelection.agreement;
+    if (!await userCanAccessSalesAgreement({ auth: callableAuth, record: freshAgreement })) {
+      throw new HttpsError('permission-denied', 'This service agreement is not available to your account.');
+    }
     const freshStatusKey = normalizeStatus(freshAgreement.status);
 
     if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
@@ -2018,10 +2034,16 @@ exports.rejectSalesServiceAgreement = legacyCallable(async (data, context) => {
   const callableAuth = await getCallableAuth(data, context, 'You must be signed in to decline a service agreement.');
   const receivedData = getCallableData(data);
   const agreementId = String(receivedData.agreementId || '').trim();
+  const responseType = String(receivedData.responseType || receivedData.customerResponseType || 'rejected').trim() === 'changesRequested'
+    ? 'changesRequested'
+    : 'rejected';
   const rejectionNote = String(receivedData.rejectionNote || receivedData.responseNote || '').trim().slice(0, 2000);
 
   if (!agreementId) {
     throw new HttpsError('invalid-argument', 'agreementId is required.');
+  }
+  if (responseType === 'changesRequested' && rejectionNote.length < 3) {
+    throw new HttpsError('invalid-argument', 'Add a short note about what you would like changed.');
   }
 
   const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
@@ -2032,7 +2054,7 @@ exports.rejectSalesServiceAgreement = legacyCallable(async (data, context) => {
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
-  const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: agreement });
+  const canAccess = await userCanAccessSalesAgreement({ auth: callableAuth, record: agreement });
 
   if (!canAccess) {
     throw new HttpsError('permission-denied', 'This service agreement does not belong to your account.');
@@ -2055,6 +2077,9 @@ exports.rejectSalesServiceAgreement = legacyCallable(async (data, context) => {
     }
 
     const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
+    if (!await userCanAccessSalesAgreement({ auth: callableAuth, record: freshAgreement })) {
+      throw new HttpsError('permission-denied', 'This service agreement is not available to your account.');
+    }
     const freshStatusKey = normalizeStatus(freshAgreement.status);
 
     if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
@@ -2069,11 +2094,15 @@ exports.rejectSalesServiceAgreement = legacyCallable(async (data, context) => {
       rejectedByEmail,
       rejectedSource: 'customerPortal',
       rejectedNote: rejectionNote,
+      customerResponseType: responseType,
+      changesRequestedAt: responseType === 'changesRequested' ? rejectedAt : null,
       customerUserId: freshAgreement.customerUserId || callableAuth.uid,
       statusChangedAt: rejectedAt,
       statusChangedByUserId: callableAuth.uid,
       statusChangedByUserName: rejectedByName,
-      statusChangeReason: rejectionNote || 'Customer declined from the client portal.',
+      statusChangeReason: rejectionNote || (responseType === 'changesRequested'
+        ? 'Customer requested changes from the client portal.'
+        : 'Customer declined from the client portal.'),
       updatedAt: rejectedAt,
     }, { merge: true });
   });
@@ -2084,6 +2113,8 @@ exports.rejectSalesServiceAgreement = legacyCallable(async (data, context) => {
     actorUserId: callableAuth.uid,
     actorUserName: rejectedByName,
     timestamp: rejectedAt,
+    responseType,
+    responseNote: rejectionNote,
   });
   await syncLinkedLeadForAgreementStatus({
     agreement,
@@ -2094,6 +2125,7 @@ exports.rejectSalesServiceAgreement = legacyCallable(async (data, context) => {
   return {
     status: 'success',
     agreementId,
+    customerResponseType: responseType,
   };
 });
 

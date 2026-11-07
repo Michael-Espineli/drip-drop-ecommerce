@@ -24,6 +24,7 @@ import {
 import { format } from 'date-fns';
 import { displayRepairRequestStatus } from '../../utils/models/RepairRequest';
 import { salesCollectionNames } from '../../utils/models/Sales';
+import { CUSTOMER_VISIBLE_AGREEMENT_STATUSES, isCustomerVisibleAgreement } from '../../utils/sales/customerAgreementVisibility';
 import { clientVisitSummary } from '../../utils/clientServiceHistory';
 import { appConfirm } from '../../utils/appDialog';
 import ClientCompanyInvites from './ClientCompanyInvites';
@@ -112,6 +113,7 @@ const MyPool = () => {
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
     const [loadError, setLoadError] = useState('');
+    const [unavailableSections, setUnavailableSections] = useState([]);
     const [locationActionError, setLocationActionError] = useState(null);
     const [savingLocation, setSavingLocation] = useState(false);
     const [editingLocation, setEditingLocation] = useState(null);
@@ -145,9 +147,9 @@ const MyPool = () => {
                 const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('userId', '==', user.uid), orderBy('createdAt', 'desc'));
                 const serviceQuery = query(collection(db, 'homeownerServiceStops'), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'));
                 const stopDataQuery = query(collection(db, 'stopData'), where('userId', '==', user.uid));
-                const agreementQuery = query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid));
+                const agreementQuery = query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid), where('status', 'in', CUSTOMER_VISIBLE_AGREEMENT_STATUSES));
 
-                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap, stopDataSnap, agreementSnap] = await Promise.all([
+                const results = await Promise.allSettled([
                     getDocs(locationQuery),
                     getDocs(bowQuery),
                     getDocs(equipQuery),
@@ -157,6 +159,20 @@ const MyPool = () => {
                     getDocs(agreementQuery)
                 ]);
                 if (!active) return;
+                // History and billing reads must not hide successfully loaded pool records.
+                const requiredFailure = results.slice(0, 3).find(result => result.status === 'rejected');
+                if (requiredFailure) throw requiredFailure.reason;
+                const optionalSections = [
+                    ['repairRequests', 'repair requests'], ['serviceStops', 'service history'],
+                    ['stopData', 'water readings'], ['serviceAgreements', 'service agreements'],
+                ];
+                const failedSections = optionalSections.filter((_, index) => results[index + 3].status === 'rejected');
+                setUnavailableSections(failedSections.map(([key]) => key));
+                if (failedSections.length) {
+                    setLoadError(`Your ${failedSections.map(([, label]) => label).join(' and ')} could not be loaded. Please try again.`);
+                }
+                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap, stopDataSnap, agreementSnap] = results
+                    .map(result => result.status === 'fulfilled' ? result.value : { docs: [] });
                 setServiceLocations(locSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 setAllData({
                     bodiesOfWater: bowSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
@@ -170,7 +186,7 @@ const MyPool = () => {
                         stopDataSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
                         getStopDataDateValue
                     ),
-                    serviceAgreements: agreementSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+                    serviceAgreements: agreementSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(isCustomerVisibleAgreement)
                 });
 
             } catch (error) {
@@ -352,6 +368,7 @@ const MyPool = () => {
     }
 
     if (serviceLocations.length === 0) {
+        if (loadError) return <main className="mx-auto max-w-7xl px-4 py-6"><WorkspaceRecordHeader title="My Pool Dashboard" eyebrow="My pool" /><PoolLoadError message={loadError} onRetry={() => setInitialLoad(true)} /></main>;
         return <NoPoolsView />;
     }
 
@@ -363,7 +380,7 @@ const MyPool = () => {
                     selected={selectedLocation}
                     onSelect={handleLocationChange}
                 />
-                {loadError && <div role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-red-700">{loadError}<button className="ml-3 min-h-[44px] font-semibold underline" onClick={() => setInitialLoad(true)}>Try again</button></div>}
+                <PoolLoadError message={loadError} onRetry={() => setInitialLoad(true)} />
                 <ServiceLocationManager
                     locations={serviceLocations}
                     selectedLocation={selectedLocation}
@@ -381,7 +398,7 @@ const MyPool = () => {
 	                        <div className="lg:col-span-2 space-y-8">
 	                            <BodiesOfWaterWidget bodiesOfWater={displayData.bodiesOfWater} />
 	                            <EquipmentWidget equipment={displayData.equipment} />
-	                            <RepairRequestsWidget repairRequests={displayData.repairRequests} />
+	                            <RepairRequestsWidget repairRequests={displayData.repairRequests} unavailable={unavailableSections.includes('repairRequests')} />
 	                        </div>
                             <div className="lg:col-span-1 space-y-8">
                                 <ServiceRecapWidget
@@ -389,6 +406,7 @@ const MyPool = () => {
                                     nextService={displayData.nextService}
                                     serviceAgreements={displayData.serviceAgreements}
                                     selectedLocation={selectedLocation}
+                                    unavailable={unavailableSections.includes('serviceStops') || unavailableSections.includes('serviceAgreements')}
                                 />
                             </div>
                         </div>
@@ -400,6 +418,7 @@ const MyPool = () => {
                                 stopDataRecords={displayData.stopData}
                                 bodiesOfWater={allData.bodiesOfWater}
                                 serviceLocations={serviceLocations}
+                                unavailable={unavailableSections.includes('serviceStops') || unavailableSections.includes('stopData')}
                             />
                         </div>
                     )}
@@ -417,6 +436,12 @@ const MyPool = () => {
         </div>
     );
 };
+
+const PoolLoadError = ({ message, onRetry }) => message ? (
+    <div role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-red-700">
+        {message}<button className="ml-3 min-h-[44px] font-semibold underline" onClick={onRetry}>Try again</button>
+    </div>
+) : null;
 
 const getLocationLabel = (location) => (
     location?.nickName ||
@@ -613,9 +638,9 @@ const EquipmentWidget = ({ equipment }) => (
     </Widget>
 );
 
-const RepairRequestsWidget = ({ repairRequests }) => (
+const RepairRequestsWidget = ({ repairRequests, unavailable }) => (
     <Widget title="Repair Requests" icon={TruckIcon} linkTo="/client/repair-requests">
-        {repairRequests.length > 0 ? (
+        {unavailable ? <p className="text-sm text-gray-600">Repair requests are temporarily unavailable.</p> : repairRequests.length > 0 ? (
             repairRequests.map(req => (
                 <Link to={`/client/repair-requests/${req.id}`} key={req.id} className="flex justify-between items-start p-3 hover:bg-gray-50 rounded-lg -m-2">
                     <div>
@@ -631,12 +656,12 @@ const RepairRequestsWidget = ({ repairRequests }) => (
     </Widget>
 );
 
-const ServiceRecapWidget = ({ lastService, nextService, serviceAgreements, selectedLocation }) => {
+const ServiceRecapWidget = ({ lastService, nextService, serviceAgreements, selectedLocation, unavailable }) => {
     const showBrowseCompaniesLink = selectedLocation !== 'all' && serviceAgreements.length === 0;
 
     return (
         <Widget title="Service Details" icon={DocumentTextIcon}>
-            {showBrowseCompaniesLink ? (
+            {unavailable ? <p className="text-sm text-gray-600">Service details are temporarily unavailable.</p> : showBrowseCompaniesLink ? (
                 <div className="text-center py-4">
                     <p className="text-gray-500 mb-4">No service agreement found for this location.</p>
                     <Link to="/client/companies" className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700">
@@ -720,7 +745,7 @@ const taskIsComplete = (task = {}) => {
     return ['finished', 'complete', 'completed', 'done'].includes(status) || task.completed === true || task.isComplete === true;
 };
 
-const ServiceHistoryWidget = ({ serviceStops, stopDataRecords, bodiesOfWater, serviceLocations }) => {
+const ServiceHistoryWidget = ({ serviceStops, stopDataRecords, bodiesOfWater, serviceLocations, unavailable }) => {
     const [showAllHistory, setShowAllHistory] = useState(false);
 
     const bodyNameById = useMemo(() => new Map(
@@ -772,6 +797,8 @@ const ServiceHistoryWidget = ({ serviceStops, stopDataRecords, bodiesOfWater, se
             return true;
         });
     };
+
+    if (unavailable) return <Widget title="Service History" icon={ClipboardDocumentListIcon}><p className="text-sm text-gray-600">Service history is temporarily unavailable.</p></Widget>;
 
     return (
         <section className="bg-white rounded-lg shadow-md overflow-hidden">

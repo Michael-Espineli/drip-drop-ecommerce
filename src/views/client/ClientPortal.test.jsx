@@ -94,6 +94,45 @@ test('manual company checks explain no match and recover from a failed check',as
  await screen.findByRole('link',{name:'Review & connect'});
 });
 
+test('My Pool keeps connected pool and equipment visible when repair and service history fail, and retries them',async()=>{
+ let historyUnavailable=true;
+ getDocs.mockImplementation(async q=>{
+  if(['homeownerRepairRequests','homeownerServiceStops'].includes(q.path) && historyUnavailable) throw new Error('The query requires an index');
+  const rows={
+   homeownerServiceLocations:[{id:'site',nickName:'House'}],
+   homeownerBodiesOfWater:[{id:'pool',name:'Backyard Pool',serviceLocationId:'site'}],
+   homeownerEquipment:[{id:'pump',name:'Pool pump',serviceLocationId:'site',bodyOfWaterId:'pool'},{id:'filter',name:'Pool filter',serviceLocationId:'site',bodyOfWaterId:'pool'}],
+   homeownerRepairRequests:[{id:'repair',description:'Inspect pump noise',status:'pending'}],
+   homeownerServiceStops:[{id:'visit',status:'Finished',serviceDate:{toDate:()=>new Date('2026-10-01T12:00:00Z')},notes:'Cleaned the pool',serviceLocationId:'site',bodyOfWaterId:'pool'}],
+  };
+  return snapshot(rows[q.path] || []);
+ });
+ mount(<MyPool/>,'/client/my-pool');
+ expect(await screen.findByRole('link',{name:/Backyard Pool/})).toHaveAttribute('href','/client/pools-spas/pool');
+ expect(screen.getByRole('link',{name:'Pool pump'})).toHaveAttribute('href','/client/equipment/pump');
+ expect(screen.getByRole('link',{name:'Pool filter'})).toHaveAttribute('href','/client/equipment/filter');
+ expect(screen.getByRole('alert')).toHaveTextContent('repair requests and service history could not be loaded');
+ expect(screen.queryByText('No pools found.')).not.toBeInTheDocument();
+ expect(screen.queryByText('No open repair requests.')).not.toBeInTheDocument();
+ expect(screen.queryByText('No service history yet.')).not.toBeInTheDocument();
+ historyUnavailable=false;fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+ await screen.findByText('Inspect pump noise');
+ await screen.findAllByText('Cleaned the pool');
+ expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+test('My Pool displays a retry when pool data cannot load instead of suggesting a connected customer has no pools',async()=>{
+ getDocs.mockRejectedValue(new Error('offline'));
+ mount(<MyPool/>,'/client/my-pool');
+ expect(await screen.findByRole('alert')).toHaveTextContent('Your pool details could not be loaded.');
+ expect(screen.queryByText('No pools found.')).not.toBeInTheDocument();
+ expect(screen.queryByRole('link',{name:'Add Your First Pool'})).not.toBeInTheDocument();
+ getDocs.mockResolvedValue(snapshot([]));fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+ expect(await screen.findByText('No pools found.')).toBeInTheDocument();
+ await waitFor(()=>expect(screen.getByRole('button',{name:'Check for company connections'})).not.toBeDisabled());
+ expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
 test('Finance includes verified email invoices before linking and retains the correct open balance',async()=>{
  onSnapshot.mockImplementation((q,callback)=>{let rows=[];
   if(q.path==='salesInvoices' && q.filters.some(filter=>filter[0]==='email')) rows=[{id:'unlinked',customerUserId:'',email:user.email,invoiceNumber:'EMAIL-100',status:'open',totalAmountCents:17500,amountDueCents:17500}];

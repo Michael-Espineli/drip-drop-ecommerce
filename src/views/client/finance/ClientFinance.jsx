@@ -266,7 +266,7 @@ const ClientFinance = () => {
   }, [user]);
 
   const summary = useMemo(() => {
-    const pendingAgreements = agreements.filter((agreement) => ['sent', 'revised', 'draft'].includes(normalizeStatus(agreement.status)));
+    const pendingAgreements = agreements.filter((agreement) => ['sent', 'revised'].includes(normalizeStatus(agreement.status)));
     const pendingApprovals = approvals.filter((approval) => normalizeStatus(approval.status || approval.approvalStatus) === 'pending');
     const openInvoices = invoices.filter((invoice) => (
       invoiceBalanceCents(invoice) > 0 &&

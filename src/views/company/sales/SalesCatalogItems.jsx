@@ -6,6 +6,7 @@ import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
 import Select from 'react-select';
+import { Dialog, DialogPanel } from '@headlessui/react';
 import {
   FaArchive,
   FaArrowLeft,
@@ -351,16 +352,36 @@ const selectStyles = {
   }),
 };
 
-const SalesCatalogItems = () => {
+const catalogItemForm = (item) => ({
+  name: item.name || '',
+  description: item.description || '',
+  type: item.type || SalesCatalogItemType.service,
+  billingBehavior: item.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+  sourceType: item.sourceType === SalesCatalogSourceType.workType
+    ? SalesCatalogSourceType.serviceStopType : item.sourceType || SalesCatalogSourceType.manual,
+  sourceId: item.sourceId || '',
+  payTypeId: jobPayFields(item).payTypeId,
+  unitAmount: centsToDollarsInput(item.unitAmountCents),
+  unitCost: centsToDollarsInput(item.unitCostCents),
+  defaultQuantity: String(item.defaultQuantity || 1),
+  taxable: Boolean(item.taxable),
+  stripeProductId: item.stripeProductId || '',
+  stripePriceId: item.stripePriceId || '',
+  stripeRecurringInterval: item.stripeRecurringInterval || 'month',
+  stripeRecurringIntervalCount: String(item.stripeRecurringIntervalCount || 1),
+  taskTemplates: taskTemplatesForItem(item).map(templateToForm),
+});
+
+const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onClose } = {}) => {
   const { catalogItemId } = useParams();
   const navigate = useNavigate();
   const { recentlySelectedCompany, stripeConnectedAccountId } = useContext(Context);
   const [catalogItems, setCatalogItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState(initialForm);
-  const [editingItemId, setEditingItemId] = useState('');
-  const [formModalOpen, setFormModalOpen] = useState(false);
+  const [form, setForm] = useState(() => editorItem ? catalogItemForm(editorItem) : initialForm);
+  const [editingItemId, setEditingItemId] = useState(editorItem?.id || '');
+  const [formModalOpen, setFormModalOpen] = useState(editorOnly);
   const servicePayrollData = useServicePayrollData(recentlySelectedCompany, formModalOpen);
   const productData = useJobProductCatalog(recentlySelectedCompany, formModalOpen);
   const [filterType, setFilterType] = useState('all');
@@ -560,6 +581,7 @@ const SalesCatalogItems = () => {
     setTaskGroupModalOpen(false);
     setSelectedTaskGroup(null);
     resetForm();
+    if (editorOnly) onClose?.();
   };
 
   const openCreateModal = () => {
@@ -723,32 +745,12 @@ const SalesCatalogItems = () => {
 
   const handleEdit = (item) => {
     setEditingItemId(item.id);
-    setForm({
-      name: item.name || '',
-      description: item.description || '',
-      type: item.type || SalesCatalogItemType.service,
-      billingBehavior: item.billingBehavior || SalesCatalogBillingBehavior.oneTime,
-      sourceType:
-        item.sourceType === SalesCatalogSourceType.workType
-          ? SalesCatalogSourceType.serviceStopType
-          : item.sourceType || SalesCatalogSourceType.manual,
-      sourceId: item.sourceId || '',
-      payTypeId: jobPayFields(item).payTypeId,
-      unitAmount: centsToDollarsInput(item.unitAmountCents),
-      unitCost: centsToDollarsInput(item.unitCostCents),
-      defaultQuantity: String(item.defaultQuantity || 1),
-      taxable: Boolean(item.taxable),
-      stripeProductId: item.stripeProductId || '',
-      stripePriceId: item.stripePriceId || '',
-      stripeRecurringInterval: item.stripeRecurringInterval || 'month',
-      stripeRecurringIntervalCount: String(item.stripeRecurringIntervalCount || 1),
-      taskTemplates: taskTemplatesForItem(item).map(templateToForm),
-    });
+    setForm(catalogItemForm(item));
     setFormModalOpen(true);
   };
 
   const buildCatalogItem = () => {
-    const existingItem = catalogItems.find((item) => item.id === editingItemId) || {};
+    const existingItem = catalogItems.find((item) => item.id === editingItemId) || editorItem || {};
     const taskTemplates = normalizeTaskTemplatesForSave(form.taskTemplates);
 
     return new SalesCatalogItem({
@@ -848,6 +850,7 @@ const SalesCatalogItems = () => {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (saving) return;
 
     if (!recentlySelectedCompany) {
       toast.error('Select a company before creating services.');
@@ -864,10 +867,11 @@ const SalesCatalogItems = () => {
     try {
       const item = buildCatalogItem();
       await saveSalesCatalogItem(db, recentlySelectedCompany, item);
+      let savedItem = item;
 
       if (!editingItemId) {
         try {
-          await createStripeObjectForCatalogItem(item, { showToast: false });
+          savedItem = await createStripeObjectForCatalogItem(item, { showToast: false });
           toast.success('Service created with Stripe object.');
         } catch (stripeError) {
           toast.error(userFacingErrorMessage(stripeError, stripeError.message || 'Service created, but Stripe object creation failed.'));
@@ -878,7 +882,9 @@ const SalesCatalogItems = () => {
 
       setFormModalOpen(false);
       resetForm();
-      if (!editingItemId) {
+      if (editorOnly) {
+        onSaved?.(savedItem);
+      } else if (!editingItemId) {
         navigate(`/company/sales/catalog-items/${item.id}`);
       }
     } catch (error) {
@@ -1185,7 +1191,7 @@ const SalesCatalogItems = () => {
 
   const renderCatalogFormModal = () => {
     if (!formModalOpen) return null;
-    const editingItem = catalogItems.find((item) => item.id === editingItemId) || null;
+    const editingItem = catalogItems.find((item) => item.id === editingItemId) || editorItem;
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
@@ -1428,7 +1434,7 @@ const SalesCatalogItems = () => {
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 p-4">
-            {editingItem ? (
+            {editingItem && !editorOnly ? (
               <button
                 type="button"
                 onClick={() => archiveItem(editingItem)}
@@ -1882,6 +1888,15 @@ const SalesCatalogItems = () => {
       </div>
     );
   };
+
+  if (editorOnly) return (
+    <Dialog open onClose={() => taskGroupModalOpen ? closeTaskGroupModal() : closeFormModal()} className="relative z-50" aria-label={editingItemId ? 'Edit Catalog Item' : 'Create Catalog Item'}>
+      <DialogPanel className="contents">
+        {renderCatalogFormModal()}
+        {renderTaskGroupPickerModal()}
+      </DialogPanel>
+    </Dialog>
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-4 text-slate-900 sm:px-3 lg:px-4">
