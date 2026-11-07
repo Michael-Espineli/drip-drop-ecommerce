@@ -39,6 +39,7 @@ import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { EquipmentPart } from "../../../utils/models/EquipmentPart";
 import { appAlert } from "../../../utils/appDialog";
+import BasicWorkOrderCreate from "../jobs/BasicWorkOrderCreate";
 import {
   AdjustmentsHorizontalIcon,
   BriefcaseIcon,
@@ -159,6 +160,7 @@ const SCHEDULE_JOB_INTENTS = {
 };
 const ACTIVE_JOB_OPERATION_STATUSES = [
   JOB_OPERATION_STATUS.draft,
+  JOB_OPERATION_STATUS.unscheduled,
   JOB_OPERATION_STATUS.scheduled,
 ];
 const ACTIVE_JOB_BILLING_STATUSES = [
@@ -918,6 +920,8 @@ export default function EquipmentList() {
   const [serviceLocationsById, setServiceLocationsById] = useState({});
   const [customerActiveById, setCustomerActiveById] = useState({});
   const [activeJobsByEquipmentId, setActiveJobsByEquipmentId] = useState({});
+  const [activeJobsRefresh, setActiveJobsRefresh] = useState(0);
+  const [jobCreationContext, setJobCreationContext] = useState(null);
   const [loadingActiveJobs, setLoadingActiveJobs] = useState(false);
   const [recurringStopsByEquipmentId, setRecurringStopsByEquipmentId] = useState({});
   const [loadingRecurringStops, setLoadingRecurringStops] = useState(false);
@@ -1346,7 +1350,7 @@ export default function EquipmentList() {
     return () => {
       cancelled = true;
     };
-  }, [recentlySelectedCompany, equipmentIdSignature]);
+  }, [recentlySelectedCompany, equipmentIdSignature, activeJobsRefresh]);
 
   useEffect(() => {
     if (!recentlySelectedCompany || !equipmentIdSignature) {
@@ -2277,6 +2281,16 @@ export default function EquipmentList() {
     model: equipment?.model || "",
     name: equipment?.name || "",
   });
+
+  const createEquipmentJob = (equipment) => {
+    closeQuickActions();
+    setJobCreationContext({
+      companyId: recentlySelectedCompany,
+      equipmentContext: buildEquipmentContext(equipment, "maintenance"),
+      jobIntent: "maintenance",
+      createdFromEquipmentCard: true,
+    });
+  };
 
   const getQuickEquipmentServiceDraft = (overrides = {}) => ({
     name: quickName,
@@ -4311,6 +4325,14 @@ export default function EquipmentList() {
                   />
                 </>
               )}
+              {can(CREATE_JOBS_PERMISSION_ID) && (
+                <QuickActionMenuItem
+                  label="Create Job"
+                  icon={BriefcaseIcon}
+                  tone="green"
+                  onClick={() => createEquipmentJob(openActionEquipment)}
+                />
+              )}
               {canScheduleTemplateSelf && (
                 <>
                   <QuickActionMenuItem
@@ -4329,6 +4351,18 @@ export default function EquipmentList() {
               )}
             </div>
           </>
+        )}
+
+        {jobCreationContext && jobCreationContext.companyId === recentlySelectedCompany && (
+          <BasicWorkOrderCreate
+            embedded
+            initialContext={jobCreationContext}
+            onCancel={() => setJobCreationContext(null)}
+            onCreated={() => {
+              setJobCreationContext(null);
+              setActiveJobsRefresh((current) => current + 1);
+            }}
+          />
         )}
 
         {showFilterModal && (

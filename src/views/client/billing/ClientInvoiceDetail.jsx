@@ -299,6 +299,7 @@ const ClientInvoiceDetail = () => {
     invoice &&
     billingSetupReady &&
     !hasActiveStripeSubscription &&
+    !billingSubscription?.checkoutCancellationRequested && !billingSubscription?.stripeSubscriptionId && !['canceled','cancelled','expired','superseded','cancellationpending'].includes(String(billingSubscription?.status || '').toLowerCase()) &&
     Number(billingSubscription?.amountCents || invoice.totalAmountCents || 0) > 0 &&
     !startingCheckout
   );
@@ -487,7 +488,7 @@ const ClientInvoiceDetail = () => {
 
                 {user?.uid ? (
                   <div className="mt-4 space-y-3">
-                    <PaymentMethodSelector
+                    <PaymentMethodSelector showFees={false}
                       amountCents={billingSubscription?.amountCents || invoice.totalAmountCents || balanceCents}
                       value={selectedPaymentMethodType}
                       onChange={setSelectedPaymentMethodType}

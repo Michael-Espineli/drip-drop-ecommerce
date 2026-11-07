@@ -74,7 +74,7 @@ function savedAmounts(invoice) {
   const total = cents(invoice.totalAmountCents ?? invoice.totalCents ?? 0, 'Saved invoice total');
   const paid = cents(invoice.amountPaidCents ?? 0, 'Saved receipts');
   const writeOff = cents(invoice.writeOffAmountCents ?? 0, 'Saved write-off');
-  const credit = cents(invoice.creditAmountCents ?? 0, 'Saved credit') + cents(invoice.refundCreditCents ?? 0, 'Saved refund credit');
+  const credit = require('./billingMath').invoiceCredits(invoice);
   const due = Math.max(total - paid - writeOff - credit, 0);
   if (paid + writeOff + credit > total || invoice.paymentReviewRequired || invoice.amountDueCents != null && invoice.amountDueCents !== due) {
     fail('failed-precondition', 'This invoice balance needs review before it can be changed.');
@@ -116,6 +116,7 @@ function createSalesInvoiceCommands(db, stripeProvider = getStripe, now = () => 
       const invoice = snap.data();
       if (invoice.companyId !== companyId) fail('permission-denied', 'Select the company that owns this invoice.');
       if (stripeOwned(invoice)) fail('failed-precondition', 'This invoice is managed by Stripe. Make payment, credit, or void changes in Stripe.');
+      if (invoice.automationEmailStatus === 'sending' && Date.now() - millis(invoice.automationEmailStartedAt) < 300000) fail('failed-precondition', 'An invoice email is being sent. Wait for its result before changing this invoice.');
       if (invoice.paymentProcessing) fail('failed-precondition', 'A payment is being confirmed. Wait for its result before changing this invoice.');
       if (action === 'recordPayment') {
         const amounts = savedAmounts(invoice);
@@ -192,7 +193,7 @@ function createSalesInvoiceCommands(db, stripeProvider = getStripe, now = () => 
             if (!amount || amount>due) fail('failed-precondition','Credit cannot exceed this invoice’s open balance.');
             nextCredit+=amount;
           }
-          const nextDue=total-nextPaid-writeOff-Number(invoice.refundCreditCents || 0)-nextCredit;
+          const nextDue=total-nextPaid-writeOff-Number(invoice.refundCreditCents || 0)-Number(invoice.disputeCreditCents || 0)-nextCredit;
           const audit={id:commandId,companyId,invoiceId,customerId:invoice.customerId || '',customerUserId:invoice.customerUserId || '',email:invoice.email || '',kind:action,
             paymentId:receipt?.id || '',amountCents:amount,reason:adjustment.reason,actorUserId:uid,createdAt:timestamp};
           if (receipt) tx.set(receipt.ref,{status:'reversed',reversedAmountCents:Number(receipt.data().reversedAmountCents || 0)+amount,netAmountCents:0,grossPosted:true,reversedAt:timestamp,reversedByUserId:uid,reversalReason:adjustment.reason,updatedAt:timestamp},{merge:true});
@@ -243,4 +244,5 @@ function createSalesInvoiceCommands(db, stripeProvider = getStripe, now = () => 
 }
 
 exports.createSalesInvoiceCommands = createSalesInvoiceCommands;
+exports.normalizePayment = normalizePayment;
 exports.manageSalesInvoice = onCall({cors:true},request=>createSalesInvoiceCommands(admin.firestore()).manage(request));

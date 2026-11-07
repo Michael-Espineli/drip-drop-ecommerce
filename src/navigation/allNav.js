@@ -85,6 +85,7 @@ export const allNav = [
     { id: 80, title: 'Messages', icon: <MdEmail />, role: 'Company', path: '/company/messages', category: 'NA', featureFlagId: 'feature_flag_001' },
     { id: 82, title: 'Notifications', icon: <FaBell />, role: 'Company', path: '/company/alerts', category: 'NA', featureFlagId: 'feature_flag_011' },
     { id: 81, title: 'Setup Guide', icon: <FaClipboardQuestion />, role: 'Company', path: '/company/setup-guide', category: 'NA', permissionId: '900' },
+    { id: 126, title: 'My Pay', icon: <MdPayment />, role: 'Company', path: '/company/my-pay', category: 'NA', featureFlagId: 'feature_flag_006' },
     //Marketting 
     { id: 64, title: 'Leads', icon: <IoIosPeople />, role: 'Company', path: '/company/leads', category: 'Marketing', permissionId: '610', featureFlagId: 'feature_flag_007' },
     { id: 65, title: 'Initial Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/initial-estimates', category: 'Marketing', permissionId: '620', featureFlagId: 'feature_flag_007' },

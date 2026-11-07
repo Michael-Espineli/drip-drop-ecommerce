@@ -23,7 +23,10 @@ function createJobBilling(db,now=()=>new Date()){
       const legacy=await tx.get(db.collection('salesInvoices').where('companyId','==',companyId).where('jobId','==',jobId));
       const candidates=[...new Map([...(linked?.exists?[linked]:[]),...legacy.docs].map(doc=>[doc.id,doc])).values()];
       if(candidates.some(doc=>doc.data().companyId!==companyId||doc.data().jobId&&doc.data().jobId!==jobId))fail('permission-denied','The linked invoice belongs to another job.');
-      const current=linked?.exists?linked:candidates.find(doc=>!['void','voided','uncollectible','canceled','cancelled'].includes(key(doc.data().status)))||candidates[0];
+      if(candidates.some(doc=>doc.data().billingScope==='approvedPart') && !candidates.some(doc=>doc.data().billingScope!=='approvedPart'))
+        fail('failed-precondition','This job has separately invoiced parts. Review the remaining job scope in Sales before creating another invoice.');
+      const jobCandidates=candidates.filter(doc=>doc.data().billingScope!=='approvedPart');
+      const current=linked?.exists&&linked.data().billingScope!=='approvedPart'?linked:jobCandidates.find(doc=>!['void','voided','uncollectible','canceled','cancelled'].includes(key(doc.data().status)))||jobCandidates[0];
       const revision=Boolean(data.replaceClosedInvoiceId);
       if(current&&!revision){
         if(['void','voided','uncollectible','canceled','cancelled'].includes(key(current.data().status)))fail('failed-precondition','This job invoice is closed. A reviewed reissue requires a new accepted estimate revision and a reason.');

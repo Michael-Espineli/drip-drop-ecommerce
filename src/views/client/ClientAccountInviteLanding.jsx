@@ -2,6 +2,7 @@ import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
+import { getAuth, signOut } from 'firebase/auth';
 import toast from 'react-hot-toast';
 import {
   ArrowRightIcon,
@@ -82,7 +83,7 @@ export default function ClientAccountInviteLanding() {
     const email = preview?.customer?.email ? `&email=${encodeURIComponent(preview.customer.email)}` : '';
 
     return {
-      signIn: `/homeownerSignIn?redirect=${redirect}`,
+      signIn: `/homeownerSignIn?redirect=${redirect}${email}`,
       signUp: `/homeownerSignUp?redirect=${redirect}${email}`,
     };
   }, [preview?.customer?.email, redirectPath]);
@@ -218,7 +219,9 @@ export default function ClientAccountInviteLanding() {
   const invite = preview.invite || {};
   const linkedToCurrentUser = user?.uid && customer.linkedCustomerIds?.includes(user.uid);
   const linkedToAnotherUser = user?.uid && customer.hasLinkedCustomerAccount && !linkedToCurrentUser;
-  const canClaim = !invite.accepted && !linkedToCurrentUser && !linkedToAnotherUser;
+  const wrongAccountType = Boolean(user && accountType && accountType !== 'Client');
+  const wrongEmail = Boolean(user && customer.email && user.email?.trim().toLowerCase() !== customer.email.trim().toLowerCase());
+  const canClaim = !invite.accepted && !linkedToCurrentUser && !linkedToAnotherUser && !wrongAccountType && !wrongEmail;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -340,12 +343,15 @@ export default function ClientAccountInviteLanding() {
           </section>
         </section>
 
-        <aside className="space-y-4">
+        <aside className="order-first space-y-4 lg:order-last">
           <div className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2">
               <UserCircleIcon className="h-5 w-5 text-slate-400" />
-              <h2 className="text-lg font-bold text-slate-950">Connect account</h2>
+              <h2 className="text-lg font-bold text-slate-950">Connect with {company.name}</h2>
             </div>
+
+            <p className="mt-4 text-sm text-slate-600">Create or sign in to your homeowner account, verify your email, then connect this customer profile. Your company’s existing records will appear in your portal.</p>
+            {(wrongAccountType || wrongEmail) && <div role="alert" className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p>{wrongAccountType ? 'You are signed in with a company account. Use a homeowner account to connect this profile.' : `You are signed in as ${user.email}. Use the email this invitation was sent to: ${customer.maskedEmail}.`}</p><button onClick={async () => { await signOut(getAuth()); navigate(authLinks.signIn); }} className="mt-2 min-h-[44px] font-semibold text-blue-700">Use a different account</button></div>}
 
             <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4">
               <p className="text-sm font-semibold text-slate-900">{customer.name}</p>
@@ -390,7 +396,7 @@ export default function ClientAccountInviteLanding() {
                   type="button"
                   className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {claiming ? 'Connecting...' : 'Connect my homeowner account'}
+                  {claiming ? 'Connecting...' : user.emailVerified ? 'Connect my homeowner account' : 'Verify email to connect'}
                   <ArrowRightIcon className="h-4 w-4" />
                 </button>
                 <Link

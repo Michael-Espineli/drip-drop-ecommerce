@@ -15,6 +15,8 @@ const sgMail = require("@sendgrid/mail");
 const {
   ensureCustomerAccountInvite,
   getCustomerAccountInvitePreview,
+  isCustomerInviteUnavailable,
+  isHomeownerAccountType,
 } = require("../customerAccountInvites");
 const { reportCloudFunctionError } = require("../appErrorReporting");
 const { sendCompanyUserInviteEmailInternal } = require("../sendGrid/general");
@@ -22,6 +24,7 @@ const { sendCompanyUserInviteEmailInternal } = require("../sendGrid/general");
 const { publicMeasurements, publicPhotos } = require('../homeownerServicePublishing');
 const db = admin.firestore();
 const { weeklyServiceDates } = require("../recurringSchedule");
+const { DEFAULT_RECURRING_TASK_GROUP_ID, loadTaskGroupItems, seedDefaultRecurringTaskGroup } = require("../taskGroupStorage");
 const recurringAccess = require("../recurringAccess").createRecurringAccess(db, {
   verifyIdToken: (token) => admin.auth().verifyIdToken(token, true),
 });
@@ -1076,9 +1079,11 @@ const commitFirestoreWrites = async (firestore, writes) => {
 };
 
 const getLinkedCustomerIds = (customer = {}) => (
-  Array.isArray(customer.linkedCustomerIds)
-    ? customer.linkedCustomerIds.filter(Boolean)
-    : []
+  [...new Set([
+    ...(Array.isArray(customer.linkedCustomerIds) ? customer.linkedCustomerIds : []),
+    customer.linkedCustomerUserId,
+    customer.linkedHomeownerUserId,
+  ].filter(Boolean))]
 );
 
 const getHomeownerRelationshipId = (companyId, customerId, homeownerId) => (
@@ -1594,10 +1599,14 @@ async function linkHomeownerToCompanyCustomer({
   }
 
   const verifiedUser = await admin.auth().getUser(homeownerId);
-  if (verifiedUser.emailVerified !== true || !verifiedUser.email) {
+  if (verifiedUser.disabled || verifiedUser.emailVerified !== true || !verifiedUser.email) {
     return { status: 403, error: "Verify your email before connecting this customer account.", code: "email-verification-required" };
   }
   normalizedAuthEmail = normalizeEmail(verifiedUser.email);
+  const homeownerProfile = await firestore.collection("users").doc(homeownerId).get();
+  if (!isHomeownerAccountType(homeownerProfile.data()?.accountType)) {
+    return { status: 403, error: "Use a homeowner account to connect this customer profile." };
+  }
 
   const companyRef = firestore.collection("companies").doc(companyId);
   const customerRef = companyRef.collection("customers").doc(customerId);
@@ -1624,6 +1633,13 @@ async function linkHomeownerToCompanyCustomer({
       return { status: 404, error: "Linked invite not found" };
     }
     invite = inviteSnap.data() || {};
+    if (isCustomerInviteUnavailable(invite)) {
+      return { status: 410, error: "This customer invitation is no longer available. Ask your pool company for a new invitation." };
+    }
+    if ((invite.accepted === true || String(invite.status || "").toLowerCase() === "accepted")
+      && invite.acceptedByUserId !== homeownerId) {
+      return { status: 409, error: "This invitation has already been accepted." };
+    }
 
     if (invite.companyId && invite.companyId !== companyId) {
       return { status: 403, error: "Invite belongs to a different company" };
@@ -1634,7 +1650,7 @@ async function linkHomeownerToCompanyCustomer({
     }
   }
 
-  const expectedEmail = normalizeEmail(invite?.email || invite?.customerEmail || customer.email);
+  const expectedEmail = normalizeEmail(invite?.email || invite?.customerEmail || customer.email || customer.billingEmail || customer.mainContact?.email || customer.contact?.email);
   const tokenOnlyInviteClaimAllowed = Boolean(inviteId && invite?.allowTokenClaim === true && !expectedEmail);
   if (!expectedEmail && !tokenOnlyInviteClaimAllowed) {
     return {
@@ -2007,6 +2023,10 @@ async function linkHomeownerToCompanyCustomer({
         snapshot.docs.forEach((document) => {
           if (seenDocIds.has(document.id)) return;
           seenDocIds.add(document.id);
+          const record = document.data() || {};
+          if ((record.customerId && record.customerId !== customerId)
+            || (record.companyCustomerId && record.companyCustomerId !== customerId)
+            || (record.customerUserId && record.customerUserId !== homeownerId)) return;
           writes.push({
             ref: document.ref,
             data: {
@@ -2272,23 +2292,14 @@ exports.createFirstRecurringServiceStop2 = recurringCallable("create", async (da
 
     console.log("create Tasks For Recurring Service Stops");
 
-    const taskGroupId = "com_set_tg_recurring_service_stops";
-
-    const tasksDoc = await db.collection("companies")
-      .doc(companyId)
-      .collection("settings")
-      .doc("taskGroup")
-      .collection("taskGroup")
-      .doc(taskGroupId)
-      .collection("taskItems")
-      .get();
+    const taskGroupId = DEFAULT_RECURRING_TASK_GROUP_ID;
+    const defaultTasks = await loadTaskGroupItems(db, companyId, taskGroupId);
 
     const taskList = [];
 
-    console.log("tasksDoc.length: ", tasksDoc.docs.length);
+    console.log("defaultTasks.length: ", defaultTasks.length);
 
-    for (const taskDoc of tasksDoc.docs) {
-      const task = taskDoc.data();
+    for (const task of defaultTasks) {
 
       const taskId = "com_rss_tas_" + uuidv4();
 
@@ -3340,30 +3351,9 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     ]
 
     console.log("Number of tasks: ", taskList.length)
-    const groupId = 'com_set_tg_recurring_service_stops'
-
-    await getFirestore().collection("companies").doc(companyId).collection("settings").doc("taskGroups").collection("taskGroups").doc(groupId).set({
-      id: groupId,
-      groupName: "Weekly Service",
-      numberOfTasks: taskList.length,
-      canDelete: false,
+    await seedDefaultRecurringTaskGroup(getFirestore(), companyId, taskList, {
+      createdAt: Timestamp.now(), createdByUserId: ownerId,
     });
-
-    console.log("Add Tasks to Task Group")
-    //Add Tasks to Task Group
-    for (let i = 0; i < taskList.length; i++) {
-      let task = taskList[i];
-      console.log("Tasks:", task.id, " => ", task);
-      await getFirestore().collection("companies").doc(companyId).collection("settings").doc("taskGroups").collection("taskGroups").doc(groupId).collection("taskItems").doc(task.id).set({
-        id: task.id,
-        name: task.name,
-        description: task.description,
-        typeId: task.typeId,
-        type: task.type,
-        contractedRate: task.contractedRate,
-        estimatedTime: task.estimatedTime,
-      });
-    }
     //Create Generic Roles
 
     let ownerRole = {
@@ -4147,8 +4137,20 @@ const customerCanRespondToPartApproval = (auth, approval = {}) => {
 
   const authEmail = normalizeEmail(auth.token?.email);
   const approvalEmail = normalizeEmail(approval.customerEmail || approval.email || approval.billingEmail);
-  return Boolean(authEmail && approvalEmail && authEmail === approvalEmail && !approval.customerUserId);
+  return Boolean(auth.token?.email_verified === true && authEmail && approvalEmail && authEmail === approvalEmail && !approval.customerUserId);
 };
+
+exports.getPartApprovalRecurringOptions = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS }, async (request) => {
+  const payload = request.data || {};
+  const auth = await getVerifiedCallableAuth(payload, { auth: request.auth, rawRequest: request.rawRequest });
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign in to view recurring billing choices.");
+  const approvalId = String(payload.approvalId || "").trim();
+  if (!approvalId || approvalId.includes("/")) throw new HttpsError("invalid-argument", "A valid approval is required.");
+  const db = getFirestore(), snap = await db.collection("customerPartApprovals").doc(approvalId).get();
+  if (!snap.exists || !customerCanRespondToPartApproval(auth, snap.data())) throw new HttpsError("permission-denied", "This approval does not belong to your account.");
+  const rows = await require('../recurringPartCharges').billingOptions({ get: ref => ref.get() }, db, snap.data());
+  return { options: rows.map(row => ({ id: row.id, label: row.data().agreementSnapshot?.title || row.data().serviceFrequencyLabel || `Recurring service (${row.id.slice(-6)})` })) };
+});
 
 exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS }, async (request) => {
   const payload = request.data ?? {};
@@ -4173,7 +4175,7 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     ? "payNow"
     : normalizedPaymentPreference === "payoncedelivered"
       ? "payOnceDelivered"
-      : "sendInvoice";
+      : ["nextbill", "includeonnextbill"].includes(normalizedPaymentPreference) ? "nextBill" : "sendInvoice";
 
   if (!approvalId) {
     throw new HttpsError("invalid-argument", "approvalId is required.");
@@ -4185,7 +4187,8 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
 
   const firestore = getFirestore();
   const approvalRef = firestore.collection("customerPartApprovals").doc(approvalId);
-  const approvalSnap = await approvalRef.get();
+  return firestore.runTransaction(async (batch) => {
+  const approvalSnap = await batch.get(approvalRef);
 
   if (!approvalSnap.exists) {
     throw new HttpsError("not-found", "Part approval request was not found.");
@@ -4196,8 +4199,22 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     throw new HttpsError("permission-denied", "This part approval does not belong to your account.");
   }
 
+  const savedStatus = String(approval.approvalStatus || approval.status || "pending").toLowerCase();
+  if (savedStatus !== "pending") {
+    if ((savedStatus === "resolved" ? "approved" : savedStatus) !== action) {
+      throw new HttpsError("failed-precondition", "This part approval already has a response.");
+    }
+    return { status: "success", approvalId, action, shoppingListItemId: approval.shoppingListItemId || "" };
+  }
+
   const companyId = approval.companyId || "";
   const existingShoppingListItemId = approval.shoppingListItemId || approval.shoppingItemId || "";
+  const existingShoppingSnap = companyId && existingShoppingListItemId
+    ? await batch.get(firestore.collection("companies").doc(companyId).collection("shoppingList").doc(existingShoppingListItemId)) : null;
+  const existingShopping = existingShoppingSnap?.data() || {};
+  if (action === "rejected" && existingShoppingSnap?.exists && (existingShopping.purchasedItem || !["", "Need to Purchase"].includes(existingShopping.status || ""))) {
+    throw new HttpsError("failed-precondition", "This item is already being fulfilled. Contact the company to change the approval.");
+  }
   const shouldHaveShoppingItem = action === "approved";
   const generatedShoppingListItemId =
     shouldHaveShoppingItem && companyId && !existingShoppingListItemId
@@ -4211,9 +4228,11 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
   const now = admin.firestore.FieldValue.serverTimestamp();
   const customerName = verifiedAuth.token?.name || approval.customerName || verifiedAuth.token?.email || "Customer";
   const companySnap = companyId
-    ? await firestore.collection("companies").doc(companyId).get()
+    ? await batch.get(firestore.collection("companies").doc(companyId))
     : null;
   const companyData = companySnap?.exists ? companySnap.data() || {} : {};
+  const nextBillPlan = action === "approved" && paymentPreference === "nextBill"
+    ? await require('../recurringPartCharges').selectSubscription(batch, firestore, approval, String(payload.nextBillSubscriptionId || "")) : null;
   const autoInvoiceOnInstall = companyData.shoppingItemInstallInvoiceAutomationEnabled === true;
   const nextShoppingStatus = "Need to Purchase";
   const nextApprovalStatus = action;
@@ -4269,12 +4288,19 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     ...(Array.isArray(approval.photoUrls) ? { photoUrls: approval.photoUrls } : {}),
   };
 
-  const batch = firestore.batch();
+
 
   batch.set(approvalRef, {
     status: nextApprovalStatus,
     approvalStatus: nextApprovalStatus,
     response: action,
+    ...(action === "approved" ? { approvedPricingSnapshot: {
+      quantity: String(approval.quantity || "1"),
+      plannedUnitPriceCents: Number(approval.plannedUnitPriceCents || approval.unitPriceCents || 0),
+      plannedTotalPriceCents: Number(approval.plannedTotalPriceCents || approval.totalPriceCents || 0) || Math.round(Number(approval.plannedUnitPriceCents || approval.unitPriceCents || 0) * (Number(approval.quantity || "1"))),
+      approvedAt: Timestamp.now(),
+      approvedByUserId: verifiedAuth.uid,
+    } } : {}),
     responseNote,
     respondedAt: now,
     respondedByUserId: verifiedAuth.uid,
@@ -4286,6 +4312,7 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     shoppingListGeneratedAt: generatedShoppingListItemId ? now : approval.shoppingListGeneratedAt || null,
     paymentPreference,
     paymentCollectionPreference: paymentPreference,
+    ...(nextBillPlan ? { nextBillSubscriptionId: nextBillPlan.id } : {}),
     paymentPreferenceSelectedAt: action === "approved" ? now : approval.paymentPreferenceSelectedAt || null,
     autoInvoiceOnInstall: action === "approved" ? autoInvoiceOnInstall : approval.autoInvoiceOnInstall || false,
     responseSource: "customerApp",
@@ -4370,6 +4397,7 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
       customerApprovalResponse: action,
       paymentPreference,
       paymentCollectionPreference: paymentPreference,
+      ...(nextBillPlan ? { nextBillSubscriptionId: nextBillPlan.id } : {}),
       autoInvoiceOnInstall,
       customerApprovalResponseNote: responseNote,
       customerApprovalRespondedAt: now,
@@ -4382,6 +4410,13 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
       ...photoFields,
       updatedAt: now,
     };
+
+    if (existingShoppingSnap?.exists) {
+      for (const field of ["status", "purchasedItem", "invoiced", "invoiceId", "salesInvoiceId", "invoiceRef", "invoiceStatus", "invoiceType", "datePurchased", "fulfillmentStatus"]) {
+        if (existingShopping[field] !== undefined) shoppingPayload[field] = existingShopping[field];
+      }
+      shoppingPayload.needsAction = !["delivered", "installed", "invoiced"].includes(String(shoppingPayload.status || "").toLowerCase());
+    }
 
     if (generatedShoppingListItemId) {
       shoppingPayload.datePurchased = null;
@@ -4456,7 +4491,6 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     });
   }
 
-  await batch.commit();
 
   return {
     status: "success",
@@ -4464,6 +4498,7 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     action,
     shoppingListItemId,
   };
+  });
 });
 
 exports.getAdminCompanyListStats = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS }, async (request) => {

@@ -312,7 +312,7 @@ const CompanySetupGuide = () => {
           countSnapshot(collection(db, "companies", companyId, "serviceLocations"), "service locations"),
           countSnapshot(collection(db, "companies", companyId, "bodiesOfWater"), "bodies of water"),
           countSnapshot(collection(db, "companies", companyId, "equipment"), "equipment"),
-          countSnapshot(collection(db, "companies", companyId, "settings", "taskGroups", "taskGroups"), "task groups"),
+          countSnapshot(collection(db, "companies", companyId, "settings", "taskGroup", "taskGroup"), "task groups"),
           countSnapshot(collection(db, "companies", companyId, "jobTemplates"), "job templates"),
           countSnapshot(collection(db, "companies", companyId, "recurringServiceStop"), "recurring service stops"),
           countSnapshot(collection(db, "companies", companyId, "routes"), "routes"),

@@ -32,3 +32,9 @@ test('new capabilities have unique permission IDs', () => {
   expect(new Set(ids).size).toBe(ids.length);
   for (const id of ['100','102','104','106','268','274','408','920']) expect(ids).toContain(id);
 });
+
+test('My Pay uses own-record access while company Payroll still requires permission 420', () => {
+  expect(getCompanyPermissionForPath('/company/my-pay')).toBe(null);
+  expect(getCompanyPermissionForPath('/company/payroll')).toBe('420');
+  expect(getCompanyPermissionForPath('/company/payroll/setup')).toBe('420');
+});

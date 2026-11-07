@@ -17,6 +17,7 @@ const db = admin.firestore();
 const { prepareJobPlanWorkspace } = require('../jobPlanWorkspace');
 const {
   createStripeProxy,
+  getStripeApiKey,
 } = require("./stripeClient");
 
 const stripe = createStripeProxy();
@@ -480,11 +481,12 @@ const agreementHistoryGroupId = (agreement = {}) => (
 const activeStripeStatusKeys = new Set(['active', 'trialing', 'pastdue', 'unpaid', 'paused']);
 
 const canDeleteBillingSubscriptionRecord = (subscription = {}) => (
-  !subscription?.stripeSubscriptionId ||
-  normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled'
+  !subscription.checkoutHold && (!subscription.checkoutCancellationRequested || subscription.checkoutCancellationStatus==='complete') &&
+  (!subscription?.stripeSubscriptionId || normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled')
 );
 
 const supersededSubscriptionUpdates = (subscription = {}, timestamp) => {
+  if(subscription.checkoutHold || subscription.checkoutCancellationRequested && subscription.checkoutCancellationStatus!=='complete')throw new HttpsError('failed-precondition','Finish canceling the previous payment setup before replacing this billing agreement.');
   const hasStripeSubscription = Boolean(subscription.stripeSubscriptionId);
   const statusKey = normalizeStatus(subscription.stripeStatus || subscription.status);
   const keepStripeManagedStatus = hasStripeSubscription && activeStripeStatusKeys.has(statusKey);
@@ -967,7 +969,7 @@ const copyList = (value) => (
     : String(value || '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
 );
 
-const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnectedAccountId }) => {
+const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnectedAccountId, companyData = {} }) => {
   const lineItems = copyLineItemsForBilling(agreement.lineItems);
   const amountCents = Number(agreement.totalAmountCents || agreement.rateAmountCents || 0);
   const canStartStripeCheckout = Boolean(stripeConnectedAccountId) && amountCents > 0;
@@ -1003,7 +1005,8 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     autopayStatus: canStartStripeCheckout ? 'available' : 'unavailable',
     autopayEnabled: false,
     amountCents,
-    billingTimeZone: agreement.billingTimeZone || 'UTC',
+    billingTimeZone: agreement.billingTimeZone || companyData.billingTimeZone || companyData.timeZone || 'UTC',
+    billingEndAt: (()=>{const end=require('../billingAgreementTerms').agreementTerms({},agreement,companyData).endAt;return end?admin.firestore.Timestamp.fromMillis(end):null;})(),
     taxAmountCents: Number(agreement.taxAmountCents || 0),
     discountAmountCents: Number(agreement.discountAmountCents || 0),
     currency: agreement.currency || 'usd',
@@ -1047,6 +1050,9 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
       billingFrequency,
       billingFrequencyCount: String(billingFrequencyCount),
       firstInvoiceSendAt: agreement.firstInvoiceSendAt || agreement.manualBillingNextInvoiceAt || agreement.startDate || null,
+      startDate: agreement.startDate || null,
+      endDate: agreement.endDate || null,
+      atWill: agreement.atWill===true,
       manualBillingAutoSendEnabled: agreement.manualBillingAutoSendEnabled === true,
       serviceCadence,
       serviceCadenceCount: String(serviceCadenceCount),
@@ -1653,7 +1659,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       : 'createBillingSubscription';
   const skippedBillingCollectionMethod = companyBillingEnabled ? 'manualInvoices' : 'externalBilling';
   const stripeConnectedAccountId = acceptanceAgreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
-  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId });
+  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId, companyData });
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
   const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
   const acceptedByEmail = callableAuth.token?.email || agreement.email || '';
@@ -1687,6 +1693,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
     const existingSubscription = subscriptionSnap?.exists
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
+    if(existingSubscription?.checkoutHold || existingSubscription?.checkoutCancellationRequested)throw new HttpsError('failed-precondition','Finish or cancel the existing payment setup before accepting another pricing revision.');
     const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
     const existingStatusKey = normalizeStatus(existingSubscription?.stripeStatus || existingSubscription?.status);
     const existingAutopayActive = hasStripeSubscription && ['active', 'trialing'].includes(existingStatusKey);
@@ -1725,6 +1732,10 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         ? existingAutopayActive || Boolean(existingSubscription.autopayEnabled)
         : subscriptionDraft.autopayEnabled,
       amountCents: subscriptionDraft.amountCents,
+      taxAmountCents: subscriptionDraft.taxAmountCents,
+      discountAmountCents: subscriptionDraft.discountAmountCents,
+      billingTimeZone: subscriptionDraft.billingTimeZone,
+      billingEndAt: subscriptionDraft.billingEndAt,
       currency: subscriptionDraft.currency,
       interval: subscriptionDraft.interval,
       intervalCount: subscriptionDraft.intervalCount,
@@ -2273,7 +2284,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
       : 'createBillingSubscription';
   const skippedBillingCollectionMethod = companyBillingEnabled ? 'manualInvoices' : 'externalBilling';
   const stripeConnectedAccountId = acceptanceAgreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
-  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId });
+  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId, companyData });
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
   const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
   const acceptedByEmail = normalizeEmail(email || agreement.email || agreement.customerEmail || agreement.billingEmail);
@@ -2307,6 +2318,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
     const existingSubscription = subscriptionSnap?.exists
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
+    if(existingSubscription?.checkoutHold || existingSubscription?.checkoutCancellationRequested)throw new HttpsError('failed-precondition','Finish or cancel the existing payment setup before accepting another pricing revision.');
     const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
     const existingStatusKey = normalizeStatus(existingSubscription?.stripeStatus || existingSubscription?.status);
     const existingAutopayActive = hasStripeSubscription && ['active', 'trialing'].includes(existingStatusKey);
@@ -2345,6 +2357,10 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
         ? existingAutopayActive || Boolean(existingSubscription.autopayEnabled)
         : subscriptionDraft.autopayEnabled,
       amountCents: subscriptionDraft.amountCents,
+      taxAmountCents: subscriptionDraft.taxAmountCents,
+      discountAmountCents: subscriptionDraft.discountAmountCents,
+      billingTimeZone: subscriptionDraft.billingTimeZone,
+      billingEndAt: subscriptionDraft.billingEndAt,
       currency: subscriptionDraft.currency,
       interval: subscriptionDraft.interval,
       intervalCount: subscriptionDraft.intervalCount,
@@ -2781,32 +2797,8 @@ exports.cancelSalesBillingSubscription = functions.https.onCall(async (data, con
     companyId,
   });
 
-  if (!subscription.stripeSubscriptionId) {
-    const now = admin.firestore.FieldValue.serverTimestamp();
-    const updateData = {
-      status: 'canceled',
-      nextAction: 'reviewCanceledSubscription',
-      cancelAtPeriodEnd: false,
-      canceledAt: now,
-      updatedAt: now,
-    };
-    await subscriptionRef.set(updateData, { merge: true });
-
-    if (subscription.agreementId) {
-      await db.collection(salesCollectionNames.agreements).doc(subscription.agreementId).set({
-        billingFlowStatus: updateData.status,
-        billingFlowNextAction: updateData.nextAction,
-        billingFlowUpdatedAt: now,
-        updatedAt: now,
-      }, { merge: true });
-    }
-
-    return {
-      status: 'success',
-      billingStatus: updateData.status,
-      nextAction: updateData.nextAction,
-      message: 'Local billing subscription canceled.',
-    };
+  if (!subscription.stripeSubscriptionId || subscription.checkoutCancellationRequested) {
+    return require('../salesSubscriptionCancellation').createSalesSubscriptionCancellation(db,stripe).cancelPending({companyId,subscriptionId:billingSubscriptionId,uid:context.auth.uid});
   }
 
   const connectedAccount = subscription.stripeConnectedAccountId;
@@ -2857,6 +2849,8 @@ exports.resumeSalesBillingSubscription = functions.https.onCall(async (data, con
     billingSubscriptionId,
     companyId,
   });
+
+  if (subscription.checkoutCancellationRequested) throw new HttpsError('failed-precondition', 'Finish cancellation before changing this billing setup. Create a new agreement to start billing again.');
 
   if (!subscription.stripeSubscriptionId) {
     throw new HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
@@ -2910,6 +2904,8 @@ exports.updateSalesBillingSubscriptionStripeItems = functions.https.onCall(async
     billingSubscriptionId,
     companyId,
   });
+
+  if (subscription.checkoutCancellationRequested) throw new HttpsError('failed-precondition', 'Finish cancellation before changing this billing setup. Create a new agreement to start billing again.');
 
   if (!subscription.stripeSubscriptionId) {
     throw new HttpsError('failed-precondition', 'This billing subscription does not have a Stripe subscription yet.');
@@ -3011,6 +3007,9 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
       const pendingVerification = requirements.pending_verification || [];
       const errors = requirements.errors || [];
       const cardPaymentsCapability = capabilities.card_payments || 'unknown';
+      const achPaymentsCapability = capabilities.us_bank_account_ach_payments || 'unrequested';
+      // Accounts v1 does not expose livemode; use the server credential context.
+      const liveMode = /^(sk|rk)_live_/.test(getStripeApiKey());
       const transfersCapability = capabilities.transfers || 'unknown';
       const canCreateCharges = Boolean(account.charges_enabled);
       const canProcessCardPayments = cardPaymentsCapability === 'active';
@@ -3020,7 +3019,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
       const canBillCustomers = canCreateCharges && canProcessCardPayments && !hasBlockingRequirements;
       const applicationFee = resolveApplicationFee({}, companyData);
       const canRunLiveBilling = (
-        Boolean(account.livemode) &&
+        liveMode &&
         canBillCustomers &&
         canReceivePayouts &&
         canTransferFunds &&
@@ -3032,7 +3031,8 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
         email: account.email || '',
         canBillCustomers,
         canRunLiveBilling,
-        livemode: Boolean(account.livemode),
+        livemode: liveMode,
+        achPaymentsEnabled: achPaymentsCapability === 'active',
         chargesEnabled: canCreateCharges,
         cardPaymentsEnabled: canProcessCardPayments,
         payoutsEnabled: canReceivePayouts,
@@ -3053,6 +3053,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
         },
         capabilities: {
           cardPayments: cardPaymentsCapability,
+          achPayments: achPaymentsCapability,
           transfers: transfersCapability,
         },
         platform: {

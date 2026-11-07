@@ -697,6 +697,10 @@ exports.stripeWebHook = onRequest(async (request, response) => {
     }
 
     try {
+        if (await require('../savedCustomerPayments').createSavedCustomerPayments(admin.firestore(), stripe).handle(event)) {
+            response.status(200).send('Saved customer payment synchronized.');
+            return;
+        }
         if (await require('../stripeLifecycle').createStripeLifecycle(admin.firestore(), stripe).handle(event)) {
             response.status(200).send('Billing state synchronized.');
             return;

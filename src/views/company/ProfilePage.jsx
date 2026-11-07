@@ -11,7 +11,9 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, updateDoc, whe
 import { auth, db, functions, storage } from '../../utils/config';
 import { FaExternalLinkAlt } from "react-icons/fa";
 import { HiOutlineUserCircle, HiOutlineBuildingOffice2, HiOutlineWallet, HiOutlineClock, HiOutlineCog6Tooth, HiOutlineLink } from "react-icons/hi2";
-import { profilePayoutSummary } from "../../utils/profilePayout";
+
+import { ProfilePaySnapshot } from "./personalPay/Paysheet";
+import { canViewOwnPay } from "../../utils/myPay";
 import "./ProfilePage.css";
 import toast from 'react-hot-toast';
 import { appConfirm } from "../../utils/appDialog";
@@ -40,28 +42,9 @@ const shortDate = (value) => {
     return date ? date.toLocaleDateString() : "-";
 };
 
-const moneyFromCents = (value) =>
-    new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: "USD",
-    }).format(Number(value || 0) / 100);
-
 const startOfToday = () => {
     const date = new Date();
     date.setHours(0, 0, 0, 0);
-    return date;
-};
-
-const dateDaysAgo = (days) => {
-    const date = new Date();
-    date.setDate(date.getDate() - days);
-    date.setHours(0, 0, 0, 0);
-    return date;
-};
-
-const endOfToday = () => {
-    const date = new Date();
-    date.setHours(23, 59, 59, 999);
     return date;
 };
 
@@ -170,11 +153,11 @@ export default function ProfilePage() {
         recentlySelectedCompany,
         recentlySelectedCompanyName,
         companyUserAccess,
-        hasCompanyPermission,
+        companyOwnerId,
+        companyRoleLoading,
+        companyRoleLoaded,
     } = useContext(Context);
-    const canViewPayrollInformation = Boolean(user?.uid && recentlySelectedCompany && (
-        companyUserAccess || (typeof hasCompanyPermission === "function" && (hasCompanyPermission("420") || hasCompanyPermission("424")))
-    ));
+    const canViewPayrollInformation = canViewOwnPay({ user, recentlySelectedCompany, companyUserAccess, companyOwnerId, companyRoleLoading, companyRoleLoaded });
 
     const [editMode, setEditMode] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -248,8 +231,6 @@ export default function ProfilePage() {
             setCompanyProfile({ scope: profileScope, company: null, companyUser: null, routes: [], lineItems: [], statements: [], loading: true, error: "" });
 
             try {
-                const startDate = dateDaysAgo(365);
-                const endDate = endOfToday();
                 const todayStart = startOfToday();
 
                 const companyRef = doc(db, "companies", recentlySelectedCompany);
@@ -259,8 +240,6 @@ export default function ProfilePage() {
                     companySnap,
                     companyUserSnap,
                     routesSnap,
-                    lineItemsSnap,
-                    statementsSnap,
                 ] = await Promise.all([
                     getDoc(companyRef),
                     getDocs(query(companyUsersRef, where("userId", "==", user.uid), limit(1))),
@@ -271,17 +250,6 @@ export default function ProfilePage() {
                         orderBy("date", "desc"),
                         limit(25)
                     )),
-                    canViewPayrollInformation
-                        ? getDocs(query(
-                            collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"),
-                            where("technicianId", "==", user.uid),
-                            where("completedDate", ">=", startDate),
-                            where("completedDate", "<=", endDate)
-                        ))
-                        : Promise.resolve({ docs: [] }),
-                    canViewPayrollInformation
-                        ? getDocs(query(collection(db, "companies", recentlySelectedCompany, "technicianPayStatements"), where("technicianId", "==", user.uid)))
-                        : Promise.resolve({ docs: [] }),
                 ]);
 
                 if (cancelled) return;
@@ -301,29 +269,13 @@ export default function ProfilePage() {
                     })
                     .sort((a, b) => (dateFromValue(b.date)?.getTime() || 0) - (dateFromValue(a.date)?.getTime() || 0));
 
-                const lineItems = lineItemsSnap.docs
-                    .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-                    .filter((item) => item.technicianId === user.uid)
-                    .sort((a, b) => (dateFromValue(b.completedDate)?.getTime() || 0) - (dateFromValue(a.completedDate)?.getTime() || 0));
-
-                const statements = statementsSnap.docs
-                    .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-                    .filter((statement) => {
-                        if (statement.technicianId !== user.uid) return false;
-                        const statementStart = dateFromValue(statement.startDate);
-                        const statementEnd = dateFromValue(statement.endDate);
-                        if (!statementStart || !statementEnd) return true;
-                        return statementStart <= endDate && statementEnd >= startDate;
-                    })
-                    .sort((a, b) => (dateFromValue(b.startDate)?.getTime() || 0) - (dateFromValue(a.startDate)?.getTime() || 0));
-
                 setCompanyProfile({
                     scope: profileScope,
                     company,
                     companyUser,
                     routes,
-                    lineItems,
-                    statements,
+                    lineItems: [],
+                    statements: [],
                     loading: false,
                     error: "",
                 });
@@ -347,17 +299,16 @@ export default function ProfilePage() {
     }, [canViewPayrollInformation, recentlySelectedCompany, user?.uid, profileScope]);
 
     const workSummary = useMemo(() => {
-        const activeLineItems = companyProfile.lineItems.filter((item) => !item.voidedAt && dateFromValue(item.completedDate) >= dateDaysAgo(180));
         const totalMiles = companyProfile.routes.reduce((total, route) => total + Number(route.distanceMiles || route.distance || 0), 0);
         const totalStops = companyProfile.routes.reduce((total, route) => total + Number(route.finishedStops || 0), 0);
         return {
             totalMiles,
             totalStops,
-            workItems: activeLineItems.length,
+            routeCount: companyProfile.routes.length,
         };
-    }, [companyProfile.lineItems, companyProfile.routes]);
+    }, [companyProfile.routes]);
 
-    const payoutSummary = useMemo(() => profilePayoutSummary(companyProfile.lineItems, companyProfile.statements), [companyProfile.lineItems, companyProfile.statements]);
+
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
@@ -678,19 +629,8 @@ export default function ProfilePage() {
     const renderPayout = () => {
         if (!recentlySelectedCompany || !canViewPayrollInformation) return null;
         return (
-            <ProfileCard title="Payout Snapshot" className="profile-payout"
-                subtitle={companyProfile.loading ? "Loading payout history..." : companyProfile.error ? "Payout history is unavailable." : payoutSummary.subtitle}>
-                {companyProfile.error ? <p role="alert" className="profile-error">{companyProfile.error}</p> : (
-                    <div className="profile-metrics" aria-busy={companyProfile.loading}>
-                        <SummaryTile label="Owed" value={companyProfile.loading ? "—" : moneyFromCents(payoutSummary.owedCents)} />
-                        <SummaryTile label="Work Done" value={companyProfile.loading ? "—" : payoutSummary.workDone} />
-                        <SummaryTile label="Last Payout" value={companyProfile.loading ? "—" : payoutSummary.lastPayoutLabel} />
-                    </div>
-                )}
-                <div className="profile-payout-actions">
-                    <ActionLink to="/company/payroll?tab=statements">Open Paysheet</ActionLink>
-                    <Link to="/company/payroll?tab=requests" className={secondaryButtonClass}>Pay Requests</Link>
-                </div>
+            <ProfileCard title="Payout Snapshot" className="profile-payout">
+                <ProfilePaySnapshot key={profileScope} companyId={recentlySelectedCompany} />
             </ProfileCard>
         );
     };
@@ -704,7 +644,7 @@ export default function ProfilePage() {
                     <div className="profile-metrics">
                         <SummaryTile label="Miles" value={`${workSummary.totalMiles.toLocaleString(undefined, { maximumFractionDigits: 1 })} mi`} />
                         <SummaryTile label="Stops" value={workSummary.totalStops.toLocaleString()} />
-                        {canViewPayrollInformation && <SummaryTile label="Work Items" value={workSummary.workItems.toLocaleString()} helper="Last 180 days" />}
+                        <SummaryTile label="Routes" value={workSummary.routeCount.toLocaleString()} />
                     </div>
                     {companyProfile.routes.length === 0 ? <p className="profile-empty">No past routes found. Completed route activity will appear here.</p> : (
                         <div>{companyProfile.routes.slice(0, 6).map((route) => (

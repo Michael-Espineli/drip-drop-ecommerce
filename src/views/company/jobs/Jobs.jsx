@@ -1443,7 +1443,7 @@ const Jobs = () => {
                             type="button"
                             onClick={() => handleJobListViewChange("operations")}
                             className={getOutlinedButtonClass({
-                                tone: "emerald",
+                                tone: "blue",
                                 active: activeQuickFilter === "operations",
                             })}
                         >
@@ -1453,7 +1453,7 @@ const Jobs = () => {
                             type="button"
                             onClick={() => handleJobListViewChange("billing")}
                             className={getOutlinedButtonClass({
-                                tone: "blue",
+                                tone: "emerald",
                                 active: activeQuickFilter === "billing",
                             })}
                         >

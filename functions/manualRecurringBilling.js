@@ -4,6 +4,8 @@ const {billingActor}=require('./billingAccess');
 const {documentId,fail}=require('./companyActor');
 const {pricing,key,millis,hash}=require('./billingMath');
 const {billingPeriod}=require('./billingCalendar');
+const {createRecurringPartCharges}=require('./recurringPartCharges');
+const {agreementTerms,readAgreement}=require('./billingAgreementTerms');
 
 function eligibility(subscription,now,scheduled=false){
   if(subscription.manualBillingEnabled!==true||subscription.autopayEnabled===true||subscription.billingCollectionMethod==='automaticStripe'||subscription.stripeSubscriptionId||subscription.checkoutHold)
@@ -38,8 +40,22 @@ function createManualRecurringBilling(db,now=()=>new Date(),stripeProvider=()=>r
       if(!subscription.customerId)fail('failed-precondition','Choose the customer before generating invoices.');
       const reason=eligibility(subscription,now(),scheduled);
       if(reason){if(scheduled)return {skipped:reason};fail('failed-precondition',reason);}
+      const agreement=await readAgreement(tx,db,subscription),terms=agreementTerms(subscription,agreement,company);
+      if(terms.closed || terms.endAt && period.periodStart.getTime()>=terms.endAt){
+        if(!scheduled)fail('failed-precondition','This service agreement has ended. No new billing period can be created.');
+        tx.set(ref,{status:'expired',manualBillingEnabled:false,manualBillingAutoSendEnabled:false,manualBillingStatus:'agreementEnded',nextAction:'reviewEndedAgreement',updatedAt:now()},{merge:true});
+        return {skipped:'agreementEnded'};
+      }
+      if(terms.endAt && period.periodEnd.getTime()>terms.endAt){
+        if(!scheduled)fail('failed-precondition','This final billing period extends beyond the service agreement. Review its final invoice amount before billing.');
+        tx.set(ref,{manualBillingStatus:'finalPeriodReview',billingReviewRequired:true,billingReviewReason:'finalPeriodExtendsBeyondAgreement',nextAction:'reviewFinalInvoice',updatedAt:now()},{merge:true});
+        return {skipped:'finalPeriodReview'};
+      }
       const price=pricing(subscription),invoiceRef=db.collection('salesInvoices').doc(period.invoiceId),invoice=await tx.get(invoiceRef);
       if(invoice.exists&&(invoice.data().companyId!==subscription.companyId||invoice.data().billingSubscriptionId!==subscriptionId))fail('failed-precondition','An unrelated invoice uses this billing period identifier.');
+      const partBilling=createRecurringPartCharges(db,null,now);
+      const parts=invoice.exists?{eligible:[],invalid:[]}:await partBilling.readManual(tx,subscription);
+      const partTotal=parts.eligible.reduce((sum,snap)=>sum+snap.data().amountCents,0);
       const timestamp=now();
       const send=scheduled&&subscription.manualBillingAutoSendEnabled===true&&['email','customerPortal'].includes(subscription.invoiceDeliveryMethod||'email');
       const fields={id:invoiceRef.id,companyId:subscription.companyId,companyName:subscription.companyName||company.name||'',customerId:subscription.customerId,
@@ -49,10 +65,10 @@ function createManualRecurringBilling(db,now=()=>new Date(),stripeProvider=()=>r
         billingSubscriptionId:subscriptionId,stripeConnectedAccountId:company.stripeConnectedAccountId||subscription.stripeConnectedAccountId||'',invoiceNumber:period.invoiceNumber,type:'subscription',sourceType:'manualBillingSubscription',
         status:'open',deliveryMethod:subscription.invoiceDeliveryMethod||'email',billingCollectionMethod:subscription.billingCollectionMethod||'manualUntilAutopay',
         autopayStatus:subscription.autopayStatus||'unavailable',receiptDeliveryMethod:subscription.receiptDeliveryMethod||subscription.invoiceDeliveryMethod||'email',receiptsEnabled:subscription.receiptsEnabled!==false,
-        currency:price.currency,lineItems:price.lines,subtotalAmountCents:price.subtotalAmountCents,discountAmountCents:price.discountAmountCents,taxAmountCents:price.taxAmountCents,totalAmountCents:price.totalAmountCents,
-        amountPaidCents:0,amountDueCents:price.totalAmountCents,writeOffAmountCents:0,scheduledSendAt:period.invoiceSendAt,billingPeriodStart:period.periodStart,billingPeriodEnd:period.periodEnd,dueDate:period.dueDate,
+        currency:price.currency,lineItems:[...price.lines,...parts.eligible.map(partBilling.lineFor)],recurringPartChargeIds:parts.eligible.map(snap=>snap.id),subtotalAmountCents:price.subtotalAmountCents+partTotal,discountAmountCents:price.discountAmountCents,taxAmountCents:price.taxAmountCents,totalAmountCents:price.totalAmountCents+partTotal,
+        amountPaidCents:0,amountDueCents:price.totalAmountCents+partTotal,writeOffAmountCents:0,scheduledSendAt:period.invoiceSendAt,billingPeriodStart:period.periodStart,billingPeriodEnd:period.periodEnd,dueDate:period.dueDate,
         memo:String(memo||subscription.manualInvoiceMemo||'').slice(0,5000),recurringManualInvoice:true,manualBilling:{generatedFromSubscriptionId:subscriptionId,periodStartKey:period.invoiceId,autoGenerated:scheduled},createdByUserId:actor?.uid||'scheduled-manual-invoice',createdAt:timestamp,updatedAt:timestamp};
-      if(!invoice.exists)tx.set(invoiceRef,fields);
+      if(!invoice.exists){tx.set(invoiceRef,fields);partBilling.claimManual(tx,parts,invoiceRef.id);}
       tx.set(ref,{billingTimeZone:period.timeZone,billingAnchorDay:period.anchorDay,billingSendAnchorDay:period.sendAnchorDay,
         manualBillingLastInvoiceId:period.invoiceId,manualBillingLastInvoiceNumber:period.invoiceNumber,manualBillingLastInvoiceAt:timestamp,
         manualBillingLastPeriodStart:period.periodStart,manualBillingLastPeriodEnd:period.periodEnd,manualBillingLastInvoiceDueDate:period.dueDate,
@@ -76,9 +92,20 @@ function createManualRecurringBilling(db,now=()=>new Date(),stripeProvider=()=>r
       }catch(error){failed++;console.error('Manual billing generation failed',{subscriptionId:doc.id,error:error.message});}}
       cursor=page.size===200?page.docs.at(-1):null;
     }while(cursor);
+    // An interrupted sender may have delivered its email. Recover its state for
+    // review instead of leaving it stuck forever or sending a second invoice.
+    let deliveryCursor=null;
+    do{
+      let query=db.collection('billingEmailQueue').where('status','==','sending').orderBy('__name__').limit(200);
+      if(deliveryCursor)query=query.startAfter(deliveryCursor);
+      const page=await query.get();
+      for(const item of page.docs)await db.runTransaction(async tx=>{const current=await tx.get(item.ref);if(current.data()?.status==='sending' && now().getTime()-millis(current.data()?.startedAt)>600000)tx.set(item.ref,{status:'reviewRequired',error:'Invoice email delivery was interrupted. Review before sending again.',updatedAt:now()},{merge:true});});
+      deliveryCursor=page.size===200?page.docs.at(-1).id:null;
+    }while(deliveryCursor);
     // Email retries never rewind service periods. Ambiguous send outcomes require review.
     const queue=await db.collection('billingEmailQueue').where('status','==','pending').limit(200).get();
     for(const item of queue.docs){
+      if(item.data().source === 'partApproval')continue;
       const claimed=await db.runTransaction(async tx=>{const current=await tx.get(item.ref);if(current.data()?.status!=='pending')return false;tx.set(item.ref,{status:'sending',startedAt:now()},{merge:true});return true;});
       if(!claimed)continue;
       try{const invoice=await db.collection('salesInvoices').doc(item.id).get();if(!invoice.data()?.sentAt)await sendEmail(item.data());await item.ref.set({status:'sent',completedAt:now()},{merge:true});}

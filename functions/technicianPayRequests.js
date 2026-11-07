@@ -33,7 +33,7 @@ function createTechnicianPayRequests(db,now=()=>new Date()) {
     const status=d.action==='propose'?'Counteroffered':'Pending';
     t.set(ref,{id:ref.id,companyId,technicianId,technicianName:d.action==='propose'?String(d.technicianName || technicianId):a.name,type,status,amountCents:amount,counterAmountCents:d.action==='propose'?amount:null,payTypeId:payType?.id || '',payTypeName:payType?.name || '',payBasis:d.payBasis || 'manualAdjustment',rateType:d.rateType || 'manual',effectiveStartDate:type==='rateChange'?date(d.effectiveStartMillis):null,payLineItemId:source?.id || '',reason:String(d.reason).trim(),createdAt:now(),updatedAt:now(),createdByUserId:uid,history:[{action:d.action,actorId:uid,at:now(),amountCents:amount}]});
     const recipient=d.action==='propose'?technicianId:a.company.ownerId;
-    if(recipient) t.set(db.collection('users').doc(recipient).collection('alerts').doc('pay_request_'+ref.id),{source:'payChangeRequest',recipientUserId:recipient,companyId,title:d.action==='propose'?'New pay proposal':'New pay request',message:d.action==='propose'?'Review your proposed rate schedule.':a.name+' submitted a pay request.',status:'Unread',read:false,createdAt:now(),date:now(),route:'/company/payroll'});
+    if(recipient) t.set(db.collection('users').doc(recipient).collection('alerts').doc('pay_request_'+ref.id),{source:'payChangeRequest',recipientUserId:recipient,companyId,title:d.action==='propose'?'New pay proposal':'New pay request',message:d.action==='propose'?'Review your proposed rate schedule.':a.name+' submitted a pay request.',status:'Unread',read:false,createdAt:now(),date:now(),route:d.action==='propose'?'/company/my-pay?tab=requests':'/company/payroll?tab=requests'});
     return {requestId:ref.id,status};
    }
    if(!existing) fail('not-found','Pay request not found.');
@@ -62,13 +62,13 @@ function createTechnicianPayRequests(db,now=()=>new Date()) {
     const adjustmentId='comp_pay_adjustment_'+ref.id;
     const correctedAmount=Number(source.totalAmountCents || 0)+adjustments.filter(v=>v.calculationStatus!=='voided').reduce((sum,v)=>sum+Number(v.totalAmountCents || 0),0);
     const difference=amount-correctedAmount;
-    t.set(c.collection('technicianPayLineItems').doc(adjustmentId),{...source,id:adjustmentId,source:'manualAdjustment',payrollSource:'payCorrection',payrollComponentId:'adjustment:'+ref.id,totalAmountCents:difference,rateAmountCents:difference,rateType:'manual',payBasis:'manualAdjustment',quantity:1,quantityUnit:'each',calculationStatus:'approved',approvedAt:now(),approvedByUserId:uid,paidAt:null,paidByUserId:null,payStatementId:null,exportBatchId:null,voidedAt:null,previousPayLineItemId:source.id,payChangeRequestId:ref.id,notes:existing.reason,calculatedAt:now(),completedDate:now()});
+    if(difference!==0) t.set(c.collection('technicianPayLineItems').doc(adjustmentId),{...source,id:adjustmentId,source:'manualAdjustment',payrollSource:'payCorrection',payrollComponentId:'adjustment:'+ref.id,totalAmountCents:difference,rateAmountCents:difference,rateType:'manual',payBasis:'manualAdjustment',quantity:1,quantityUnit:'each',calculationStatus:'approved',approvedAt:now(),approvedByUserId:uid,paidAt:null,paidByUserId:null,payStatementId:null,exportBatchId:null,voidedAt:null,previousPayLineItemId:source.id,payChangeRequestId:ref.id,notes:existing.reason,calculatedAt:now(),completedDate:now()});
    }
    const status=approved?'Approved':d.action==='counter'?'Counteroffered':'Rejected';
    const patch={status,updatedAt:now(),decisionByUserId:uid,decisionReason:String(d.reason || ''),history:[...(existing.history || []),{action:d.action,actorId:uid,at:now(),amountCents:amount,reason:String(d.reason || '')}]};
    if(d.action==='counter') { patch.counterAmountCents=amount; if(d.effectiveStartMillis) patch.effectiveStartDate=date(d.effectiveStartMillis); }
    t.set(ref,patch,{merge:true});
-   t.set(db.collection('users').doc(existing.technicianId).collection('alerts').doc('pay_request_'+ref.id+'_'+status),{source:'payChangeRequest',relatedEntity:{type:'payChangeRequest',id:ref.id},recipientUserId:existing.technicianId,title:'Pay request '+status,message:patch.decisionReason || existing.reason,status:'Unread',read:false,createdAt:now(),date:now(),route:'/company/payroll'});
+   t.set(db.collection('users').doc(existing.technicianId).collection('alerts').doc('pay_request_'+ref.id+'_'+status),{source:'payChangeRequest',companyId,relatedEntity:{type:'payChangeRequest',id:ref.id},recipientUserId:existing.technicianId,title:'Pay request '+status,message:patch.decisionReason || existing.reason,status:'Unread',read:false,createdAt:now(),date:now(),route:'/company/my-pay?tab=requests'});
    return {requestId:ref.id,status};
   });
  }

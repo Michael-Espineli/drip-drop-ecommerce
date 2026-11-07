@@ -1,5 +1,6 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import { workspaceButtonClass, workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
@@ -41,6 +42,7 @@ import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/F
 import {
     DEFAULT_ISSUE_PRIORITY,
     DEFAULT_JOB_PLAN_TIER,
+    ISSUE_PRIORITY,
     JOB_PLAN_STATUS,
     getIssuePriorityLabel,
     getJobPlanRecommendationLabel,
@@ -71,6 +73,7 @@ import {
     uniqueStringList,
 } from "../../../utils/jobEquipmentScope";
 import { REPAIR_REQUEST_STATUS, getRepairRequestIssuePriority } from "../../../utils/models/RepairRequest";
+import { JOB_BILLING_STATUS, JOB_OPERATION_STATUS } from "../../../utils/jobStatusFilters";
 
 const selectStyles = workspaceSelectStyles({
     control: (base, state) => ({
@@ -308,23 +311,26 @@ const buildCompanyUserOption = (docSnap) => {
     };
 };
 
-const BasicWorkOrderCreate = () => {
+const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCancel, onCreated } = {}) => {
   const pendingCreationId = useRef(null);
     const navigate = useNavigate();
     const location = useLocation();
-    const [searchParams] = useSearchParams();
-    const equipmentContext = location.state?.equipmentContext || null;
-    const customerContext = location.state?.customerContext || null;
-    const repairRequest = location.state?.repairRequest || null;
+    const [routeSearchParams] = useSearchParams();
+    const searchParams = useMemo(() => embedded ? new URLSearchParams() : routeSearchParams, [embedded, routeSearchParams]);
+    const creationContext = initialContext || location.state;
+    const scheduleLater = embedded || searchParams.get("schedule") === "later";
+    const equipmentContext = creationContext?.equipmentContext || null;
+    const customerContext = creationContext?.customerContext || null;
+    const repairRequest = creationContext?.repairRequest || null;
     const repairRequestSourcePath =
-        location.state?.repairRequestSourcePath ||
+        creationContext?.repairRequestSourcePath ||
         repairRequest?.sourcePath ||
         "company";
-    const defaultDescriptionFromState = location.state?.defaultDescription || "";
-    const jobIntent = location.state?.jobIntent || equipmentContext?.jobIntent || "";
-    const createdFromCustomerDetail = Boolean(location.state?.createdFromCustomerDetail);
-    const createdFromEquipmentCard = Boolean(location.state?.createdFromEquipmentCard);
-    const createdFromEquipmentDetail = Boolean(location.state?.createdFromEquipmentDetail);
+    const defaultDescriptionFromState = creationContext?.defaultDescription || "";
+    const jobIntent = creationContext?.jobIntent || equipmentContext?.jobIntent || "";
+    const createdFromCustomerDetail = Boolean(creationContext?.createdFromCustomerDetail);
+    const createdFromEquipmentCard = Boolean(creationContext?.createdFromEquipmentCard);
+    const createdFromEquipmentDetail = Boolean(creationContext?.createdFromEquipmentDetail);
     const {
         recentlySelectedCompany,
         recentlySelectedCompanyName,
@@ -354,17 +360,22 @@ const BasicWorkOrderCreate = () => {
     const [loadingLocationAssets, setLoadingLocationAssets] = useState(false);
 
     const [mode, setMode] = useState("template");
-    const [selectedTemplate, setSelectedTemplate] = useState(null);
+    const [templateSelection, setSelectedTemplate] = useState(null);
+    const selectedTemplate = scheduleLater && mode !== "template" ? null : templateSelection;
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [selectedServiceLocation, setSelectedServiceLocation] = useState(null);
     const [selectedBodyOfWater, setSelectedBodyOfWater] = useState(null);
     const [selectedEquipment, setSelectedEquipment] = useState(null);
     const [selectedAssignee, setSelectedAssignee] = useState(null);
+    const [selectedJobAdminId, setSelectedJobAdminId] = useState("");
+    const [jobBillingStatus, setJobBillingStatus] = useState(JOB_BILLING_STATUS.accepted);
     const [description, setDescription] = useState("");
     const [scheduledAt, setScheduledAt] = useState(defaultScheduledAt);
     const [customPrice, setCustomPrice] = useState("0.00");
     const [customEstimatedMinutes, setCustomEstimatedMinutes] = useState("60");
-    const newJobIssuePriority = repairRequest ? getRepairRequestIssuePriority(repairRequest) : getTemplateDefaultIssuePriority(selectedTemplate || {});
+    const newJobIssuePriority = repairRequest ? getRepairRequestIssuePriority(repairRequest)
+        : jobIntent === "maintenance" && scheduleLater ? ISSUE_PRIORITY.PREVENTIVE
+        : getTemplateDefaultIssuePriority(selectedTemplate || {});
 
     const loggedInUser = currentUser || user || {};
     const { userId: createdByUserId, userName: createdByUserName } = resolveJobCreator({ user: loggedInUser, profile: dataBaseUser || {} });
@@ -374,8 +385,8 @@ const BasicWorkOrderCreate = () => {
     const canTemplateOthers = canUseFullCreate || can(CREATE_TEMPLATE_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID);
     const canCustomSelf = canUseFullCreate || can(CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID);
     const canCustomOthers = canUseFullCreate || can(CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID);
-    const canUseTemplate = canTemplateSelf || canTemplateOthers;
-    const canUseCustom = canCustomSelf || canCustomOthers;
+    const canUseTemplate = scheduleLater ? canUseFullCreate : canTemplateSelf || canTemplateOthers;
+    const canUseCustom = scheduleLater ? canUseFullCreate : canCustomSelf || canCustomOthers;
     const canAssignForSelectedMode = mode === "template" ? canTemplateOthers : canCustomOthers;
     const hasAnyBasicPermission = canUseTemplate || canUseCustom;
 
@@ -598,6 +609,12 @@ const BasicWorkOrderCreate = () => {
     );
 
     const resolvedAdmin = useMemo(() => {
+        if (scheduleLater) {
+            const admin = adminOptions.find((item) => item.userId === selectedJobAdminId || item.id === selectedJobAdminId)
+                || adminOptions.find((item) => item.userId === companyDefaults.defaultAdminId || item.id === companyDefaults.defaultAdminId)
+                || adminOptions[0];
+            return admin ? { id: admin.userId || admin.id, name: admin.userName || admin.label, source: "Job admin" } : null;
+        }
         if (!selectedAssignee) return null;
 
         const explicitAdminId = getAssignedWorkOrderAdminId(selectedAssignee);
@@ -653,7 +670,7 @@ const BasicWorkOrderCreate = () => {
         }
 
         return null;
-    }, [adminOptions, companyDefaults.defaultAdminId, companyDefaults.defaultAdminName, companyUsers, selectedAssignee]);
+    }, [adminOptions, companyDefaults.defaultAdminId, companyDefaults.defaultAdminName, companyUsers, selectedAssignee, scheduleLater, selectedJobAdminId]);
 
     const templateGeneratedPriceCents = useMemo(() => {
         if (!selectedTemplate) return 0;
@@ -685,10 +702,10 @@ const BasicWorkOrderCreate = () => {
         selectedModeAllowed &&
         selectedCustomer?.id &&
         selectedServiceLocation?.id &&
-        selectedAssignee?.userId &&
-        scheduledAt &&
+        (scheduleLater || (selectedAssignee?.userId && scheduledAt)) &&
         resolvedAdmin?.id &&
         (mode === "custom" || selectedTemplate?.id) &&
+        !loadingLocationAssets &&
         templateDetailsReady &&
         !selectedTemplateLaborLinesMissing &&
         missingEquipmentAssignments.length === 0 &&
@@ -832,12 +849,12 @@ const BasicWorkOrderCreate = () => {
 
     useEffect(() => {
         const templateId = searchParams.get("templateId");
-        if ((!templateId && !jobIntent) || !templateOptions.length || selectedTemplate) return;
+        if (mode !== "template" || (!templateId && !jobIntent) || !templateOptions.length || selectedTemplate) return;
         const matchedTemplate = templateId
             ? templateOptions.find((template) => template.id === templateId)
             : templateOptions.find((template) => templateIntentMatches(template, jobIntent)) || templateOptions[0];
         if (matchedTemplate) setSelectedTemplate(matchedTemplate);
-    }, [jobIntent, searchParams, selectedTemplate, templateOptions]);
+    }, [jobIntent, mode, searchParams, selectedTemplate, templateOptions]);
 
     useEffect(() => {
         const customerId =
@@ -1114,8 +1131,8 @@ const BasicWorkOrderCreate = () => {
         jobId,
         sourcePlanId: planId,
         sourceSolutionId: planId,
-        name: "Custom Work",
-        type: "General",
+        name: scheduleLater && jobIntent === "maintenance" ? "Maintenance" : "Custom Work",
+        type: scheduleLater && jobIntent === "maintenance" ? "Maintenance" : "General",
         description: description.trim(),
         contractedRate: 0,
         billingLaborPriceCents: customPriceCents,
@@ -1798,7 +1815,7 @@ const BasicWorkOrderCreate = () => {
 
     const handleCreate = async () => {
         if (!hasAnyBasicPermission) {
-            await appAlert("You do not have permission to create and schedule jobs.");
+            await appAlert(scheduleLater ? "You do not have permission to create unscheduled jobs." : "You do not have permission to create and schedule jobs.");
             return;
         }
 
@@ -1833,18 +1850,18 @@ const BasicWorkOrderCreate = () => {
         }
 
         if (!canCreate) {
-            await appAlert("Pick a template or custom job, customer, service location, technician, scheduled time, and assigned admin.");
+            await appAlert(scheduleLater ? "Pick a template or basic job, customer, service location, and assigned admin." : "Pick a template or custom job, customer, service location, technician, scheduled time, and assigned admin.");
             return;
         }
 
-        if (!canAssignForSelectedMode && selectedAssignee?.userId !== currentCompanyUser?.userId) {
+        if (!scheduleLater && !canAssignForSelectedMode && selectedAssignee?.userId !== currentCompanyUser?.userId) {
             await appAlert("You can only assign this job to yourself.");
             setSelectedAssignee(currentCompanyUser);
             return;
         }
 
-        const scheduledDate = new Date(scheduledAt);
-        if (Number.isNaN(scheduledDate.getTime())) {
+        const scheduledDate = scheduleLater ? null : new Date(scheduledAt);
+        if (!scheduleLater && Number.isNaN(scheduledDate.getTime())) {
             await appAlert("Choose a valid scheduled date and time.");
             return;
         }
@@ -1951,15 +1968,15 @@ const BasicWorkOrderCreate = () => {
                 const jobData = {
                     id: jobId,
                     internalId: nextInternalId,
-                    type: selectedTemplate?.jobType || selectedTemplate?.type || (mode === "template" ? "Template Job" : "Custom Job"),
+                    type: selectedTemplate?.jobType || selectedTemplate?.type || (scheduleLater && jobIntent === "maintenance" ? "Maintenance" : mode === "template" ? "Template Job" : "Custom Job"),
                     dateCreated: nowTimestamp,
                     updatedAt: nowTimestamp,
                     updatedAtMillis: nowMillis,
-                    lastHistoryEventTitle: "Job created and scheduled",
+                    lastHistoryEventTitle: scheduleLater ? "Job created" : "Job created and scheduled",
                     lastHistoryEventType: "Created",
                     description: description.trim() || selectedTemplate?.description || "",
-                    operationStatus: "Scheduled",
-                    billingStatus: "Draft",
+                    operationStatus: scheduleLater ? JOB_OPERATION_STATUS.unscheduled : JOB_OPERATION_STATUS.scheduled,
+                    billingStatus: scheduleLater ? jobBillingStatus : JOB_BILLING_STATUS.draft,
                     issuePriorityLevel,
                     issuePriorityLabel,
                     priorityLevel: issuePriorityLevel,
@@ -2034,13 +2051,13 @@ const BasicWorkOrderCreate = () => {
                     equipmentContext: equipmentContext || null,
                     customerContext: customerContext || null,
                     jobIntent,
-                    assignedTechId: selectedAssignee.userId,
-                    assignedTechName: selectedAssignee.userName,
-                    assignedCompanyUserId: selectedAssignee.id,
-                    scheduledAt: Timestamp.fromDate(scheduledDate),
-                    scheduledDate: Timestamp.fromDate(scheduledDate),
+                    assignedTechId: scheduleLater ? "" : selectedAssignee.userId,
+                    assignedTechName: scheduleLater ? "" : selectedAssignee.userName,
+                    assignedCompanyUserId: scheduleLater ? "" : selectedAssignee.id,
+                    scheduledAt: scheduleLater ? null : Timestamp.fromDate(scheduledDate),
+                    scheduledDate: scheduleLater ? null : Timestamp.fromDate(scheduledDate),
                     customerRegionTags: normalizeCustomerTags(selectedCustomer.tags || []),
-                    assignedTechRegionTags: selectedAssigneeRegionalTags,
+                    assignedTechRegionTags: scheduleLater ? [] : selectedAssigneeRegionalTags,
                     createdByUserId,
                     createdByUserName,
                 };
@@ -2077,7 +2094,7 @@ const BasicWorkOrderCreate = () => {
                 }
 
                 const preferredPlannedStop = normalizedPlannedStops[0] || null;
-                const scheduledStop = await createScheduledServiceStop({
+                const scheduledStop = scheduleLater ? null : await createScheduledServiceStop({
                     writer,
                     jobId,
                     jobInternalId: nextInternalId,
@@ -2093,15 +2110,17 @@ const BasicWorkOrderCreate = () => {
                     jobId,
                     jobInternalId: nextInternalId,
                     eventType: "Created",
-                    title: "Job created and scheduled",
+                    title: scheduleLater ? "Job created" : "Job created and scheduled",
                     description: repairRequest?.id
                         ? `Created from repair request: ${repairRequest.description || repairRequest.id}`
                         : selectedTemplate?.name
                             ? `Created from technician template: ${selectedTemplate.name}`
-                            : "Created from the custom job scheduling form.",
+                            : scheduleLater ? "Created from the basic job form. First visit not yet scheduled." : "Created from the custom job scheduling form.",
                     changes: [
                         { field: "adminName", label: "Admin", before: "-", after: resolvedAdmin.name || "-" },
-                        { field: "assignedTechName", label: "Technician", before: "-", after: selectedAssignee.userName || "-" },
+                        ...(!scheduleLater ? [{ field: "assignedTechName", label: "Technician", before: "-", after: selectedAssignee.userName || "-" }] : []),
+                        { field: "operationStatus", label: "Operation Status", before: "-", after: jobData.operationStatus },
+                        { field: "billingStatus", label: "Billing Status", before: "-", after: jobData.billingStatus },
                         { field: "customerName", label: "Customer", before: "-", after: customerName || "-" },
                         { field: "serviceLocationName", label: "Service Location", before: "-", after: selectedServiceLocation.label || "-" },
                         ...(primaryBodyOfWaterName
@@ -2110,7 +2129,7 @@ const BasicWorkOrderCreate = () => {
                         ...(createdEquipmentSummary.equipmentNames?.length
                             ? [{ field: "equipmentNames", label: "Equipment", before: "-", after: createdEquipmentSummary.equipmentNames.join(", ") }]
                             : []),
-                        { field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() },
+                        ...(!scheduleLater ? [{ field: "scheduledAt", label: "Scheduled Time", before: "-", after: scheduledDate.toLocaleString() }] : []),
                         { field: "laborLineItems", label: "Service Lines", before: "-", after: String(normalizedLaborLineItems.length) },
                         { field: "rate", label: "Generated Price", before: "-", after: moneyFromCents(starterPlanRecord.totalAmountCents || generatedPriceCents) },
                     ],
@@ -2122,8 +2141,8 @@ const BasicWorkOrderCreate = () => {
                         starterPlanId: planId,
                         activePlanId: planId,
                         activeSolutionId: planId,
-                        scheduledServiceStopId: scheduledStop.stopId,
-                        scheduledServiceStopInternalId: scheduledStop.serviceStopInternalId,
+                        scheduledServiceStopId: scheduledStop?.stopId || "",
+                        scheduledServiceStopInternalId: scheduledStop?.serviceStopInternalId || "",
                         bodyOfWaterId: primaryBodyOfWaterId,
                         bodyOfWaterName: primaryBodyOfWaterName,
                         bodyOfWaterIds: createdBodyOfWaterIds,
@@ -2151,21 +2170,23 @@ const BasicWorkOrderCreate = () => {
 
             });
             pendingCreationId.current = null;
-            toast.success("Job scheduled.");
-            navigate(`/company/jobs/detail/${jobId}`);
+            toast.success(scheduleLater ? "Job created. Schedule the first visit when ready." : "Job scheduled.");
+            if (onCreated) onCreated(jobId);
+            else navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating basic job:", error);
-            toast.error(userFacingErrorMessage(error, ["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : "Failed to create and schedule job."));
+            toast.error(userFacingErrorMessage(error, ["job-scope-too-large", "job-template-unavailable"].includes(error.code) ? error.message : scheduleLater ? "Failed to create job." : "Failed to create and schedule job."));
         } finally {
             setCreating(false);
         }
     };
 
+    const renderForm = () => {
     if (!permissionsReady || loading) {
         return (
-            <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+            <div className={`flex ${embedded ? "min-h-64" : "min-h-screen"} items-center justify-center bg-slate-50 px-4`}>
                 <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 text-sm font-semibold text-slate-700 shadow-sm">
-                    Loading job scheduling form...
+                    {scheduleLater ? "Loading job form..." : "Loading job scheduling form..."}
                 </div>
             </div>
         );
@@ -2173,29 +2194,29 @@ const BasicWorkOrderCreate = () => {
 
     if (!hasAnyBasicPermission) {
         return (
-            <div className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center bg-slate-50 px-4 text-center">
+            <div className={`mx-auto flex ${embedded ? "min-h-64" : "min-h-screen"} max-w-xl flex-col items-center justify-center bg-slate-50 px-4 text-center`}>
                 <h1 className="text-2xl font-bold text-slate-950">Permission Required</h1>
                 <p className="mt-2 text-sm text-slate-600">
-                    Your role needs a basic template or custom basic-job permission before you can use this form.
+                    {scheduleLater ? "Your role needs Create Jobs permission to create work before scheduling." : "Your role needs a basic template or custom basic-job permission before you can use this form."}
                 </p>
-                <Link to="/company/jobs" className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
+                {!embedded && <Link to="/company/jobs" className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
                     Back to Jobs
-                </Link>
+                </Link>}
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
+        <div className={embedded ? "bg-slate-50 p-4 text-slate-950 sm:p-5" : "min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8"}>
             <div className="mx-auto max-w-6xl space-y-5">
-                <WorkspaceRecordHeader title={<>Create and Schedule Job</>} eyebrow="Company operations"><div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
+                {!embedded && <WorkspaceRecordHeader title={scheduleLater ? "Create Job" : "Create and Schedule Job"} eyebrow="Company operations"><div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                         <Link to="/company/jobs" className="text-sm font-semibold text-blue-700 hover:text-blue-900">
                             Back to Jobs
                         </Link>
 
                         <p className="mt-1 text-sm text-slate-500">
-                            Choose a template or custom scope, assign a technician, and schedule the first visit.
+                            {scheduleLater ? "Create a job from a template or a basic job. Track customer approval now and schedule the first visit when ready." : "Choose a template or custom scope, assign a technician, and schedule the first visit."}
                         </p>
                     </div>
 
@@ -2203,7 +2224,7 @@ const BasicWorkOrderCreate = () => {
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated Price</p>
                         <p className="mt-1 text-2xl font-bold text-slate-950">{moneyFromCents(generatedPriceCents)}</p>
                     </div>
-                </div></WorkspaceRecordHeader>
+                </div></WorkspaceRecordHeader>}
 
                 {requestedTemplateUnavailable && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
                     The requested template is inactive or unavailable to your role. Choose another available template{canUseCustom ? " or create a custom job" : ""}.
@@ -2213,7 +2234,7 @@ const BasicWorkOrderCreate = () => {
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div>
                                 <h2 className="text-base font-semibold text-slate-950">Job Setup</h2>
-                                <p className="mt-1 text-sm text-slate-500">Choose a template or custom scope, then schedule the first visit.</p>
+                                <p className="mt-1 text-sm text-slate-500">{scheduleLater ? "Choose a template or basic job. The job will be saved as Unscheduled." : "Choose a template or custom scope, then schedule the first visit."}</p>
                             </div>
 
                             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -2231,15 +2252,19 @@ const BasicWorkOrderCreate = () => {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => canUseCustom && setMode("custom")}
+                                    onClick={() => {
+                                        if (!canUseCustom) return;
+                                        setMode("custom");
+                                        if (scheduleLater) setSelectedTemplate(null);
+                                    }}
                                     disabled={!canUseCustom}
                                     className={[
                                         "rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60",
                                         mode === "custom" ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
                                     ].join(" ")}
                                 >
-                                    <p className="font-semibold">Custom</p>
-                                    <p className="mt-1 text-sm">Create one simple job item with a basic price and scheduled visit.</p>
+                                    <p className="font-semibold">{scheduleLater ? "Basic Job" : "Custom"}</p>
+                                    <p className="mt-1 text-sm">{scheduleLater ? "Create one simple job item with a basic price." : "Create one simple job item with a basic price and scheduled visit."}</p>
                                 </button>
                             </div>
                         </section>
@@ -2502,6 +2527,29 @@ const BasicWorkOrderCreate = () => {
                                             />
                                         </div>
                                     </label>
+                                {scheduleLater ? <>
+                                    <label className="block">
+                                        <span className="text-sm font-semibold text-slate-700">Assigned Admin</span>
+                                        <div className="mt-2">
+                                            <Select
+                                                value={adminOptions.find((admin) => admin.userId === resolvedAdmin?.id || admin.id === resolvedAdmin?.id) || null}
+                                                options={adminOptions}
+                                                onChange={(admin) => setSelectedJobAdminId(admin?.userId || admin?.id || "")}
+                                                placeholder="Choose admin..."
+                                                styles={selectStyles}
+                                            />
+                                        </div>
+                                    </label>
+                                    <label className="block">
+                                        <span className="text-sm font-semibold text-slate-700">Billing Status</span>
+                                        <select className={`mt-2 ${inputBase}`} value={jobBillingStatus} onChange={(event) => setJobBillingStatus(event.target.value)}>
+                                            <option value={JOB_BILLING_STATUS.accepted}>Accepted</option>
+                                            <option value={JOB_BILLING_STATUS.estimate}>Estimate</option>
+                                            <option value={JOB_BILLING_STATUS.draft}>Draft</option>
+                                        </select>
+                                        <p className="mt-1 text-xs text-slate-500">Use Accepted when the customer has approved the work.</p>
+                                    </label>
+                                </> : <>
 	                                <label className="block">
 	                                    <span className="text-sm font-semibold text-slate-700">Technician</span>
 	                                    <div className="mt-2">
@@ -2524,6 +2572,7 @@ const BasicWorkOrderCreate = () => {
                                         type="datetime-local"
                                     />
                                 </label>
+                                </>}
                             </div>
 
                             <label className="mt-4 block">
@@ -2543,14 +2592,17 @@ const BasicWorkOrderCreate = () => {
                             <h2 className="text-base font-semibold text-slate-950">Assignment</h2>
                             <div className="mt-4 space-y-3 text-sm">
                                     <Detail label="Priority" value={`${newJobIssuePriority} - ${getIssuePriorityLabel(newJobIssuePriority)}`} />
-                                <Detail label="Technician" value={selectedAssignee?.userName || "Not selected"} />
+                                <Detail label="Technician" value={scheduleLater ? "Not assigned" : selectedAssignee?.userName || "Not selected"} />
                                 <Detail label="Assigned Admin" value={resolvedAdmin?.name || "Not assigned"} />
                                 <Detail label="Admin Source" value={resolvedAdmin?.source || "Set a user admin or company default"} />
-                                <Detail label="Regional Tags" value={selectedAssigneeRegionalTags.join(", ") || "Full access or no tags"} />
+                                {scheduleLater ? <>
+                                    <Detail label="Operation Status" value={JOB_OPERATION_STATUS.unscheduled} />
+                                    <Detail label="Billing Status" value={jobBillingStatus} />
+                                </> : <Detail label="Regional Tags" value={selectedAssigneeRegionalTags.join(", ") || "Full access or no tags"} />}
                             </div>
                             {!resolvedAdmin?.id && (
                                 <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                                    Assign a basic-job admin to this technician or set a company default admin before creating the job.
+                                    {scheduleLater ? "Choose an assigned admin before creating the job." : "Assign a basic-job admin to this technician or set a company default admin before creating the job."}
                                 </p>
                             )}
                         </section>
@@ -2558,32 +2610,65 @@ const BasicWorkOrderCreate = () => {
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h2 className="text-base font-semibold text-slate-950">Summary</h2>
                             <div className="mt-4 space-y-3 text-sm">
-	                                <Detail label="Mode" value={mode === "template" ? "Template" : "Custom"} />
+	                                <Detail label="Mode" value={mode === "template" ? "Template" : scheduleLater ? "Basic Job" : "Custom"} />
 	                                <Detail label="Customer" value={selectedCustomer?.label || "Not selected"} />
 	                                <Detail label="Location" value={selectedServiceLocation?.label || "Not selected"} />
                                     <Detail label="Body Of Water" value={resolvedJobBodyOfWaterName || (selectedTemplateRequiresBodyOfWater ? "Required" : "Not selected")} />
                                     <Detail label="Equipment" value={assignedEquipmentSummary.equipmentNames?.join(", ") || selectedEquipmentName || (selectedTemplateRequiresEquipment ? "Required" : "Not selected")} />
 	                                <Detail label="Price" value={moneyFromCents(generatedPriceCents)} />
 	                            </div>
-	                            <button
+	                            {!embedded && <><button
 	                                type="button"
 	                                onClick={handleCreate}
 	                                disabled={!canCreate || creating || loadingTemplateDetails}
 	                                className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
 	                            >
-	                                {creating ? "Scheduling..." : loadingTemplateDetails ? "Loading Template..." : "Create and Schedule"}
+	                                {creating ? scheduleLater ? "Creating..." : "Scheduling..." : loadingTemplateDetails ? "Loading Template..." : scheduleLater ? "Create Job" : "Create and Schedule"}
 	                            </button>
                             <Link
                                 to="/company/jobs"
                                 className="mt-2 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-center text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                             >
                                 Cancel
-                            </Link>
+                            </Link></>}
                         </section>
                     </aside>
                 </div>
             </div>
         </div>
+    );
+    };
+
+    if (!embedded) return renderForm();
+
+    return (
+        <Dialog open onClose={() => !creating && onCancel()} className="relative z-50">
+            <div className="fixed inset-0 bg-slate-950/60" aria-hidden="true" />
+            <div className="fixed inset-0 flex items-center justify-center p-4">
+                <DialogPanel className="flex max-h-[calc(100dvh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-5">
+                        <div>
+                            <DialogTitle className="text-xl font-bold text-slate-950">Create Job</DialogTitle>
+                            <p className="mt-1 text-sm text-slate-500">Create a job from a template or a basic job. Schedule the first visit when ready.</p>
+                        </div>
+                        <button type="button" aria-label="Close create job" onClick={onCancel} disabled={creating}
+                            className={workspaceButtonClass({ tone: "slate", className: "shrink-0" })}>
+                            <span aria-hidden="true">×</span>
+                        </button>
+                    </div>
+                    <div className="min-h-0 overflow-y-auto">{renderForm()}</div>
+                    <div className="flex shrink-0 justify-end gap-3 border-t border-slate-200 p-4">
+                        <button type="button" onClick={onCancel} disabled={creating}
+                            className={workspaceButtonClass({ tone: "slate" })}>Cancel</button>
+                        <button type="button" onClick={handleCreate}
+                            disabled={!permissionsReady || loading || !hasAnyBasicPermission || !canCreate || creating || loadingTemplateDetails}
+                            className={workspaceButtonClass({ tone: "emerald" })}>
+                            {creating ? "Creating..." : "Create Job"}
+                        </button>
+                    </div>
+                </DialogPanel>
+            </div>
+        </Dialog>
     );
 };
 

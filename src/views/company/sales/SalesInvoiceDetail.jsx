@@ -1,4 +1,9 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import StripePaymentRefund from '../../../components/billing/StripePaymentRefund';
+import SavedInvoicePayment from '../../../components/billing/SavedInvoicePayment';
+import StripeInvoiceActions from '../../../components/billing/StripeInvoiceActions';
+import SalesPaymentReceiptButton from '../../../components/billing/SalesPaymentReceiptButton';
+import StripePaymentRefresh from '../../../components/billing/StripePaymentRefresh';
 import InvoiceAdjustments from '../../../components/billing/InvoiceAdjustments';
 import JobInvoiceReissue from '../../../components/billing/JobInvoiceReissue';
 import { netPaymentCents } from '../../../utils/sales/financialMetrics';
@@ -854,7 +859,7 @@ const SalesInvoiceDetail = () => {
   }, [draft, invoice?.amountPaidCents]);
 
   const canSend = Boolean(
-    canManageBilling && !invoice?.paymentReviewRequired && balanceCents > 0 &&
+    canManageBilling && !invoice?.paymentReviewRequired && !(invoice?.stripeInvoiceId && invoice?.status === 'draft') && balanceCents > 0 &&
     invoice &&
     !companyMismatch &&
     !editing &&
@@ -1506,6 +1511,9 @@ const SalesInvoiceDetail = () => {
                 </section>
 
               {canManageBilling && !companyMismatch && <InvoiceAdjustments key={invoice.id} invoice={invoice} payments={payments} userId={user?.uid} />}
+              {canManageBilling && !companyMismatch && <StripePaymentRefund key={`refund-${invoice.id}`} invoice={invoice} payments={payments} userId={user?.uid} />}
+              {canManageBilling && !companyMismatch && <SavedInvoicePayment key={`saved-${invoice.id}`} invoice={invoice} userId={user?.uid} />}
+              {canManageBilling && !companyMismatch && <StripeInvoiceActions key={`stripe-invoice-${invoice.id}`} invoice={invoice} userId={user?.uid} />}
               {canManageBilling && !companyMismatch && <JobInvoiceReissue key={`reissue-${invoice.id}`} invoice={invoice} />}
               {invoice.paymentReviewRequired && <p role="status" className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">Payment adjustment needs review: {labelize(invoice.paymentReviewReason)}. Resolve the charge or credit in Stripe, then refresh its status before collecting again.</p>}
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -1527,6 +1535,8 @@ const SalesInvoiceDetail = () => {
                       </div>
                       {payment.referenceNumber && <p className="mt-2 text-xs text-slate-500">{payment.referenceNumber}</p>}
                       {payment.memo && <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-600">{payment.memo}</p>}
+                      {canManageBilling && <SalesPaymentReceiptButton payment={payment} userId={user?.uid}/>}
+                      {canManageBilling && <StripePaymentRefresh payment={payment}/>}
                     </div>
                   ))}
                 </div>

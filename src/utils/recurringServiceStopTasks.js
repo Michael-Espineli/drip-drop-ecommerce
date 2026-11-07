@@ -1,5 +1,5 @@
 import { jobPayFields } from "./payroll/payCalculation";
-import { collection, doc, getDocs, query, setDoc, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, setDoc, where } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { canonicalJobTaskType } from "./jobTaskTypes";
 
@@ -11,13 +11,14 @@ const numberValue = (...values) => {
 
 const taskGroupOptionFromDoc = (docSnap, sourcePath) => {
   const data = docSnap.data() || {};
-  const id = data.id || docSnap.id;
+  const id = docSnap.id;
   const label = data.name || data.groupName || "Task Group";
 
   return {
     ...data,
     id,
-    value: `${sourcePath}:${id}`,
+    name: label,
+    value: id,
     label,
     sourcePath,
   };
@@ -26,38 +27,39 @@ const taskGroupOptionFromDoc = (docSnap, sourcePath) => {
 export const fetchRecurringTaskGroupOptions = async ({ db, companyId }) => {
   if (!db || !companyId) return [];
 
-  const [legacyTaskGroupsSnap, taskGroupsSnap] = await Promise.all([
+  const [canonicalSnap, pluralSnap] = await Promise.all([
     getDocs(collection(db, "companies", companyId, "settings", "taskGroup", "taskGroup")),
     getDocs(collection(db, "companies", companyId, "settings", "taskGroups", "taskGroups")),
   ]);
 
-  return [
-    ...legacyTaskGroupsSnap.docs.map((docSnap) => taskGroupOptionFromDoc(docSnap, "legacy")),
-    ...taskGroupsSnap.docs.map((docSnap) => taskGroupOptionFromDoc(docSnap, "current")),
-  ].sort((a, b) => a.label.localeCompare(b.label));
+  const groups = new Map();
+  for (const snapshot of pluralSnap.docs) groups.set(snapshot.id, taskGroupOptionFromDoc(snapshot, "plural"));
+  for (const snapshot of canonicalSnap.docs) groups.set(snapshot.id, taskGroupOptionFromDoc(snapshot, "canonical"));
+  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
 };
 
 export const fetchTaskGroupTasks = async ({ db, companyId, taskGroup }) => {
   if (!db || !companyId || !taskGroup?.id) return [];
 
-  const taskCollections = taskGroup.sourcePath === "legacy"
-    ? [
-      collection(db, "companies", companyId, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
-      collection(db, "companies", companyId, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
-    ]
-    : [
-      collection(db, "companies", companyId, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
-      collection(db, "companies", companyId, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
-    ];
-
-  for (const taskCollection of taskCollections) {
-    const snapshot = await getDocs(taskCollection);
-    if (snapshot.docs.length) {
-      return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-    }
+  const canonical = doc(db, "companies", companyId, "settings", "taskGroup", "taskGroup", taskGroup.id);
+  const [groupSnapshot, items] = await Promise.all([
+    getDoc(canonical),
+    getDocs(collection(canonical, "taskItems")),
+  ]);
+  // An existing empty canonical group is intentional, not a reason to resurrect old tasks.
+  if (groupSnapshot.exists() || items.docs.length) {
+    return items.docs.map((snapshot) => ({ ...snapshot.data(), id: snapshot.id }));
   }
-
-  return [];
+  const plural = doc(db, "companies", companyId, "settings", "taskGroups", "taskGroups", taskGroup.id);
+  const snapshots = await Promise.all([
+    getDocs(collection(plural, "taskItems")),
+    getDocs(collection(plural, "tasks")),
+  ]);
+  const tasks = new Map();
+  for (const snapshot of snapshots) {
+    for (const item of snapshot.docs) tasks.set(item.id, { ...item.data(), id: item.id });
+  }
+  return [...tasks.values()];
 };
 
 export const loadRecurringServiceStopTasks = async ({

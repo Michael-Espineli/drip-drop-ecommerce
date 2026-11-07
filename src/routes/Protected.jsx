@@ -22,7 +22,6 @@ export function Protected({ route, children }) {
     ].filter(Boolean);
 
     if (!user) {
-        console.log('no user')
         const redirectTarget = encodeURIComponent(`${location.pathname}${location.search || ""}`);
         const signInPath = routeRole === "client" ? "/homeownerSignIn" : "/signIn";
         return <Navigate to={`${signInPath}?redirect=${redirectTarget}`} />;

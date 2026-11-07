@@ -10,7 +10,7 @@ export const invoiceBalanceCents = (invoice = {}) => {
   const paid = Number(invoice.amountPaidCents) || 0;
   const writtenOff = Number(invoice.writeOffAmountCents) || 0;
 
-  return Math.max(total - paid - writtenOff - Number(invoice.refundCreditCents || 0) - Number(invoice.creditAmountCents || 0), 0);
+  return Math.max(total - paid - writtenOff - Number(invoice.refundCreditCents || 0) - Number(invoice.creditAmountCents || 0) - Number(invoice.stripeCreditAmountCents || 0) - Number(invoice.disputeCreditCents || 0), 0);
 };
 
 export const getSubscriptionBillingPeriodPreview = (subscription = {}) => billingPeriod(subscription);

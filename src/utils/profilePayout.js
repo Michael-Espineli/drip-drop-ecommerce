@@ -3,32 +3,63 @@ const asDate = (value) => {
   return date && !Number.isNaN(date.getTime()) ? date : null;
 };
 
-// Keep the profile snapshot aligned with the native profile's existing payout window.
+const amount = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+const money = (cents) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const text = (...values) => values.find(value => typeof value === "string" && value.trim())?.trim() || "";
+
+function rateDescription(item) {
+  const hourly = item.rateType === "hourly";
+  const quantity = amount(item.quantity) / (hourly && item.quantityUnit === "minutes" ? 60 : 1);
+  const rate = amount(item.rateAmountCents);
+  if (item.source === "manualAdjustment") return "Pay adjustment";
+  if (item.rateType === "manual") return "Custom pay";
+  if (item.rateType === "percentage") return `${(rate / 100).toLocaleString()}% rate`;
+  if (!quantity || !rate) return "";
+  const units = { each: "", hours: "hr", minutes: "min", bodyOfWater: "pool/spa", serviceLocation: "location" };
+  const unit = hourly && item.quantityUnit === "minutes" ? "hr" : units[item.quantityUnit] ?? "";
+  return `${quantity.toLocaleString(undefined, { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ""} × ${money(rate)}${item.rateType === "hourly" ? "/hr" : ""}`;
+}
+
+// Read-only presentation of the existing 365-day payroll window, shared with iOS.
 export function profilePayoutSummary(lineItems = [], statements = [], now = new Date()) {
+  const paidStatements = statements.filter(statement => statement.status !== "voided" && (statement.status === "paid" || statement.paidAt));
+  const paidStatementIds = new Set(paidStatements.map(statement => statement.id).filter(Boolean));
+  const paidLineIds = new Set(paidStatements.flatMap(statement => statement.lineItemIds || []));
   const dates = [
-    ...lineItems.map((item) => asDate(item.paidAt)),
-    ...statements.map((statement) => asDate(statement.paidAt) || (statement.status === "paid" ? asDate(statement.endDate) : null)),
+    ...lineItems.filter(item => !item.voidedAt && item.calculationStatus !== "voided").map(item => asDate(item.paidAt)),
+    ...paidStatements.map(statement => asDate(statement.paidAt) || asDate(statement.endDate)),
   ].filter(Boolean);
   const lastPayoutDate = dates.length ? new Date(Math.max(...dates.map(Number))) : null;
-  const owed = lineItems.filter((item) =>
-    !item.voidedAt && !item.paidAt &&
-    ["pending", "calculated", "needsReview", "approved", "adjusted"].includes(item.calculationStatus) &&
-    (!lastPayoutDate || asDate(item.completedDate) >= lastPayoutDate)
-  );
-  const workDates = owed.map((item) => asDate(item.completedDate)).filter(Boolean);
-  const oldestWorkDate = workDates.length ? new Date(Math.min(...workDates.map(Number))) : null;
-  let lastPayoutLabel = "None";
+  const items = lineItems.filter(item => !item.voidedAt && ["pending", "calculated", "needsReview", "approved", "adjusted", "paid"].includes(item.calculationStatus)).map(item => {
+    const isPaid = Boolean(item.paidAt) || item.calculationStatus === "paid" || paidStatementIds.has(item.payStatementId) || paidLineIds.has(item.id);
+    const needsReview = !isPaid && ["pending", "needsReview"].includes(item.calculationStatus);
+    return {
+      id: item.id,
+      title: text(item.taskName, item.payTypeName, item.workTypeName, item.serviceStopTypeName, item.displayTitle) || "Completed work",
+      customer: text(item.customerName, item.serviceLocationAddress, item.displaySubtitle),
+      completedDate: asDate(item.completedDate),
+      paidDate: asDate(item.paidAt),
+      amountCents: amount(item.totalAmountCents),
+      rateDescription: rateDescription(item),
+      isPaid,
+      needsReview,
+      statusLabel: isPaid ? "Marked paid" : needsReview ? "Pay needs review" : item.calculationStatus === "approved" ? "Approved · unpaid" : "Unpaid",
+    };
+  }).filter(item => item.amountCents !== 0 || item.needsReview)
+    .sort((a, b) => Number(b.needsReview) - Number(a.needsReview) || (b.completedDate?.getTime() || 0) - (a.completedDate?.getTime() || 0) || a.id.localeCompare(b.id));
+  const unpaidItems = items.filter(item => !item.isPaid);
+  const paidItems = items.filter(item => item.isPaid);
+  const reviewCount = unpaidItems.filter(item => item.needsReview).length;
+  let lastPayoutLabel = "None recorded";
   if (lastPayoutDate) {
-    // Calendar days, including daylight-saving transitions.
     const calendarDay = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
     const days = Math.max(0, Math.round((calendarDay(now) - calendarDay(lastPayoutDate)) / 86400000));
-    lastPayoutLabel = days === 0 ? "Today" : days === 1 ? "1 day" : `${days} days`;
+    lastPayoutLabel = days === 0 ? "Today" : days === 1 ? "1 day ago" : `${days} days ago`;
   }
   return {
-    owedCents: owed.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0),
-    workDone: owed.length,
-    lastPayoutLabel,
-    subtitle: oldestWorkDate ? `Unpaid work since ${oldestWorkDate.toLocaleDateString()}`
-      : lastPayoutDate ? "No unpaid work since the last payout." : "No payout history found.",
+    owedCents: unpaidItems.filter(item => !item.needsReview).reduce((total, item) => total + item.amountCents, 0),
+    paidCents: paidItems.reduce((total, item) => total + item.amountCents, 0),
+    unpaidItems, paidItems, reviewCount, lastPayoutDate, lastPayoutLabel,
+    subtitle: "Recorded payroll · past 365 days",
   };
 }

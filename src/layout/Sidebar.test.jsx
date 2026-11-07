@@ -1,8 +1,9 @@
 import React from 'react';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { getDocs, onSnapshot } from 'firebase/firestore';
-import { getFilteredDocsCount, getServerCount, sumServerCounts } from '../utils/firestoreCounts';
+import { getFilteredDocsCount, getServerCount, sumServerCounts, listenForForegroundRefresh } from '../utils/firestoreCounts';
+import { signOut } from 'firebase/auth';
 import { Context } from '../context/AuthContext';
 import Sidebar from './Sidebar';
 
@@ -20,7 +21,7 @@ jest.mock('../utils/firestoreCounts', () => ({
   getServerCount: jest.fn(async () => 0),
   getFilteredDocsCount: jest.fn(async () => 0),
   sumServerCounts: jest.fn(async () => 0),
-  listenForForegroundRefresh: () => () => {},
+  listenForForegroundRefresh: jest.fn(() => () => {}),
 }));
 jest.mock('../utils/chatMessaging', () => ({ isChatUnreadFor: jest.fn(), listenVisibleChats: jest.fn() }));
 jest.mock('../navigation/index', () => ({
@@ -33,6 +34,8 @@ const context = {
   recentlySelectedCompany: 'company-1',
   user: { uid: 'tech-1' },
   dataBaseUser: {},
+  companyRoleLoaded: true,
+  companyRoleLoading: false,
   featureFlagsLoaded: true,
   isFeatureEnabled: () => false,
   hasCompanyPermission: () => true,
@@ -45,6 +48,7 @@ beforeEach(() => {
   getServerCount.mockResolvedValue(0);
   getFilteredDocsCount.mockResolvedValue(0);
   sumServerCounts.mockResolvedValue(0);
+  listenForForegroundRefresh.mockImplementation(() => () => {});
   subscriptions = [];
   onSnapshot.mockImplementation((query, onChange, onError) => {
     const unsubscribe = jest.fn();
@@ -64,8 +68,8 @@ const emit = (subscription, approvals) => act(() => subscription.onChange({
   docs: approvals.map((approval) => ({ data: () => approval })),
 }));
 const renderSidebar = async (value, props) => {
-  let view;
-  await act(async () => { view = render(sidebar(value, props)); });
+  const view = render(sidebar(value, props));
+  await act(async () => { await Promise.resolve(); });
   return view;
 };
 
@@ -108,7 +112,8 @@ test('company changes clear the old badge, unsubscribe, and ignore old callbacks
   const previous = subscriptions[0];
   emit(previous, [{ status: 'pending' }]);
   expect(within(link).getByText('1')).toBeInTheDocument();
-  await act(async () => { view.rerender(sidebar({ ...context, recentlySelectedCompany: 'company-2' })); });
+  view.rerender(sidebar({ ...context, recentlySelectedCompany: 'company-2' }));
+  await act(async () => { await Promise.resolve(); });
   expect(previous.unsubscribe).toHaveBeenCalledTimes(1);
   expect(link).toHaveTextContent(/^Part Approvals$/);
   emit(previous, [{ status: 'pending' }]);
@@ -135,4 +140,79 @@ test('repair badge matches the default list and reacts to changes from both sour
   expect(within(link).getByText('9')).toBeInTheDocument();
   emit(company, [{ status: 'Converted To Job' }]);
   expect(link).toHaveTextContent(/^Repair Requests$/);
+});
+
+test('waits for company permissions before starting badge requests', async () => {
+  const view = await renderSidebar({ ...context, companyRoleLoaded: false, companyRoleLoading: true });
+  expect(onSnapshot).not.toHaveBeenCalled();
+  expect(getDocs).not.toHaveBeenCalled();
+  expect(getServerCount).not.toHaveBeenCalled();
+  view.rerender(sidebar(context));
+  await act(async () => { await Promise.resolve(); });
+  expect(onSnapshot).toHaveBeenCalled();
+  expect(getDocs).toHaveBeenCalled();
+});
+
+test('does not query shopping, jobs, equipment, or company-wide offers without their read permissions', async () => {
+  await renderSidebar({ ...context, hasCompanyPermission: (id) => id === '320' });
+  expect(getDocs).not.toHaveBeenCalled();
+  expect(getServerCount).not.toHaveBeenCalled();
+  expect(getFilteredDocsCount).not.toHaveBeenCalled();
+  expect(onSnapshot).not.toHaveBeenCalled();
+});
+
+test('a denied legacy shopping count is not retried on every foreground event', async () => {
+  const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    getDocs.mockImplementation(async (ref) => {
+      if (ref.path?.endsWith('/shoppingListItems')) {
+        throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+      }
+      return { docs: [] };
+    });
+    await renderSidebar();
+    const refresh = listenForForegroundRefresh.mock.calls[0][0];
+    await act(async () => { await refresh(); await refresh(); });
+    expect(getDocs.mock.calls.filter(([ref]) => ref.path?.endsWith('/shoppingListItems'))).toHaveLength(1);
+    expect(getDocs.mock.calls.filter(([ref]) => ref.path?.endsWith('/shoppingList'))).toHaveLength(3);
+    expect(errorLog).toHaveBeenCalledTimes(1);
+  } finally { errorLog.mockRestore(); }
+});
+
+test('does not overlap initial counts with foreground requests or restart reads after unmount', async () => {
+  let finish;
+  getServerCount.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const view = await renderSidebar();
+  const refresh = listenForForegroundRefresh.mock.calls[0][0];
+  const initialCalls = getDocs.mock.calls.length;
+  await act(async () => { await refresh(); await refresh(); });
+  expect(getDocs).toHaveBeenCalledTimes(initialCalls);
+  await act(async () => { finish(0); });
+  view.unmount();
+  await refresh();
+  expect(getDocs).toHaveBeenCalledTimes(initialCalls);
+});
+
+test('pauses count refreshes after a fatal browser-storage failure', async () => {
+  const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    getDocs.mockRejectedValue(new Error('FIRESTORE (11.10.0) INTERNAL ASSERTION FAILED: Unexpected state (ID: b815) CONTEXT: {"hc":"The transaction was aborted, so the request cannot be fulfilled."}'));
+    await renderSidebar();
+    const initialCalls = getDocs.mock.calls.length;
+    await act(async () => { await listenForForegroundRefresh.mock.calls[0][0](); });
+    expect(getDocs).toHaveBeenCalledTimes(initialCalls);
+    expect(warning.mock.calls.filter(([message]) => message.startsWith('Sidebar counts paused'))).toHaveLength(1);
+  } finally { warning.mockRestore(); }
+});
+
+test('logout relies on the auth listener and succeeds without an extra context callback', async () => {
+  const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    signOut.mockResolvedValue(undefined);
+    await renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: /logout/i }));
+    await act(async () => { await Promise.resolve(); });
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(errorLog).not.toHaveBeenCalled();
+  } finally { errorLog.mockRestore(); }
 });

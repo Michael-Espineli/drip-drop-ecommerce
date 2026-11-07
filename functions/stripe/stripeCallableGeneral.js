@@ -707,6 +707,7 @@ exports.createStripeAccountLink = functions.https.onCall(async(data,context) => 
         email: receivedData.email || companyData.email || auth.token?.email || undefined,
         capabilities: {
           card_payments: { requested: true },
+          us_bank_account_ach_payments: { requested: true },
           transfers: { requested: true },
         },
         business_profile: {

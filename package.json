@@ -17,6 +17,7 @@
     "firebase": "^11.9.0",
     "firebase-functions": "^7.0.5",
     "install": "^0.13.0",
+    "jspdf": "4.2.1",
     "npm": "^10.9.0",
     "pdfjs-dist": "^3.11.174",
     "react": "^18.3.1",

@@ -11,6 +11,7 @@ import { COMPANY_WIDE_MESSAGES_PERMISSION_ID, TODO_ALL_BOARDS_PERMISSION_ID } fr
 import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
 import { getFilteredDocsCount, getServerCount, listenForForegroundRefresh } from '../utils/firestoreCounts';
+import { isFirebaseClientStorageError } from '../utils/firebaseNetwork';
 import {
     buildCustomerActiveById,
     equipmentNeedsMaintenanceForActiveBoard,
@@ -163,7 +164,7 @@ const shoppingItemIsReadyToPurchase = (item = {}) => {
 
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();
-    const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
+    const { role, recentlySelectedCompany, user, dataBaseUser, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
     const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, partApprovals: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
@@ -246,16 +247,19 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     }, [role, dataBaseUser, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled]);
 
     useEffect(() => {
-        if (!recentlySelectedCompany || !user) {
+        if (!recentlySelectedCompany || !user || !companyRoleLoaded || companyRoleLoading) {
             setCounts({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, partApprovals: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
             return;
         }
 
         let cancelled = false;
+        let countsLoading = false;
+        let clientStorageFailed = false;
+        const deniedCounts = new Set();
 
-        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, partApprovals: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 }));
+        setCounts({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, partApprovals: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
 
-        const unsubscribePartApprovals = onSnapshot(
+        const unsubscribePartApprovals = hasCompanyPermission("400") ? onSnapshot(
             query(
                 collection(db, "customerPartApprovals"),
                 where("companyId", "==", recentlySelectedCompany)
@@ -272,7 +276,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 console.error("Error loading pending part approval count:", error);
                 setCounts(prev => ({ ...prev, partApprovals: 0 }));
             }
-        );
+        ) : () => {};
 
         const leadsQuery = query(
             collection(db, "homeownerServiceRequests"),
@@ -287,7 +291,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             company: collection(db, "companies", recentlySelectedCompany, "repairRequests"),
             homeowner: query(collection(db, "homeownerRepairRequests"), where("companyId", "==", recentlySelectedCompany)),
         };
-        const unsubscribeRepairRequests = Object.entries(repairRequestQueries).map(([source, requestQuery]) => (
+        const unsubscribeRepairRequests = hasCompanyPermission("30") ? Object.entries(repairRequestQueries).map(([source, requestQuery]) => (
             onSnapshot(requestQuery, snapshot => {
                 if (cancelled) return;
                 repairRequestCounts[source] = snapshot.docs.filter((request) => isOpenRepairRequestStatus(request.data().status)).length;
@@ -298,7 +302,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                 repairRequestCounts[source] = 0;
                 setCounts(prev => ({ ...prev, repairRequests: repairRequestCounts.company + repairRequestCounts.homeowner }));
             })
-        ));
+        )) : [];
 
         const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
         const workOffersRef = collection(db, "companies", recentlySelectedCompany, "workOffers");
@@ -331,10 +335,20 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             ));
         }
 
-        const loadCount = async (label, loader) => {
+        const loadCount = async (label, loader, enabled = true) => {
+            if (!enabled || cancelled || clientStorageFailed || deniedCounts.has(label)) return 0;
             try {
                 return await loader();
             } catch (error) {
+                if (cancelled) return 0;
+                if (isFirebaseClientStorageError(error)) {
+                    if (!clientStorageFailed) {
+                        console.warn("Sidebar counts paused because browser storage failed. Reload the page to reconnect.", error);
+                    }
+                    clientStorageFailed = true;
+                    return 0;
+                }
+                if (isFirestorePermissionDenied(error)) deniedCounts.add(label);
                 console.error(`Error loading ${label} count:`, error);
                 return 0;
             }
@@ -343,7 +357,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         const getEquipmentMaintenanceCount = async () => {
             const [equipmentSnap, customersSnap] = await Promise.all([
                 getDocs(equipmentRef),
-                getDocs(collection(db, "companies", recentlySelectedCompany, "customers")).catch((error) => {
+                (hasCompanyPermission("10") ? getDocs(collection(db, "companies", recentlySelectedCompany, "customers")) : Promise.resolve({ docs: [] })).catch((error) => {
                     console.warn("Unable to load customers for equipment maintenance count:", error);
                     return { docs: [] };
                 }),
@@ -400,40 +414,46 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         };
 
         const loadServerBackedCounts = async () => {
-            const [
-                leads,
-                shopping,
-                legacyShopping,
-                finishedJobs,
-                actionableJobs,
-                offeredWork,
-                equipmentMaintenance,
-            ] = await Promise.all([
-                loadCount("lead", () => getServerCount(leadsQuery)),
-                loadCount("shopping", () => getPurchaseReadyShoppingCount("shoppingList")),
-                loadCount("legacy shopping", () => getPurchaseReadyShoppingCount("shoppingListItems")),
-                loadCount("finished job", () => getFilteredDocsCount(
-                    finishedJobsQuery,
-                    (jobDoc) => isFinishedOutstandingJob({ id: jobDoc.id, ...jobDoc.data() })
-                )),
-                loadCount("actionable job", getActionableJobCount),
-                loadCount("offered work", getOpenWorkOfferCount),
-                loadCount("equipment maintenance", getEquipmentMaintenanceCount),
-            ]);
+            if (cancelled || countsLoading || clientStorageFailed) return;
+            countsLoading = true;
+            try {
+                const [
+                    leads,
+                    shopping,
+                    legacyShopping,
+                    finishedJobs,
+                    actionableJobs,
+                    offeredWork,
+                    equipmentMaintenance,
+                ] = await Promise.all([
+                    loadCount("lead", () => getServerCount(leadsQuery), hasCompanyPermission("610")),
+                    loadCount("shopping", () => getPurchaseReadyShoppingCount("shoppingList"), hasCompanyPermission("100")),
+                    loadCount("legacy shopping", () => getPurchaseReadyShoppingCount("shoppingListItems"), hasCompanyPermission("100")),
+                    loadCount("finished job", () => getFilteredDocsCount(
+                        finishedJobsQuery,
+                        (jobDoc) => isFinishedOutstandingJob({ id: jobDoc.id, ...jobDoc.data() })
+                    ), hasCompanyPermission("20")),
+                    loadCount("actionable job", getActionableJobCount, hasCompanyPermission("20")),
+                    loadCount("offered work", getOpenWorkOfferCount, hasCompanyPermission("324") || hasCompanyPermission("332")),
+                    loadCount("equipment maintenance", getEquipmentMaintenanceCount, hasCompanyPermission("60")),
+                ]);
 
-            if (cancelled) return;
+                if (cancelled) return;
 
-            setCounts(prev => ({
-                ...prev,
-                leads,
-                shopping,
-                legacyShopping,
-                repairRequestSources: {},
-                finishedJobs,
-                actionableJobs,
-                offeredWork,
-                equipmentMaintenance,
-            }));
+                setCounts(prev => ({
+                    ...prev,
+                    leads,
+                    shopping,
+                    legacyShopping,
+                    repairRequestSources: {},
+                    finishedJobs,
+                    actionableJobs,
+                    offeredWork,
+                    equipmentMaintenance,
+                }));
+            } finally {
+                countsLoading = false;
+            }
         };
 
         loadServerBackedCounts();
@@ -569,7 +589,6 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const logout = async () => {
         try {
             await signOut(auth);
-            handleLogout(); // Assuming handleLogout clears context/redirects
         } catch (error) {
             console.error("Logout failed:", error.message);
         }

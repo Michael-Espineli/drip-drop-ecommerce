@@ -12,6 +12,7 @@ const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 const { jobPayFields } = require("../payrollCalculation");
 const { weeklyServiceDates } = require("../recurringSchedule");
+const { DEFAULT_RECURRING_TASK_GROUP_ID, loadTaskGroupItems } = require("../taskGroupStorage");
 const { sendSalesInvoiceEmailForAutomation } = require("../sendGrid/general");
 
 // Initialize admin SDK if not already done
@@ -1008,22 +1009,9 @@ async function loadRecurringServiceStopTasks(db, companyId, rssData) {
     }));
   }
 
-  const taskGroupId = "com_set_tg_recurring_service_stops";
-  const taskGroupSnap = await db.collection("companies")
-    .doc(companyId)
-    .collection("settings")
-    .doc("taskGroup")
-    .collection("taskGroup")
-    .doc(taskGroupId)
-    .collection("taskItems")
-    .get();
-
-  return taskGroupSnap.docs.map((taskDoc) => ({
-    id: taskDoc.id,
-    taskGroupId,
-    taskGroupTaskId: taskDoc.id,
-    ...taskDoc.data(),
-  }));
+  const taskGroupId = DEFAULT_RECURRING_TASK_GROUP_ID;
+  const tasks = await loadTaskGroupItems(db, companyId, taskGroupId);
+  return tasks.map(task => ({ ...task, taskGroupId, taskGroupTaskId: task.id }));
 }
 
 function buildServiceDateKey(serviceDate) {

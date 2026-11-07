@@ -61,9 +61,10 @@ const statusTone = {
 };
 
 const paymentPreferenceOptions = [
-  { value: 'payNow', label: 'Pay right away' },
-  { value: 'payOnceDelivered', label: 'Charge on delivery' },
+  { value: 'payNow', label: 'Invoice immediately' },
+  { value: 'payOnceDelivered', label: 'Invoice on delivery' },
   { value: 'sendInvoice', label: 'Request invoice' },
+  { value: 'nextBill', label: 'Include on next bill' },
 ];
 
 const StatusBadge = ({ status }) => {
@@ -93,6 +94,10 @@ const PartApprovalDetail = () => {
   const [responseNote, setResponseNote] = useState('');
   const [paymentPreference, setPaymentPreference] = useState('sendInvoice');
   const [responding, setResponding] = useState('');
+  const [recurringOptions, setRecurringOptions] = useState([]);
+  const [recurringLoading, setRecurringLoading] = useState(true);
+  const [recurringError, setRecurringError] = useState('');
+  const [nextBillSubscriptionId, setNextBillSubscriptionId] = useState('');
 
   useEffect(() => {
     if (!approvalId) {
@@ -144,6 +149,25 @@ const PartApprovalDetail = () => {
   const totalPriceCents = approval?.plannedTotalPriceCents || approval?.totalPriceCents || 0;
   const unitPriceCents = approval?.plannedUnitPriceCents || approval?.unitPriceCents || 0;
 
+  useEffect(() => {
+    let cancelled = false;
+    setRecurringOptions([]); setRecurringLoading(true); setRecurringError('');
+    if (!approval?.id || !isPending) { setRecurringLoading(false); return undefined; }
+    (async () => {
+      try {
+        const auth = await getCallableAuthPayload();
+        const result = await httpsCallable(functions, 'getPartApprovalRecurringOptions')({ ...auth, approvalId: approval.id });
+        if (cancelled) return;
+        const options = result.data.options || [];
+        setRecurringOptions(options);
+        setNextBillSubscriptionId(options.length === 1 ? options[0].id : '');
+      } catch (error) {
+        if (!cancelled) setRecurringError('Recurring billing choices could not be loaded. Choose another option or try again later.');
+      } finally { if (!cancelled) setRecurringLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [approval?.id, isPending, user?.uid]);
+
   const partName = useMemo(
     () => approval?.itemName || approval?.name || approval?.dbItemName || 'Pool Part',
     [approval]
@@ -171,6 +195,7 @@ const PartApprovalDetail = () => {
   const respond = async (action) => {
     if (!approval || !isPending || responding) return;
 
+    if (action === 'approved' && paymentPreference === 'nextBill' && !nextBillSubscriptionId) { toast.error('Choose an eligible recurring service bill.'); return; }
     setResponding(action);
     try {
       const authPayload = await getCallableAuthPayload();
@@ -181,6 +206,7 @@ const PartApprovalDetail = () => {
         action,
         responseNote,
         paymentPreference: action === 'approved' ? paymentPreference : 'sendInvoice',
+        ...(action === 'approved' && paymentPreference === 'nextBill' ? { nextBillSubscriptionId } : {}),
       });
       toast.success(action === 'approved' ? 'Part approved.' : 'Part rejected.');
     } catch (responseError) {
@@ -270,7 +296,7 @@ const PartApprovalDetail = () => {
                   />
                   <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
                     <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Prepare Payment</p>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
                       {paymentPreferenceOptions.map((option) => {
                         const selected = paymentPreference === option.value;
                         return (
@@ -278,7 +304,7 @@ const PartApprovalDetail = () => {
                             key={option.value}
                             type="button"
                             onClick={() => setPaymentPreference(option.value)}
-                            disabled={Boolean(responding)}
+                            disabled={Boolean(responding) || (option.value === 'nextBill' && (recurringLoading || !recurringOptions.length))}
                             className={[
                               'rounded-md border px-3 py-2 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60',
                               selected
@@ -292,6 +318,16 @@ const PartApprovalDetail = () => {
                       })}
                     </div>
                   </div>
+                  <p className="mt-3 text-sm text-slate-600">Include on next bill adds the approved price after delivery or installation and uses your existing recurring bill’s payment method.</p>
+                  {(recurringLoading || recurringError || !recurringOptions.length) && <p className="mt-2 text-sm text-slate-500">{recurringLoading ? 'Checking recurring billing…' : recurringError || 'An eligible recurring service bill is required for Include on next bill.'}</p>}
+                  {paymentPreference === 'nextBill' && recurringOptions.length > 1 && (
+                    <label className="mt-3 block text-sm font-semibold">Recurring service bill
+                      <select aria-label="Recurring service bill" value={nextBillSubscriptionId} onChange={event => setNextBillSubscriptionId(event.target.value)} className="mt-2 w-full rounded-md border border-slate-300 bg-white p-3">
+                        <option value="">Choose a recurring bill</option>
+                        {recurringOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  )}
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <button
                       type="button"
@@ -316,6 +352,13 @@ const PartApprovalDetail = () => {
               ) : (
                 <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                   Response recorded {formatDate(approval.respondedAt || approval.updatedAt)}.
+                  {(approval.salesInvoiceId || approval.invoiceId) ? (
+                    <Link to={`/customer/invoices/${approval.salesInvoiceId || approval.invoiceId}`} className="mt-3 block font-semibold text-blue-700 underline">View invoice</Link>
+                  ) : approval.billingAutomationStatus === 'awaitingNextBill' ? (
+                    <p className="mt-2">This part is queued for your next recurring service bill.</p>
+                  ) : approval.billingAutomationStatus === 'awaitingDelivery' ? (
+                    <p className="mt-2">Your invoice will be created after delivery or installation.</p>
+                  ) : null}
                   {approval.responseNote && <p className="mt-2 whitespace-pre-wrap">{approval.responseNote}</p>}
                   {approval.paymentPreference || approval.paymentCollectionPreference ? (
                     <p className="mt-2 font-semibold">

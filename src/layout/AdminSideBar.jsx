@@ -12,7 +12,7 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
   const ADMIN_YELLOW = '#efb12f';
 
   const auth = getAuth();
-  const { role, recentlySelectedCompany, user, handleLogout } = useContext(Context);
+  const { role, recentlySelectedCompany, user } = useContext(Context);
   const { pathname } = useLocation();
   const [navItemsByCategory, setNavItemsByCategory] = useState({});
   const [counts, setCounts] = useState({ leads: 0, messages: 0, errors: 0 });
@@ -111,7 +111,6 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
   const logout = async () => {
     try {
       await signOut(auth);
-      handleLogout();
     } catch (error) {
       console.error('Logout failed:', error.message);
     }

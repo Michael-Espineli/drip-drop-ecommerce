@@ -10,6 +10,7 @@ import NewRequest from './serviceRequests/NewRequest';
 import NewRepairRequest from './repairRequests/NewRepairRequest';
 import HomeownerServiceLocationForm from './serviceLocations/HomeownerServiceLocationForm';
 import ClientHome from './ClientHome';
+import MyPool from './MyPool';
 import ClientFinance from './finance/ClientFinance';
 import {Routes,Route} from 'react-router-dom';
 jest.mock('../../context/AuthContext',()=>({Context:require('react').createContext()}));
@@ -62,6 +63,35 @@ test('repair submissions display a recipient and send the server-validated reque
 test('the mobile home shows next service and a direct payment action before long account details',async()=>{
  onSnapshot.mockImplementation((q,callback)=>{let rows=[];if(q.path==='homeownerServiceStops')rows=[{id:'next',serviceDate:new Date(Date.now()+86400000),status:'Scheduled',companyName:'Pool Company'}];if(q.path==='salesInvoices')rows=[{id:'invoice',customerUserId:'homeowner',status:'open',amountDueCents:17500,invoiceNumber:'1001'}];if(q.path==='customerCompanyRelationships')rows=[{id:'r',status:'active',companyName:'Pool Company'}];queueMicrotask(()=>callback(snapshot(rows)));return()=>{};});
  mount(<ClientHome/>,'/client/dashboard');await screen.findAllByText('$175.00');expect(screen.getByRole('link',{name:'View & pay'})).toHaveAttribute('href','/client/billing/invoices/invoice');expect(screen.getByRole('link',{name:'Report a problem'})).toHaveAttribute('href','/client/repair-requests/new');expect(screen.queryByText('No visit scheduled')).not.toBeInTheDocument();
+});
+
+test('My Pool checks again beside Add Your First Pool and displays new matching company profiles',async()=>{
+ mount(<MyPool/>,'/client/my-pool');
+ const add=await screen.findByRole('link',{name:'Add Your First Pool'});
+ const check=await screen.findByRole('button',{name:'Check for company connections'});
+ expect(check.parentElement).toBe(add.parentElement);
+ await waitFor(()=>expect(check).not.toBeDisabled());
+ let finish;command.mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+ const before=command.mock.calls.length;fireEvent.click(check);fireEvent.click(check);
+ await waitFor(()=>expect(command).toHaveBeenCalledTimes(before+1));
+ expect(screen.getByRole('button',{name:'Checking…'})).toBeDisabled();
+ await act(async()=>finish({data:{invitations:[{inviteId:'new-match',companyName:'Pool Company',customerName:'Jordan Rivera'}]}}));
+ expect(await screen.findByRole('link',{name:'Review & connect'})).toHaveAttribute('href','/client/customer-account-invite/new-match');
+ expect(screen.getByRole('button',{name:'Check for company connections'})).not.toBeDisabled();
+});
+
+test('manual company checks explain no match and recover from a failed check',async()=>{
+ mount(<MyPool/>,'/client/my-pool');
+ await screen.findByRole('link',{name:'Add Your First Pool'});
+ const check=await screen.findByRole('button',{name:'Check for company connections'});
+ await waitFor(()=>expect(check).not.toBeDisabled());
+ command.mockResolvedValueOnce({data:{invitations:[]}});fireEvent.click(check);
+ expect(await screen.findByText(/No company connections found for jordan@example.test/)).toBeInTheDocument();
+ command.mockRejectedValueOnce(new Error('temporary failure'));fireEvent.click(check);
+ expect(await screen.findByRole('alert')).toHaveTextContent('We could not check for company invitations.');
+ command.mockResolvedValueOnce({data:{invitations:[{inviteId:'retry-match',companyName:'Pool Company',customerName:'Jordan Rivera'}]}});
+ fireEvent.click(screen.getByRole('button',{name:'Check invitations again'}));
+ await screen.findByRole('link',{name:'Review & connect'});
 });
 
 test('Finance includes verified email invoices before linking and retains the correct open balance',async()=>{

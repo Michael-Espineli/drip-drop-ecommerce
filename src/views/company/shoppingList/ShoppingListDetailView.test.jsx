@@ -18,6 +18,7 @@ jest.mock("firebase/firestore", () => ({
     collection: (_, ...parts) => parts.join("/"),
     doc: (_, ...parts) => parts.join("/"),
     getDoc: jest.fn(),
+    onSnapshot: jest.fn(() => () => {}),
     getDocs: jest.fn(),
     updateDoc: jest.fn(),
     Timestamp: { now: () => "saved-timestamp", fromDate: (date) => date },
@@ -88,7 +89,7 @@ test("updates status from the sidebar without opening the full editor or rewriti
     const panel = await openDetail();
     expect(panel.getByRole("button", { name: "Update Status" })).toBeDisabled();
     expect(panel.getAllByRole("option").map((option) => option.value)).toEqual([
-        "", "Need to Purchase", "Purchased", "Installed", "Invoiced",
+        "", "Need to Purchase", "Purchased", "Delivered", "Installed", "Invoiced",
     ]);
     fireEvent.change(panel.getByLabelText("Status"), { target: { value: "Purchased" } });
     fireEvent.click(panel.getByRole("button", { name: "Update Status" }));

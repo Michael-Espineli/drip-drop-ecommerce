@@ -33,5 +33,6 @@ export const isFirebaseClientStorageError = (error = {}) => {
     || errorText.includes("internal error opening backing store")
     || errorText.includes("failed to persist write")
     || errorText.includes("web storage unsupported")
+    || errorText.includes("the transaction was aborted, so the request cannot be fulfilled")
   );
 };

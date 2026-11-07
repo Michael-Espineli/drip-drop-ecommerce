@@ -1,7 +1,8 @@
 import { userFacingErrorMessage } from '../../utils/permissionErrors';
-import React, { useContext, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
-import { getAuth, sendEmailVerification, signOut } from 'firebase/auth';
+import { getAuth, signOut } from 'firebase/auth';
+import { sendClientEmailVerification } from '../../utils/accountEmails';
 import { Context } from '../../context/AuthContext';
 import { safeClientReturnPath } from '../../utils/clientNavigation';
 export default function ClientEmailVerification() {
@@ -16,6 +17,16 @@ export default function ClientEmailVerification() {
     [error, setError] = useState('');
   const [sentAt, setSentAt] = useState(0),
     [verified, setVerified] = useState(false);
+  useEffect(() => {
+    if (!user?.uid || user.emailVerified) return undefined;
+    let active = true;
+    const refresh = async () => {
+      try { if (await refreshAccount()) { if (active) setVerified(true); } } catch (_) { /* The check button offers an explicit retry. */ }
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => { active = false; window.removeEventListener('focus', refresh); };
+  }, [user?.uid, user?.emailVerified, refreshAccount]);
   const check = async () => {
     setBusy(true);
     setError('');
@@ -35,9 +46,7 @@ export default function ClientEmailVerification() {
     setBusy(true);
     setError('');
     try {
-      await sendEmailVerification(getAuth().currentUser, {
-        url: `${window.location.origin}/client/verify-email?redirect=${encodeURIComponent(destination)}`
-      });
+      await sendClientEmailVerification(getAuth(), `/client/verify-email?redirect=${encodeURIComponent(destination)}`);
       setSentAt(Date.now());
       setMessage('Verification email sent. Check your inbox and spam folder.');
     } catch (_) {
@@ -49,7 +58,7 @@ export default function ClientEmailVerification() {
   if (verified || user?.emailVerified) return <Navigate to={destination} replace />;
   return <main className="flex min-h-[100dvh] items-center justify-center bg-slate-50 p-4"><section className="w-full max-w-md space-y-5 rounded-xl border bg-white p-6">
         <Link to="/homeowners" className="font-bold text-blue-700">Drip Drop</Link><h1 className="text-2xl font-bold">Verify your email</h1>
-        {user ? <><p className="text-slate-600">Open the verification email sent to <strong className="break-all">{user.email}</strong> to connect your pool company and view billing.</p>
+        {user ? <><p className="text-slate-600">Open the verification email for <strong className="break-all">{user.email}</strong>. After verification, you’ll return here to finish connecting your pool company.</p>
             <button disabled={busy} onClick={check} className="min-h-[44px] w-full rounded-lg bg-blue-600 px-4 font-semibold text-white">{busy ? 'Checking…' : 'I verified my email'}</button>
             <button disabled={busy} onClick={resend} className="min-h-[44px] w-full rounded-lg border px-4 font-semibold">Resend verification email</button>
             <button onClick={() => signOut(getAuth())} className="min-h-[44px] w-full text-sm font-semibold text-blue-700">Use a different account</button></> : <Link className="inline-flex min-h-[44px] items-center text-blue-700" to={`/homeownerSignIn?redirect=${encodeURIComponent(`/client/verify-email?redirect=${encodeURIComponent(destination)}`)}`}>Sign in to continue</Link>}

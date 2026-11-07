@@ -50,8 +50,8 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
 const canDeleteBillingSubscriptionRecord = (subscription = {}) => (
-  !subscription?.stripeSubscriptionId ||
-  normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled'
+  !subscription.checkoutHold && (!subscription.checkoutCancellationRequested || subscription.checkoutCancellationStatus==='complete') &&
+  (!subscription?.stripeSubscriptionId || normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled')
 );
 
 const labelize = (value) => {
@@ -284,7 +284,7 @@ const SalesBillingSubscriptionDetail = () => {
     subscription.companyId &&
     subscription.companyId !== recentlySelectedCompany
   );
-  const statusKey = normalizeStatus(subscription?.stripeStatus || subscription?.status);
+  const statusKey = normalizeStatus(subscription?.checkoutCancellationRequested ? subscription?.status : subscription?.stripeStatus || subscription?.status);
   const hasActiveStripeSubscription = ['active', 'trialing'].includes(statusKey);
   const billingCollectionMethod = subscription?.billingCollectionMethod || SalesBillingCollectionMethod.manualUntilAutopay;
   const isStripeManagedBilling = billingCollectionMethod === SalesBillingCollectionMethod.automaticStripe || hasActiveStripeSubscription;
@@ -299,6 +299,7 @@ const SalesBillingSubscriptionDetail = () => {
     !companyMismatch &&
     !isStripeManagedBilling &&
     !hasActiveStripeSubscription &&
+    !subscription.checkoutCancellationRequested && !['canceled','expired','superseded','cancellationpending'].includes(statusKey) &&
     Number(subscription.amountCents || 0) > 0 &&
     subscription.stripeConnectedAccountId &&
     !startingCheckout &&
@@ -323,13 +324,13 @@ const SalesBillingSubscriptionDetail = () => {
   const lineItemsMissingStripePrices = lineItems.filter((item) => !item.stripePriceId);
   const subscriptionCompanyId = subscription?.companyId || recentlySelectedCompany || '';
   const canSyncStripe = Boolean(canManageBilling && hasStripeSubscription && !companyMismatch && !stripeAction);
-  const canApplyStripePricing = Boolean(canManageBilling && hasStripeSubscription && !companyMismatch && !editing && !stripeAction && lineItems.length > 0);
+  const canApplyStripePricing = Boolean(canManageBilling && hasStripeSubscription && !subscription?.checkoutCancellationRequested && !['canceled','expired','superseded'].includes(statusKey) && !companyMismatch && !editing && !stripeAction && lineItems.length > 0);
   const canCancelStripe = Boolean(
     canManageBilling &&
-    hasStripeSubscription &&
+    Boolean(subscription) &&
     !companyMismatch &&
-    !subscription?.cancelAtPeriodEnd &&
-    !['canceled'].includes(statusKey) &&
+    (!subscription?.cancelAtPeriodEnd || subscription?.checkoutCancellationRequested) &&
+    !['canceled','expired','superseded'].includes(statusKey) &&
     !stripeAction
   );
   const canResumeStripe = Boolean(
@@ -337,6 +338,7 @@ const SalesBillingSubscriptionDetail = () => {
     hasStripeSubscription &&
     !companyMismatch &&
     subscription?.cancelAtPeriodEnd &&
+    !subscription?.checkoutCancellationRequested &&
     !['canceled'].includes(statusKey) &&
     !stripeAction
   );
@@ -556,7 +558,7 @@ const SalesBillingSubscriptionDetail = () => {
   const cancelStripeSubscription = () => runStripeAction({
     callableName: 'cancelSalesBillingSubscription',
     payload: { cancelAtPeriodEnd: true },
-    successMessage: 'Stripe subscription will cancel at period end.',
+    successMessage: hasStripeSubscription && !subscription?.checkoutCancellationRequested ? 'Stripe subscription will cancel at period end.' : 'Billing setup canceled.',
   });
 
   const resumeStripeSubscription = () => runStripeAction({
@@ -865,6 +867,7 @@ const SalesBillingSubscriptionDetail = () => {
                     <Field label="Customer Can Pay" value={subscription.customerCanPayImmediately ? 'Ready' : 'No'} />
                     <Field label="Current Period" value={`${formatDate(subscription.currentPeriodStart)} - ${formatDate(subscription.currentPeriodEnd)}`} />
                     <Field label="Cancel At Period End" value={subscription.cancelAtPeriodEnd ? 'Yes' : 'No'} />
+                    <Field label="Scheduled Billing End" value={formatDate(subscription.stripeCancelAt || subscription.billingEndAt)} />
                   </dl>
                 )}
               </form>
@@ -975,7 +978,7 @@ const SalesBillingSubscriptionDetail = () => {
                       className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <FaBan className="text-xs" />
-                      {stripeAction === 'cancelSalesBillingSubscription' ? 'Canceling...' : 'Cancel At Period End'}
+                      {stripeAction === 'cancelSalesBillingSubscription' ? 'Canceling...' : subscription.checkoutCancellationRequested && subscription.checkoutCancellationStatus!=='complete' ? 'Finish cancellation' : hasStripeSubscription ? 'Cancel At Period End' : 'Cancel billing setup'}
                     </button>
                   )}
                 </div>

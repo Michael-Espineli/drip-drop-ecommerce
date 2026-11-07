@@ -321,3 +321,32 @@ test('stop pay prefers its own rate and additional task pay remains a separate c
   assert.deepEqual(removed.conflicts, []);
   assert.deepEqual(removed.writes.map(line => line.calculationStatus), ['voided']);
 });
+
+test('reconciliation refuses generated zero earnings from every source while preserving review issues and real adjustments', () => {
+  for (const engine of [server, browser]) {
+    for (const source of ['serviceStop', 'serviceStopTask', 'activeRoute', 'activeRouteLog', 'manualAdjustment']) {
+      for (const totalAmountCents of [0, '0']) {
+        const line = { id: 'zero', source, serviceStopId: 'stop', technicianId: 'tech-A', totalAmountCents, calculationStatus: 'calculated' };
+        assert.equal(engine.reconcilePayLines({ generated: [line] }).writes.length, 0, source);
+        const review = engine.reconcilePayLines({ generated: [{ ...line, calculationStatus: 'needsReview', notes: 'Missing rate' }] });
+        assert.equal(review.writes.length, 1); assert.equal(review.writes[0].calculationStatus, 'needsReview');
+      }
+    }
+    for (const totalAmountCents of [-500, 500]) {
+      const result = engine.reconcilePayLines({ generated: [{ id: 'adjustment', source: 'manualAdjustment', technicianId: 'tech-A', totalAmountCents, calculationStatus: 'adjusted' }] });
+      assert.equal(result.writes[0].totalAmountCents, totalAmountCents);
+    }
+  }
+});
+
+test('zero generation does not overwrite protected earnings and retires only eligible old automatic rows', () => {
+  for (const engine of [server, browser]) {
+    const zero = { id: 'zero', source: 'serviceStop', serviceStopId: 'stop', technicianId: 'tech-A', totalAmountCents: 0, calculationStatus: 'calculated' };
+    const ordinary = engine.reconcilePayLines({ generated: [zero], existing: [zero] });
+    assert.equal(ordinary.writes.length, 1); assert.equal(ordinary.writes[0].calculationStatus, 'voided');
+    for (const protection of [{ calculationStatus: 'approved', approvedAt: new Date() }, { paidAt: new Date() }, { payStatementId: 'sheet' }, { exportBatchId: 'export' }, { calculationStatus: 'adjusted' }]) {
+      const result = engine.reconcilePayLines({ generated: [zero], existing: [{ ...zero, totalAmountCents: 5000, ...protection }] });
+      assert.equal(result.writes.length, 0); assert.deepEqual(Array.from(result.conflicts), ['zero']);
+    }
+  }
+});

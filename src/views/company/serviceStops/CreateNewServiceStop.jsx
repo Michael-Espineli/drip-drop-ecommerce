@@ -1,3 +1,4 @@
+import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
@@ -525,8 +526,7 @@ const CreateNewServiceStop = () => {
                     mappingsSnap,
                     ratesSnap,
                     taskTypesSnap,
-                    legacyTaskGroupsSnap,
-                    taskGroupsSnap,
+                    taskGroupOptions,
                 ] = await Promise.all([
                     getDocs(collection(db, "companies", recentlySelectedCompany, 'companyUsers')),
                     getDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main")),
@@ -535,8 +535,7 @@ const CreateNewServiceStop = () => {
                     Promise.resolve({ docs: [] }),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates")),
                     getDocs(collection(db, "universal", "settings", "taskTypes")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup")),
-                    getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups")),
+                    fetchRecurringTaskGroupOptions({ db, companyId: recentlySelectedCompany }),
                 ]);
 
                 setUserList(sortCompanyUsersByName(usersSnapshot.docs.map(docSnap => {
@@ -568,34 +567,7 @@ const CreateNewServiceStop = () => {
                 setWorkTypeMappings(mappingsSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
                 setTechnicianRates(ratesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
                 setTaskTypeList(jobTaskTypeOptionsFromDocs(taskTypesSnap.docs));
-                setTaskGroupList([
-                    ...legacyTaskGroupsSnap.docs.map((docSnap) => {
-                        const data = docSnap.data();
-                        const id = data.id || docSnap.id;
-                        const label = data.name || data.groupName || "Task Group";
-
-                        return {
-                            ...data,
-                            id,
-                            value: id,
-                            label,
-                            sourcePath: "legacy",
-                        };
-                    }),
-                    ...taskGroupsSnap.docs.map((docSnap) => {
-                        const data = docSnap.data();
-                        const id = data.id || docSnap.id;
-                        const label = data.name || data.groupName || "Task Group";
-
-                        return {
-                            ...data,
-                            id,
-                            value: id,
-                            label,
-                            sourcePath: "current",
-                        };
-                    }),
-                ]);
+                setTaskGroupList(taskGroupOptions);
             } catch (error) {
                 console.error("Failed to load service stop scheduler settings:", error);
                 toast.error(userFacingErrorMessage(error, "Failed to load scheduler settings."));
@@ -923,26 +895,7 @@ const CreateNewServiceStop = () => {
         }
     };
 
-    const getTaskGroupTasks = async (taskGroup) => {
-        const taskCollections = taskGroup?.sourcePath === "legacy"
-            ? [
-                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
-                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
-            ]
-            : [
-                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
-                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
-            ];
-
-        for (const taskCollection of taskCollections) {
-            const snapshot = await getDocs(taskCollection);
-            if (snapshot.docs.length) {
-                return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-            }
-        }
-
-        return [];
-    };
+    const getTaskGroupTasks = (taskGroup) => fetchTaskGroupTasks({ db, companyId: recentlySelectedCompany, taskGroup });
 
     const applyTaskGroupToJob = async (taskGroup) => {
         setSelectedTaskGroup(taskGroup || null);

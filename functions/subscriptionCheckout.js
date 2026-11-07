@@ -1,6 +1,7 @@
 const {billingActor,companyBillingMembership}=require('./billingAccess');
 const {documentId,fail}=require('./companyActor');
 const {id,key,hash,millis,pricing,liveSubscription}=require('./billingMath');
+const {agreementTerms,readAgreement}=require('./billingAgreementTerms');
 const allowedOrigins=new Set(['https://dripdrop-poolapp.com','https://www.dripdrop-poolapp.com','https://the-pool-app-dev.web.app','https://the-pool-app-dev.firebaseapp.com','https://the-pool-app-3e652.web.app','https://the-pool-app-3e652.firebaseapp.com']);
 function redirect(value){let url;try{url=new URL(value);}catch(_){fail('invalid-argument','Choose a valid DripDrop return URL.');}const local=['localhost','127.0.0.1'].includes(url.hostname)&&process.env.FUNCTIONS_EMULATOR==='true';if((!allowedOrigins.has(url.origin)&&!local)||url.username||url.password)fail('invalid-argument','Return to the DripDrop app after billing setup.');return url.toString();}
 function createSubscriptionCheckout(db,stripe,now=()=>new Date()){
@@ -18,13 +19,15 @@ function createSubscriptionCheckout(db,stripe,now=()=>new Date()){
    else if(!owns)await billingActor(db,tx,companyId,uid);
    if(!platform && (record.companyId!==companyId || !companySnap.exists))fail('permission-denied','The subscription belongs to another company.');
    if(!platform && data.agreementId && record.agreementId!==data.agreementId)fail('failed-precondition','This agreement has a different billing subscription.');
-   if(!platform && ['canceled','cancelled','superseded','expired'].includes(key(record.status)))fail('failed-precondition','This billing agreement is closed.');
+   if(!platform && (record.checkoutCancellationRequested || ['canceled','cancelled','superseded','expired','cancellationpending'].includes(key(record.status))))fail('failed-precondition','This billing agreement is closed or being canceled.');
    const connected=platform?'':company.stripeConnectedAccountId || company.stripeConnectAccountId || '';
    if(!platform && (!connected || connected!==record.stripeConnectedAccountId || !(company.customerBillingEnabled||company.salesBillingEnabled||company.salesBillingAutomationEnabled)))fail('failed-precondition','The company must finish its connected payment setup.');
    if(!platform&&record.stripeSubscriptionId&&liveSubscription(record.stripeStatus || record.status))return {already:record.stripeSubscriptionId};
    const appSubs=platform?await tx.get(ref.collection('subscriptions')):null;
    if(appSubs?.docs.some(doc=>doc.data().stripeSubscriptionId&&liveSubscription(doc.data().status)))return {already:appSubs.docs.find(doc=>doc.data().stripeSubscriptionId&&liveSubscription(doc.data().status)).data().stripeSubscriptionId};
    const price=platform?null:pricing(record);
+   const agreement=platform?{}:await readAgreement(tx,db,record),terms=platform?{}:agreementTerms(record,agreement,company);
+   if(!platform && (terms.closed || terms.endAt && terms.endAt<=now().getTime()))fail('failed-precondition','This service agreement has ended. Review its terms before setting up billing.');
    if(method==='ach'&&!platform&&price.currency!=='usd')fail('failed-precondition','ACH requires USD billing.');
    const invoices=platform?null:await tx.get(db.collection('salesInvoices').where('billingSubscriptionId','==',subscriptionId));
    let startAt=Math.max(millis(record.firstInvoiceSendAt),millis(record.manualBillingNextInvoiceAt),millis(record.agreementSnapshot?.startDate));
@@ -34,6 +37,7 @@ function createSubscriptionCheckout(db,stripe,now=()=>new Date()){
     if(Number(bill.amountDueCents ?? Number(bill.totalAmountCents || 0)-Number(bill.amountPaidCents || 0)-Number(bill.writeOffAmountCents || 0))>0)fail('failed-precondition','Settle existing manual invoices before enabling autopay so the same service is not billed twice.');
     if(Number(bill.amountPaidCents || 0)>0){if(!millis(bill.billingPeriodEnd))fail('failed-precondition','Set the service period on existing paid manual invoices before enabling autopay.');startAt=Math.max(startAt,millis(bill.billingPeriodEnd));}
    }
+   if(!platform && terms.endAt && startAt>=terms.endAt)fail('failed-precondition','No recurring service period remains before this agreement ends.');
    const previous=record.checkoutAttemptId?await tx.get(ref.collection('checkoutAttempts').doc(record.checkoutAttemptId)):null;
    const old=previous?.data();
    if(old?.kind==='native'&&!['expired','failed'].includes(old.status))fail('failed-precondition','Finish or cancel the pending mobile subscription setup before starting browser Checkout.');
@@ -54,7 +58,7 @@ function createSubscriptionCheckout(db,stripe,now=()=>new Date()){
    // Firestore does not accept undefined, even in a frozen Stripe request.
    const clean=JSON.parse(JSON.stringify({fingerprint,params,customerData,connected,status:'creating',expiresAt:new Date(params.expires_at*1000),createdAt:now(),startAt,platform}));clean.expiresAt=new Date(clean.expiresAt);clean.createdAt=new Date(clean.createdAt);
    tx.set(ref.collection('checkoutAttempts').doc(attemptId),clean);
-   tx.set(ref,{checkoutAttemptId:attemptId,checkoutVersion:version,checkoutHold:true,checkoutCustomerData:clean.customerData},{merge:true});
+   tx.set(ref,{checkoutAttemptId:attemptId,checkoutVersion:version,checkoutHold:true,checkoutCustomerData:clean.customerData,...(!platform&&terms.endAt?{billingEndAt:new Date(terms.endAt)}:{})},{merge:true});
    return {ref,record,company,connected,attempt:{...clean,id:attemptId}};
   });
   if(reserved.already)return {status:'already_active',stripeSubscriptionId:reserved.already,message:'This company or agreement already has a Stripe subscription. Manage that subscription instead.'};
@@ -79,7 +83,7 @@ function createSubscriptionCheckout(db,stripe,now=()=>new Date()){
    return start(request,{platform,plan});
   }
   const publish=await db.runTransaction(async tx=>{
-   const current=await tx.get(ref),latestAttempt=await tx.get(attemptRef);if(!['creating','open'].includes(latestAttempt.data()?.status)||current.data()?.checkoutAttemptId!==attempt.id||current.data()?.stripeSubscriptionId&&liveSubscription(current.data()?.stripeStatus || current.data()?.status))return false;
+   const current=await tx.get(ref),latestAttempt=await tx.get(attemptRef);if(current.data()?.checkoutCancellationRequested || ['canceled','cancelled','cancellationpending','expired','superseded'].includes(key(current.data()?.status)) || !['creating','open'].includes(latestAttempt.data()?.status)||current.data()?.checkoutAttemptId!==attempt.id||current.data()?.stripeSubscriptionId&&liveSubscription(current.data()?.stripeStatus || current.data()?.status))return false;
    tx.set(attemptRef,{sessionId:session.id,status:'open',updatedAt:now()},{merge:true});
    tx.set(ref,{checkoutSessionId:session.id,checkoutUrl:session.url,checkoutStatus:'created',checkoutHold:true,...(!platform?{status:'pendingStripe',autopayStatus:'checkoutStarted',nextAction:'completeCheckout',firstAutomaticChargeAt:attempt.startAt?new Date(attempt.startAt):now()}:{}),updatedAt:now()},{merge:true});return true;
   });

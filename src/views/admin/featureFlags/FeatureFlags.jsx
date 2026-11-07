@@ -358,7 +358,7 @@ function FeatureFlags() {
             </p>
           </div>
           <div className="border border-slate-800/60 bg-slate-900/50 p-3">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Real Emails</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Customer Emails</p>
             <p className={`text-2xl font-bold ${realEmailsFlag?.enabled ? 'text-emerald-300' : 'text-[#efb12f]'}`}>
               {realEmailsFlag?.enabled ? 'On' : 'Test'}
             </p>

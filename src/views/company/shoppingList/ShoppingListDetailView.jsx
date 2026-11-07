@@ -1,3 +1,4 @@
+import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -1143,6 +1144,8 @@ const ShoppingListDetailView = () => {
                     )}
                 </div>
 
+                <InvoiceWorkflowStatus recordPath={recentlySelectedCompany && item.id ? `companies/${recentlySelectedCompany}/${sourceCollection}/${item.id}` : undefined} />
+
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
                     <div className="lg:col-span-2 space-y-6">
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -1295,7 +1298,12 @@ const ShoppingListDetailView = () => {
                                     )}
                                 </div>
 
-                                {edit && editForm.status !== SHOPPING_LIST_INVOICED_STATUS ? (
+                                {partApprovalRequestId ? (
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Invoice Timing</p>
+                                        <p>Follows the customer’s choice on the part approval. Automatic email follows Company Settings.</p>
+                                    </div>
+                                ) : edit && editForm.status !== SHOPPING_LIST_INVOICED_STATUS ? (
                                     <label className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
                                         <input
                                             type="checkbox"
@@ -1305,7 +1313,7 @@ const ShoppingListDetailView = () => {
                                         />
                                         <span>
                                             <span className="block font-semibold">Auto invoice when installed</span>
-                                            <span className="block text-xs text-blue-700">Creates and sends a sales invoice when this item is marked installed.</span>
+                                            <span className="block text-xs text-blue-700">Creates a sales invoice when installed. Automatic email follows Company Settings; approved parts follow the customer’s selected invoice timing.</span>
                                         </span>
                                     </label>
                                 ) : !edit ? (

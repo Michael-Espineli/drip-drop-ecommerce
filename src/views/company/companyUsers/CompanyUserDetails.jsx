@@ -6,6 +6,7 @@ import { httpsCallable } from "firebase/functions";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import Select from "react-select";
 import {
+    ArrowDownTrayIcon,
     ArrowLeftIcon,
     ArrowTopRightOnSquareIcon,
     BriefcaseIcon,
@@ -62,6 +63,8 @@ import {
 } from "../../../utils/dashboardAccess";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
+import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
+import PerformanceDownloadDialog from "./PerformanceDownloadDialog";
 
 const VEHICLE_TYPES = ["Car", "Truck", "Van"];
 const MAX_COMPANY_USER_FILE_SIZE = 25 * 1024 * 1024;
@@ -773,6 +776,7 @@ const CompanyUserDetails = () => {
     const [isEditingPerformanceReview, setIsEditingPerformanceReview] = useState(false);
     const [isUpdatingPerformanceReview, setIsUpdatingPerformanceReview] = useState(false);
     const [showAllPerformanceHistory, setShowAllPerformanceHistory] = useState(false);
+    const [isPerformanceDownloadOpen, setIsPerformanceDownloadOpen] = useState(false);
     const [copyingPerformanceReviewId, setCopyingPerformanceReviewId] = useState("");
     const [summaryDraft, setSummaryDraft] = useState(emptySummaryDraft);
     const [isSavingPerformance, setIsSavingPerformance] = useState(false);
@@ -794,6 +798,10 @@ const CompanyUserDetails = () => {
         setPerformanceFiles([]);
         setIsPerformanceLineModalOpen(true);
     }, []);
+
+    useEffect(() => {
+        setIsPerformanceDownloadOpen(false);
+    }, [recentlySelectedCompany, companyUserId, activeTab]);
 
     const handleTabChange = useCallback((nextTab) => {
         const normalizedTab = getInitialTab(nextTab);
@@ -4623,6 +4631,16 @@ const CompanyUserDetails = () => {
 
         return (
             <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-base font-semibold text-slate-950">Performance Timeline</h2>
+                        <p className="mt-1 text-sm text-slate-500">Download saved history for a technician review.</p>
+                    </div>
+                    <button type="button" onClick={() => setIsPerformanceDownloadOpen(true)} className={workspaceButtonClass()}>
+                        <ArrowDownTrayIcon className="h-4 w-4" />
+                        Download
+                    </button>
+                </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <StatTile
                         icon={StarIcon}
@@ -4782,6 +4800,16 @@ const CompanyUserDetails = () => {
                 </Section>
 
                 {renderComplaintTimeline()}
+
+                {isPerformanceDownloadOpen && (
+                    <PerformanceDownloadDialog
+                        key={`${recentlySelectedCompany}/${user.id}`}
+                        companyId={recentlySelectedCompany}
+                        companyUserId={user.id}
+                        technicianName={getDisplayName(user)}
+                        onClose={() => setIsPerformanceDownloadOpen(false)}
+                    />
+                )}
 
                 {isPerformanceLineModalOpen && canEditPerformanceReviews && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">

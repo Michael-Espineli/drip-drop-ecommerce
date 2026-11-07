@@ -6,6 +6,7 @@ export const PAYROLL_ENABLED_FIELD = "payrollEnabled";
 export const DEFAULT_COMPANY_WORK_SETTINGS = {
   laborMultiplier: DEFAULT_LABOR_MULTIPLIER,
   customerBillingEnabled: false,
+  partApprovalAutoSendInvoices: false,
   salesCreateBillingSubscriptionOnAcceptanceDefault: true,
   payrollEnabled: true,
   workOffersGoLiveByDefault: true,
@@ -47,6 +48,7 @@ export const normalizeCompanyWorkSettings = (settings = {}) => {
   return {
     laborMultiplier: normalizeLaborMultiplier(data.laborMultiplier),
     customerBillingEnabled,
+    partApprovalAutoSendInvoices: data.partApprovalAutoSendInvoices === true,
     salesCreateBillingSubscriptionOnAcceptanceDefault: customerBillingEnabled && boolWithDefault(
       data.salesCreateBillingSubscriptionOnAcceptanceDefault,
       boolWithDefault(data.salesBillingAutomationEnabled, DEFAULT_COMPANY_WORK_SETTINGS.salesCreateBillingSubscriptionOnAcceptanceDefault)

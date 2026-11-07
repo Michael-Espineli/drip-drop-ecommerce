@@ -24,10 +24,24 @@
 .profile-metric-label { color: var(--color-text-subtle); font-size: .8rem; font-weight: 600; }
 .profile-metric-value { margin-top: .3rem; color: var(--color-text); font-size: 1.5rem; font-weight: 700; overflow-wrap: anywhere; }
 .profile-metric-helper, .profile-caption { margin-top: .3rem; color: var(--color-text-subtle); font-size: .8rem; }
-.profile-payout .profile-card-body { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1.5rem; }
+.profile-payout .profile-card-body { gap: 1rem; }
 .profile-payout .profile-metric:first-child { border-color: var(--workspace-emerald-border); background: var(--workspace-emerald-bg); }
-.profile-payout .profile-metric:first-child .profile-metric-value { color: var(--workspace-emerald-text); }
-.profile-payout-actions { display: grid; gap: .6rem; }
+.profile-payout .profile-metric:first-child .profile-metric-value { color: var(--workspace-emerald-text); font-size: 2rem; }
+.profile-payout-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
+.profile-payout-date { margin-top: .5rem; font-size: 1rem; font-weight: 700; }
+.profile-payout-review { padding: .85rem 1rem; border: 1px solid var(--workspace-amber-border); border-radius: .5rem; color: var(--workspace-amber-text); background: var(--workspace-amber-bg); font-size: .875rem; }
+.profile-payout-work-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
+.profile-payout-work-heading h3 { font-size: 1rem; font-weight: 700; }
+.profile-payout-filters { display: flex; gap: .5rem; }
+.profile-payout-work { margin: 0; padding: 0; list-style: none; }
+.profile-payout-work li { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1rem 0; border-top: 1px solid var(--color-border); }
+.profile-payout-work-copy { min-width: 0; overflow-wrap: anywhere; }
+.profile-payout-work-title { font-size: 1rem; font-weight: 600; }
+.profile-payout-work-pay { flex-shrink: 0; display: grid; justify-items: end; gap: .4rem; }
+.profile-payout-work-amount { font-size: 1.1rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.profile-payout-status { padding: .25rem .5rem; border-radius: .375rem; font-size: .75rem; font-weight: 600; background: var(--workspace-slate-bg); color: var(--workspace-slate-text); }
+.profile-payout-status.is-paid { color: var(--workspace-emerald-text); background: var(--workspace-emerald-bg); }
+.profile-payout-status.is-review { color: var(--workspace-amber-text); background: var(--workspace-amber-bg); }
 .profile-payout-subtitle { font-size: .875rem; color: var(--color-text-subtle); margin-top: .25rem; }
 .profile-page .profile-route { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .75rem; padding: 1rem 0; border-bottom: 1px solid var(--color-border); }
 .profile-route:last-child { border: 0; padding-bottom: 0; }
@@ -54,7 +68,9 @@
   .profile-card-body { padding: 1rem; }
   .profile-info-row, .profile-aside .profile-info-row { grid-template-columns: 6rem minmax(0, 1fr); gap: .75rem; }
   .profile-payout .profile-card-body { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
-  .profile-payout-actions { grid-template-columns: 1fr 1fr; }
+  .profile-payout-actions > * { flex: 1 1 auto; }
+  .profile-payout-work li { flex-wrap: wrap; gap: .65rem; }
+  .profile-payout-work-pay { width: 100%; grid-template-columns: 1fr auto; align-items: center; justify-items: start; }
   .profile-payout .profile-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .profile-payout .profile-metric:first-child { grid-column: 1 / -1; }
   .profile-metrics { gap: .5rem; }

@@ -163,6 +163,7 @@ export const buildPartApprovalShoppingItemPayload = ({
     autoInvoiceOnInstall: approval.autoInvoiceOnInstall === true,
     paymentCollectionPreference: approval.paymentCollectionPreference || approval.paymentPreference || "sendInvoice",
     paymentPreference: approval.paymentPreference || approval.paymentCollectionPreference || "sendInvoice",
+    nextBillSubscriptionId: approval.nextBillSubscriptionId || "",
     ...photoFields,
     updatedAt: now,
     ...(generated ? { datePurchased: null, createdAt: now } : {}),

@@ -1,0 +1,21 @@
+import React from 'react';
+import {render,screen,within,fireEvent,waitFor} from '@testing-library/react';
+import {MemoryRouter} from 'react-router-dom';
+import {onSnapshot,updateDoc} from 'firebase/firestore';
+import {httpsCallable} from 'firebase/functions';
+import {Context} from '../../../context/AuthContext';
+import CompanyAccountingWorkspace from './CompanyAccountingWorkspace';
+jest.mock('../../../context/AuthContext',()=>({Context:require('react').createContext()}));
+jest.mock('../../../context/ThemeContext',()=>({useTheme:()=>({isDarkMode:false,toggleTheme:jest.fn()})}));
+jest.mock('../../../utils/config',()=>({db:{},functions:{}}));
+jest.mock('../../../utils/callableAuth',()=>({getCallableAuthPayload:async()=>({idToken:'test'})}));
+jest.mock('firebase/functions',()=>({httpsCallable:jest.fn()}));
+jest.mock('firebase/firestore',()=>({collection:(_,...p)=>p.join('/'),query:(ref)=>ref,where:jest.fn(),orderBy:jest.fn(),limit:jest.fn(),onSnapshot:jest.fn(),doc:jest.fn(),updateDoc:jest.fn(),serverTimestamp:jest.fn(),addDoc:jest.fn()}));
+const command=jest.fn(),payments=[{id:'payment',companyId:'company',customerId:'customer',invoiceId:'invoice',status:'partiallyRefunded',method:'stripeCard',amountCents:10000,refundedAmountCents:4000,receivedAt:new Date()}];
+const mount=(permissions=['404'])=>render(<MemoryRouter><Context.Provider value={{recentlySelectedCompany:'company',user:{uid:'manager'},companyRole:{permissionIdList:permissions}}}><CompanyAccountingWorkspace/></Context.Provider></MemoryRouter>);
+beforeEach(()=>{command.mockReset().mockResolvedValue({data:{status:'reconciled'}});httpsCallable.mockReturnValue(command);onSnapshot.mockImplementation((ref,next)=>{next({docs:(ref==='salesPayments'?payments:[]).map(p=>({id:p.id,data:()=>p}))});return jest.fn();});});
+test('accounting retains partial refunds and displays remaining cash consistently',async()=>{
+ mount();await screen.findByText('Cash received');expect(within(screen.getByText('Cash received').parentElement).getByText('$60.00')).toBeInTheDocument();expect(within(screen.getByText('Unreconciled').parentElement).getByText('$60.00')).toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:'Reconciled'}));await waitFor(()=>expect(command).toHaveBeenCalledWith(expect.objectContaining({action:'markReconciled',paymentId:'payment',companyId:'company'})));expect(updateDoc).not.toHaveBeenCalled();
+});
+test('finance readers cannot mark payments reconciled',async()=>{mount(['400']);expect(await screen.findByRole('button',{name:'Reconciled'})).toBeDisabled();});

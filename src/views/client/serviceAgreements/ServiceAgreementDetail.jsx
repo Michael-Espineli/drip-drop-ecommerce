@@ -808,6 +808,7 @@ const ServiceAgreementDetail = () => {
     agreement &&
     effectiveSubscriptionId &&
     !hasActiveStripeSubscription &&
+    !billingSubscription?.checkoutCancellationRequested && !billingSubscription?.stripeSubscriptionId && !['canceled','cancelled','expired','superseded','cancellationpending'].includes(String(billingSubscription?.status || '').toLowerCase()) &&
     billingSubscription?.stripeConnectedAccountId &&
     Number(billingSubscription?.amountCents || agreement?.totalAmountCents || 0) > 0 &&
     !startingCheckout
@@ -1605,7 +1606,7 @@ const ServiceAgreementDetail = () => {
               </div>
             ) : (
               <div className="mt-5 space-y-4">
-                <PaymentMethodSelector
+                <PaymentMethodSelector showFees={false}
                   amountCents={billingSubscription?.amountCents || agreement.totalAmountCents || agreement.rateAmountCents}
                   value={selectedPaymentMethodType}
                   onChange={setSelectedPaymentMethodType}

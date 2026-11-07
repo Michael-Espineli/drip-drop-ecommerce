@@ -3,6 +3,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../utils/config';
 import { getCallableAuthPayload } from '../../utils/callableAuth';
+import PaymentMethodSelector from '../sales/PaymentMethodSelector';
 export function ManageClientBilling({
   subscription
 }) {
@@ -38,6 +39,7 @@ export function ClientInvoicePayment({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [processing, setProcessing] = useState(false);
+  const [paymentMethodType,setPaymentMethodType]=useState('card');
   useEffect(() => {
     let active = true;
     if (typeof invoice.onlinePaymentAvailable === 'boolean') {
@@ -67,6 +69,7 @@ export function ClientInvoicePayment({
         ...auth,
         invoiceId: invoice.id,
         accessToken,
+        paymentMethodType,
         returnUrl: window.location.href
       });
       if (data.url) window.location.assign(data.url);else {
@@ -81,8 +84,8 @@ export function ClientInvoicePayment({
   if (invoice.paymentReviewRequired) return <p role="status" className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Your company is reviewing a payment adjustment. Contact them before making another payment.</p>;
   if (balanceCents <= 0 || ['paid', 'void', 'draft', 'uncollectible'].includes(String(invoice.status).toLowerCase())) return null;
   if (invoice.stripeHostedInvoiceUrl) return <a href={invoice.stripeHostedInvoiceUrl} className="mt-4 inline-flex min-h-[48px] w-full items-center justify-center rounded-lg bg-blue-600 px-4 font-bold text-white">Pay this invoice</a>;
-  return <div className="mt-4 space-y-3">{ready ? <><button onClick={pay} disabled={busy || processing || invoice.paymentProcessing} className="min-h-[48px] w-full rounded-lg bg-blue-600 px-4 font-bold text-white disabled:opacity-60">{busy ? 'Opening secure payment…' : processing || invoice.paymentProcessing ? 'Payment processing' : `Pay ${new Intl.NumberFormat('en-US', {
+  return <div className="mt-4 space-y-3">{ready ? <>{String(invoice.currency || 'usd').toLowerCase()==='usd' && <PaymentMethodSelector amountCents={balanceCents} value={paymentMethodType} onChange={setPaymentMethodType} disabled={busy || processing || invoice.paymentProcessing} compact showFees={false}/>}<button onClick={pay} disabled={busy || processing || invoice.paymentProcessing} className="min-h-[48px] w-full rounded-lg bg-blue-600 px-4 font-bold text-white disabled:opacity-60">{busy ? 'Opening secure payment…' : processing || invoice.paymentProcessing ? 'Payment processing' : `Pay ${new Intl.NumberFormat('en-US', {
           style: 'currency',
           currency: invoice.currency || 'USD'
-        }).format(balanceCents / 100)}`}</button><p className="text-xs text-slate-500">Pay this invoice once by card. This does not authorize recurring charges.</p></> : <p className="text-sm text-slate-600">Contact your pool company for payment instructions. Online payment is not enabled for this invoice.</p>}{error && <p role="alert" className="text-sm text-red-700">{error}</p>}</div>;
+        }).format(balanceCents / 100)}`}</button><p className="text-xs text-slate-500">Pay this invoice once. This does not authorize recurring charges.{paymentMethodType==='ach'?' Bank payments can take several business days to confirm.':''}</p></> : <p className="text-sm text-slate-600">Contact your pool company for payment instructions. Online payment is not enabled for this invoice.</p>}{error && <p role="alert" className="text-sm text-red-700">{error}</p>}</div>;
 }

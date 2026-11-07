@@ -6,6 +6,7 @@ import { Context } from '../../context/AuthContext';
 import { db } from '../../utils/config';
 import { listenClientRecords } from '../../utils/clientRecords';
 import { clientVisitSummary, clientServiceDate } from '../../utils/clientServiceHistory';
+import ClientCompanyInvites from './ClientCompanyInvites';
 const money = value => new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD'
@@ -92,6 +93,7 @@ export default function ClientHome() {
   }))];
   const ready = Object.keys(loaded).length === 5;
   return <div className="mx-auto max-w-4xl space-y-5 p-4 sm:p-6"><WorkspaceRecordHeader title={<>Hi, {name?.split(' ')[0] || 'there'}</>} eyebrow="Your pool care"><header><p className="mt-1 text-sm text-slate-500">{company?.companyName || 'Pool care, service updates, and billing in one place.'}</p></header></WorkspaceRecordHeader>
+        <ClientCompanyInvites user={user} />
         {errors.length > 0 && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Some updates could not be loaded. Reopen this page to try again.</p>}
         {!ready && <p role="status" className="text-sm text-slate-500">Loading your latest updates…</p>}
         {!company && loaded.relationships && <section className="space-y-3 rounded-xl border border-blue-200 bg-blue-50 p-5"><h2 className="text-xl font-bold">Find your pool company</h2><p className="text-sm text-slate-600">Looking for service? Browse companies and send a request. Already a customer? Open the invitation from your pool company to connect your account.</p><Link className="inline-flex min-h-[48px] w-full items-center justify-center rounded-lg bg-blue-600 px-4 font-bold text-white sm:w-auto" to="/client/companies">Find pool service</Link></section>}

@@ -1,0 +1,319 @@
+<!--
+Weekly Service Report
+-->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weekly Service Report</title>
+</head>
+
+<body style="margin:0; padding:0; background-color:#F3F5F8; font-family:Arial, Helvetica, sans-serif; color:#172033;">
+
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
+    {{preHeader}}
+  </div>
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F3F5F8; margin:0; padding:0;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px; background-color:#FFFFFF; border-radius:18px; overflow:hidden;">
+
+          <tr>
+            <td style="background-color:#1D2E76; padding:28px 28px 24px 28px; text-align:left;">
+              <div style="font-size:13px; line-height:18px; color:#E0AE36; font-weight:bold; letter-spacing:0.8px; text-transform:uppercase;">
+                Weekly Service Report
+              </div>
+
+              <h1 style="margin:8px 0 0 0; font-size:28px; line-height:34px; color:#FFFFFF; font-weight:700;">
+                Your pool has been serviced
+              </h1>
+
+              <p style="margin:10px 0 0 0; font-size:15px; line-height:22px; color:#DDE5FF;">
+                Hi {{customer}}, here is your latest service summary.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:24px 24px 8px 24px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F8FAFC; border:1px solid #E6EAF0; border-radius:14px;">
+                <tr>
+                  <td style="padding:20px;">
+
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="padding-bottom:14px;">
+                          <div style="font-size:13px; line-height:18px; color:#687386; font-weight:bold; text-transform:uppercase; letter-spacing:0.5px;">
+                            Service Location
+                          </div>
+
+                          <div style="font-size:18px; line-height:26px; color:#172033; font-weight:700; margin-top:4px;">
+                            {{address01}}
+                          </div>
+
+                          {{#if address02}}
+                          <div style="font-size:15px; line-height:22px; color:#4B5565;">
+                            {{address02}}
+                          </div>
+                          {{/if}}
+
+                          <div style="font-size:15px; line-height:22px; color:#4B5565;">
+                            {{city}}, {{state}} {{zip}}
+                          </div>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td style="border-top:1px solid #E6EAF0; padding-top:14px;">
+                          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                              <td width="50%" style="padding-right:8px;">
+                                <div style="font-size:12px; line-height:16px; color:#687386; font-weight:bold; text-transform:uppercase;">
+                                  Customer
+                                </div>
+                                <div style="font-size:15px; line-height:22px; color:#172033; font-weight:700;">
+                                  {{customer}}
+                                </div>
+                              </td>
+
+                              <td width="50%" style="padding-left:8px;">
+                                <div style="font-size:12px; line-height:16px; color:#687386; font-weight:bold; text-transform:uppercase;">
+                                  Technician
+                                </div>
+                                <div style="font-size:15px; line-height:22px; color:#172033; font-weight:700;">
+                                  {{technician}}
+                                </div>
+                              </td>
+                            </tr>
+
+                            {{#if serviceDate}}
+                            <tr>
+                              <td colspan="2" style="padding-top:14px;">
+                                <div style="font-size:12px; line-height:16px; color:#687386; font-weight:bold; text-transform:uppercase;">
+                                  Completed
+                                </div>
+                                <div style="font-size:15px; line-height:22px; color:#172033; font-weight:700;">
+                                  {{serviceDate}} {{#if serviceTime}}at {{serviceTime}}{{/if}}
+                                </div>
+                              </td>
+                            </tr>
+                            {{/if}}
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:12px 24px 22px 24px;">
+              <table cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="background-color:#E0AE36; border-radius:999px;">
+                    <a href="{{#if primaryCustomerUrl}}{{primaryCustomerUrl}}{{else}}https://dripdrop-poolapp.com/client/my-pool{{/if}}" target="_blank" style="display:inline-block; padding:13px 22px; font-size:15px; line-height:20px; color:#172033; text-decoration:none; font-weight:700;">
+                      {{#if shouldShowClaimAccountLink}}Connect your homeowner account{{else}}View Service History{{/if}}
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              {{#if shouldShowClaimAccountLink}}
+              <p style="margin:12px 0 0; font-size:14px; line-height:21px; color:#475569;">Create or sign in to your homeowner account, verify your email, then connect your existing customer profile with {{companyName}} to see your service history and billing.</p>
+              {{/if}}
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px 18px 24px;">
+              <h2 style="margin:0 0 12px 0; font-size:20px; line-height:26px; color:#1D2E76;">
+                Water Readings
+              </h2>
+
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E6EAF0; border-radius:14px; overflow:hidden;">
+                {{#each stopData.readings}}
+                <tr>
+                  <td style="padding:14px 16px; border-bottom:1px solid #E6EAF0; font-size:15px; line-height:20px; color:#172033;">
+                    {{this.name}}
+                  </td>
+                  <td align="right" style="padding:14px 16px; border-bottom:1px solid #E6EAF0; font-size:15px; line-height:20px; color:#172033; font-weight:700;">
+                    {{this.amount}} {{this.UOM}}
+                  </td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px 22px 24px;">
+              <h2 style="margin:0 0 12px 0; font-size:20px; line-height:26px; color:#1D2E76;">
+                Chemicals Added
+              </h2>
+
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E6EAF0; border-radius:14px; overflow:hidden;">
+                {{#each stopData.dosages}}
+                <tr>
+                  <td style="padding:14px 16px; border-bottom:1px solid #E6EAF0; font-size:15px; line-height:20px; color:#172033;">
+                    {{this.name}}
+                  </td>
+                  <td align="right" style="padding:14px 16px; border-bottom:1px solid #E6EAF0; font-size:15px; line-height:20px; color:#172033; font-weight:700;">
+                    {{this.amount}} {{this.UOM}}
+                  </td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+
+          {{#if stopData.observation}}
+          <tr>
+            <td style="padding:0 24px 22px 24px;">
+              <h2 style="margin:0 0 12px 0; font-size:20px; line-height:26px; color:#1D2E76;">
+                Observations
+              </h2>
+
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F8FAFC; border:1px solid #E6EAF0; border-radius:14px;">
+                {{#each stopData.observation}}
+                <tr>
+                  <td style="padding:12px 16px; border-bottom:1px solid #E6EAF0; font-size:15px; line-height:21px; color:#4B5565;">
+                    {{this}}
+                  </td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          {{#if stopData.equipmentMeasurements}}
+          <tr>
+            <td style="padding:0 24px 22px 24px;">
+              <h2 style="margin:0 0 12px 0; font-size:20px; line-height:26px; color:#1D2E76;">
+                Equipment Measurements
+              </h2>
+
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E6EAF0; border-radius:14px; overflow:hidden;">
+                {{#each stopData.equipmentMeasurements}}
+                <tr>
+                  <td style="padding:14px 16px; border-bottom:1px solid #E6EAF0; font-size:15px; line-height:20px; color:#172033;">
+                    {{this.equipmentId}} — {{this.status}}
+                  </td>
+                  <td align="right" style="padding:14px 16px; border-bottom:1px solid #E6EAF0; font-size:15px; line-height:20px; color:#172033; font-weight:700;">
+                    {{#if this.poundForcePerSquareInch}}{{this.poundForcePerSquareInch}} PSI{{/if}}
+                    {{#if this.revolutionsPerMinute}} / {{this.revolutionsPerMinute}} RPM{{/if}}
+                  </td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          {{#if photoUrls}}
+          <tr>
+            <td style="padding:0 24px 22px 24px;">
+              <h2 style="margin:0 0 12px 0; font-size:20px; line-height:26px; color:#1D2E76;">
+                Service Photos
+              </h2>
+
+              {{#each photoUrls}}
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px; border:1px solid #E6EAF0; border-radius:14px; overflow:hidden;">
+                <tr>
+                  <td>
+                    <img src="{{this.imageUrl}}" alt="{{this.description}}" width="592" style="display:block; width:100%; max-width:592px; height:auto; border:0;">
+                  </td>
+                </tr>
+
+                {{#if this.description}}
+                <tr>
+                  <td style="padding:12px 14px; font-size:14px; line-height:20px; color:#4B5565; background-color:#F8FAFC;">
+                    {{this.description}}
+                  </td>
+                </tr>
+                {{/if}}
+              </table>
+              {{/each}}
+            </td>
+          </tr>
+          {{/if}}
+
+          <tr>
+            <td style="padding:4px 24px 26px 24px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#FFF9EA; border:1px solid #F1D58A; border-radius:14px;">
+                <tr>
+                  <td style="padding:18px 20px;">
+                    <div style="font-size:18px; line-height:24px; color:#172033; font-weight:700;">
+                      Thank you for choosing {{companyName}}
+                    </div>
+
+                    <p style="margin:6px 0 0 0; font-size:14px; line-height:21px; color:#4B5565;">
+                      Questions about this service? Contact your pool provider directly.
+                    </p>
+
+                    {{#if companyPhone}}
+                    <p style="margin:10px 0 0 0; font-size:14px; line-height:21px; color:#4B5565;">
+                      Phone: {{companyPhone}}
+                    </p>
+                    {{/if}}
+
+                    {{#if companyEmail}}
+                    <p style="margin:2px 0 0 0; font-size:14px; line-height:21px; color:#4B5565;">
+                      Email: {{companyEmail}}
+                    </p>
+                    {{/if}}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#1D2E76; padding:24px 24px 18px 24px; text-align:center;">
+              <div style="font-size:12px; line-height:18px; color:#AEB8D8; text-transform:uppercase; letter-spacing:0.8px;">
+                Powered by
+              </div>
+
+              <div style="font-size:18px; line-height:24px; color:#FFFFFF; font-weight:700; margin-top:2px;">
+                DripDrop Pool App
+              </div>
+
+              <table align="center" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
+                <tr>
+                  <td style="padding:0 8px;">
+                    <a href="{{supportUrl}}" style="font-size:13px; line-height:18px; color:#E0AE36; text-decoration:none;">Support</a>
+                  </td>
+                  <td style="padding:0 8px;">
+                    <a href="{{contactUrl}}" style="font-size:13px; line-height:18px; color:#E0AE36; text-decoration:none;">Contact</a>
+                  </td>
+                  <td style="padding:0 8px;">
+                    <a href="{{legalUrl}}" style="font-size:13px; line-height:18px; color:#E0AE36; text-decoration:none;">Legal</a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:18px 0 0 0; font-size:11px; line-height:17px; color:#AEB8D8;">
+                You are receiving this email because your pool service provider uses DripDrop Pool App.
+              </p>
+
+              <p style="margin:10px 0 0 0; font-size:11px; line-height:17px; color:#AEB8D8;">
+                <a href="<%asm_group_unsubscribe_raw_url%>" style="color:#E0AE36; text-decoration:none;">Unsubscribe</a>
+                &nbsp;|&nbsp;
+                <a href="<%asm_preferences_raw_url%>" style="color:#E0AE36; text-decoration:none;">Preferences</a>
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

@@ -1,0 +1,18 @@
+import React from 'react';
+import {render,screen,fireEvent,waitFor} from '@testing-library/react';
+import {MemoryRouter,Routes,Route} from 'react-router-dom';
+import {onSnapshot} from 'firebase/firestore';
+import {httpsCallable} from 'firebase/functions';
+import {Context} from '../../../context/AuthContext';
+import SalesBillingSubscriptionDetail from './SalesBillingSubscriptionDetail';
+jest.mock('../../../context/AuthContext',()=>({Context:require('react').createContext()}));
+jest.mock('../../../utils/config',()=>({db:{},functions:{}}));
+jest.mock('../../../utils/callableAuth',()=>({getCallableAuthPayload:async()=>({idToken:'test'})}));
+jest.mock('./components/CustomerBillingNotesPanel',()=>()=>null);
+jest.mock('firebase/functions',()=>({httpsCallable:jest.fn()}));
+jest.mock('firebase/firestore',()=>({doc:(_,...p)=>p.join('/'),onSnapshot:jest.fn(),getDoc:jest.fn(),updateDoc:jest.fn(),writeBatch:jest.fn(),serverTimestamp:jest.fn(),Timestamp:{fromDate:d=>d,fromMillis:v=>new Date(v)}}));
+let row;const command=jest.fn();
+const mount=()=>render(<MemoryRouter initialEntries={['/company/sales/subscriptions/sub']}><Context.Provider value={{recentlySelectedCompany:'company',companyRole:{permissionIdList:['404']},user:{uid:'manager'}}}><Routes><Route path="/company/sales/subscriptions/:billingSubscriptionId" element={<SalesBillingSubscriptionDetail/>}/></Routes></Context.Provider></MemoryRouter>);
+beforeEach(()=>{row={companyId:'company',customerId:'customer',customerName:'Home Owner',status:'pendingStripe',amountCents:10000,currency:'usd',interval:'month',intervalCount:1,lineItems:[],checkoutHold:true,createdAt:new Date('2026-11-01'),currentPeriodStart:new Date('2026-11-01')};command.mockReset().mockResolvedValue({data:{status:'success'}});httpsCallable.mockReturnValue(command);onSnapshot.mockImplementation((ref,next)=>{next({id:'sub',exists:()=>true,data:()=>row});return jest.fn();});});
+test('an open setup can be canceled from the subscription page before Stripe has created a subscription',async()=>{mount();const button=await screen.findByRole('button',{name:'Cancel billing setup'});expect(button).not.toBeDisabled();fireEvent.click(button);await waitFor(()=>expect(command).toHaveBeenCalledWith(expect.objectContaining({companyId:'company',billingSubscriptionId:'sub',cancelAtPeriodEnd:true})));});
+test('an interrupted cancellation exposes its retry and cannot restart Checkout',async()=>{row={...row,status:'cancellationPending',checkoutCancellationRequested:true,checkoutCancellationStatus:'pending'};mount();expect(await screen.findByRole('button',{name:'Finish cancellation'})).not.toBeDisabled();expect(screen.getByRole('button',{name:'Start Checkout'})).toBeDisabled();});

@@ -179,6 +179,13 @@ const StripeBillingSnapshotPanel = ({
                 : "Stripe must approve card payments before Checkout can collect money.",
         },
         {
+            complete: readiness?.achPaymentsEnabled === true,
+            label: "ACH bank payments enabled",
+            detail: readiness?.achPaymentsEnabled
+                ? "Stripe says this account can collect authorized US bank account payments."
+                : "Enable ACH Direct Debit for this connected account in Stripe and finish any bank-payment requirements.",
+        },
+        {
             complete: readiness ? readiness.payoutsEnabled && transfersActive : false,
             label: "Payouts and transfers enabled",
             detail: readiness?.payoutsEnabled && transfersActive

@@ -34,4 +34,8 @@ function period(subscription={}){
 }
 const invoiceSubscription=invoice=>id(invoice.subscription) || id(invoice.parent?.subscription_details?.subscription);
 const paymentIntent=invoice=>id(invoice.payment_intent) || id(invoice.payments?.data?.find(payment=>payment.payment?.type==='payment_intent')?.payment?.payment_intent);
-module.exports={id,key,hash,millis,money,liveSubscription,pricing,period,invoiceSubscription,paymentIntent};
+// Credits reduce debt without being counted as collected cash. Refunds preserve
+// the original invoice obligation by adding an equal credit when cash is returned.
+const invoiceCredits=invoice=>['creditAmountCents','stripeCreditAmountCents','refundCreditCents','disputeCreditCents'].reduce((sum,field)=>sum+money(Number(invoice[field] || 0),field),0);
+const invoiceDue=invoice=>Math.max(0,money(Number(invoice.totalAmountCents ?? invoice.totalCents ?? 0))-money(Number(invoice.amountPaidCents || 0))-money(Number(invoice.writeOffAmountCents || 0))-invoiceCredits(invoice));
+module.exports={id,key,hash,millis,money,liveSubscription,pricing,period,invoiceSubscription,paymentIntent,invoiceCredits,invoiceDue};

@@ -19,10 +19,12 @@ import { itemPhotoFieldsFromSource } from '../../../utils/itemPhotos';
 import { buildPartApprovalShoppingItemPayload } from '../../../utils/partApprovalShopping';
 import { REPAIR_REQUEST_STATUS } from '../../../utils/models/RepairRequest';
 import {
+  buildProductFromVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
   isProductAvailableForPartApproval,
   productCatalogCollectionRef,
+  productCatalogDocRef,
 } from '../../../utils/productCatalog';
 
 const selectStyles = {
@@ -336,6 +338,9 @@ const PartApprovalCreateModal = ({
     let active = true;
 
     const loadServiceLocations = async () => {
+      setServiceLocations([]);
+      setSelectedServiceLocation(null);
+
       try {
         const locationSnap = await getDocs(
           query(
@@ -346,11 +351,11 @@ const PartApprovalCreateModal = ({
 
         if (!active) return;
 
-        setServiceLocations(
-          locationSnap.docs
-            .map((locationDoc) => normalizeServiceLocationOption(locationDoc.id, locationDoc.data()))
-            .sort((left, right) => left.name.localeCompare(right.name))
-        );
+        const locations = locationSnap.docs
+          .map((locationDoc) => normalizeServiceLocationOption(locationDoc.id, locationDoc.data()))
+          .sort((left, right) => left.name.localeCompare(right.name));
+        setServiceLocations(locations);
+        setSelectedServiceLocation(locations[0] || null);
       } catch (locationError) {
         console.error('Unable to load service locations for part approval', locationError);
         setServiceLocations([]);
@@ -400,8 +405,9 @@ const PartApprovalCreateModal = ({
     }));
   };
 
-  const createApproval = async (approvalMode = 'pending') => {
+  const createApproval = async (approvalMode = 'pending', { createProduct = false } = {}) => {
     if (!canSave || saving) return;
+    if (createProduct && form.mode !== 'manual') return;
 
     const approvedInPerson = approvalMode === 'approved';
     if (approvedInPerson && !allowInPersonApproval) return;
@@ -450,6 +456,26 @@ const PartApprovalCreateModal = ({
         user?.displayName ||
         user?.email ||
         '';
+      const newProductId = createProduct ? `com_prod_${uuidv4()}` : '';
+      const productId = newProductId || (form.mode === 'database'
+        ? selectedDbItem?.productId || selectedDbItem?.genericItemId || selectedDbItem?.id || ''
+        : '');
+      const newProduct = createProduct ? {
+        ...buildProductFromVendorItem({
+          productId: newProductId,
+          overrides: {
+            name: itemName,
+            description: itemDescription,
+            sellPrice: unitPriceCents,
+            UOM: 'Unit',
+            billable: true,
+          },
+          source: 'manualPartApproval',
+          now,
+        }),
+        rate: unitCostCents,
+        cost: unitCostCents,
+      } : null;
 
       const payload = {
         id: approvalId,
@@ -476,12 +502,12 @@ const PartApprovalCreateModal = ({
         quantity: String(quantity),
         dbItemId: '',
         dbItemName: '',
-        genericItemId: form.mode === 'database' ? selectedDbItem?.productId || selectedDbItem?.genericItemId || selectedDbItem?.id || '' : '',
-        productId: form.mode === 'database' ? selectedDbItem?.productId || selectedDbItem?.id || '' : '',
-        productName: form.mode === 'database' ? selectedDbItem?.name || '' : '',
-        itemId: form.mode === 'database' ? selectedDbItem?.productId || selectedDbItem?.id || '' : '',
-        itemType: form.mode === 'database' ? 'Product' : 'Part',
-        subCategory: form.mode === 'database' ? 'Product' : 'Part',
+        genericItemId: productId,
+        productId,
+        productName: productId ? itemName : '',
+        itemId: productId,
+        itemType: productId ? 'Product' : 'Part',
+        subCategory: productId ? 'Product' : 'Part',
         plannedUnitCostCents: unitCostCents,
         plannedUnitPriceCents: unitPriceCents,
         plannedTotalCostCents: totalCostCents,
@@ -596,6 +622,9 @@ const PartApprovalCreateModal = ({
 
       const batch = writeBatch(db);
       batch.set(doc(db, 'customerPartApprovals', approvalId), payload);
+      if (newProduct) {
+        batch.set(productCatalogDocRef(db, companyId, newProductId), newProduct);
+      }
 
       if (repairRequestId && workflowContext?.sourceRecordType === 'repairRequest') {
         const repairRequestRef = workflowContext.repairRequestSourcePath === 'homeowner'
@@ -627,9 +656,9 @@ const PartApprovalCreateModal = ({
 
       toast.success(approvedInPerson
         ? 'Part approved and added to the shopping list.'
-        : customerUserId
-          ? 'Part approval created.'
-          : 'Part approval created. Link the customer account so it appears in their portal.');
+        : `${createProduct ? 'Part approval and product created.' : 'Part approval created.'}${customerUserId
+          ? ''
+          : ' Link the customer account so it appears in their portal.'}`);
       onCreated?.(payload);
       onClose?.();
     } catch (saveError) {
@@ -667,13 +696,14 @@ const PartApprovalCreateModal = ({
         <form onSubmit={handleSubmit} className="space-y-5 p-5">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
-              <label className="mb-2 block text-sm font-semibold text-slate-700">Customer</label>
+              <label htmlFor="part-approval-customer" className="mb-2 block text-sm font-semibold text-slate-700">Customer</label>
               {fixedCustomerOption ? (
                 <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900">
                   {fixedCustomerOption.label}
                 </div>
               ) : (
                 <Select
+                  inputId="part-approval-customer"
                   value={selectedCustomer}
                   options={customers}
                   onChange={setSelectedCustomer}
@@ -686,8 +716,9 @@ const PartApprovalCreateModal = ({
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">Service Location</label>
+              <label htmlFor="part-approval-service-location" className="mb-2 block text-sm font-semibold text-slate-700">Service Location</label>
               <Select
+                inputId="part-approval-service-location"
                 value={selectedServiceLocation}
                 options={serviceLocations}
                 onChange={setSelectedServiceLocation}
@@ -699,8 +730,9 @@ const PartApprovalCreateModal = ({
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-700">Item Type</label>
+              <label htmlFor="part-approval-item-type" className="mb-2 block text-sm font-semibold text-slate-700">Item Type</label>
               <select
+                id="part-approval-item-type"
                 value={form.mode}
                 onChange={(event) => {
                   setSelectedDbItem(null);
@@ -809,7 +841,7 @@ const PartApprovalCreateModal = ({
             </div>
           </div>
 
-          <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+          <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:flex-wrap sm:justify-end">
             <button
               type="button"
               onClick={onClose}
@@ -824,6 +856,20 @@ const PartApprovalCreateModal = ({
             >
               {saving ? 'Creating...' : 'Create Customer Approval'}
             </button>
+            {form.mode === 'manual' && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  if (event.currentTarget.form.reportValidity()) {
+                    createApproval('pending', { createProduct: true });
+                  }
+                }}
+                disabled={!canSave || saving}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? 'Creating...' : 'Create Customer Approval and Create New Product'}
+              </button>
+            )}
             {allowInPersonApproval && (
               <button
                 type="button"

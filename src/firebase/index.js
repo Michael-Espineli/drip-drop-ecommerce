@@ -27,7 +27,9 @@ const useProductionFirebase = ['production', 'prod'].includes(requestedFirebaseE
 const firebaseEnvironment = useProductionFirebase ? 'production' : 'development';
 const firebaseConfig = useProductionFirebase ? prodConfig : devConfig;
 const useFirebaseEmulators = process.env.REACT_APP_USE_FIREBASE_EMULATORS === 'true';
-const usePersistentFirestoreCache = process.env.REACT_APP_FIRESTORE_PERSISTENT_CACHE !== 'false';
+// Disk caching is opt-in: an aborted IndexedDB transaction can poison the SDK's
+// async queue and make every subsequent read/write fail until the page reloads.
+const usePersistentFirestoreCache = process.env.REACT_APP_FIRESTORE_PERSISTENT_CACHE === 'true';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);

@@ -1,3 +1,4 @@
+import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
@@ -33,7 +34,7 @@ import ShareItemButton from "../../components/share/ShareItemButton";
 const purchaseCategoryOptions = ["PVC", "Galvanized", "Chemicals", "Useables", "Equipment", "Parts", "Electrical", "Tools", "Misc", "Uncategorized"];
 const normalizePurchaseCategory = (value) => String(value || "").trim() || "Uncategorized";
 const shoppingListStatusOptions = SHOPPING_LIST_STATUS_OPTIONS;
-const defaultShoppingListStatusFilters = [SHOPPING_LIST_STATUS.purchased, SHOPPING_LIST_STATUS.installed, SHOPPING_LIST_STATUS.invoiced];
+const defaultShoppingListStatusFilters = [SHOPPING_LIST_STATUS.purchased, SHOPPING_LIST_STATUS.delivered, SHOPPING_LIST_STATUS.installed, SHOPPING_LIST_STATUS.invoiced];
 const jobBillingIsInvoiced = (status = "") =>
     ["invoiced", "paid"].includes(String(status || "").trim().toLowerCase());
 const purchaseConnectedStatus = (invoiced) => invoiced ? "Invoiced" : "Connected to Job";
@@ -1395,6 +1396,8 @@ const PurchaseDetailView = () => {
                         </div>
                     )}
                 </div>
+
+                <InvoiceWorkflowStatus recordPath={recentlySelectedCompany && purchaseId ? `companies/${recentlySelectedCompany}/purchasedItems/${purchaseId}` : undefined} />
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-6">

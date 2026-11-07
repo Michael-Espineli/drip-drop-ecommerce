@@ -11,6 +11,18 @@ const isFeatureFlagEnabled = async (flagId) => {
   return flagDoc.data()?.enabled === true;
 };
 
+const resolveCompanyEmailDeliveryRecipient = (intendedTo) => {
+  const recipient = String(intendedTo || "").trim();
+  if (!recipient) throw new Error("A company email recipient is required.");
+  return {
+    intendedTo: recipient,
+    actualTo: recipient,
+    testMode: false,
+    realEmailsEnabled: true,
+    realEmailsFeatureFlagId: null,
+  };
+};
+
 const resolveEmailDeliveryRecipient = async (intendedTo) => {
   const realEmailsEnabled = await isFeatureFlagEnabled(REAL_EMAILS_FEATURE_FLAG_ID);
   const normalizedIntendedTo = String(intendedTo || "").trim();
@@ -35,6 +47,7 @@ module.exports = {
   REAL_EMAILS_FEATURE_FLAG_ID,
   EMAIL_TEST_RECIPIENT,
   isFeatureFlagEnabled,
+  resolveCompanyEmailDeliveryRecipient,
   resolveEmailDeliveryRecipient,
   addDeliveryModeTemplateData,
 };

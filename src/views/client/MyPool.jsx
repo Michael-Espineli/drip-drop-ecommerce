@@ -26,6 +26,7 @@ import { displayRepairRequestStatus } from '../../utils/models/RepairRequest';
 import { salesCollectionNames } from '../../utils/models/Sales';
 import { clientVisitSummary } from '../../utils/clientServiceHistory';
 import { appConfirm } from '../../utils/appDialog';
+import ClientCompanyInvites from './ClientCompanyInvites';
 
 const toDate = (value) => {
     if (!value) return null;
@@ -528,17 +529,27 @@ const EditServiceLocationModal = ({ form, saving, error, onChange, onClose, onSu
     );
 };
 
-const NoPoolsView = () => (
+const NoPoolsView = () => {
+    const { user } = useContext(Context);
+    return (
     <div className="flex min-h-[60vh] items-center justify-center px-4 py-10">
-        <div className="text-center">
+        <div className="w-full max-w-2xl text-center">
             <h2 className="text-2xl font-semibold text-gray-700 mb-4">No pools found.</h2>
             <p className="text-gray-500 mb-6">It looks like you haven't added a pool yet.</p>
-            <Link to="/client/my-pool/new" className="inline-flex w-full justify-center rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white shadow-md hover:bg-blue-700 sm:w-auto">
-                Add Your First Pool
-            </Link>
+            <ClientCompanyInvites user={user} renderActions={({ check, checking }) => (
+                <div className="flex flex-col justify-center gap-3 sm:flex-row">
+                    <Link to="/client/my-pool/new" className="inline-flex min-h-[48px] items-center justify-center rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white shadow-md hover:bg-blue-700">
+                        Add Your First Pool
+                    </Link>
+                    <button type="button" onClick={check} disabled={checking} className="inline-flex min-h-[48px] items-center justify-center rounded-lg border border-blue-600 bg-white px-6 py-3 font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+                        {checking ? 'Checking…' : 'Check for company connections'}
+                    </button>
+                </div>
+            )} />
         </div>
     </div>
-);
+    );
+};
 
 const Widget = ({ title, icon: Icon, linkTo, addLinkTo, children }) => (
     <div className="bg-white rounded-lg shadow-md">

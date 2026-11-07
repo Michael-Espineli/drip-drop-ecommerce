@@ -18,10 +18,11 @@ This is the current backend email surface area and the matching Dynamic Template
 
 ### Service Stop Report / Weekly Service Report
 
-- Template source: pasted Weekly Service Report template
+- Template file: `docs/sendgrid-service-stop-report-template.html`
 - Callable: `sendServiceReportOnFinish`
 - Backend template id source: company email configuration `sendGridTemplateId`
 - Current fallback id: `d-a987a065df0e43378dafd14c1b7ee419`
+- Account button: `primaryCustomerUrl` opens the matching customer invitation for an unlinked homeowner, or their service report after linking. Signup and sign-in links preserve the invitation in `redirect`.
 - Notes: Used for route, job visit summary, customer relationship visit recap, and other service stop recap categories unless the company category settings override the template id.
 
 ## Added Here

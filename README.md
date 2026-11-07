@@ -36,6 +36,8 @@ npm run deploy:prod
 
 `firebase use development` only changes which Firebase project CLI commands target. It does not change the Firebase config baked into the React browser bundle.
 
+Firestore uses memory caching by default to avoid browser IndexedDB transaction failures that can leave the client unable to read or write. Cached documents and pending offline writes do not survive a page reload in this mode; let writes finish before closing the page. Set `REACT_APP_FIRESTORE_PERSISTENT_CACHE=true` at build/start time to opt into persistent multi-tab caching. Authentication persistence is configured separately. This setting does not clear existing IndexedDB data.
+
 ## Public repair requests
 
 Share `/request-repair/<companyId>` with technicians from the external technician repair form panel on the company Repair Requests or Create Internal Repair Request page. `/public/repair-request/<companyId>` is an alias. This is separate from the homeowner `/request-service/<companyId>` intake.

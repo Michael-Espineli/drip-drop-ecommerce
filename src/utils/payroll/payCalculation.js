@@ -322,6 +322,9 @@ export const reconcilePayLines = ({ generated = [], existing = [], now = new Dat
   const writes = [];
   const desiredIds = new Set();
   generated.forEach((line) => {
+    // Guard the persistence boundary too: time/other generators can bypass build().
+    // Missing setup remains a review record, not a calculated zero-dollar earning.
+    if (line.calculationStatus !== "needsReview" && Number(line.totalAmountCents) === 0) return;
     const previous = locked.find((old) => old.id === line.id || component(old) === component(line)
       || line.payrollMode !== "incentive" && old.payrollMode !== "incentive" && (!desiredIds.has(old.id) || old.source === "manualAdjustment") && old.serviceStopId && old.serviceStopId === line.serviceStopId && (old.source === "manualAdjustment" && old.technicianId === line.technicianId
         || old.source === "serviceStop" && old.payTypeId === line.payTypeId && !line.additionalPayExplicit));

@@ -55,29 +55,30 @@ const TaskGroupDetails = () => {
     (async () => {
       try {
         let docSnap = await getDoc(
-          doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId)
+          doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId)
         );
         if (docSnap.exists()) {
           const data = docSnap.data();
 
           setTaskGroup((taskGroup) => ({
             ...taskGroup,
-            id: data.id,
-            groupName: data.groupName,
+            id: docSnap.id,
+            groupName: data.name || data.groupName || "Task Group",
+            canDelete: data.canDelete === true,
             numberOfTasks: data.numberOfTasks,
           }));
         }
 
         //Get Task List
         let taskListQ = query(
-          collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId, "tasks")
+          collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId, "taskItems")
         );
         const taskListQSnapshot = await getDocs(taskListQ);
         setTaskList([]);
         taskListQSnapshot.forEach((doc) => {
           const taskData = doc.data();
           const taskType = {
-            id: taskData.id,
+            id: doc.id,
             name: taskData.name,
             description: taskData.description,
             typeId: taskData.typeId,
@@ -96,7 +97,7 @@ const TaskGroupDetails = () => {
         console.log(error);
       }
     })();
-  }, []);
+  }, [recentlySelectedCompany, taskGroupId]);
 
   const handleSelectedTaskTypeChange = (option) => {
     (async () => {
@@ -131,7 +132,7 @@ const TaskGroupDetails = () => {
       let time = parseFloat(taskTime);
 
       await setDoc(
-        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId, "tasks", taskId),
+        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId, "taskItems", taskId),
         {
           id: taskId,
           name: taskName,
@@ -143,21 +144,22 @@ const TaskGroupDetails = () => {
         }
       );
 
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId), {
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId), {
         numberOfTasks: taskList.length + 1,
       });
 
       //Get Updated Task Group
       let docSnap = await getDoc(
-        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId)
+        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId)
       );
       if (docSnap.exists()) {
         const data = docSnap.data();
 
         setTaskGroup((taskGroup) => ({
           ...taskGroup,
-          id: data.id,
-          groupName: data.groupName,
+          id: docSnap.id,
+          groupName: data.name || data.groupName || "Task Group",
+            canDelete: data.canDelete === true,
           numberOfTasks: data.numberOfTasks,
         }));
       }
@@ -166,14 +168,14 @@ const TaskGroupDetails = () => {
 
       //Get Updated Task List
       let taskListQ = query(
-        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId, "tasks")
+        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId, "taskItems")
       );
       const taskListQSnapshot = await getDocs(taskListQ);
       setTaskList([]);
       taskListQSnapshot.forEach((doc) => {
         const taskData = doc.data();
         const taskType = {
-          id: taskData.id,
+          id: doc.id,
           name: taskData.name,
           description: taskData.description,
           typeId: taskData.typeId,
@@ -200,38 +202,39 @@ const TaskGroupDetails = () => {
 
     try {
       await deleteDoc(
-        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId, "tasks", taskId)
+        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId, "taskItems", taskId)
       );
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId), {
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId), {
         numberOfTasks: taskList.length - 1,
       });
       toast.success("Successfully Removed Task");
 
       //Get Updated Task Group
       let docSnap = await getDoc(
-        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId)
+        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId)
       );
       if (docSnap.exists()) {
         const data = docSnap.data();
 
         setTaskGroup((taskGroup) => ({
           ...taskGroup,
-          id: data.id,
-          groupName: data.groupName,
+          id: docSnap.id,
+          groupName: data.name || data.groupName || "Task Group",
+            canDelete: data.canDelete === true,
           numberOfTasks: data.numberOfTasks,
         }));
       }
 
       //Get Updated Task List
       let taskListQ = query(
-        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId, "tasks")
+        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId, "taskItems")
       );
       const taskListQSnapshot = await getDocs(taskListQ);
       setTaskList([]);
       taskListQSnapshot.forEach((doc) => {
         const taskData = doc.data();
         const taskType = {
-          id: taskData.id,
+          id: doc.id,
           name: taskData.name,
           description: taskData.description,
           typeId: taskData.typeId,
@@ -251,7 +254,7 @@ const TaskGroupDetails = () => {
     if (!requirePermission("826", "delete task groups")) return;
 
     try {
-      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId));
+      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId));
       toast.dismiss(t.id);
       toast.success("Successfully Deleted Task Group");
       navigate("/company/taskGroups");

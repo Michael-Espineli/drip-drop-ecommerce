@@ -1213,6 +1213,7 @@ const PersonalDashboardView = ({
     alertHref,
     personalCustomerIds,
     personalEquipment,
+    messagesEnabled,
 }) => {
     const equipmentRows = [
         {
@@ -1274,7 +1275,7 @@ const PersonalDashboardView = ({
                     helper="Unfinished jobs where I am the admin"
                     count={personalDashboard.assignedJobCount}
                     to="/company/jobs"
-                    className="xl:col-span-4"
+                    className={messagesEnabled ? 'xl:col-span-4' : 'xl:col-span-6'}
                 >
                     <div className="divide-y divide-slate-100">
                         {personalDashboard.assignedJobs.length === 0 ? (
@@ -1295,29 +1296,31 @@ const PersonalDashboardView = ({
                     </div>
                 </PersonalPanel>
 
-                <PersonalPanel
-                    title="Recent Messages"
-                    helper="Unread badge and latest conversations"
-                    to="/company/messages"
-                    className="xl:col-span-4"
-                >
-                    <div className="p-3">
-                        <RecentChatsWidget
-                            variant="compact"
-                            limit={2}
-                            personalOnly
-                            unreadOnly
-                            customerIds={personalCustomerIds}
-                        />
-                    </div>
-                </PersonalPanel>
+                {messagesEnabled && (
+                    <PersonalPanel
+                        title="Recent Messages"
+                        helper="Unread badge and latest conversations"
+                        to="/company/messages"
+                        className="xl:col-span-4"
+                    >
+                        <div className="p-3">
+                            <RecentChatsWidget
+                                variant="compact"
+                                limit={2}
+                                personalOnly
+                                unreadOnly
+                                customerIds={personalCustomerIds}
+                            />
+                        </div>
+                    </PersonalPanel>
+                )}
 
                 <PersonalPanel
                     title="Alerts"
                     helper={`${unreadAlerts.length} unread notifications`}
                     count={dashboardAlerts.length}
                     to="/company/alerts"
-                    className="xl:col-span-4"
+                    className={messagesEnabled ? 'xl:col-span-4' : 'xl:col-span-6'}
                     actionLabel="All"
                 >
                     <div className="divide-y divide-slate-100">
@@ -1416,6 +1419,7 @@ const Dashboard = () => {
 
     const todoListEnabled = featureFlagsLoaded && isFeatureEnabled(TODO_LIST_FEATURE_FLAG_ID);
     const alertsEnabled = featureFlagsLoaded && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
+    const messagesEnabled = featureFlagsLoaded && isFeatureEnabled('feature_flag_001');
     const dashboardScopeAccess = useMemo(
         () => getEffectiveDashboardScopeAccess({ userAccess: companyUserAccess, role: companyRole }),
         [companyRole, companyUserAccess]
@@ -2098,6 +2102,7 @@ const Dashboard = () => {
                         alertHref={alertHref}
                         personalCustomerIds={personalCustomerIds}
                         personalEquipment={scopedData.equipment}
+                        messagesEnabled={messagesEnabled}
                     />
                 ) : (
                     <RegionalCompanyDashboardView

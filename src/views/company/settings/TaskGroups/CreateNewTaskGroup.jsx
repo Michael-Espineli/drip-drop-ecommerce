@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useContext } from "react";
 import { Link } from "react-router-dom";
-import { query, collection, getDocs, setDoc, doc } from "firebase/firestore";
-import { db } from "../../../../utils/config";
+import { query, collection, getDocs, setDoc, doc, serverTimestamp } from "firebase/firestore";
+import { db, auth } from "../../../../utils/config";
 import { Context } from "../../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
 import Select from "react-select";
@@ -74,12 +74,17 @@ const CreateNewTaskGroup = () => {
     //Guard Statments
     //Create Task Group
 
-    await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId), {
+    await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId), {
       id: taskGroupId,
-      name: groupName,
-      description: groupDescription,
+      name: String(groupName || "").trim(),
+      description: groupDescription || "",
       numberOfTasks: taskList.length,
       canDelete: true,
+      estimatedMinutes: taskList.reduce((sum, task) => sum + Number(task.estimatedTime || 0), 0),
+      estimatedLaborCents: taskList.reduce((sum, task) => sum + Number(task.contractedRate || 0), 0),
+      isActive: true,
+      createdAt: serverTimestamp(),
+      createdByUserId: auth.currentUser?.uid || "",
     });
 
     //Add Tasks to Task Group
@@ -87,7 +92,7 @@ const CreateNewTaskGroup = () => {
       let task = taskList[i];
 
       await setDoc(
-        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId, "tasks", task.id),
+        doc(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroupId, "taskItems", task.id),
         {
           id: task.id,
           name: task.name,

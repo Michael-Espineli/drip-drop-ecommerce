@@ -19,7 +19,8 @@ const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 
 const billingEnabled = company => company.customerBillingEnabled === true || company.salesBillingEnabled === true || company.salesBillingAutomationEnabled === true;
 const accountId = company => text(company.stripeConnectedAccountId || company.stripeConnectAccountId);
 const millis = value => value?.toMillis?.() ?? value?.getTime?.() ?? 0;
-const invoiceBalance = invoice => Math.max(0, Number(invoice.amountDueCents ?? Number(invoice.totalAmountCents || invoice.totalCents || 0) - Number(invoice.amountPaidCents || 0) - Number(invoice.writeOffAmountCents || 0)));
+const {invoiceCredits,invoiceDue} = require('./billingMath');
+const invoiceBalance = invoiceDue;
 function canAccess(record, auth, token = '') {
   if (auth?.uid && record.customerUserId === auth.uid) return true;
   if (auth?.uid && auth.token?.email_verified === true && !record.customerUserId && normalized(auth.token.email) === normalized(record.email || record.customerEmail || record.billingEmail) && normalized(auth.token.email)) return true;
@@ -41,6 +42,8 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
   async function startInvoiceCheckout(request) {
     const data = request.data || {},
       invoiceId = documentId(data.invoiceId, 'Invoice');
+    const paymentMethodType=data.paymentMethodType || 'card';
+    if(!['card','ach'].includes(paymentMethodType))fail('invalid-argument','Choose card or bank account payment.');
     const returnTo = returnUrl(data.returnUrl, request.rawRequest?.headers?.origin);
     const invoiceRef = db.collection('salesInvoices').doc(invoiceId);
     const draft = await db.runTransaction(async tx => {
@@ -55,6 +58,7 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
       if (!['open', 'overdue', 'partiallypaid'].includes(normalized(invoice.status).replace(/[^a-z]/g, ''))) fail('failed-precondition', 'This invoice is not open for payment.');
       if (invoice.paymentProcessing) fail('failed-precondition', 'A payment is already processing for this invoice. Wait for confirmation before trying again.');
       const balance = invoiceBalance(invoice);
+      if(paymentMethodType==='ach' && normalized(invoice.currency || 'usd')!=='usd')fail('failed-precondition','Bank account payments require a USD invoice.');
       if (!Number.isSafeInteger(balance) || balance < 50) fail('failed-precondition', 'This invoice has no payable online balance. Contact the company for small balances.');
       const company = await tx.get(db.collection('companies').doc(documentId(invoice.companyId, 'Company')));
       const connected = accountId(company.data() || {});
@@ -64,7 +68,7 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
       const previous = previousId ? await tx.get(invoiceRef.collection('portalPaymentAttempts').doc(previousId)) : null;
       const old = previous?.data();
       if (staleMutation) tx.set(invoiceRef, {billingMutation:null}, {merge:true});
-      const reusable = old && old.balanceCents === balance && old.connectedAccount === connected && millis(old.expiresAt) > now().getTime() && !['failed', 'expired'].includes(old.status);
+      const reusable = old && old.balanceCents === balance && old.connectedAccount === connected && (old.paymentMethodType || 'card')===paymentMethodType && millis(old.expiresAt) > now().getTime() && !['failed', 'expired'].includes(old.status);
       if (reusable) return {
         invoice,
         attempt: old,
@@ -90,12 +94,13 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
         salesInvoiceId: invoiceId,
         companyId: invoice.companyId,
         stripeConnectedAccountId: connected,
-        paymentAttemptId: attemptId
+        paymentAttemptId: attemptId,
+        paymentMethodType
       };
       const expiresAt = new Date(now().getTime() + 30 * 60000);
       const params = {
         mode: 'payment',
-        payment_method_types: ['card'],
+        payment_method_types: [paymentMethodType==='ach'?'us_bank_account':'card'],
         line_items: [{
           price_data: {
             currency: normalized(invoice.currency || 'usd'),
@@ -110,7 +115,7 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
         metadata,
         payment_intent_data: {
           metadata,
-          application_fee_amount: Math.round(balance * 0.08 / 100)
+          application_fee_amount: Math.round(balance * (paymentMethodType==='ach'?0.19:0.08) / 100)
         },
         success_url: success.toString().replace(/%7BCHECKOUT_SESSION_ID%7D/gi, '{CHECKOUT_SESSION_ID}'),
         cancel_url: cancel.toString(),
@@ -122,6 +127,7 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
         invoiceId,
         balanceCents: balance,
         connectedAccount: connected,
+        paymentMethodType,
         status: 'creating',
         params,
         expiresAt,
@@ -300,7 +306,7 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
         customerCompanyRelationshipId: invoice.customerCompanyRelationshipId || invoice.relationshipId || '',
         amountCents: session.amount_total,
         currency: session.currency,
-        method: 'stripeCard',
+        method: attempt.paymentMethodType==='ach' || attempt.params?.payment_method_types?.includes('us_bank_account')?'stripeAch':'stripeCard',
         status: effectiveStatus,
         grossPosted: status === 'posted',
         stripePaymentIntentId: intentId || '',
@@ -328,17 +334,18 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
       if (status === 'posted') {
         const paid = Number(invoice.amountPaidCents || 0) + session.amount_total,
           total = Number(invoice.totalAmountCents || invoice.totalCents || 0),
-          closed = ['void', 'voided', 'cancelled', 'canceled'].includes(normalized(invoice.status)),
-          due = closed ? 0 : Math.max(0, total - paid - Number(invoice.writeOffAmountCents || 0));
+          closed = ['void', 'voided', 'cancelled', 'canceled', 'uncollectible'].includes(normalized(invoice.status)),
+          settled = paid + Number(invoice.writeOffAmountCents || 0) + invoiceCredits(invoice),
+          due = closed ? 0 : invoiceDue({...invoice,amountPaidCents:paid});
         tx.set(invoiceRef, {
           amountPaidCents: paid,
           amountDueCents: due,
           status: closed ? invoice.status : due > 0 ? 'partiallyPaid' : 'paid',
           paidAt: !closed && due === 0 ? now() : null,
-          paymentReviewRequired: closed || paid + Number(invoice.writeOffAmountCents || 0) > total,
+          paymentReviewRequired: closed || settled > total,
           lastPaymentAt: now(),
           paymentProcessing: false,
-          overpaymentCents: Math.max(0, paid + Number(invoice.writeOffAmountCents || 0) - total),
+          overpaymentCents: Math.max(0, settled - total),
           updatedAt: now()
         }, {
           merge: true

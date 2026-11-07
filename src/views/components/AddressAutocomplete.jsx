@@ -12,6 +12,10 @@ const AddressAutocomplete = ({
   disabled = false,
 }) => {
   const autocompleteRef = useRef(null);
+  const callbacksRef = useRef({ onAddressSelect, onInputChange });
+  useEffect(() => {
+    callbacksRef.current = { onAddressSelect, onInputChange };
+  }, [onAddressSelect, onInputChange]);
   const [inputValue, setInputValue] = useState(initialValue || '');
   const [placesReady, setPlacesReady] = useState(Boolean(window.google?.maps?.places));
 
@@ -40,12 +44,13 @@ const AddressAutocomplete = ({
       {
         types: ['address'],
         componentRestrictions: { country: 'us' },
+        fields: ['address_components', 'formatted_address', 'geometry'],
       }
     );
 
     autocomplete.addListener('place_changed', () => {
       const place = autocomplete.getPlace();
-      if (place && place.address_components) {
+      if (place?.address_components && place.geometry?.location) {
         const address = {
           streetAddress: '',
           city: '',
@@ -54,16 +59,18 @@ const AddressAutocomplete = ({
           latitude: place.geometry.location.lat(),
           longitude: place.geometry.location.lng(),
         };
+        let streetNumber = '';
+        let streetName = '';
 
         for (const component of place.address_components) {
           const types = component.types;
 
           if (types.includes('street_number')) {
-            address.streetAddress = `${component.long_name}`;
+            streetNumber = component.long_name;
           }
 
           if (types.includes('route')) {
-            address.streetAddress = `${address.streetAddress} ${component.long_name}`;
+            streetName = component.long_name;
           }
 
           if (types.includes('locality')) {
@@ -79,16 +86,17 @@ const AddressAutocomplete = ({
           }
         }
 
-        onAddressSelect?.(address);
-        onInputChange?.(address.streetAddress || place.formatted_address || '');
-        setInputValue(place.formatted_address);
+        address.streetAddress = [streetNumber, streetName].filter(Boolean).join(' ');
+        callbacksRef.current.onAddressSelect?.(address);
+        callbacksRef.current.onInputChange?.(address.streetAddress || place.formatted_address || '');
+        setInputValue(place.formatted_address || address.streetAddress);
       }
     });
 
     return () => {
       window.google.maps.event.clearInstanceListeners(autocomplete);
     };
-  }, [onAddressSelect, onInputChange, placesReady]);
+  }, [placesReady]);
 
   return (
     <div className="relative">

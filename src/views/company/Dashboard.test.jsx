@@ -49,7 +49,7 @@ beforeEach(() => {
     });
 });
 
-function Harness({ role = {}, userAccess = {}, initialTag = '' }) {
+function Harness({ role = {}, userAccess = {}, initialTag = '', featureFlagsLoaded = true, enabledFlags = [] }) {
     const [selectedTag, setSelectedTag] = useState(initialTag);
     return (
         <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -61,8 +61,8 @@ function Harness({ role = {}, userAccess = {}, initialTag = '' }) {
                 companyUserAccess: userAccess,
                 selectedCustomerRegionTag: selectedTag,
                 setSelectedCustomerRegionTag: setSelectedTag,
-                featureFlagsLoaded: true,
-                isFeatureEnabled: () => false,
+                featureFlagsLoaded,
+                isFeatureEnabled: (flagId) => enabledFlags.includes(flagId),
             }}>
                 <Dashboard />
             </Context.Provider>
@@ -77,7 +77,7 @@ const selectArea = (tag) => fireEvent.change(screen.getByRole('combobox', { name
 test('Personal and Manager replace the three views, and the same Manager page filters all work and money', async () => {
     render(<Harness />);
     expect(await screen.findByRole('button', { name: 'Personal' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('Personal conversations')).toBeInTheDocument();
+    expect(screen.queryByText('Personal conversations')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Tag / Regional' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Whole Company' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Manager' }));
@@ -100,9 +100,39 @@ test('Personal and Manager replace the three views, and the same Manager page fi
     expect(within(openJobsTile()).getByText('3')).toBeInTheDocument();
     expect(moneyMetric()).toHaveTextContent('$350.00');
     fireEvent.click(screen.getByRole('button', { name: 'Personal' }));
-    expect(screen.getByText('Personal conversations')).toBeInTheDocument();
+    expect(screen.queryByText('Personal conversations')).not.toBeInTheDocument();
     expect(screen.getByText('North pump')).toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Customer area' })).not.toBeInTheDocument();
+});
+
+test.each([
+    { featureFlagsLoaded: false, enabledFlags: ['feature_flag_001'] },
+    { featureFlagsLoaded: true, enabledFlags: [] },
+    { featureFlagsLoaded: true, enabledFlags: ['feature_flag_002'] },
+])('Recent Messages stays unmounted while messaging is unavailable (%j)', async (flags) => {
+    render(<Harness {...flags} />);
+    await screen.findByRole('button', { name: 'Personal' });
+    expect(screen.queryByText('Recent Messages')).not.toBeInTheDocument();
+    expect(screen.queryByText('Personal conversations')).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('link').some((link) => link.getAttribute('href') === '/company/messages')).toBe(false);
+    expect(screen.getByText('Assigned Jobs')).toBeInTheDocument();
+});
+
+test('Recent Messages follows messaging flag changes and waits for loaded flags', async () => {
+    const { rerender } = render(<Harness enabledFlags={['feature_flag_001']} />);
+    expect(await screen.findByText('Recent Messages')).toBeInTheDocument();
+    expect(screen.getByText('Personal conversations')).toBeInTheDocument();
+
+    rerender(<Harness />);
+    expect(screen.queryByText('Recent Messages')).not.toBeInTheDocument();
+    expect(screen.queryByText('Personal conversations')).not.toBeInTheDocument();
+
+    rerender(<Harness featureFlagsLoaded={false} enabledFlags={['feature_flag_001']} />);
+    expect(screen.queryByText('Recent Messages')).not.toBeInTheDocument();
+
+    rerender(<Harness enabledFlags={['feature_flag_001']} />);
+    expect(screen.getByText('Recent Messages')).toBeInTheDocument();
+    expect(screen.getByText('Personal conversations')).toBeInTheDocument();
 });
 
 test('Manager retains its chosen tag when switching to Personal and back', async () => {

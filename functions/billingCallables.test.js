@@ -22,6 +22,11 @@ test('actual connected-account financial commands reject readers, technicians an
 test('actual invoice-email callable does not let finance viewers send invoices',async()=>{
  for(const uid of ['reader','tech','revoked'])await assert.rejects(mail.sendSalesInvoiceEmail.run({companyId:'company',invoiceId:'invoice'},{auth:{uid,token:{}}}),{code:'permission-denied'});
 });
+test('legacy payment confirmation cannot be sent anonymously or by a finance reader',async()=>{
+ db.set('invoices/legacy',{receiverId:'company',email:'homeowner@example.test'});
+ await assert.rejects(mail.sendPaymentConfirmationEmail.run({invoiceId:'legacy'},{}),{code:'unauthenticated'});
+ await assert.rejects(mail.sendPaymentConfirmationEmail.run({invoiceId:'legacy'},{auth:{uid:'reader'}}),{code:'permission-denied'});
+});
 test('platform subscription billing requires active subscription-management access rather than finance viewing',async()=>{
  for(const uid of ['reader','tech','revoked'])await assert.rejects(platform.createSubscriptionCheckoutSession.run({auth:{uid,token:{}},data:{companyId:'company',stripePriceId:'price_test',successUrl:'https://dripdrop-poolapp.com/company/settings',cancelUrl:'https://dripdrop-poolapp.com/company/settings'}}),{code:'permission-denied'});
 });

@@ -323,9 +323,13 @@ export default function EmailConfiguration() {
         querySnapshotConfig.forEach((configDoc) => {
           const customerConfig = configDoc.data();
           if (customerConfig.customerId) {
+            const existingConfig = configByCustomerId.get(customerConfig.customerId) || {};
             configByCustomerId.set(customerConfig.customerId, {
+              ...existingConfig,
               ...customerConfig,
+              emailIsOn: existingConfig.emailIsOn !== false && customerConfig.emailIsOn !== false,
               docId: configDoc.id,
+              docIds: [...(existingConfig.docIds || []), configDoc.id],
             });
           }
         });
@@ -337,7 +341,8 @@ export default function EmailConfiguration() {
             return {
               id: customerConfig.id || customerConfig.docId || customer.id,
               docId: customerConfig.docId || customer.id,
-              emailIsOn: customerConfig.emailIsOn === true,
+              docIds: customerConfig.docIds || [customer.id],
+              emailIsOn: customerConfig.emailIsOn !== false,
               customerId: customer.id,
               fullName: `${customer.firstName || ""} ${customer.lastName || ""}`.trim() || "Unknown Customer",
               email: customer.email || customerConfig.email || "",
@@ -390,6 +395,7 @@ export default function EmailConfiguration() {
 
       await setDoc(emailConfigurationRef(recentlySelectedCompany), payload, { merge: true });
       setEmailConfig((current) => ({ ...(current || {}), ...payload }));
+      setEmailIsOn(payload.emailIsOn);
       toast.success("Email configuration saved.");
     } catch (error) {
       console.error(error);
@@ -401,7 +407,6 @@ export default function EmailConfiguration() {
 
   const toggleCompanyEmail = async () => {
     const nextEmailIsOn = !emailIsOn;
-    setEmailIsOn(nextEmailIsOn);
     await saveEmailConfiguration({ emailIsOn: nextEmailIsOn });
   };
 
@@ -468,24 +473,28 @@ export default function EmailConfiguration() {
     setSavingCustomerId(customer.customerId);
 
     try {
-      const docId = customer.docId || customer.customerId;
+      const docIds = customer.docIds || [customer.docId || customer.customerId];
       const payload = {
-        id: customer.id || docId,
         customerId: customer.customerId,
         email: customer.email || "",
         emailIsOn: enabled,
         updatedAt: serverTimestamp(),
       };
 
-      await setDoc(doc(customerEmailConfigurationRef(recentlySelectedCompany), docId), payload, { merge: true });
+      const batch = writeBatch(db);
+      docIds.forEach(docId => batch.set(
+        doc(customerEmailConfigurationRef(recentlySelectedCompany), docId),
+        { ...payload, id: docId },
+        { merge: true }
+      ));
+      await batch.commit();
 
       setCustomerConfigList((current) =>
         current.map((item) =>
           item.customerId === customer.customerId
             ? {
                 ...item,
-                docId,
-                id: payload.id,
+                docIds,
                 emailIsOn: enabled,
               }
             : item
@@ -511,18 +520,20 @@ export default function EmailConfiguration() {
     setSavingCustomerId("all");
 
     try {
-      const customerChunks = chunkArray(customerConfigList, 450);
+      const writes = customerConfigList.flatMap(customer => (
+        customer.docIds || [customer.docId || customer.customerId]
+      ).map(docId => ({ customer, docId })));
+      const customerChunks = chunkArray(writes, 450);
 
       await Promise.all(
         customerChunks.map((customerChunk) => {
           const batch = writeBatch(db);
 
-          customerChunk.forEach((customer) => {
-            const docId = customer.docId || customer.customerId;
+          customerChunk.forEach(({ customer, docId }) => {
             batch.set(
               doc(customerEmailConfigurationRef(recentlySelectedCompany), docId),
               {
-                id: customer.id || docId,
+                id: docId,
                 customerId: customer.customerId,
                 email: customer.email || "",
                 emailIsOn: enabled,
@@ -603,7 +614,7 @@ export default function EmailConfiguration() {
               <SummaryCard
                 label="Customer recipients"
                 value={customerConfigList.length ? `${customerEmailsEnabledCount}/${customerConfigList.length}` : "0"}
-                helper="active customers opted in"
+                helper="active customers with emails enabled"
                 tone={customerEmailsEnabledCount > 0 ? "emerald" : "slate"}
               />
               <SummaryCard
@@ -672,7 +683,7 @@ export default function EmailConfiguration() {
                   <div className="flex items-center justify-between gap-4 px-4 py-4">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">Email sending</p>
-                      <p className="mt-1 text-xs text-slate-500">Company-wide service email switch.</p>
+                      <p className="mt-1 text-xs text-slate-500">Turn off to pause all service emails. Customer preferences are kept for when you turn it back on.</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
                       <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${statusTone(emailIsOn)}`}>
@@ -799,16 +810,6 @@ export default function EmailConfiguration() {
                           placeholder="Email subject"
                         />
                       </label>
-
-                      <label className="block">
-                        <span className="text-sm font-semibold text-slate-800">SendGrid template ID</span>
-                        <input
-                          className={inputClass}
-                          value={selectedCategorySetting.sendGridTemplateId || ""}
-                          onChange={(event) => updateCategorySetting(selectedCategoryKey, "sendGridTemplateId", event.target.value)}
-                          placeholder="d-..."
-                        />
-                      </label>
                     </div>
 
                     <div className="space-y-4">
@@ -881,6 +882,7 @@ export default function EmailConfiguration() {
               <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 md:flex-row md:items-center md:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-slate-950">Customer Recipients</h2>
+                  <p className="mt-1 text-sm text-slate-500">New customers start with emails on. To pause service emails for everyone, turn off Email sending under Company Delivery.</p>
                   <p className="mt-1 text-sm text-slate-500">
                     {customerConfigList.length
                       ? `${customerEmailsEnabledCount} of ${customerConfigList.length} active customers have service emails on.`

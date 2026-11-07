@@ -451,3 +451,41 @@ test('recurring route offer summaries use the dated offered stops and matching c
  await f.save({jobId:'',jobTaskIds:[],routeId:'recurring',routeSource:'recurringRoutes',routeDate:day,requestedRecurringStopIds:['r2'],paySource:'Offered Amount',offeredAmountCents:5000});
  const saved=f.db.records.get(company+'/workOffers/offer');assert.deepEqual(saved.routeSummary.stopIds,['two']);assert.equal(saved.routeSummary.totalMinutes,60);assert.equal(saved.routeSummary.totalDistanceMiles,12);assert.equal(saved.routeSummary.serviceMinutes,45);
 });
+
+
+test('pay requests route management alerts and technician decisions to separate web pages',async()=>{
+ const f=fixture(),requests=createTechnicianPayRequests(f.db,()=>day);
+ const created=await requests.command({auth:{uid:'tech'},data:{companyId:'company',action:'create',clientRequestId:'personal-payout',type:'payout',amountCents:5000,reason:'Pay completed work'}});
+ assert.equal(f.db.records.get('users/admin/alerts/pay_request_'+created.requestId).route,'/company/payroll?tab=requests');
+ await requests.command({auth:{uid:'admin'},data:{companyId:'company',action:'approve',requestId:created.requestId}});
+ assert.equal(f.db.records.get('users/tech/alerts/pay_request_'+created.requestId+'_Approved').route,'/company/my-pay?tab=requests');
+ assert.equal(f.db.records.get('users/tech/alerts/pay_request_'+created.requestId+'_Approved').companyId,'company');
+});
+
+test('manager rate proposals send technicians to their personal request page',async()=>{
+ const f=fixture(),requests=createTechnicianPayRequests(f.db,()=>day);
+ const proposed=await requests.command({auth:{uid:'admin'},data:{companyId:'company',action:'propose',clientRequestId:'personal-rate',technicianId:'tech',type:'rateChange',payTypeId:'repair',payBasis:'serviceStopTask',rateType:'flatPerTask',amountCents:7000,effectiveStartMillis:new Date('2026-11-01').getTime(),reason:'Rate review'}});
+ assert.equal(f.db.records.get('users/tech/alerts/pay_request_'+proposed.requestId).route,'/company/my-pay?tab=requests');
+});
+
+test('approving an unchanged pay correction records the decision without creating a zero adjustment',async()=>{
+ const original={technicianId:'tech',totalAmountCents:5000,calculationStatus:'paid',paidAt:day};
+ const f=fixture({[company+'/technicianPayLineItems/paid']:original}),requests=createTechnicianPayRequests(f.db,()=>day);
+ const created=await requests.command({auth:{uid:'tech'},data:{companyId:'company',action:'create',clientRequestId:'no-change',type:'payCorrection',payLineItemId:'paid',amountCents:5000,reason:'Confirm my pay'}});
+ const request={auth:{uid:'admin'},data:{companyId:'company',action:'approve',requestId:created.requestId}};
+ await requests.command(request);await requests.command(request);
+ assert.equal(f.db.records.get(company+'/payChangeRequests/'+created.requestId).status,'Approved');
+ assert.equal([...f.db.records.keys()].filter(path=>path.startsWith(company+'/technicianPayLineItems/')).length,1);
+ assert.deepEqual(f.db.records.get(company+'/technicianPayLineItems/paid'),original);
+});
+
+test('correction equal to an already corrected total creates no zero line, while reductions remain real deductions',async()=>{
+ const f=fixture({[company+'/technicianPayLineItems/paid']:{technicianId:'tech',totalAmountCents:5000,calculationStatus:'paid',paidAt:day}}),requests=createTechnicianPayRequests(f.db,()=>day);
+ for(const [requestId,amountCents]of [['increase',6000],['same',6000],['decrease',5500]]){
+  const created=await requests.command({auth:{uid:'tech'},data:{companyId:'company',action:'create',clientRequestId:requestId,type:'payCorrection',payLineItemId:'paid',amountCents,reason:'Review total'}});
+  await requests.command({auth:{uid:'admin'},data:{companyId:'company',action:'approve',requestId:created.requestId}});
+ }
+ const corrections=[...f.db.records].filter(([path])=>path.startsWith(company+'/technicianPayLineItems/comp_pay_adjustment_')).map(([,line])=>line.totalAmountCents).sort((a,b)=>a-b);
+ assert.deepEqual(corrections,[-500,1000]);
+ assert.equal(earned(f).reduce((sum,line)=>sum+line.totalAmountCents,0),5500);
+});

@@ -104,3 +104,24 @@ test('actual rolling worker keeps the biweekly anchor and a repeat dispatch adds
   assert.equal([...memory.records].filter(([path, value]) => path.startsWith(c + '/serviceStops/') && value.recurringServiceStopId === 'rss' && value.serviceDate).length, count);
   assert.equal(taskCopies().length, count * 2);
 });
+
+// Canonical task-group defaults are shared by initial and later recurring generation.
+test('actual recurring creation consumes the historical taskGroup/taskGroup/taskItems default', async () => {
+  fixture();
+  const group = c + '/settings/taskGroup/taskGroup/com_set_tg_recurring_service_stops';
+  memory.set(group, { name: 'Weekly Service' });
+  memory.set(group + '/taskItems/brush', { id: 'stale', name: 'Brush', type: 'Clean', contractedRate: 0, estimatedTime: 5 });
+  await general.createFirstRecurringServiceStop2.run(request({ recurringServiceStop: { ...rss, id: 'canonical-rss' } }, 'owner'));
+  const templates = [...memory.records].filter(([path]) => path.startsWith(c + '/recurringServiceStop/canonical-rss/tasks/'));
+  const copies = [...memory.records].filter(([path, task]) => path.startsWith(c + '/serviceStops/') && path.includes('/tasks/') && task.name === 'Brush');
+  assert.equal(templates.length, 1); assert.equal(templates[0][1].taskGroupTaskId, 'brush'); assert.equal(copies.length, 5);
+});
+test('actual recurring creation reads setup-era plural defaults without moving stored data', async () => {
+  fixture();
+  const group = c + '/settings/taskGroups/taskGroups/com_set_tg_recurring_service_stops';
+  memory.set(group + '/taskItems/brush', { name: 'Brush', type: 'Clean', contractedRate: 0, estimatedTime: 5 });
+  await general.createFirstRecurringServiceStop2.run(request({ recurringServiceStop: { ...rss, id: 'compat-rss' } }, 'owner'));
+  const tasks = [...memory.records].filter(([path]) => path.startsWith(c + '/recurringServiceStop/compat-rss/tasks/'));
+  assert.equal(tasks.length, 1); assert.equal(tasks[0][1].taskGroupTaskId, 'brush');
+  assert.equal(memory.records.has(c + '/settings/taskGroup/taskGroup/com_set_tg_recurring_service_stops'), false);
+});

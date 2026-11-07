@@ -626,9 +626,9 @@ const ClientFinance = () => {
                 {subscriptions.length === 0 ? (
                   <div className="p-4 text-sm text-slate-500">No recurring billing records yet.</div>
                 ) : subscriptions.map((subscription) => {
-                  const statusKey = normalizeStatus(subscription.stripeStatus || subscription.status);
+                  const statusKey = normalizeStatus(subscription.checkoutCancellationRequested ? subscription.status : subscription.stripeStatus || subscription.status);
                   const isActive = ['active', 'trialing'].includes(statusKey);
-                  const canCheckout = !isActive && Number(subscription.amountCents || 0) > 0 && Boolean(subscription.stripeConnectedAccountId);
+                  const canCheckout = !isActive && !subscription.checkoutCancellationRequested && !subscription.stripeSubscriptionId && !['canceled','cancelled','expired','superseded','cancellationpending'].includes(statusKey) && Number(subscription.amountCents || 0) > 0 && Boolean(subscription.stripeConnectedAccountId);
 
                   return (
                     <div key={subscription.id} className="p-4">
@@ -648,7 +648,7 @@ const ClientFinance = () => {
                       )}
                       <ManageClientBilling subscription={subscription} />
                       {!isActive && (
-                        <PaymentMethodSelector
+                        <PaymentMethodSelector showFees={false}
                           amountCents={subscription.amountCents}
                           value={paymentMethodForSubscription(subscription)}
                           onChange={(paymentMethodType) => updatePaymentMethodForSubscription(subscription.id, paymentMethodType)}

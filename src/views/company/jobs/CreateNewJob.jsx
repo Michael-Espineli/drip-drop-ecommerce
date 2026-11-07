@@ -1,3 +1,4 @@
+import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
@@ -1219,7 +1220,7 @@ const CreateNewJob = () => {
                     adminsSnap,
                     customersSnap,
                     taskTypesSnap,
-                    taskGroupsSnap,
+                    taskGroupOptions,
                     templatesSnap,
                 ] = await Promise.all([
                     getDocs(query(collection(db, "companies", recentlySelectedCompany, "companyUsers"))),
@@ -1230,18 +1231,7 @@ const CreateNewJob = () => {
                         )
                     ),
                     getDocs(query(collection(db, "universal", "settings", "taskTypes"))),
-                    getDocs(
-                        query(
-                            collection(
-                                db,
-                                "companies",
-                                recentlySelectedCompany,
-                                "settings",
-                                "taskGroup",
-                                "taskGroup"
-                            )
-                        )
-                    ),
+                    fetchRecurringTaskGroupOptions({ db, companyId: recentlySelectedCompany }),
                     getDocs(query(collection(db, "companies", recentlySelectedCompany, "jobTemplates"))),
                 ]);
 
@@ -1285,20 +1275,7 @@ const CreateNewJob = () => {
 
                 setTaskTypeList(jobTaskTypeOptionsFromDocs(taskTypesSnap.docs));
 
-                setTaskGroupList(
-                    taskGroupsSnap.docs.map((docSnap) => {
-                        const data = docSnap.data();
-                        const id = data.id || docSnap.id;
-                        const label = data.name || data.groupName || "Task Group";
-
-                        return {
-                            ...data,
-                            id,
-                            label,
-                            value: id,
-                        };
-                    })
-                );
+                setTaskGroupList(taskGroupOptions);
 
                 const templates = templatesSnap.docs.map((docSnap) => {
                     const data = docSnap.data();
@@ -1835,22 +1812,8 @@ const CreateNewJob = () => {
         if (!ok) return;
 
         try {
-            const snapshot = await getDocs(
-                collection(
-                    db,
-                    "companies",
-                    recentlySelectedCompany,
-                    "settings",
-                    "taskGroup",
-                    "taskGroup",
-                    taskGroup.id,
-                    "taskItems"
-                )
-            );
-
-            const tasks = snapshot.docs.map((docSnap) => {
-                const data = docSnap.data();
-
+            const groupTasks = await fetchTaskGroupTasks({ db, companyId: recentlySelectedCompany, taskGroup });
+            const tasks = groupTasks.map((data) => {
                 return normalizeJobTask(data, {
                     id: `comp_job_task_${uuidv4()}`,
                     status: "Draft",

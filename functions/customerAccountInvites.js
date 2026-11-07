@@ -1,5 +1,7 @@
 const admin = require("firebase-admin");
 const { v4: uuidv4 } = require("uuid");
+const { onCall } = require("firebase-functions/v2/https");
+const { HttpsError } = require("./appErrors");
 
 const LINKED_INVITE_COLLECTION = "linkedInvite";
 const CUSTOMER_ACCOUNT_INVITE_TYPE = "customerAccountClaim";
@@ -56,6 +58,8 @@ const getCustomerEmail = (customer = {}) => (
   customer.contact?.email ||
   ""
 );
+const customerPortalEmail = customer => normalizeEmail(getCustomerEmail(customer));
+const isHomeownerAccountType = value => ['client', 'homeowner', 'customer'].includes(String(value || '').trim().toLowerCase());
 
 const getCompanyContact = (company = {}) => ({
   email: company.email || company.companyEmail || company.billingEmail || company.mainContact?.email || "",
@@ -82,10 +86,73 @@ const formatAddressSummary = (address = {}) => (
 );
 
 const getLinkedCustomerIds = (customer = {}) => (
-  Array.isArray(customer.linkedCustomerIds)
-    ? customer.linkedCustomerIds.filter(Boolean)
-    : []
+  [...new Set([
+    ...(Array.isArray(customer.linkedCustomerIds) ? customer.linkedCustomerIds : []),
+    customer.linkedCustomerUserId,
+    customer.linkedHomeownerUserId,
+  ].filter(Boolean))]
 );
+
+const isCustomerInviteUnavailable = (invite, now = Date.now()) => {
+  const status = String(invite.status || "").trim().toLowerCase();
+  const expiresAt = invite.expiresAt?.toMillis?.() ?? (invite.expiresAt ? new Date(invite.expiresAt).getTime() : 0);
+  return invite.revoked === true || ["revoked", "expired", "cancelled", "canceled"].includes(status)
+    || (expiresAt > 0 && expiresAt <= now);
+};
+
+// Discover only invitations addressed to the signed-in, verified homeowner.
+const createCustomerAccountInviteLister = ({ db, accountAuth, ensureInvite = ensureCustomerAccountInvite }) => async uid => {
+  if (!uid) throw new HttpsError("unauthenticated", "Sign in to check your company invitations.");
+  const account = await accountAuth.getUser(uid);
+  if (account.disabled || !account.emailVerified || !account.email) {
+    throw new HttpsError("failed-precondition", "Verify your email to check your company invitations.");
+  }
+  const profile = await db.collection("users").doc(uid).get();
+  if (!isHomeownerAccountType(profile.data()?.accountType)) {
+    throw new HttpsError("permission-denied", "Use a homeowner account to connect a company invitation.");
+  }
+  const email = normalizeEmail(account.email);
+  const [snapshots, matchingCustomers] = await Promise.all([
+    Promise.all(["email", "customerEmail"].map(field => db.collection(LINKED_INVITE_COLLECTION).where(field, "==", email).limit(50).get())),
+    db.collectionGroup('customers').where('portalEmailNormalized', '==', email).limit(50).get(),
+  ]);
+  const candidates = new Map(snapshots.flatMap(snapshot => snapshot.docs.map(document => [document.id, document])));
+  const invitations = await Promise.all([...candidates.values()].map(async document => {
+    const invite = document.data() || {};
+    if (!invite.companyId || !invite.customerId || isCustomerInviteUnavailable(invite)
+      || invite.accepted || String(invite.status || "").toLowerCase() === "accepted"
+      || (invite.type && invite.type !== CUSTOMER_ACCOUNT_INVITE_TYPE)
+      || normalizeEmail(invite.email || invite.customerEmail) !== email) return null;
+    const companyRef = db.collection("companies").doc(invite.companyId);
+    const [company, customer] = await Promise.all([
+      companyRef.get(), companyRef.collection("customers").doc(invite.customerId).get(),
+    ]);
+    if (!company.exists || !customer.exists || getLinkedCustomerIds(customer.data()).length) return null;
+    return { inviteId: document.id, companyId: invite.companyId, customerId: invite.customerId, companyName: getCompanyDisplayName(company.data()), customerName: getCustomerDisplayName(customer.data()) };
+  }));
+  const found = new Map(invitations.filter(Boolean).map(invite => [`${invite.companyId}/${invite.customerId}`, invite]));
+  for (const document of matchingCustomers.docs) {
+    const parts = document.ref.path.split('/');
+    if (parts.length !== 4 || parts[0] !== 'companies' || parts[2] !== 'customers') continue;
+    const customer = document.data() || {};
+    const key = `${parts[1]}/${document.id}`;
+    if (found.has(key) || found.size >= 20 || customerPortalEmail(customer) !== email
+      || customer.active === false || customer.isActive === false || getLinkedCustomerIds(customer).length) continue;
+    const previousInviteId = customer.customerAccountInviteId || customer.linkedInviteId;
+    if (previousInviteId) {
+      const previous = await db.collection(LINKED_INVITE_COLLECTION).doc(previousInviteId).get();
+      if (previous.exists && isCustomerInviteUnavailable(previous.data())) continue;
+    }
+    // The matching, verified email authorizes a reviewable invitation, never an automatic link.
+    const invitation = await ensureInvite({ companyId: parts[1], customerId: document.id, email, source: 'verifiedEmailDiscovery', createdByUserId: uid });
+    if (invitation.status === 200) found.set(key, { inviteId: invitation.inviteId, companyId: parts[1], customerId: document.id, companyName: invitation.companyName, customerName: invitation.customerName });
+  }
+  return { invitations: [...found.values()].slice(0, 20) };
+};
+
+const listMyCustomerAccountInvites = onCall({ cors: true }, request => (
+  createCustomerAccountInviteLister({ db: admin.firestore(), accountAuth: admin.auth() })(request.auth?.uid)
+));
 
 const getInviteDoc = async (inviteId) => {
   if (!inviteId) return null;
@@ -110,6 +177,7 @@ const reusableInviteDoc = async ({ inviteId, companyId, customerId }) => {
   const status = String(invite.status || "").toLowerCase();
   if (invite.companyId !== companyId || invite.customerId !== customerId) return null;
   if (invite.accepted === true || status === "accepted" || status === "revoked") return null;
+  if (isCustomerInviteUnavailable(invite)) return null;
 
   return inviteDoc;
 };
@@ -223,6 +291,9 @@ const getCustomerAccountInvitePreview = async ({ inviteId, baseUrl = "" } = {}) 
   }
 
   const invite = inviteDoc.data;
+  if (isCustomerInviteUnavailable(invite)) {
+    return { status: 410, error: "This customer invitation is no longer available. Ask your pool company for a new invitation." };
+  }
   const companyId = invite.companyId || "";
   const customerId = invite.customerId || "";
 
@@ -325,4 +396,9 @@ module.exports = {
   ensureCustomerAccountInvite,
   getCustomerAccountInvitePreview,
   maskEmail,
+  isCustomerInviteUnavailable,
+  createCustomerAccountInviteLister,
+  listMyCustomerAccountInvites,
+  customerPortalEmail,
+  isHomeownerAccountType,
 };

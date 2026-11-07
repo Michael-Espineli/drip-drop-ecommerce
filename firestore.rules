@@ -214,7 +214,9 @@ service cloud.firestore {
         "stripeInvoiceId", "stripePaymentIntentId", "stripeChargeId", "stripeStatus", "checkoutSessionId", "checkoutUrl", "checkoutStatus",
         "autopayEnabled", "autopayStatus", "billingCollectionMethod", "manualBillingEnabled", "stripeSyncedAt",
         "stripeId", "checkoutAttemptId", "checkoutVersion", "checkoutHold", "checkoutCustomerData", "firstAutomaticChargeAt",
-        "billingReviewRequired", "billingReviewReason", "duplicateStripeSubscriptionIds", "stripePricingSnapshotHash"
+        "billingReviewRequired", "billingReviewReason", "duplicateStripeSubscriptionIds", "stripePricingSnapshotHash",
+        "checkoutCancellationRequested", "checkoutCancellationHadSetup", "checkoutCancellationId", "checkoutCancellationStatus", "checkoutCancellationRequestedAt",
+        "cancellationPaymentReviewRequired", "billingEndAt", "stripeCancelAt"
       ]);
     }
 
@@ -223,6 +225,8 @@ service cloud.firestore {
         && data.get("status", "draft") in ["draft", "open", "overdue"]
         && data.get("totalAmountCents", -1) is int && data.totalAmountCents >= 0
         && data.get("amountPaidCents", 0) == 0 && data.get("writeOffAmountCents", 0) == 0
+        && data.get("creditAmountCents", 0) == 0 && data.get("stripeCreditAmountCents", 0) == 0
+        && data.get("refundCreditCents", 0) == 0 && data.get("disputeCreditCents", 0) == 0
         && data.get("amountDueCents", -1) == data.totalAmountCents
         && data.get("stripeInvoiceId", "") in ["", null]
         && data.get("stripePaymentIntentId", "") in ["", null]
@@ -230,7 +234,7 @@ service cloud.firestore {
         && data.get("stripeHostedInvoiceUrl", "") in ["", null]
         && data.get("billingSubscriptionId", "") in ["", null]
         && data.get("paidAt", null) == null && data.get("lastPaymentAt", null) == null
-        && !data.keys().hasAny(["billingMutation", "portalPaymentAttemptId", "portalPaymentAttemptVersion", "lastPaymentId", "paymentProcessing", "billingRevision"]);
+        && !data.keys().hasAny(["billingMutation", "portalPaymentAttemptId", "portalPaymentAttemptVersion", "officePaymentAttemptId", "stripeInvoiceMutation", "externalPaymentDetails", "collectionReminderState", "collectionReminderCount", "lastCollectionReminderAt", "lastPaymentId", "paymentProcessing", "billingRevision"]);
     }
 
     function canUseCompanySalesAgreementPermission(companyId, permissionId) {
@@ -636,7 +640,7 @@ service cloud.firestore {
       function settingsMutation(settingsId, action) {
         let ids = {
           "emailConfiguration": ["832", "834", "836"], "readings": ["842", "844", "846"], "dosages": ["842", "844", "846"],
-          "stopData": ["842", "844", "846"], "taskGroups": ["822", "824", "826"],
+          "stopData": ["842", "844", "846"], "taskGroup": ["822", "824", "826"], "taskGroups": ["822", "824", "826"],
           "dataBase": ["852", "854", "856"], "genericItems": ["852", "854", "856"], "termsTemplates": ["882", "884", "886"],
           "customerPipeline": ["632", "634", "634"]
         }.get(settingsId, ["900", "900", "900"]);
@@ -674,7 +678,7 @@ service cloud.firestore {
           || (name == "stopData" && permitted(["240", "244", "244", "246"][action]))
           || (name == "vehicals" && permitted(["290", "292", "294", "296"][action]))
           || (name == "vehicles" && permitted(["290", "292", "294", "296"][action]))
-          || (name == "shoppingList" && permitted(["100", "102", "104", "106"][action]))
+          || (name in ["shoppingList", "shoppingListItems"] && permitted(["100", "102", "104", "106"][action]))
           || (name == "purchasedItems" && permitted(["100", "102", "104", "106"][action]))
           || (name == "receipts" && permitted(["100", "102", "104", "106"][action]))
           || (name == "associatedBusinesses" && permitted(["260", "262", "264", "266"][action]))
@@ -875,6 +879,10 @@ service cloud.firestore {
           allow update: if settingsId != "companyWide" && settingsMutation(settingsId, 1);
           allow delete: if settingsId != "companyWide" && settingsMutation(settingsId, 2);
         }
+        match /taskGroup/{groupId}/taskItems/{taskId} {
+          // Editing a group includes adding/removing its items; deleting the group still requires 826.
+          allow create, update, delete: if settingsId == "taskGroup" && permitted("824");
+        }
       }
       match /roles/{roleId} {
         allow read: if hasCompanyAccess(companyId) && (permitted("860") || roleId == get(userAccessPath(companyId)).data.get("roleId", ""));
@@ -1000,6 +1008,19 @@ service cloud.firestore {
           allow read: if permitted("20") || canManageJobTemplates() || permitted("22") || permitted("23") || permitted("27") || permitted("29") || permitted("31");
           allow write: if canManageJobTemplates();
         }
+      }
+      match /salesCatalogItems/{catalogItemId} {
+        // Shared pickers read by company path, including legacy items without companyId.
+        allow read: if companyBillingPermission(companyId, [
+          "20", "24", "28", "72", "400", "404", "430", "432", "434", "628", "920"
+        ]);
+        // Job/template planners can add a new reusable service; billing managers
+        // control subsequent edits, archiving, and deletion of shared services.
+        allow create: if companyBillingPermission(companyId, ["24", "28", "72", "404", "920"])
+          && request.resource.data.get("companyId", "") == companyId;
+        allow update: if canManageCompanyBilling(companyId)
+          && request.resource.data.get("companyId", "") == companyId;
+        allow delete: if canManageCompanyBilling(companyId);
       }
       match /{companyCollection}/{document=**} {
         allow read: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 0);
@@ -1167,12 +1188,14 @@ service cloud.firestore {
       allow create: if canCompanyWriteSalesRecord(request.resource.data)
         && request.resource.data.get("stripeSubscriptionId", "") in ["", null]
         && request.resource.data.get("stripeCustomerId", "") in ["", null]
-        && !request.resource.data.keys().hasAny(["checkoutAttemptId", "checkoutHold", "checkoutVersion", "checkoutSessionId", "checkoutCustomerData", "billingReviewRequired", "stripePricingSnapshotHash"])
+        && !request.resource.data.keys().hasAny(["checkoutAttemptId", "checkoutHold", "checkoutVersion", "checkoutSessionId", "checkoutCustomerData", "billingReviewRequired", "stripePricingSnapshotHash", "checkoutCancellationRequested", "checkoutCancellationId", "checkoutCancellationStatus", "billingEndAt", "stripeCancelAt"])
         && request.resource.data.get("autopayEnabled", false) != true;
       allow update: if canCompanyWriteSalesRecord(resource.data) && preservesSalesIdentity() && preservesStripeBillingFields()
         && ((resource.data.get("stripeSubscriptionId", "") in ["", null] && resource.data.get("checkoutHold", false) != true)
           || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["status", "amountCents", "lineItems", "currency", "interval", "intervalCount", "currentPeriodStart", "currentPeriodEnd", "cancelAtPeriodEnd", "applicationFeePercent", "taxAmountCents", "discountAmountCents", "billingTimeZone", "billingAnchorDay", "billingSendAnchorDay", "manualBillingNextPeriodStart", "manualBillingNextPeriodEnd", "manualBillingNextInvoiceAt"]));
-      allow delete: if canCompanyWriteSalesRecord(resource.data) && resource.data.get("stripeSubscriptionId", "") in ["", null];
+      allow delete: if canCompanyWriteSalesRecord(resource.data) && resource.data.get("stripeSubscriptionId", "") in ["", null]
+        && resource.data.get("checkoutHold", false) != true
+        && (resource.data.get("checkoutCancellationRequested", false) != true || resource.data.get("checkoutCancellationStatus", "") == "complete");
     }
 
     match /salesInvoices/{invoiceId} {
@@ -1202,12 +1225,19 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /recurringPartCharges/{chargeId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow write: if false;
+    }
+
     match /billingEmailQueue/{emailId} {
       allow read: if signedIn() && canReadCompanyBilling(resource.data.companyId);
       allow write: if false;
     }
 
     match /stripeSyncLocks/{lockId} { allow read, write: if false; }
+    match /salesPaymentProfiles/{profileId} { allow read, write: if false; }
+    match /billingReminderPolicies/{companyId} { allow read, write: if false; }
     match /stripeSyncEvents/{eventId} { allow read, write: if false; }
 
     match /customerPartApprovals/{approvalId} {
@@ -1297,7 +1327,7 @@ service cloud.firestore {
 
     match /{document=**} {
       allow read: if isSuperMaster();
-      allow write: if isSuperMaster() && !(request.path[3] in ["salesAgreements", "salesInvoices", "salesBillingProfiles", "salesBillingSubscriptions", "salesPayments", "salesPaymentEvents", "salesInvoiceEvents", "salesPaymentAdjustments", "billingEmailQueue", "stripeSyncLocks", "stripeSyncEvents", "customerPartApprovals"])
+      allow write: if isSuperMaster() && !(request.path[3] in ["salesAgreements", "salesInvoices", "salesBillingProfiles", "salesBillingSubscriptions", "salesPayments", "salesPaymentProfiles", "salesPaymentEvents", "salesInvoiceEvents", "salesPaymentAdjustments", "billingEmailQueue", "billingReminderPolicies", "recurringPartCharges", "stripeSyncLocks", "stripeSyncEvents", "customerPartApprovals"])
         && !(request.path[3] == "companies" && request.path == companyPath(request.path[4]) && !preservesStripeBillingFields())
         && !(request.path[3] == "companies" && request.path != companyPath(request.path[4]) && request.path[5] in ["subscriptions", "checkoutAttempts", "stripePayouts", "stripeBalanceTransactions"]);
     }

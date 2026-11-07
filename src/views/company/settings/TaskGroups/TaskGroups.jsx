@@ -12,18 +12,22 @@ const TaskGroups = () => {
 
   const navigate = useNavigate();
   useEffect(() => {
+    let active = true;
+    if (!recentlySelectedCompany) { setCompanyUserList([]); return; }
+    setCompanyUserList([]);
     (async () => {
       try {
         let q = query(
-          collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups")
+          collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup")
         );
         const querySnapshot = await getDocs(q);
+        if (!active) return;
         setCompanyUserList([]);
         querySnapshot.forEach((doc) => {
           const data = doc.data();
           const companyUser = {
-            id: data.id,
-            name: data.name,
+            id: doc.id,
+            name: data.name || data.groupName || "Task Group",
             description: data.description,
             canDelete: data.canDelete,
             numberOfTasks: data.numberOfTasks,
@@ -34,7 +38,8 @@ const TaskGroups = () => {
         console.log("Error");
       }
     })();
-  }, []);
+    return () => { active = false; };
+  }, [recentlySelectedCompany]);
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">

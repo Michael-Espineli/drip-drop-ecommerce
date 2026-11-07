@@ -1,4 +1,9 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
+import BillingReconciliationPanel from '../../../components/billing/BillingReconciliationPanel';
+import {cashActivity} from '../../../utils/sales/cashActivity';
+import { hasPostedPayment, netPaymentCents } from '../../../utils/sales/financialMetrics';
+import {canManageCustomerBilling} from '../../../utils/companyPermissionAccess';
+import {getCallableAuthPayload} from '../../../utils/callableAuth';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -101,7 +106,7 @@ const isThisMonth = (value) => {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
 };
 
-const isPostedPayment = (payment) => normalizeStatus(payment.status) === "posted";
+const isPostedPayment = hasPostedPayment;
 
 const isReconciledPayment = (payment) => (
   normalizeStatus(payment.accountingStatus) === "reconciled" ||
@@ -287,16 +292,19 @@ const StripeRequirementList = ({ title, items = [], tone = "amber" }) => {
 };
 
 const CompanyAccountingWorkspace = () => {
+  const authContext = useContext(Context);
+  const canManageBilling = canManageCustomerBilling(authContext);
   const {
     recentlySelectedCompany,
     recentlySelectedCompanyName,
     stripeConnectedAccountId,
     user,
-  } = useContext(Context);
+  } = authContext;
   const { isDarkMode, toggleTheme } = useTheme();
   const [loading, setLoading] = useState(true);
   const [invoices, setInvoices] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [paymentAdjustments, setPaymentAdjustments] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
   const [agreements, setAgreements] = useState([]);
   const [purchases, setPurchases] = useState([]);
@@ -312,6 +320,7 @@ const CompanyAccountingWorkspace = () => {
     if (!recentlySelectedCompany) {
       setInvoices([]);
       setPayments([]);
+      setPaymentAdjustments([]);
       setSubscriptions([]);
       setAgreements([]);
       setPurchases([]);
@@ -321,7 +330,7 @@ const CompanyAccountingWorkspace = () => {
     }
 
     setLoading(true);
-    let firstSnapshotsRemaining = 6;
+    let firstSnapshotsRemaining = 7;
     const markReady = () => {
       firstSnapshotsRemaining -= 1;
       if (firstSnapshotsRemaining <= 0) setLoading(false);
@@ -335,7 +344,7 @@ const CompanyAccountingWorkspace = () => {
     const bind = (ref, setter, label) => onSnapshot(
       ref,
       (snapshot) => {
-        setter(snapshot.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+        setter(snapshot.docs.map((itemDoc) => ({ ...itemDoc.data(), id: itemDoc.id })));
         markReady();
       },
       handleError(label)
@@ -344,6 +353,7 @@ const CompanyAccountingWorkspace = () => {
     const unsubscribes = [
       bind(query(collection(db, salesCollectionNames.invoices), companyFilter), setInvoices, "invoices"),
       bind(query(collection(db, salesCollectionNames.payments), companyFilter), setPayments, "payments"),
+      bind(query(collection(db, 'salesPaymentAdjustments'), companyFilter), setPaymentAdjustments, "payment adjustments"),
       bind(query(collection(db, salesCollectionNames.billingSubscriptions), companyFilter), setSubscriptions, "subscriptions"),
       bind(query(collection(db, salesCollectionNames.agreements), companyFilter), setAgreements, "agreements"),
       bind(collection(db, "companies", recentlySelectedCompany, "purchasedItems"), setPurchases, "purchases"),
@@ -376,7 +386,6 @@ const CompanyAccountingWorkspace = () => {
     });
     const overdueInvoices = openInvoices.filter((invoice) => daysPastDue(invoice.dueDate) > 0 || normalizeStatus(invoice.status) === "overdue");
     const currentMonthInvoices = eligibleInvoices.filter((invoice) => isThisMonth(invoice.invoiceDate || invoice.createdAt || invoice.dueDate));
-    const currentMonthPayments = postedPayments.filter((payment) => isThisMonth(payment.receivedAt || payment.paidAt || payment.createdAt));
     const currentMonthPurchases = nonReturnedPurchases.filter((purchase) => isThisMonth(purchaseDate(purchase)));
     const billableUninvoicedPurchases = nonReturnedPurchases.filter((purchase) => isBillablePurchase(purchase) && !isInvoicedPurchase(purchase));
     const purchaseReviewQueue = nonReturnedPurchases.filter(purchaseNeedsReview);
@@ -396,11 +405,12 @@ const CompanyAccountingWorkspace = () => {
     const taxableRevenueCents = sumCents(eligibleInvoices, (invoice) => Math.max(Number(invoice.subtotalAmountCents || invoice.totalAmountCents || 0) - Number(invoice.taxAmountCents || 0), 0));
     const purchaseSpendCents = sumCents(nonReturnedPurchases, purchaseAmountCents);
     const purchaseTaxesCents = sumCents(nonReturnedPurchases, purchaseTaxCents);
-    const postedPaymentCents = sumCents(postedPayments, (payment) => payment.amountCents);
+    const postedPaymentCents = sumCents(postedPayments, netPaymentCents);
     const recurringRunRateCents = sumCents(activeSubscriptions, (subscription) => subscription.amountCents);
     const openArCents = sumCents(openInvoices, invoiceBalanceCents);
     const currentMonthRevenueCents = sumCents(currentMonthInvoices, (invoice) => invoice.totalAmountCents);
-    const currentMonthCashCents = sumCents(currentMonthPayments, (payment) => payment.amountCents);
+    const today=new Date(),monthCash=cashActivity(payments,paymentAdjustments,new Date(today.getFullYear(),today.getMonth(),1).getTime(),new Date(today.getFullYear(),today.getMonth()+1,1).getTime());
+    const currentMonthCashCents = monthCash.byCurrency.usd?.netCents || 0;
     const currentMonthSpendCents = sumCents(currentMonthPurchases, purchaseAmountCents);
     const documentedPurchaseCents = sumCents(nonReturnedPurchases.filter(hasSourceDocument), purchaseAmountCents);
 
@@ -408,23 +418,24 @@ const CompanyAccountingWorkspace = () => {
       acceptedAgreementCount: acceptedAgreements.length,
       activeSubscriptionCount: activeSubscriptions.length,
       agingBuckets,
-      appPaymentCents: sumCents(appPayments, (payment) => payment.amountCents),
+      appPaymentCents: sumCents(appPayments, netPaymentCents),
       billableUninvoicedPurchases,
       billableUninvoicedCents: sumCents(billableUninvoicedPurchases, purchaseAmountCents),
       currentMonthCashCents,
+      cashActivityIncomplete:monthCash.missing.length>0,
       currentMonthRevenueCents,
       currentMonthSpendCents,
       documentedPurchaseRate: purchaseSpendCents ? documentedPurchaseCents / purchaseSpendCents : 1,
       eligibleInvoices,
       invoiceTaxCents,
-      manualPaymentCents: sumCents(manualPayments, (payment) => payment.amountCents),
+      manualPaymentCents: sumCents(manualPayments, netPaymentCents),
       missingReceiptPurchases,
       openArCents,
       openInvoices,
       openNotes,
       overdueInvoiceCount: overdueInvoices.length,
       overdueInvoiceCents: sumCents(overdueInvoices, invoiceBalanceCents),
-      paymentMethods: groupCents(postedPayments, (payment) => labelize(payment.method), (payment) => payment.amountCents, "Unknown"),
+      paymentMethods: groupCents(postedPayments, (payment) => labelize(payment.method), netPaymentCents, "Unknown"),
       postedPaymentCents,
       purchaseCategorySpend: groupCents(nonReturnedPurchases, (purchase) => purchase.category || "Uncategorized", purchaseAmountCents),
       purchaseReviewQueue,
@@ -433,11 +444,11 @@ const CompanyAccountingWorkspace = () => {
       recurringRunRateCents,
       taxableRevenueCents,
       unreconciledPaymentCount: unreconciledPayments.length,
-      unreconciledPaymentCents: sumCents(unreconciledPayments, (payment) => payment.amountCents),
+      unreconciledPaymentCents: sumCents(unreconciledPayments, netPaymentCents),
       unreconciledPayments,
       vendorSpend: groupCents(nonReturnedPurchases, purchaseVendorName, purchaseAmountCents, "Vendor"),
     };
-  }, [agreements, invoices, notes, payments, purchases, subscriptions]);
+  }, [agreements, invoices, notes, payments, paymentAdjustments, purchases, subscriptions]);
 
   const reconciliationQueue = useMemo(
     () => sortByFreshest(accounting.unreconciledPayments).slice(0, 12),
@@ -567,12 +578,8 @@ const CompanyAccountingWorkspace = () => {
   const markPaymentReconciled = async (payment) => {
     setReconcilingPaymentId(payment.id);
     try {
-      await updateDoc(doc(db, salesCollectionNames.payments, payment.id), {
-        accountingStatus: "reconciled",
-        reconciledAt: serverTimestamp(),
-        reconciledByUserId: user?.uid || "",
-        updatedAt: serverTimestamp(),
-      });
+      await httpsCallable(functions, 'manageSalesPayment')({...(await getCallableAuthPayload()),
+        companyId:recentlySelectedCompany,paymentId:payment.id,action:'markReconciled',requestId:`reconcile_${payment.id}`});
       toast.success("Payment marked reconciled.");
     } catch (error) {
       console.error("Unable to reconcile payment", error);
@@ -734,7 +741,7 @@ const CompanyAccountingWorkspace = () => {
             </Panel>
 
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <MetricCard label="Cash received" value={formatCurrency(accounting.postedPaymentCents)} helper={`${formatCurrency(accounting.currentMonthCashCents)} this month`} tone="emerald" />
+              <MetricCard label="Cash received" value={formatCurrency(accounting.postedPaymentCents)} helper={`${formatCurrency(accounting.currentMonthCashCents)} this month${accounting.cashActivityIncomplete?' · Review refund dates':''}`} tone="emerald" />
               <MetricCard label="Open AR" value={formatCurrency(accounting.openArCents)} helper={`${accounting.overdueInvoiceCount} overdue`} tone={accounting.overdueInvoiceCount ? "amber" : "emerald"} />
               <MetricCard label="Unreconciled" value={formatCurrency(accounting.unreconciledPaymentCents)} helper={`${accounting.unreconciledPaymentCount} payments`} tone={accounting.unreconciledPaymentCount ? "rose" : "emerald"} />
               <MetricCard label="Purchase spend" value={formatCurrency(accounting.purchaseSpendCents)} helper={`${formatCurrency(accounting.currentMonthSpendCents)} this month`} />
@@ -746,6 +753,7 @@ const CompanyAccountingWorkspace = () => {
           </section>
 
           <section id="reconciliation" className="space-y-4">
+            <BillingReconciliationPanel key={recentlySelectedCompany} companyId={recentlySelectedCompany} payments={payments} canManage={canManageCustomerBilling(authContext)} />
             <SectionHeader
               eyebrow="Reconciliation"
               title="Payment Queue"
@@ -775,13 +783,13 @@ const CompanyAccountingWorkspace = () => {
                               <p className="text-xs text-slate-500">{payment.invoiceId || payment.referenceNumber || payment.id}</p>
                             </td>
                             <td className="px-4 py-3 text-slate-700">{labelize(payment.method)}</td>
-                            <td className="px-4 py-3 text-right font-bold text-slate-950">{formatCurrency(payment.amountCents)}</td>
+                            <td className="px-4 py-3 text-right font-bold text-slate-950">{formatCurrency(netPaymentCents(payment))}</td>
                             <td className="px-4 py-3 text-slate-700">{formatDate(payment.receivedAt || payment.createdAt)}</td>
                             <td className="px-4 py-3 text-right">
                               <button
                                 type="button"
                                 onClick={() => markPaymentReconciled(payment)}
-                                disabled={reconcilingPaymentId === payment.id}
+                                disabled={!canManageBilling || reconcilingPaymentId === payment.id}
                                 className="inline-flex items-center gap-2 rounded-md bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {reconcilingPaymentId === payment.id ? <FaCircleNotch className="h-3 w-3 animate-spin" /> : <FaCheck className="h-3 w-3" />}
@@ -1085,7 +1093,7 @@ const CompanyAccountingWorkspace = () => {
                         <tr key={payment.id} className="hover:bg-slate-50">
                           <td className="px-3 py-2 font-semibold text-slate-950">{payment.customerName || payment.email || "Customer"}</td>
                           <td className="px-3 py-2 text-slate-700">{labelize(payment.method)}</td>
-                          <td className="px-3 py-2 text-right font-bold text-slate-950">{formatCurrency(payment.amountCents)}</td>
+                          <td className="px-3 py-2 text-right font-bold text-slate-950">{formatCurrency(netPaymentCents(payment))}</td>
                           <td className="px-3 py-2 text-slate-700">{formatDate(payment.receivedAt || payment.createdAt)}</td>
                         </tr>
                       ))}

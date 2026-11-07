@@ -73,7 +73,7 @@ const workOrderCounterRef = (companyId) => doc(db, "companies", companyId, "sett
 const recurringStopCounterRef = (companyId) => doc(db, "companies", companyId, "settings", "recurringServiceStops");
 
 const collectionRefs = (companyId) => ({
-  taskGroups: collection(db, "companies", companyId, "settings", "taskGroups", "taskGroups"),
+  taskGroups: collection(db, "companies", companyId, "settings", "taskGroup", "taskGroup"),
   jobTemplates: collection(db, "companies", companyId, "jobTemplates"),
   termsTemplates: collection(db, "companies", companyId, "termsTemplates"),
   readingTemplates: collection(db, "companies", companyId, "settings", "readings", "readings"),
@@ -238,6 +238,11 @@ const settingSections = [
     title: "Billing",
     icon: CreditCardIcon,
     items: [
+      {
+        key: "partApprovalAutoSendInvoices",
+        label: "Automatically send approved-part invoices",
+        helper: "Separate part invoices: turn on to email automatically, or leave off to review drafts in Sales. Include on next bill uses the recurring bill’s existing delivery and payment settings.",
+      },
       {
         key: "customerBillingEnabled",
         label: "Customer billing enabled",

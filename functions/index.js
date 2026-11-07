@@ -502,6 +502,8 @@ exports.sendJobEstimateEmail = sendGridGeneral.sendJobEstimateEmail;
 exports.sendInvoiceEmail = sendGridGeneral.sendInvoiceEmail;
 exports.sendSalesInvoiceEmail = sendGridGeneral.sendSalesInvoiceEmail;
 exports.sendPaymentConfirmationEmail = sendGridGeneral.sendPaymentConfirmationEmail;
+exports.sendAccountEmail = require('./accountEmails').sendAccountEmail;
+exports.initializeCustomerEmailConfiguration = require('./customerEmailDefaults').initializeCustomerEmailConfiguration;
 
 //-----------------General Callable----------------------------
 
@@ -530,6 +532,8 @@ exports.migrateLegacyVendorsToCanonical = callableGeneral.migrateLegacyVendorsTo
 exports.acceptLinkedInvite = callableGeneral.acceptLinkedInvite;
 exports.createCustomerAccountInvite = callableGeneral.createCustomerAccountInvite;
 exports.getCustomerAccountInvitePreview = callableGeneral.getCustomerAccountInvitePreview;
+exports.listMyCustomerAccountInvites = require('./customerAccountInvites').listMyCustomerAccountInvites;
+exports.indexCustomerPortalEmail = require('./customerPortalDiscovery').indexCustomerPortalEmail;
 exports.convertHomeownerServiceRequestToCompanyCustomer = callableGeneral.convertHomeownerServiceRequestToCompanyCustomer;
 exports.updateCompanyReadingsSettings = callableGeneral.updateCompanyReadingsSettings;
 exports.updateServiceStopDayPermanently = callableGeneral.updateServiceStopDayPermanently;
@@ -871,9 +875,40 @@ const customerPortalBilling = require('./customerPortalBilling');
 exports.createCustomerInvoiceCheckout = customerPortalBilling.createCustomerInvoiceCheckout;
 exports.createCustomerBillingPortal = customerPortalBilling.createCustomerBillingPortal;
 exports.manageSalesInvoice = require('./salesInvoiceCommands').manageSalesInvoice;
+exports.manageStripeInvoice = require('./stripeInvoiceCommands').manageStripeInvoice;
+exports.manageSalesPayment = require('./salesPaymentCommands').manageSalesPayment;
+const savedCustomerPayments = require('./savedCustomerPayments');
+exports.createSavedPaymentSetup = savedCustomerPayments.createSavedPaymentSetup;
+exports.listSavedPaymentMethods = savedCustomerPayments.listSavedPaymentMethods;
+exports.chargeSavedInvoice = savedCustomerPayments.chargeSavedInvoice;
+exports.sendSalesPaymentReceipt = require('./salesPaymentReceipts').sendSalesPaymentReceipt;
+exports.queueSalesPaymentReceipt = require('./salesPaymentReceipts').queueSalesPaymentReceipt;
+exports.deliverSalesPaymentReceipt = require('./salesPaymentReceipts').deliverSalesPaymentReceipt;
+exports.reviewSalesReceiptDeliveries = require('./salesPaymentReceipts').reviewSalesReceiptDeliveries;
 
 exports.createManualSalesSubscriptionInvoice = require('./manualRecurringBilling').createManualSalesSubscriptionInvoice;
 exports.refreshCompanyPayoutReconciliation = require('./payoutReconciliation').refreshCompanyPayoutReconciliation;
+exports.getBillingReconciliationReport = require('./billingReconciliation').getBillingReconciliationReport;
+exports.confirmStripePayoutDeposit = require('./billingReconciliation').confirmStripePayoutDeposit;
+exports.configureCollectionReminders = require('./collectionReminders').configureCollectionReminders;
+exports.queueCollectionReminders = require('./collectionReminders').queueCollectionReminders;
+exports.deliverCollectionReminder = require('./collectionReminders').deliverCollectionReminder;
 exports.createJobSalesInvoice = require('./jobBilling').createJobSalesInvoice;
 
 exports.ensureOwnTechnicianRoute = require("./technicianWork").ensureOwnTechnicianRoute;
+
+// Personal, read-only paysheet; identity comes from Firebase Auth.
+exports.getTechnicianPaysheet = onCall({ timeoutSeconds: 120 }, require("./technicianPaysheet").createTechnicianPaysheet(admin.firestore()));
+
+// Approved-part invoices follow customer timing across web and native fulfillment.
+const partApprovalBilling = require('./partApprovalBilling');
+exports.ensurePartApprovalInvoice = partApprovalBilling.ensurePartApprovalInvoice;
+exports.reconcilePartApprovalInvoice = partApprovalBilling.reconcilePartApprovalInvoice;
+exports.reconcileShoppingItemInvoice = partApprovalBilling.reconcileShoppingItemInvoice;
+exports.processPartInvoiceEmail = partApprovalBilling.processPartInvoiceEmail;
+exports.syncPartInvoiceLinks = partApprovalBilling.syncPartInvoiceLinks;
+
+exports.getPartApprovalRecurringOptions = callableGeneral.getPartApprovalRecurringOptions;
+exports.syncRecurringPartInvoice = require('./recurringPartCharges').syncRecurringPartInvoice;
+
+exports.reviewStoppedPartBillingPlan = require('./recurringPartCharges').reviewStoppedPartBillingPlan;

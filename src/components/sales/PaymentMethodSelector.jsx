@@ -18,6 +18,7 @@ const PaymentMethodSelector = ({
   onChange,
   disabled = false,
   compact = false,
+  showFees = true,
   className = '',
 }) => {
   const selectedValue = normalizeSalesPaymentMethodType(value);
@@ -26,7 +27,7 @@ const PaymentMethodSelector = ({
     <div className={className}>
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm font-bold text-slate-800">Payment Method</p>
-        <span className="text-xs font-semibold text-slate-500">Drip Drop fee estimate</span>
+        {showFees && <span className="text-xs font-semibold text-slate-500">Drip Drop fee estimate</span>}
       </div>
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         {salesPaymentMethodOptions.map((option) => {
@@ -37,6 +38,7 @@ const PaymentMethodSelector = ({
             <button
               key={option.id}
               type="button"
+              aria-pressed={selected}
               onClick={() => onChange?.(option.id)}
               disabled={disabled}
               className={`rounded-md border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
@@ -59,10 +61,10 @@ const PaymentMethodSelector = ({
                   {option.shortLabel}
                 </span>
               </div>
-              <p className="mt-2 text-xs font-semibold text-slate-700">
+              {showFees && <p className="mt-2 text-xs font-semibold text-slate-700">
                 {option.platformFeePercent}% | est. {formatCurrency(summary.platformFeeCents)}
-              </p>
-              {!compact && (
+              </p>}
+              {showFees && !compact && (
                 <p className="mt-1 text-xs text-slate-500">
                   {option.stripeFeeDescription}
                 </p>

@@ -4,7 +4,13 @@ Feature flag: `feature_flag_004` (`Sales`)
 
 Email delivery flag: `feature_flag_012` (`Turn on real emails`)
 
-## Billing audit — November 2, 2026
+## Billing continuation — November 6, 2026 (local review)
+
+Saved card/ACH setup and authorized office collection for DripDrop invoices, Stripe subscription-invoice draft/credit/void/write-off/full external receipt commands, native invoice actions, opt-in non-Stripe collection reminders, dated cash activity, historical balance review and bank-statement payout confirmation are implemented locally. Accounts v1 readiness now derives mode from the server credential and checks ACH separately; new US onboarding requests ACH capability. Production, Stripe configuration and financial records remain unchanged.
+
+Real connected-account acceptance and release remain blocked on a development sandbox secret key. The hidden terminal helper is `node scripts/configure-stripe-development.cjs` in `drip-drop-ecommerce`; it writes only the ignored development environment file. See `outputs/billing-completion-2026-11-06/rollout.json` for Stripe-owner steps, exact scope limits, deployment functions and acceptance. Per-visit/chemical billing, skipped-service policy, final proration, coordinated renewals, shared subscription saved methods, wider invoice authoring and production historical cleanup remain.
+
+## Billing audit — November 2, 2026 (historical)
 
 First hardening batch: **Review locally**. Permission 404, server-owned external receipts/invoice mutations, Checkout mutation fencing/expiration, Stripe-owned invoice guards, verified-recipient Finance visibility, and deterministic/atomic job invoice preservation are implemented. Existing roles are not automatically expanded. Checks: 447 web tests, 170 backend checks, nine actual-rule emulator tests, development build and scoped lint pass. No deployment/live financial changes; phone and real Stripe test-mode acceptance remain. See [batch evidence and rollout](../../outputs/billing-hardening-2026-11-02/README.md) and the audit's current status table. Recurring duplication, refunds/event reconciliation, remaining billing findings, and broader access-grant defects remain open.
 
@@ -221,7 +227,7 @@ Connected account payouts should be visible to owners and admins:
 
 ## Deployment And Operations Notes
 
-- Upgrade Firebase Functions off Node.js 20 before the next production deployment window. Firebase deploy output warned that Node.js 20 decommissions on `2026-10-30`.
+- Local Firebase Functions configuration now targets Node.js 22. Include the runtime update when deploying the verified billing functions.
 - Keep Stripe API keys and webhook signing secrets out of tracked source.
 - Use the Admin Billing Calculator to estimate whether base subscription fees plus platform fees cover Firebase usage.
 - Use snapshot webhook payloads until the webhook handler is intentionally rewritten to support Stripe thin events.

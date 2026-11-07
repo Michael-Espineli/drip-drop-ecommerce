@@ -12,8 +12,10 @@ const { title } = require("process");
 
 const sgMail = require("@sendgrid/mail");
 const { ensureCustomerAccountInvite } = require("../customerAccountInvites");
+const { linkedId } = require("../homeownerServicePublishing");
 const {
     resolveEmailDeliveryRecipient,
+    resolveCompanyEmailDeliveryRecipient,
     addDeliveryModeTemplateData,
 } = require("../emailDelivery");
 if (process.env.SEND_GRID_API_KEY && process.env.SEND_GRID_API_KEY.startsWith('SG.')) {
@@ -392,9 +394,17 @@ const buildCustomerAccessTemplateData = async ({
             email: relationshipContext.customerEmail,
         });
     }
-    const homeownerSignInUrl = buildUrl(appBaseUrl, "/homeownerSignIn");
+    const returnUrl = new URL((!relationshipContext.hasLinkedCustomerAccount && claimAccountUrl) || actionUrl || "/client/dashboard", appBaseUrl);
+    const returnPath = returnUrl.origin === new URL(appBaseUrl).origin
+        ? `${returnUrl.pathname}${returnUrl.search}`
+        : "/client/dashboard";
+    const homeownerSignInUrl = buildUrl(appBaseUrl, "/homeownerSignIn", {
+        redirect: returnPath,
+        email: relationshipContext.customerEmail,
+    });
     const homeownerSignUpUrl = buildUrl(appBaseUrl, "/homeownerSignUp", {
         email: relationshipContext.customerEmail,
+        redirect: returnPath,
     });
     const customerPortalUrl = relationshipContext.hasLinkedCustomerAccount
         ? buildUrl(appBaseUrl, "/client/dashboard")
@@ -734,7 +744,7 @@ const sendCompanyUserInviteEmailInternal = async ({
         ? await db.collection("companies").doc(invite.companyId).collection("settings").doc("emailConfiguration").get()
         : null;
     const emailConfig = emailConfigDoc?.exists ? emailConfigDoc.data() : {};
-    const emailDelivery = await resolveEmailDeliveryRecipient(inviteEmail);
+    const emailDelivery = resolveCompanyEmailDeliveryRecipient(inviteEmail);
     const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "info@dripdrop-poolapp.com";
     const replyToEmail = emailConfig.replyToEmail || getCompanyContactEmail(companyData) || fromEmail;
     const templateId = process.env.SEND_GRID_COMPANY_USER_INVITE_TEMPLATE_ID || process.env.SENDGRID_COMPANY_USER_INVITE_TEMPLATE_ID || "";
@@ -1914,6 +1924,7 @@ const buildSalesInvoiceFallbackHtml = (templateData) => {
 const sendSalesInvoiceEmailCore = async ({
     companyId,
     invoiceId,
+    automationDeliveryKey = "",
     invoiceBaseUrl = process.env.SALES_INVOICE_BASE_URL || process.env.APP_BASE_URL || "",
 }) => {
     const templateId = process.env.SEND_GRID_SALES_INVOICE_TEMPLATE_ID || process.env.SENDGRID_SALES_INVOICE_TEMPLATE_ID || "";
@@ -1948,6 +1959,20 @@ const sendSalesInvoiceEmailCore = async ({
 
     if (invoice.companyId !== companyId) {
         throw new HttpsError("permission-denied", "Invoice does not belong to the selected company.");
+    }
+
+    if (invoice.stripeInvoiceId && invoice.status === "draft") {
+        throw new HttpsError("failed-precondition", "Stripe is still preparing this recurring invoice. Wait until it is issued before sending it.");
+    }
+    if (invoice.billingMutation || invoice.paymentProcessing) {
+        throw new HttpsError("failed-precondition", "Wait for the invoice payment or update to finish before sending it.");
+    }
+    if (invoice.automationEmailStatus === "sending" && invoice.automationDeliveryKey !== automationDeliveryKey &&
+        Date.now() - (invoice.automationEmailStartedAt?.toMillis?.() || new Date(invoice.automationEmailStartedAt || Date.now()).getTime()) < 300000) {
+        throw new HttpsError("failed-precondition", "An automatic invoice email is being sent. Wait for its result before sending again.");
+    }
+    if (["void", "voided", "canceled", "cancelled", "uncollectible"].includes(String(invoice.status || "").toLowerCase())) {
+        throw new HttpsError("failed-precondition", "A closed invoice cannot be sent for collection.");
     }
 
     if (invoice.paymentReviewRequired) throw new HttpsError('failed-precondition','Resolve the payment adjustment before sending a collection reminder.');
@@ -2016,7 +2041,27 @@ const sendSalesInvoiceEmailCore = async ({
         html: buildSalesInvoiceFallbackHtml(invoiceTemplateData)
     };
 
-    const sendResult = await sgMail.send(msg);
+    let manualPartClaim = false;
+    if (invoice.billingScope === "approvedPart" && !automationDeliveryKey) {
+        const { hash, millis } = require("../billingMath");
+        const manualDeliveryKey = `manual_${uuidv4()}`;
+        await db.runTransaction(async transaction => {
+            const current = (await transaction.get(invoiceRef)).data() || {};
+            if (current.automationEmailStatus === "sending" && Date.now() - millis(current.automationEmailStartedAt) < 300000) {
+                throw new HttpsError("failed-precondition", "An invoice email is already being sent. Wait for its result.");
+            }
+            if (current.billingMutation || current.paymentProcessing || current.status !== invoice.status || current.totalAmountCents !== invoice.totalAmountCents || current.email !== invoice.email || JSON.stringify(current.lineItems) !== JSON.stringify(invoice.lineItems)) {
+                throw new HttpsError("failed-precondition", "This invoice changed. Reload it before sending.");
+            }
+            transaction.set(invoiceRef, { automationEmailStatus: "sending", automationDeliveryKey: manualDeliveryKey, automationEmailStartedAt: new Date() }, { merge: true });
+            transaction.set(db.collection("billingEmailQueue").doc(`part_${hash(invoiceId)}`), { companyId, invoiceId, source: "partApproval", status: "manualHandling", updatedAt: new Date() }, { merge: true });
+        });
+        manualPartClaim = true;
+    }
+    const sendResult = await sgMail.send(msg).catch(async error => {
+        if (manualPartClaim) await invoiceRef.set({ automationEmailStatus: "needsReview", automationEmailError: "Invoice email failed or delivery is uncertain. Review before sending again." }, { merge: true });
+        throw error;
+    });
     const messageId = sendResult?.[0]?.headers?.["x-message-id"] || "";
 
     await invoiceRef.set({
@@ -2024,6 +2069,8 @@ const sendSalesInvoiceEmailCore = async ({
         customerUserId: invoice.customerUserId || customerAccess.customerUserId || null,
         relationshipId: invoice.relationshipId || customerAccess.relationshipId || "",
         customerCompanyRelationshipId: invoice.customerCompanyRelationshipId || customerAccess.customerCompanyRelationshipId || "",
+        automationEmailStatus: "sent",
+        automationEmailError: "",
         sentAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         emailDelivery: {
@@ -2198,6 +2245,9 @@ const sendServiceReportOnFinishCore = async (payload = {}) => {
         }
 
         const emailConfigData = emailConfigDoc.data();
+        if (emailConfigData.emailIsOn === false) {
+            return { status: 200, account: "Company email is turned off" };
+        }
         const categoryEmailSetting = resolveServiceStopCategoryEmailSetting({
             emailConfigData,
             serviceStopData,
@@ -2214,28 +2264,24 @@ const sendServiceReportOnFinishCore = async (payload = {}) => {
         }
 
         // 5. Check customer email config
+        const customerIdForPreferences = serviceStopData.customerId || stopData.customerId || "";
+        if (!customerIdForPreferences) {
+            return { status: 400, error: "Service stop is missing a customer id" };
+        }
         const customerEmailConfigSnapshot = await db
             .collection("companies")
             .doc(companyId)
             .collection("settings")
             .doc("emailConfiguration")
             .collection("customerConfiguration")
-            .where("customerId", "==", serviceStopData.customerId)
-            .limit(1)
+            .where("customerId", "==", customerIdForPreferences)
             .get();
 
-        if (customerEmailConfigSnapshot.empty) {
-            console.log("Customer Email Config Doc DNE");
-            return {
-                status: 404,
-                error: "Customer email configuration not found"
-            };
-        }
-
-        const customerEmailConfigDoc = customerEmailConfigSnapshot.docs[0];
-        const customerEmailConfigData = customerEmailConfigDoc.data();
-
-        if (!customerEmailConfigData.emailIsOn) {
+        const customerEmailConfigs = customerEmailConfigSnapshot.docs.map(doc => doc.data() || {});
+        const customerEmailConfigData = customerEmailConfigs[0] || {};
+        // No saved choice means on, including before the customer-create trigger runs.
+        // An explicit off in a legacy duplicate must still be respected.
+        if (customerEmailConfigs.some(config => config.emailIsOn === false)) {
             console.log("Email Not Turned on for Customer");
             return {
                 status: 200,
@@ -2254,7 +2300,6 @@ const sendServiceReportOnFinishCore = async (payload = {}) => {
                 customerId: serviceStopData.customerId || stopData.customerId || "",
             })
         );
-        const customerIdForPreferences = serviceStopData.customerId || stopData.customerId || '';
         const customerForPreferences = customerIdForPreferences ? await db.collection('companies').doc(companyId).collection('customers').doc(customerIdForPreferences).get() : null;
         const linkedHomeowners = customerForPreferences?.data()?.linkedCustomerIds || [];
         if (linkedHomeowners.length) {
@@ -2262,7 +2307,7 @@ const sendServiceReportOnFinishCore = async (payload = {}) => {
             if (profiles.some(profile => profile.data()?.settings?.emailNotifications === false)) return { status: 200, account: 'Homeowner service update emails are turned off' };
         }
         const serviceReportBaseUrl = payload.serviceReportBaseUrl || process.env.SERVICE_REPORT_BASE_URL || process.env.APP_BASE_URL || "";
-        const serviceReportUrl = buildUrl(serviceReportBaseUrl, `/serviceStop/detail/${serviceStopId}`);
+        const serviceReportUrl = buildUrl(serviceReportBaseUrl, `/serviceStop/detail/${linkedId('hoss', companyId, serviceStopId)}`);
         const customerAccess = await buildCustomerAccessTemplateData({
             companyId,
             customerId: serviceStopData.customerId || stopData.customerId || "",
@@ -2517,6 +2562,10 @@ exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
 
         const companyData = companyDoc.data();
         const companyName = companyData.name || companyData.companyName || serviceStopData.companyName || "Your Pool Company";
+        const emailConfigDoc = await companyRef.collection("settings").doc("emailConfiguration").get();
+        if (emailConfigDoc.exists && emailConfigDoc.data()?.emailIsOn === false) {
+            return { status: 200, account: "Company email is turned off" };
+        }
         const customerEmail = (
             serviceStopData.email ||
             serviceStopData.customerEmail ||
@@ -2676,6 +2725,7 @@ exports.sendInvoiceEmail = functions.https.onCall(async (data, context) => {
 });
 
 exports.sendPaymentConfirmationEmail = functions.https.onCall(async (data, context) => {
+    const callableAuth = await getCallableAuth(data, context, 'Sign in to send a payment confirmation.');
 
     console.log('Send Service Report On Finish')
 
@@ -2703,6 +2753,9 @@ exports.sendPaymentConfirmationEmail = functions.https.onCall(async (data, conte
 
         if (!receiverCompanyId) {
             throw new Error("Invoice is missing receiver company id");
+        }
+        if (!(await userHasCompanyAccess(callableAuth.uid, receiverCompanyId))) {
+            throw new HttpsError('permission-denied', 'Manage Customer Billing permission is required.');
         }
 
         const companyRef = db.collection("companies").doc(receiverCompanyId);
@@ -2760,6 +2813,7 @@ exports.sendPaymentConfirmationEmail = functions.https.onCall(async (data, conte
             testMode: emailDelivery.testMode
         };
     } catch (error) {
+        if (error instanceof HttpsError) throw error;
         console.error(
             "An error occurred when calling the Create New Recurring Service Stop API",
             error

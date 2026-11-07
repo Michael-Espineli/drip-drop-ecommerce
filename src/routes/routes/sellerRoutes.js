@@ -8,6 +8,7 @@ import {
 
 const Home = lazy(() => import("../../views/Home"))
 const ProfilePage = lazy(() => import("../../views/company/ProfilePage"))
+const MyPayPage = lazy(() => import("../../views/company/personalPay/MyPayPage"))
 const CompanyDashboardWrapper = lazy(() => import("../../views/company/CompanyDashboardWrapper"))
 const CompanySelection = lazy(() => import("../../views/company/companySelection/CompanySelection"))
 const OperationsDashboard = lazy(() => import("../../views/company/dashboard/OperationsDashboard"));
@@ -270,6 +271,12 @@ export const sellerRoutes = [
         element: <ProfilePage />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }, {
+        path: '/company/my-pay',
+        element: <MyPayPage />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        featureFlagId: 'feature_flag_006',
     }, {
         path: '/company/customers',
         element: <Customers />,

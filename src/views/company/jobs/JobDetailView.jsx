@@ -1,3 +1,4 @@
+import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { jobStatusClass } from '../../../utils/statusPresentation';
 import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
@@ -1545,31 +1546,7 @@ const JobDetailView = () => {
       setLoadingTaskGroups(true);
 
       try {
-        const [legacyTaskGroupsSnap, taskGroupsSnap] = await Promise.all([
-          getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup")),
-          getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups")),
-        ]);
-
-        const normalizeTaskGroup = (docSnap, sourcePath) => {
-          const data = docSnap.data();
-          const id = data.id || docSnap.id;
-          const label = data.name || data.groupName || "Task Group";
-
-          return {
-            ...data,
-            id,
-            value: id,
-            label,
-            sourcePath,
-          };
-        };
-
-        setTaskGroupList(
-          [
-            ...legacyTaskGroupsSnap.docs.map((docSnap) => normalizeTaskGroup(docSnap, "legacy")),
-            ...taskGroupsSnap.docs.map((docSnap) => normalizeTaskGroup(docSnap, "current")),
-          ].sort((left, right) => String(left.label || "").localeCompare(String(right.label || "")))
-        );
+        setTaskGroupList(await fetchRecurringTaskGroupOptions({ db, companyId: recentlySelectedCompany }));
       } catch (error) {
         console.error("[JobDetailView] Failed to load task groups", error);
         toast.error(userFacingErrorMessage(error, "Failed to load task groups."));
@@ -12490,28 +12467,7 @@ const JobDetailView = () => {
     return { tasks, updatedShoppingList };
   };
 
-  const getTaskGroupTasks = async (taskGroup) => {
-    if (!taskGroup?.id || !recentlySelectedCompany) return [];
-
-    const taskCollections = taskGroup.sourcePath === "legacy"
-      ? [
-        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
-        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
-      ]
-      : [
-        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
-        collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
-      ];
-
-    for (const taskCollection of taskCollections) {
-      const snapshot = await getDocs(taskCollection);
-      if (snapshot.docs.length) {
-        return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-      }
-    }
-
-    return [];
-  };
+  const getTaskGroupTasks = (taskGroup) => fetchTaskGroupTasks({ db, companyId: recentlySelectedCompany, taskGroup });
 
   const buildTaskFromGroupTask = (task) => {
     const id = "comp_wo_tas_" + uuidv4();

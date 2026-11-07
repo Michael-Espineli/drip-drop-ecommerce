@@ -1,6 +1,7 @@
 export const SHOPPING_LIST_STATUS = {
   needToPurchase: "Need to Purchase",
   purchased: "Purchased",
+  delivered: "Delivered",
   installed: "Installed",
   invoiced: "Invoiced",
 };
@@ -16,6 +17,7 @@ export const canonicalShoppingListStatus = (value) => {
     case "purchased":
       return SHOPPING_LIST_STATUS.purchased;
     case "delivered":
+      return SHOPPING_LIST_STATUS.delivered;
     case "installed":
     case "resolved":
       return SHOPPING_LIST_STATUS.installed;
@@ -44,6 +46,7 @@ export const shoppingListStatusMatches = (value, allowedStatuses = []) => {
 export const isShoppingListStatusClosed = (status) => {
   const canonicalStatus = canonicalShoppingListStatus(status);
   return [
+    SHOPPING_LIST_STATUS.delivered,
     SHOPPING_LIST_STATUS.installed,
     SHOPPING_LIST_STATUS.invoiced,
   ].includes(canonicalStatus);

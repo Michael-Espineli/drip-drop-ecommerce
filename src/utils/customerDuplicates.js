@@ -99,6 +99,48 @@ export const findDuplicateCustomerMatches = (candidateCustomer = {}, existingCus
     .filter((match) => match.matchedKeys.length > 0);
 };
 
+export const findDuplicateCustomerSuggestions = (customers = [], limit = 6) => {
+  if (limit <= 0) return [];
+
+  // Build identities once instead of comparing every customer with every other customer.
+  const entries = customers.map((customer) => ({ customer, keys: buildCustomerDuplicateKeys(customer) }));
+  const customersByKey = new Map();
+  entries.forEach(({ customer, keys }, index) => {
+    if (!customer.id) return;
+    keys.forEach((key) => {
+      if (!customersByKey.has(key)) customersByKey.set(key, []);
+      customersByKey.get(key).push(index);
+    });
+  });
+
+  const suggestions = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const { customer, keys } = entries[index];
+    if (!customer.id) continue;
+
+    const matchingIndexes = new Set();
+    keys.forEach((key) => {
+      customersByKey.get(key)?.forEach((matchIndex) => {
+        if (matchIndex > index && entries[matchIndex].customer.id !== customer.id) {
+          matchingIndexes.add(matchIndex);
+        }
+      });
+    });
+
+    for (const matchIndex of [...matchingIndexes].sort((a, b) => a - b)) {
+      const match = entries[matchIndex];
+      suggestions.push({
+        primary: customer,
+        duplicate: match.customer,
+        reason: describeDuplicateCustomerMatch({ matchedKeys: match.keys.filter((key) => keys.includes(key)) }),
+      });
+      if (suggestions.length >= limit) return suggestions;
+    }
+  }
+
+  return suggestions;
+};
+
 export const describeDuplicateCustomerMatch = (match = {}) => {
   const key = match.matchedKeys?.[0] || "";
   if (key.startsWith("email:")) return "email";

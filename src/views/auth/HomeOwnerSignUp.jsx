@@ -1,7 +1,8 @@
 import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { getAuth, createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
+import { sendClientEmailVerification } from '../../utils/accountEmails';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { safeClientReturnPath, clientVerificationPath } from "../../utils/clientNavigation";
@@ -105,7 +106,7 @@ export default function HomeOwnerSignUp() {
             toast.success('Profile created!');
 
             // 3. Navigate to the invite or dashboard
-            try { await sendEmailVerification(user, { url: `${window.location.origin}${clientVerificationPath(redirectPath)}` }); } catch (_) { toast.error(userFacingErrorMessage(_, 'Your account was created. Use Resend on the next screen to verify your email.')); }
+            try { await sendClientEmailVerification(auth, clientVerificationPath(redirectPath)); } catch (_) { toast.error(userFacingErrorMessage(_, 'Your account was created. Use Resend on the next screen to verify your email.')); }
             navigate(user.emailVerified ? safeClientReturnPath(redirectPath) : clientVerificationPath(redirectPath));
         } catch (error) {
             console.error("Homeowner sign-up failed:", error);

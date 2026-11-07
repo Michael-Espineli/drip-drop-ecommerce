@@ -115,6 +115,7 @@ const publicCompanyRoutePatterns = [
   /^\/company\/selector/i,
   /^\/company\/selection/i,
   /^\/company\/profile/i,
+  /^\/company\/my-pay(?:\/|$)/i,
   /^\/company\/messages/i,
   /^\/company\/public-profile/i,
   /^\/company\/reviews/i,

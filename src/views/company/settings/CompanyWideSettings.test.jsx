@@ -110,3 +110,15 @@ test("an intentional payroll setting change still mirrors its enablement while r
   expect(batch.set).toHaveBeenCalledWith('companies/company/paySettings/main', expect.objectContaining({ payrollEnabled: false }), { merge: true });
   expect(batch.set).toHaveBeenCalledWith('companies/company', expect.objectContaining({ payrollEnabled: false }), { merge: true });
 });
+
+
+test("approved-part automatic sending defaults off and saves independently of recurring billing", async () => {
+  render(view());
+  const toggle = await screen.findByRole('checkbox', { name: /Automatically send approved-part invoices/ });
+  expect(toggle).not.toBeChecked();
+  fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+  await waitFor(() => expect(batch.commit).toHaveBeenCalled());
+  expect(batch.set).toHaveBeenCalledWith('companies/company/settings/companyWide', expect.objectContaining({ partApprovalAutoSendInvoices: true }), { merge: true });
+  expect(batch.set).toHaveBeenCalledTimes(1);
+});

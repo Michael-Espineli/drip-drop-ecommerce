@@ -1,7 +1,9 @@
+import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
+import { httpsCallable } from 'firebase/functions';
 import {
   arrayUnion,
   collection,
@@ -37,7 +39,6 @@ import {
 import { Context } from '../../../context/AuthContext';
 import { db, functions } from '../../../utils/config';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
-import { salesCollectionNames } from '../../../utils/models/Sales';
 import { itemPhotoFieldsFromSource } from '../../../utils/itemPhotos';
 import { buildPartApprovalShoppingItemPayload } from '../../../utils/partApprovalShopping';
 import {
@@ -214,8 +215,7 @@ const approvalIsInstalled = (approval = {}) => (
 
 const approvalIsInvoiced = (approval = {}) => Boolean(
   approval.invoiced ||
-  approval.manuallyInvoiced ||
-  approvalInvoiceId(approval)
+  approval.manuallyInvoiced
 );
 
 const normalizeDbItemOption = (docId, data = {}) => {
@@ -246,22 +246,6 @@ const normalizeDbItemOption = (docId, data = {}) => {
   };
 };
 
-const buildServiceLocationSnapshots = (approval = {}) => {
-  if (Array.isArray(approval.serviceLocationSnapshots) && approval.serviceLocationSnapshots.length) {
-    return approval.serviceLocationSnapshots;
-  }
-
-  if (approval.serviceLocationSnapshot && typeof approval.serviceLocationSnapshot === 'object') {
-    return [approval.serviceLocationSnapshot];
-  }
-
-  if (!approval.serviceLocationId && !approval.serviceLocationName) return [];
-
-  return [{
-    id: approval.serviceLocationId || '',
-    name: approval.serviceLocationName || '',
-  }];
-};
 
 const statusOptions = [
   { value: 'pending', label: 'Pending' },
@@ -424,6 +408,7 @@ const PartApprovalActionMenuItem = ({
 };
 
 const CompanyPartApprovals = () => {
+  const navigate = useNavigate();
   const {
     recentlySelectedCompany,
     recentlySelectedCompanyName,
@@ -575,90 +560,12 @@ const CompanyPartApprovals = () => {
     }
   };
 
-  const buildApprovalInvoicePayload = ({ approval, invoiceId, shoppingListItemId }) => {
-    const totalAmountCents = approvalTotalCents(approval);
-    const quantity = Number.parseFloat(approval.quantity || '1') || 1;
-    const unitAmountCents = approvalUnitPriceCents(approval);
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + 14);
-
-    const lineItem = {
-      id: `sili_${uuidv4()}`,
-      sourceType: 'partApproval',
-      sourceId: approval.id,
-      catalogItemId: approvalCatalogItemId(approval),
-      name: approval.itemName || approval.name || approval.productName || approval.dbItemName || 'Pool Part',
-      description: approval.description || '',
-      quantity,
-      unitAmountCents,
-      totalAmountCents,
-      taxable: false,
-      type: 'material',
-      metadata: {
-        sourceType: 'partApproval',
-        shoppingListItemId,
-        partApprovalRequestId: approval.id,
-      },
-    };
-
-    const invoicePayload = {
-      id: invoiceId,
-      companyId: recentlySelectedCompany,
-      companyName: recentlySelectedCompanyName || approval.companyName || '',
-      customerId: approval.customerId || '',
-      customerUserId: approval.customerUserId || null,
-      customerName: approval.customerName || 'Customer',
-      customerEmail: approval.customerEmail || approval.email || '',
-      billingEmail: approval.billingEmail || approval.customerEmail || approval.email || '',
-      customerPhoneNumber: approval.customerPhoneNumber || '',
-      relationshipId: approval.relationshipId || '',
-      customerCompanyRelationshipId: approval.customerCompanyRelationshipId || approval.relationshipId || '',
-      email: approval.email || approval.customerEmail || approval.billingEmail || '',
-      agreementId: '',
-      jobId: approval.jobId || '',
-      contractId: '',
-      billingSubscriptionId: '',
-      stripeConnectedAccountId: approval.stripeConnectedAccountId || '',
-      stripeInvoiceId: '',
-      stripePaymentIntentId: '',
-      stripeHostedInvoiceUrl: '',
-      stripeInvoicePdfUrl: '',
-      invoiceNumber: approval.invoiceNumber || `PART-${String(Date.now()).slice(-6)}`,
-      type: 'oneTime',
-      status: 'draft',
-      deliveryMethod: 'email',
-      currency: 'usd',
-      billingPeriodStart: null,
-      billingPeriodEnd: null,
-      dueDate: Timestamp.fromDate(dueDate),
-      subtotalAmountCents: totalAmountCents,
-      discountAmountCents: 0,
-      taxAmountCents: 0,
-      totalAmountCents,
-      amountPaidCents: 0,
-      amountDueCents: totalAmountCents,
-      writeOffAmountCents: 0,
-      memo: `Approved part: ${lineItem.name}`,
-      lineItems: [lineItem],
-      serviceLocationSnapshots: buildServiceLocationSnapshots(approval),
-      sourceType: 'partApproval',
-      sourceId: approval.id,
-      shoppingListItemId,
-      partApprovalRequestId: approval.id,
-      updatedAt: serverTimestamp(),
-      createdAt: serverTimestamp(),
-      createdByUserId: user?.uid || '',
-    };
-
-    Object.keys(invoicePayload).forEach((key) => {
-      if (invoicePayload[key] === undefined) delete invoicePayload[key];
-    });
-
-    return invoicePayload;
-  };
-
   const showInstallInvoiceResult = (invoiceResult = {}) => {
-    if (invoiceResult.status === 'sent') {
+    if (['created', 'existing'].includes(invoiceResult.status)) {
+      toast.success('Invoice is available in Sales. Automatic email follows company settings.');
+    } else if (invoiceResult.status === 'needsReview') {
+      toast.error(invoiceResult.reason);
+    } else if (invoiceResult.status === 'sent') {
       toast.success('Invoice created and sent.');
     } else if (invoiceResult.status === 'created_email_failed') {
       toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
@@ -899,104 +806,20 @@ const CompanyPartApprovals = () => {
 
   const convertApprovalToInvoice = async (approval) => {
     if (!recentlySelectedCompany || !approval?.id || workflowActionId) return;
-
-    if (approvalInvoiceId(approval)) {
-      toast.error('This part approval already has an invoice.');
-      return;
-    }
-
-    const totalAmountCents = approvalTotalCents(approval);
-    if (totalAmountCents <= 0) {
-      toast.error('Add a billable amount before converting this approval to an invoice.');
-      return;
-    }
-
-    const existingShoppingListItemId = approvalShoppingListItemId(approval);
-    const shoppingListItemId = existingShoppingListItemId || `comp_shop_${uuidv4()}`;
-    const invoiceId = `si_${uuidv4()}`;
-    const now = Timestamp.fromDate(new Date());
-    const actor = userDisplayName(user);
-    const historyEvent = buildHistoryEvent({
-      action: 'convertedToInvoice',
-      status: 'invoiced',
-      note: 'Converted to a draft sales invoice',
-      user,
-    });
-
     setWorkflowActionId(`invoice-${approval.id}`);
-
     try {
-      const batch = writeBatch(db);
-      const invoicePayload = buildApprovalInvoicePayload({ approval, invoiceId, shoppingListItemId });
-      const approvalUpdates = {
-        status: normalizeStatus(approval.status || approval.approvalStatus) === 'resolved' ? 'resolved' : 'approved',
-        approvalStatus: 'approved',
-        response: 'approved',
-        responseNote: approval.responseNote || 'Approved by company',
-        respondedAt: approval.respondedAt || serverTimestamp(),
-        respondedByUserId: approval.respondedByUserId || user?.uid || '',
-        respondedByUserName: approval.respondedByUserName || actor,
-        respondedByEmail: approval.respondedByEmail || user?.email || '',
-        responseSource: approval.responseSource || 'companyWeb',
-        responseSourceLabel: approval.responseSourceLabel || 'Company web app',
-        fulfillmentStatus: approval.fulfillmentStatus || 'approvedAwaitingPurchase',
-        shoppingListItemId,
-        shoppingListPath: `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}`,
-        shoppingListGeneratedAt: approval.shoppingListGeneratedAt || serverTimestamp(),
-        invoiceId,
-        salesInvoiceId: invoiceId,
-        invoiced: true,
-        invoiceStatus: 'draft',
-        invoiceType: 'salesInvoice',
-        convertedToInvoiceAt: serverTimestamp(),
-        convertedToInvoiceByUserId: user?.uid || '',
-        convertedToInvoiceByUserName: actor,
-        updatedAt: serverTimestamp(),
-        history: arrayUnion(historyEvent),
-      };
-      const shoppingPayload = existingShoppingListItemId
-        ? {}
-        : buildPartApprovalShoppingItemPayload({
-          approval: {
-            ...approval,
-            status: 'approved',
-            approvalStatus: 'approved',
-            shoppingListItemId,
-            respondedAt: approval.respondedAt || now,
-            respondedByUserId: approval.respondedByUserId || user?.uid || '',
-            respondedByUserName: approval.respondedByUserName || actor,
-            respondedByEmail: approval.respondedByEmail || user?.email || '',
-          },
-          shoppingListItemId,
-          now,
-          generated: true,
-        });
-
-      Object.assign(shoppingPayload, {
-        invoiced: true,
-        invoiceId,
-        salesInvoiceId: invoiceId,
-        invoiceStatus: 'draft',
-        invoiceType: 'salesInvoice',
-        updatedAt: serverTimestamp(),
+      const auth = await getCallableAuthPayload();
+      const result = await httpsCallable(functions, 'ensurePartApprovalInvoice')({
+        ...auth, companyId: recentlySelectedCompany, approvalId: approval.id, manualDraft: true,
       });
-
-      if (approvalIsInstalled(approval)) {
-        Object.assign(shoppingPayload, {
-          status: 'Installed',
-          needsAction: false,
-          fulfillmentStatus: 'installed',
-        });
+      if (result.data.invoiceId) {
+        toast.success(result.data.status === 'existing' ? 'Opened the existing invoice.' : 'Draft invoice created. Review and send it in Sales.');
+        navigate(`/company/sales/invoices/${result.data.invoiceId}`);
+      } else {
+        toast.error(result.data.reason || 'This approval is not ready to invoice.');
       }
-
-      batch.set(doc(db, salesCollectionNames.invoices, invoiceId), invoicePayload, { merge: true });
-      batch.set(doc(db, 'customerPartApprovals', approval.id), approvalUpdates, { merge: true });
-      batch.set(doc(db, 'companies', recentlySelectedCompany, 'shoppingList', shoppingListItemId), shoppingPayload, { merge: true });
-      await batch.commit();
-      toast.success('Draft invoice created. No email was sent.');
-    } catch (workflowError) {
-      console.error('Unable to convert part approval to invoice', workflowError);
-      toast.error(userFacingErrorMessage(workflowError, workflowError.message || 'Unable to convert to invoice.'));
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, 'Unable to create the invoice.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -1419,7 +1242,8 @@ const CompanyPartApprovals = () => {
 	                          {(isInstalled || isInvoiced) && (
 	                            <div className="mt-1 flex flex-wrap gap-1">
 	                              {isInstalled && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">Installed</span>}
-	                              {isInvoiced && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">Invoiced</span>}
+	                              {approvalInvoiceId(approval) && !isInvoiced && <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Invoice {approval.invoiceStatus || 'draft'}</span>}
+                {isInvoiced && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">Invoiced</span>}
 	                            </div>
 	                          )}
 	                        </td>
@@ -1464,7 +1288,7 @@ const CompanyPartApprovals = () => {
 	        const statusKey = normalizeStatus(openActionApproval.status || openActionApproval.approvalStatus || 'pending');
 	        const approvalStatusKey = normalizeStatus(openActionApproval.approvalStatus || openActionApproval.status || 'pending');
 	        const isApproved = approvalStatusKey === 'approved' || statusKey === 'approved' || statusKey === 'resolved';
-	        const canConvertToInvoice = !invoiceId && approvalTotalCents(openActionApproval) > 0;
+	        const canConvertToInvoice = !invoiceId && (openActionApproval.paymentPreference || openActionApproval.paymentCollectionPreference) !== 'nextBill' && approvalTotalCents(openActionApproval) > 0;
 	        const working = Boolean(workflowActionId);
 
 	        return (
@@ -1561,7 +1385,7 @@ const CompanyPartApprovals = () => {
 	                  tone="blue"
 	                  loading={workflowActionId === `invoice-${openActionApproval.id}`}
 	                  disabled={working || !canConvertToInvoice}
-	                  title={!canConvertToInvoice ? 'Add a billable amount before converting to an invoice.' : 'Create a draft invoice without emailing it.'}
+	                  title={(openActionApproval.paymentPreference || openActionApproval.paymentCollectionPreference) === 'nextBill' ? 'Included on the selected recurring service bill after delivery.' : !canConvertToInvoice ? 'Add a billable amount before converting to an invoice.' : 'Create a draft invoice without emailing it.'}
 	                  onClick={() => {
 	                    convertApprovalToInvoice(openActionApproval);
 	                    closeApprovalActions();
@@ -1673,7 +1497,7 @@ const PartApprovalDetailModal = ({
   const isDatabaseItem = Boolean(catalogItemId);
   const isInstalled = approvalIsInstalled(approval);
   const isInvoiced = approvalIsInvoiced(approval);
-  const canConvertToInvoice = !invoiceId && approvalTotalCents(approval) > 0;
+  const canConvertToInvoice = !invoiceId && (approval.paymentPreference || approval.paymentCollectionPreference) !== 'nextBill' && approvalTotalCents(approval) > 0;
 
   return (
     <ModalShell title={partName} eyebrow="Part approval details" onClose={onClose} maxWidth="max-w-5xl">
@@ -1682,6 +1506,7 @@ const PartApprovalDetailModal = ({
           <div>
             <StatusBadge status={approval.status || approval.approvalStatus} />
             <p className="mt-2 text-sm text-slate-600">{approval.customerName || 'Customer'} · {formatCurrency(approvalTotalCents(approval))}</p>
+            <InvoiceWorkflowStatus record={approval} />
 	          </div>
 	          <div className="flex flex-wrap gap-2">
 	            <button type="button" onClick={() => onEdit(approval)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
@@ -1698,7 +1523,7 @@ const PartApprovalDetailModal = ({
 	            </button>
 	            <button type="button" onClick={() => onMarkInvoiced(approval)} disabled={Boolean(working) || isInvoiced} className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60">
 	              <FaFileInvoiceDollar />
-	              {working === `invoiced-${approval.id}` ? 'Saving...' : 'Mark Invoiced'}
+	              {working === `invoiced-${approval.id}` ? 'Saving...' : 'Record External Invoice'}
 	            </button>
 	            {invoiceId ? (
 	              <Link to={`/company/sales/invoices/${invoiceId}`} className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50">

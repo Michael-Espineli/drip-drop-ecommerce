@@ -12,8 +12,7 @@ import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import {
-    describeDuplicateCustomerMatch,
-    findDuplicateCustomerMatches,
+    findDuplicateCustomerSuggestions,
     getCustomerDuplicateDisplayName,
 } from '../../../utils/customerDuplicates';
 import { mergeDuplicateCustomers, previewCustomerMerge } from '../../../utils/customerMerge';
@@ -258,14 +257,16 @@ export default function Customers() {
     } = useContext(Context);
     const { can } = useCompanyPermissions();
     const [allCustomers, setAllCustomers] = useState([]);
-    const [filteredCustomers, setFilteredCustomers] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('active');
     const [selectedTags, setSelectedTags] = useState([]);
     const [tagFilterInput, setTagFilterInput] = useState('');
     const [showFilters, setShowFilters] = useState(false);
     const [loading, setLoading] = useState(true);
-    const [upgradeState, setUpgradeState] = useState({ isUnlimited: false, remaining: Infinity });
+    const [customerLoadError, setCustomerLoadError] = useState('');
+    const [customerLimit, setCustomerLimit] = useState(null);
+    const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+    const [noteCountsLoading, setNoteCountsLoading] = useState(false);
     const [primaryCustomerId, setPrimaryCustomerId] = useState('');
     const [duplicateCustomerId, setDuplicateCustomerId] = useState('');
     const [mergePreview, setMergePreview] = useState(null);
@@ -273,6 +274,9 @@ export default function Customers() {
     const [merging, setMerging] = useState(false);
     const [customerNoteCounts, setCustomerNoteCounts] = useState({});
     const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
+    const canMergeCustomers = can("14") && can("16");
+    const activeCustomerCount = useMemo(() => allCustomers.filter(customer => customer.active).length, [allCustomers]);
+    const upgradeState = getUpgradeState(customerLimit, activeCustomerCount);
 
     const visibleCustomers = useMemo(
         () => filterCustomersByRegionalAccess(allCustomers, {
@@ -289,27 +293,12 @@ export default function Customers() {
         () => getCustomerRegionAccessTags({ userAccess: companyUserAccess, role: companyRole }),
         [companyUserAccess, companyRole]
     );
-    const duplicateSuggestions = useMemo(() => {
-        const seenPairs = new Set();
-        const suggestions = [];
-
-        visibleCustomers.forEach((customer) => {
-            findDuplicateCustomerMatches(customer, visibleCustomers).forEach((match) => {
-                const pairKey = [customer.id, match.customer.id].sort().join(':');
-                if (seenPairs.has(pairKey)) return;
-                seenPairs.add(pairKey);
-                suggestions.push({
-                    primary: customer,
-                    duplicate: match.customer,
-                    reason: describeDuplicateCustomerMatch(match),
-                });
-            });
-        });
-
-        return suggestions.slice(0, 6);
-    }, [visibleCustomers]);
+    const duplicateSuggestions = useMemo(
+        () => canMergeCustomers ? findDuplicateCustomerSuggestions(visibleCustomers) : [],
+        [canMergeCustomers, visibleCustomers]
+    );
     const mergeCustomerOptions = useMemo(
-        () => visibleCustomers.map((customer) => {
+        () => duplicateSuggestions.length === 0 ? [] : visibleCustomers.map((customer) => {
             const name = getCustomerDuplicateDisplayName(customer);
             const email = getCustomerEmail(customer);
             const phone = getCustomerPhone(customer);
@@ -342,7 +331,7 @@ export default function Customers() {
                     .join(' '),
             };
         }),
-        [visibleCustomers]
+        [duplicateSuggestions.length, visibleCustomers]
     );
     const selectedPrimaryCustomer = useMemo(
         () => allCustomers.find((customer) => customer.id === primaryCustomerId) || null,
@@ -371,13 +360,12 @@ export default function Customers() {
         () => (statusFilter !== 'active' ? 1 : 0) + selectedTags.length,
         [selectedTags.length, statusFilter]
     );
-    const canMergeCustomers = can("14") && can("16");
 
     useEffect(() => {
+        let cancelled = false;
+        setAllCustomers([]);
+        setCustomerLoadError('');
         if (!recentlySelectedCompany) {
-            setAllCustomers([]);
-            setFilteredCustomers([]);
-            setUpgradeState(noConfiguredLimitState);
             setLoading(false);
             return;
         }
@@ -385,63 +373,72 @@ export default function Customers() {
         const fetchCustomerData = async () => {
             setLoading(true);
             try {
-                // Fetch all customers
                 const customerQuery = query(collection(db, 'companies', recentlySelectedCompany, 'customers'), orderBy("firstName"));
                 const customerSnapshot = await getDocs(customerQuery);
+                if (cancelled) return;
                 const customerData = customerSnapshot.docs.map((customerDoc) => ({
                     ...customerDoc.data(),
                     ...Customer.fromFirestore(customerDoc),
                 }));
                 setAllCustomers(customerData);
-                setFilteredCustomers(filterCustomersByRegionalAccess(customerData, {
-                    userAccess: companyUserAccess,
-                    role: companyRole,
-                    selectedRegionTag: selectedCustomerRegionTag,
-                    regionalAccessEnabled: customerAreaFilteringEnabled,
-                }));
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Error fetching customer data: ", error);
+                    setCustomerLoadError(userFacingErrorMessage(error, 'Could not load customers. Please try again.'));
+                }
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        };
 
-                // Check subscription status
-                const activeCount = customerData.filter(c => c.active).length;
+        fetchCustomerData();
+        return () => { cancelled = true; };
+    }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        let cancelled = false;
+        setCustomerLimit(null);
+        if (!recentlySelectedCompany) {
+            setSubscriptionLoading(false);
+            return;
+        }
+
+        const fetchCustomerLimit = async () => {
+            setSubscriptionLoading(true);
+            try {
                 const subQuery = query(
                     collection(db, 'companies', recentlySelectedCompany, 'subscriptions'),
                     where('status', 'in', ACTIVE_SUBSCRIPTION_STATUSES)
                 );
                 const subSnap = await getDocs(subQuery);
+                if (cancelled) return;
 
                 if (!subSnap.empty) {
                     const subData = subSnap.docs[0].data();
-                    if (!subData.dripDropSubscriptionId) {
-                        setUpgradeState(noConfiguredLimitState);
-                        return;
-                    }
+                    if (!subData.dripDropSubscriptionId) return;
 
-                    //Get universal subscription info
                     const unSubRef = doc(db, 'subscriptions', subData.dripDropSubscriptionId);
-
                     const docSnap = await getDoc(unSubRef);
+                    if (cancelled) return;
                     if (docSnap.exists()) {
-                        const customerLimit = getCustomerLimitFromPlan(docSnap.data());
-                        setUpgradeState(getUpgradeState(customerLimit, activeCount));
-                    } else {
-                        setUpgradeState(noConfiguredLimitState);
+                        setCustomerLimit(getCustomerLimitFromPlan(docSnap.data()));
                     }
                 } else {
-                    // Default to a free plan limit if no active subscription
-                    setUpgradeState(getUpgradeState(FREE_CUSTOMER_LIMIT, activeCount));
+                    setCustomerLimit(FREE_CUSTOMER_LIMIT);
                 }
-
             } catch (error) {
-                console.error("Error fetching customer data: ", error);
+                if (!cancelled) console.error("Error fetching customer subscription: ", error);
             } finally {
-                setLoading(false);
+                if (!cancelled) setSubscriptionLoading(false);
             }
         };
 
-        fetchCustomerData();
-    }, [recentlySelectedCompany, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled]);
+        fetchCustomerLimit();
+        return () => { cancelled = true; };
+    }, [recentlySelectedCompany]);
 
-    useEffect(() => {
-        const filtered = visibleCustomers.filter(customer => {
+    const filteredCustomers = useMemo(
+        () => visibleCustomers.filter(customer => {
             const matchesSearch = searchTextIncludesTerm(getCustomerSearchText(customer), searchTerm);
             const matchesStatus =
                 statusFilter === 'all' ||
@@ -450,19 +447,22 @@ export default function Customers() {
             const matchesTags = customerHasAnyTag(customer, selectedTags);
 
             return matchesSearch && matchesStatus && matchesTags;
-        });
-        setFilteredCustomers(filtered);
-    }, [searchTerm, statusFilter, selectedTags, visibleCustomers]);
+        }),
+        [searchTerm, statusFilter, selectedTags, visibleCustomers]
+    );
 
     useEffect(() => {
+        let cancelled = false;
+        setCustomerNoteCounts({});
         const fetchCustomerNoteCounts = async () => {
             if (!recentlySelectedCompany || filteredCustomers.length === 0) {
-                setCustomerNoteCounts({});
+                setNoteCountsLoading(false);
                 return;
             }
 
+            setNoteCountsLoading(true);
             try {
-                const countsArray = await Promise.all(
+                const results = await Promise.allSettled(
                     filteredCustomers.map(async (customer) => {
                         const notesRef = collection(
                             db,
@@ -475,22 +475,23 @@ export default function Customers() {
                         const unresolvedNotesQuery = query(notesRef, where('resolved', '==', false));
                         const snap = await getDocs(unresolvedNotesQuery);
 
-                        return {
-                            customerId: customer.id,
-                            count: snap.size,
-                        };
+                        if (!cancelled) {
+                            setCustomerNoteCounts((counts) => ({ ...counts, [customer.id]: snap.size }));
+                        }
                     })
                 );
-                setCustomerNoteCounts(countsArray.reduce((acc, item) => {
-                    acc[item.customerId] = item.count;
-                    return acc;
-                }, {}));
-            } catch (error) {
-                console.error('Error fetching customer note counts: ', error);
+                if (!cancelled) {
+                    results.filter(result => result.status === 'rejected').forEach(result => {
+                        console.error('Error fetching customer note count: ', result.reason);
+                    });
+                }
+            } finally {
+                if (!cancelled) setNoteCountsLoading(false);
             }
         };
 
         fetchCustomerNoteCounts();
+        return () => { cancelled = true; };
     }, [filteredCustomers, recentlySelectedCompany]);
 
     const toggleTagFilter = (tag) => {
@@ -715,7 +716,7 @@ export default function Customers() {
                 />
 
                 {/* Upgrade Banner */}
-                {!upgradeState.isUnlimited && upgradeState.remaining < 10 && (
+                {!loading && !subscriptionLoading && !upgradeState.isUnlimited && upgradeState.remaining < 10 && (
                     <UpgradeBanner remaining={upgradeState.remaining} onUpgrade={handleUpgradeClick} />
                 )}
 
@@ -878,6 +879,9 @@ export default function Customers() {
                             </button>
                             <div className="text-sm text-slate-500">
                                 Showing {filteredCustomers.length} of {visibleCustomers.length} visible customers
+                                {!loading && (subscriptionLoading || noteCountsLoading) && (
+                                    <p role="status" className="mt-1 text-xs text-slate-400">Loading customer details...</p>
+                                )}
                             </div>
                         </div>
 
@@ -988,8 +992,12 @@ export default function Customers() {
                     </div>
 
                     {loading ? (
-                        <div className="flex justify-center items-center py-12">
+                        <div role="status" aria-label="Loading customers" className="flex justify-center items-center py-12">
                             <ClipLoader size={40} color="#4A90E2" />
+                        </div>
+                    ) : customerLoadError ? (
+                        <div role="alert" className="px-6 py-12 text-center text-sm text-red-700">
+                            {customerLoadError}
                         </div>
                     ) : (
                         <div className="overflow-x-auto border-t border-slate-200">

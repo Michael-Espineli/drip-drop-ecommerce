@@ -1,4 +1,4 @@
-import { sendPasswordResetEmail } from "firebase/auth";
+import { requestAccountEmail } from "./accountEmails";
 
 export const PASSWORD_RESET_RECENTLY_SENT_CODE = "auth/password-reset-recently-sent";
 export const DEFAULT_PASSWORD_RESET_COOLDOWN_MS = 60 * 1000;
@@ -45,9 +45,7 @@ export const sendAccountPasswordResetEmail = async (auth, email, options = {}) =
     throw error;
   }
 
-  // Password resets are Firebase Auth account emails, not app SendGrid emails.
-  // They intentionally bypass feature_flag_012 ("Turn on real emails").
-  const resetPromise = sendPasswordResetEmail(auth, recipientEmail)
+  const resetPromise = requestAccountEmail(auth, { kind: "passwordReset", email: recipientEmail })
     .then(() => {
       passwordResetRequestsByEmail.set(requestKey, {
         pending: false,

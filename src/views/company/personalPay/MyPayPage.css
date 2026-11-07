@@ -1,0 +1,75 @@
+.my-pay-page .profile-workspace { max-width: 76rem; }
+.my-pay-tabs { display: flex; flex-wrap: wrap; gap: .75rem; }
+.my-pay-page [aria-label="My Pay Requests"] { border-radius: .5rem; }
+.my-pay-page form label { min-width: 0; }
+.my-pay-page form input, .my-pay-page form select { min-width: 0; max-width: 100%; background: var(--color-surface-soft); color: var(--color-text); border-color: var(--color-border); }
+.my-pay-statement { min-width: 0; border: 1px solid var(--color-border); border-radius: .5rem; }
+.my-pay-statement summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem; cursor: pointer; min-height: 44px; }
+.my-pay-statement summary::before { content: '▸'; }
+.my-pay-statement[open] summary::before { content: '▾'; }
+.my-pay-statement summary > span:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.my-pay-statement summary .profile-caption { display: block; }
+.my-pay-statement-total { display: grid; gap: .5rem; justify-items: end; font-variant-numeric: tabular-nums; }
+.my-pay-statement-body { padding: 1rem; border-top: 1px solid var(--color-border); display: grid; gap: 1rem; }
+.my-pay-totals { display: grid; gap: .75rem; }
+.my-pay-totals > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
+.my-pay-totals > div:last-child { font-weight: 700; border-top: 1px solid var(--color-border); padding-top: .75rem; }
+.my-pay-totals dd { font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .my-pay-page form input, .my-pay-page form select { min-height: 44px; }
+}
+.paysheet-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0; }
+.paysheet-metrics > div { min-width: 0; padding: 1rem; border: 1px solid var(--color-border); border-radius: .5rem; background: var(--color-surface-soft); }
+.paysheet-metrics dt { color: var(--color-text-subtle); font-size: .85rem; font-weight: 600; }
+.paysheet-metrics dd { font-size: clamp(1.2rem, 2vw, 1.65rem); font-weight: 750; margin-top: .35rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.paysheet-metrics > div:last-child { border-color: var(--color-primary, #2563eb); }
+.paysheet-period { display: flex; align-items: end; flex-wrap: wrap; gap: .75rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: .5rem; background: var(--color-surface); }
+.paysheet-period > span { margin-right: auto; }
+.paysheet-period label { display: grid; gap: .25rem; font-size: .85rem; font-weight: 600; }
+.paysheet-period input { color-scheme: light dark; padding: .5rem; min-height: 44px; border: 1px solid var(--color-border); border-radius: .35rem; }
+.paysheet-identity { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; }
+.paysheet-identity > div { display: grid; gap: .3rem; }
+.paysheet-identity span { color: var(--color-text-subtle); font-size: .85rem; }
+.paysheet-earnings { margin: 1.5rem 0 1rem; }
+.paysheet-earnings > div { display: flex; justify-content: space-between; gap: 1rem; padding: .65rem 0; border-bottom: 1px solid var(--color-border); }
+.paysheet-earnings dd, .paysheet-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.paysheet-total { font-weight: 750; font-size: 1.1rem; }
+.paysheet-notice { padding: .85rem 1rem; border: 1px solid #c59235; border-radius: .4rem; background: rgba(202, 138, 4, .08); margin: .75rem 0; font-size: .9rem; }
+.paysheet-notice a, .paysheet-issue { text-decoration: underline; text-underline-offset: 3px; }
+.paysheet-day { margin-bottom: 1.5rem; }
+.paysheet-day h3 { font-weight: 750; font-size: 1.05rem; padding-bottom: .7rem; }
+.paysheet-route { border: 1px solid var(--color-border); border-radius: .5rem; overflow: hidden; margin-bottom: .85rem; }
+.paysheet-route-heading { display: flex; gap: 1rem; justify-content: space-between; background: var(--color-surface-soft); padding: 1rem; }
+.paysheet-route-heading h4 { font-weight: 700; }
+.paysheet-stop { border-top: 1px solid var(--color-border); }
+.paysheet-stop > summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem; padding: 1rem; min-height: 44px; cursor: pointer; }
+.paysheet-stop > summary::before { content: '▸'; }
+.paysheet-stop[open] > summary::before { content: '▾'; }
+.paysheet-stop > summary > span:first-of-type { flex: 1; min-width: 10rem; }
+.paysheet-stop-body { padding: 0 1rem 1rem 2rem; }
+.paysheet-coverage { font-size: .8rem; font-weight: 600; }
+.paysheet-review { color: var(--color-warning-text, #ad6811); font-weight: 700; }
+.paysheet-pay-line { display: flex; justify-content: space-between; align-items: start; gap: .75rem; padding: .85rem 0; border-bottom: 1px solid var(--color-border); }
+.paysheet-pay-line > div { min-width: 0; }
+.paysheet-pay-line .profile-caption { display: block; margin-top: .25rem; }
+.paysheet-tasks { margin: .85rem 0; padding-left: 1rem; border-left: 2px solid var(--color-border); }
+.paysheet-tasks h5 { font-size: .85rem; color: var(--color-text-subtle); margin-bottom: .6rem; }
+.paysheet-task { padding: .65rem 0; }
+.paysheet-task-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
+.paysheet-issue { font-size: .85rem; display: inline-flex; align-items: center; min-height: 44px; margin-top: .4rem; }
+.paysheet-saved-detail { padding: 1rem; display: grid; gap: 1rem; }
+.my-pay-page .profile-card-body { min-width: 0; }
+@media (max-width: 600px) {
+  .paysheet-metrics { gap: .5rem; }
+  .paysheet-metrics > div { padding: .65rem .5rem; }
+  .paysheet-metrics dt { font-size: .75rem; }
+  .paysheet-metrics dd { font-size: 1.1rem; }
+  .paysheet-period label { flex: 1; min-width: 0; }
+  .paysheet-period input { width: 100%; min-width: 0; }
+  .paysheet-period > span { flex-basis: 100%; }
+  .paysheet-stop-body { padding-left: 1rem; }
+  .paysheet-pay-line { flex-wrap: wrap; }
+  .paysheet-saved-detail { padding: .5rem; }
+}
+.paysheet-coverage { display: grid; gap: .3rem; text-align: right; }
+.paysheet-coverage > span:first-child { font-size: 1rem; font-variant-numeric: tabular-nums; color: var(--color-text); }
