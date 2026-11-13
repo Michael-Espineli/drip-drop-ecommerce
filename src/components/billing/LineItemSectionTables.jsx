@@ -127,7 +127,7 @@ const LineItemTable = ({ items, formatCurrency, fallbackName, includeStripePrice
               <td className="px-5 py-4 text-slate-700">{formatCurrency(unitAmountCents)}</td>
               <td className="px-5 py-4 font-semibold text-slate-950">{formatCurrency(totalAmountCents)}</td>
               {includeStripePrice && (
-                <td className="px-5 py-4 text-xs text-slate-500">{item.stripePriceId || 'Inline Checkout price'}</td>
+                <td className="px-5 py-4 text-xs text-slate-500">{item.stripePriceId ? 'Saved Stripe price' : 'Inline Checkout price'}</td>
               )}
             </tr>
           );

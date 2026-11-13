@@ -1157,7 +1157,7 @@ function CustomerExportImport() {
           <div className="mx-4 border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
             <p className="font-semibold">Last import complete</p>
             <p className="mt-1">
-              Batch {lastImportSummary.importBatchId}: {lastImportSummary.rows} rows using{" "}
+              {lastImportSummary.rows} rows using{" "}
               {lastImportSummary.importMode}, {lastImportSummary.customers} customers,{" "}
               {lastImportSummary.serviceLocations} service locations, {lastImportSummary.bodiesOfWater} pools,{" "}
               {lastImportSummary.equipment || 0} equipment records, and {lastImportSummary.equipmentParts || 0} equipment parts.
@@ -1184,7 +1184,7 @@ function CustomerExportImport() {
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-4 py-3">Customer ID</th>
+                    <th className="px-4 py-3">Conflict</th>
                     <th className="px-4 py-3">Rows</th>
                     <th className="px-4 py-3">Customers</th>
                   </tr>
@@ -1192,7 +1192,7 @@ function CustomerExportImport() {
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {customerIdCollisions.slice(0, 20).map((collision) => (
                     <tr key={collision.customerId} className="align-top">
-                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{collision.customerId}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-700">Shared reference</td>
                       <td className="px-4 py-3 text-slate-700">
                         {collision.rows.map((row) => row.rowNumber).join(", ")}
                       </td>

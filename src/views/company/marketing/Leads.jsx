@@ -252,7 +252,7 @@ export default function Leads() {
             return (
                 <div>
                     <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700">Client request</span>
-                    <div className="mt-1 text-xs text-slate-500">{lead.homeownerId}</div>
+                    <div className="mt-1 text-xs text-slate-500">Homeowner account linked</div>
                 </div>
             );
         }

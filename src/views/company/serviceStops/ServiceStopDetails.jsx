@@ -1,3 +1,4 @@
+import { displayReferenceValue, linkedReferenceText } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
@@ -3869,7 +3870,7 @@ const ServiceStopDetails = () => {
                                     <h4 className="font-bold text-slate-900">Job Estimate Plan</h4>
                                     <p className="mt-1 text-xs font-semibold text-slate-500">
                                         {jobEstimatePlanRecommendation.planId
-                                            ? `Saved plan ${jobEstimatePlanRecommendation.planId}`
+                                            ? "Saved plan"
                                             : `${taskList.length} task${taskList.length === 1 ? "" : "s"} and ${serviceStopShoppingItems.length} part${serviceStopShoppingItems.length === 1 ? "" : "s"}`}
                                     </p>
                                 </div>
@@ -4018,7 +4019,7 @@ const ServiceStopDetails = () => {
                             &larr; Back to Service Stops
                         </Link>
 
-                        <p className="text-sm text-slate-500">#{serviceStop.internalId || "—"}</p>
+                        <p className="text-sm text-slate-500">#{displayReferenceValue(serviceStop.internalId || "—", "Service visit")}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                         {(can("244") || can("246")) && (
@@ -4035,7 +4036,7 @@ const ServiceStopDetails = () => {
                             type="serviceStop"
                             recordId={serviceStopId}
                             title={serviceStop.type || serviceStop.serviceStopType || "Service Stop"}
-                            subtitle={[serviceStop.customerName, serviceStop.internalId].filter(Boolean).join(" - ")}
+                            subtitle={[serviceStop.customerName, displayReferenceValue(serviceStop.internalId || "Service visit", "Service visit")].filter(Boolean).join(" - ")}
                             companyId={recentlySelectedCompany}
                             customerId={serviceStop.customerId}
                             collectionPath={`companies/${recentlySelectedCompany}/serviceStops`}
@@ -4106,10 +4107,10 @@ const ServiceStopDetails = () => {
                                 <Field label="Recurring Service Stop">
                                     {serviceStop.recurringServiceStopId ? (
                                         <Link
-                                            to={`/company/recurringServiceStop/details/${serviceStop.recurringServiceStopId}`}
+                                            to={`/company/recurringServiceStop/details/${linkedReferenceText("Recurring Service Stop", serviceStop.recurringServiceStopId, serviceStop.recurringServiceStopInternalId)}`}
                                             className="text-blue-600 hover:underline"
                                         >
-                                            {serviceStop.recurringServiceStopId}
+                                            {linkedReferenceText("Recurring Service Stop", serviceStop.recurringServiceStopId, serviceStop.recurringServiceStopInternalId)}
                                         </Link>
                                     ) : (
                                         <p className="text-slate-800">—</p>
@@ -5304,9 +5305,9 @@ const ServiceStopDetails = () => {
                                                 </div>
 
                                                 <div className="rounded-lg bg-slate-50 px-3 py-2">
-                                                    <p className="text-slate-500">Worker ID</p>
+                                                    <p className="text-slate-500">Assignment</p>
                                                     <p className="font-medium text-slate-800 break-all">
-                                                        {task.workerId || "—"}
+                                                        {task.workerId ? "Assigned" : "Unassigned"}
                                                     </p>
                                                 </div>
                                             </div>

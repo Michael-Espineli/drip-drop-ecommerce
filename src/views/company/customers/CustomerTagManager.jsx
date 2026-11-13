@@ -811,7 +811,7 @@ const CustomerTagManager = () => {
                         </td>
                         <td className="px-4 py-3">
                           <p className="font-semibold text-slate-950">{customerDisplayName(customer)}</p>
-                          <p className="mt-1 text-xs text-slate-500">{customer.email || customer.phoneNumber || customer.id}</p>
+                          <p className="mt-1 text-xs text-slate-500">{customer.email || customer.phoneNumber || "Customer"}</p>
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-slate-600">{addressZip(customer) || "-"}</td>
                         <td className="px-4 py-3">

@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { listenCompanyTodos } from "../../../utils/companyTodoAccess";
 import React, { useContext, useEffect, useMemo, useState } from "react";
@@ -216,15 +217,7 @@ const todoColumnId = (todo = {}) => {
   return TODO_STATUS.open;
 };
 
-const todoIssueKey = (todo = {}) => {
-  const compactId = String(todo.id || "")
-    .replace(/^todo[_-]?/i, "")
-    .replace(/[^a-z0-9]/gi, "")
-    .slice(-5)
-    .toUpperCase();
-
-  return `TODO-${compactId || "ITEM"}`;
-};
+const todoIssueKey = () => "Task";
 
 const memberSummary = (board = {}) => {
   const names = Array.isArray(board.memberNames) ? board.memberNames.filter(Boolean) : [];
@@ -1438,7 +1431,7 @@ const TodoList = () => {
                             className={`block w-full border-b border-slate-100 px-3 py-2 text-left transition last:border-b-0 ${selected ? "bg-blue-50" : "hover:bg-slate-50"}`}
                           >
                             <span className={`block truncate text-sm font-semibold ${selected ? "text-blue-950" : "text-slate-900"}`}>{option.label}</span>
-                            <span className="mt-0.5 block truncate text-xs text-slate-500">{option.subtitle || option.id}</span>
+                            <span className="mt-0.5 block truncate text-xs text-slate-500">{displayReferenceValue(option.subtitle || "Open record", "Open record")}</span>
                           </button>
                         );
                       })}
@@ -1764,7 +1757,7 @@ const TodoList = () => {
                                     <p className="truncate">{todoBoardName(todo, boardById)}</p>
                                     <p className="truncate">{assignmentLabel(todo)}</p>
                                     {todo.relatedEntity?.type && todo.relatedEntity?.id && (
-                                      <p className="truncate">{todo.relatedEntity.type}: {todo.relatedEntity.label || todo.relatedEntity.id}</p>
+                                      <p className="truncate">{todo.relatedEntity.type}: {displayReferenceValue(todo.relatedEntity.label || "Open record", "Open record")}</p>
                                     )}
                                   </div>
                                 </button>
@@ -1866,7 +1859,7 @@ const TodoList = () => {
                         <div>Created {formatShortDateTime(selectedTodo.createdAt)}</div>
                         <div>Updated {formatShortDateTime(selectedTodo.updatedAt)}</div>
                       {selectedTodo.relatedEntity?.type && selectedTodo.relatedEntity?.id && (
-                        <div>{selectedTodo.relatedEntity.type}: {selectedTodo.relatedEntity.label || selectedTodo.relatedEntity.id}</div>
+                        <div>{selectedTodo.relatedEntity.type}: {displayReferenceValue(selectedTodo.relatedEntity.label || "Open record", "Open record")}</div>
                       )}
                     </div>
 

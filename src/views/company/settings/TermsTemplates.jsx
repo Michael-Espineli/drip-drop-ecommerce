@@ -118,8 +118,6 @@ const TemplateCard = ({ template, canDuplicate, isDuplicating, onDuplicate }) =>
                 </div>
             )}
 
-            <p className="mt-3 truncate text-xs text-slate-400">{template.id}</p>
-
             <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
                 {canDuplicate && (
                     <button

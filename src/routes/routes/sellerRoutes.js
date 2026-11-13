@@ -1552,10 +1552,12 @@ export const sellerRoutes = [
         path: '/company/reviews/:companyId',
         element: <Reviews />,
         role: 'Company',
+        permissionId: '810',
     }, {
         path: '/company/reviews/detail/:reviewId',
-        element: <Sales />,
+        element: <Reviews />,
         role: 'Company',
+        permissionId: '810',
     },
     {
         path: '/company/invites/pending',

@@ -965,7 +965,7 @@ const UniversalEquipment = () => {
               <tr key={makeRecord.id} className="align-top hover:bg-slate-900/60 transition">
                 <td className="px-4 py-3">
                   <p className="font-semibold text-slate-100">{makeRecord.name}</p>
-                  <p className="mt-1 text-xs text-slate-500">{makeRecord.id}</p>
+
                 </td>
                 <td className="px-4 py-3 text-slate-300">
                   {getMakeTypeLabels(Array.isArray(makeRecord.types) ? makeRecord.types : [])}
@@ -999,7 +999,7 @@ const UniversalEquipment = () => {
           <h1 className="font-extrabold text-xl tracking-tight" style={{ color: ADMIN_YELLOW }}>
             {selectedMakeRecord?.name || 'Make'}
           </h1>
-          <p className="text-sm text-slate-400">{selectedMakeRecord?.id || 'No make selected'}</p>
+          <p className="text-sm text-slate-400">{selectedMakeRecord?.name || 'No make selected'}</p>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -1239,7 +1239,7 @@ const UniversalEquipment = () => {
                     </td>
                     <td className="px-4 py-3 text-slate-200">
                       <p className="font-semibold text-slate-100">{suggestion.equipmentName || 'Equipment'}</p>
-                      <p className="mt-1 text-xs text-slate-500">{suggestion.equipmentId || 'No equipment id'}</p>
+                      <p className="mt-1 text-xs text-slate-500">{suggestion.equipmentId ? 'Equipment linked' : 'No equipment linked'}</p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {suggestion.customCategoryRequested && (
                           <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom category</span>
@@ -1258,12 +1258,12 @@ const UniversalEquipment = () => {
                       <p><span className="text-slate-500">Model:</span> {suggestion.model || 'None'}</p>
                       {suggestion.reconciledUniversalEquipmentId && (
                         <p className="mt-2 text-xs text-purple-200">
-                          Ready: {[suggestion.reconciledMake, suggestion.reconciledModel].filter(Boolean).join(' ') || suggestion.reconciledUniversalEquipmentId}
+                          Ready: {[suggestion.reconciledMake, suggestion.reconciledModel].filter(Boolean).join(' ') || 'Catalog match'}
                         </p>
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-300">
-                      <p>{suggestion.companyName || suggestion.companyId || 'Company'}</p>
+                      <p>{suggestion.companyName || 'Company'}</p>
                       <p className="mt-1 text-xs text-slate-500">{suggestion.customerName || 'No customer name'}</p>
                     </td>
                     <td className="px-4 py-3">

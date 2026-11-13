@@ -946,13 +946,13 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
           <div>
             <p className="font-semibold uppercase tracking-wide text-slate-500">Product</p>
             <p className="mt-1 break-all rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-slate-800">
-              {stripeProductId || 'Not connected'}
+              {stripeProductId ? 'Connected' : 'Not connected'}
             </p>
           </div>
           <div>
             <p className="font-semibold uppercase tracking-wide text-slate-500">Price</p>
             <p className="mt-1 break-all rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-slate-800">
-              {stripePriceId || 'Not connected'}
+              {stripePriceId ? 'Connected' : 'Not connected'}
             </p>
           </div>
         </div>
@@ -1652,15 +1652,15 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
 	                    <td className="px-5 py-4 text-slate-600">
 	                      {item.stripeProductId && item.stripePriceId ? (
 	                        <div className="space-y-1 text-xs">
-	                          <p className="break-all font-mono">{item.stripeProductId}</p>
-	                          <p className="break-all font-mono">{item.stripePriceId}</p>
+	                          <p className="break-all font-mono">Product connected</p>
+	                          <p className="break-all font-mono">Price connected</p>
 	                        </div>
 	                      ) : (
 	                        <div className="space-y-2">
 	                          {(item.stripeProductId || item.stripePriceId) && (
 	                            <div className="space-y-1 text-xs">
-	                              {item.stripeProductId && <p className="break-all font-mono">{item.stripeProductId}</p>}
-	                              {item.stripePriceId && <p className="break-all font-mono">{item.stripePriceId}</p>}
+	                              {item.stripeProductId && <p className="break-all font-mono">Product connected</p>}
+	                              {item.stripePriceId && <p className="break-all font-mono">Price connected</p>}
 	                            </div>
 	                          )}
 	                          <button
@@ -1856,11 +1856,11 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
 	            <div className="mt-3 space-y-2 text-sm">
 	              <div>
 	                <p className="text-xs font-semibold text-slate-500">Product</p>
-	                <p className="mt-1 break-all font-mono font-semibold text-slate-900">{selectedCatalogItem.stripeProductId || 'Not connected'}</p>
+	                <p className="mt-1 break-all font-mono font-semibold text-slate-900">{selectedCatalogItem.stripeProductId ? 'Connected' : 'Not connected'}</p>
 	              </div>
 	              <div>
 	                <p className="text-xs font-semibold text-slate-500">Price</p>
-	                <p className="mt-1 break-all font-mono font-semibold text-slate-900">{selectedCatalogItem.stripePriceId || 'Not connected'}</p>
+	                <p className="mt-1 break-all font-mono font-semibold text-slate-900">{selectedCatalogItem.stripePriceId ? 'Connected' : 'Not connected'}</p>
 	              </div>
 	            </div>
 	            {!(selectedCatalogItem.stripeProductId && selectedCatalogItem.stripePriceId) && (

@@ -190,7 +190,7 @@ const serviceLocationDisplayName = (location = {}) => (
     ""
 );
 
-const compactIdFallback = (label, id) => (id ? `${label} ${String(id).slice(-6)}` : "");
+const compactIdFallback = (label, id) => (id ? label : "");
 
 const buildForPrimary = (item) => {
     if (item.category === "Personal") {
@@ -231,15 +231,15 @@ const buildContextLines = (item) => {
 
     if (item.category === "Customer" && item.customerId && !item.customerName) {
         lines.push({
-            label: "Customer ID",
-            value: item.customerId,
+            label: "Customer",
+            value: "Linked customer",
         });
     }
 
     if (item.category === "Personal" && item.userId && !item.userName) {
         lines.push({
-            label: "User ID",
-            value: item.userId,
+            label: "User",
+            value: "Assigned user",
         });
     }
 

@@ -1,0 +1,220 @@
+{
+  "options": {
+    "companyId": "company",
+    "reportType": "readings",
+    "mode": "summary",
+    "groupBy": "company",
+    "dateRange": {
+      "start": "2026-11-01",
+      "end": "2026-11-30"
+    },
+    "canViewPayrollInformation": true,
+    "readingHealthFilters": {
+      "templateId": "ph",
+      "operator": "gt",
+      "threshold": "8"
+    },
+    "readingPerformanceStandards": [
+      {
+        "id": "high-ph",
+        "templateId": "ph",
+        "operator": "gt",
+        "threshold": "8"
+      }
+    ],
+    "readingPerformanceView": "users"
+  },
+  "sources": {
+    "customers": [
+      {
+        "id": "customer",
+        "firstName": "Sam",
+        "tags": [
+          "North"
+        ]
+      }
+    ],
+    "readingTemplates": [
+      {
+        "id": "ph",
+        "name": "pH",
+        "UOM": "pH",
+        "highWarning": 8
+      }
+    ],
+    "dosageTemplates": [
+      {
+        "id": "chlorine",
+        "name": "Chlorine",
+        "UOM": "gal",
+        "linkedDataBaseItemIds": [
+          "chemical"
+        ],
+        "priceCents": 500
+      }
+    ],
+    "databaseItems": [
+      {
+        "id": "chemical",
+        "name": "Chlorine",
+        "UOM": "gal",
+        "size": "1 gal",
+        "category": "Chemicals"
+      }
+    ],
+    "stopData": [
+      {
+        "id": "reading1",
+        "serviceStopId": "stop",
+        "customerId": "customer",
+        "customerName": "Sam",
+        "userId": "worker",
+        "userName": "Alex",
+        "bodyOfWaterId": "pool",
+        "date": "2026-11-10T12:00:00",
+        "readings": [
+          {
+            "templateId": "ph",
+            "name": "pH",
+            "value": "8.4",
+            "UOM": "pH"
+          }
+        ],
+        "dosages": [
+          {
+            "templateId": "chlorine",
+            "name": "Chlorine",
+            "amount": 2,
+            "UOM": "gal"
+          }
+        ]
+      }
+    ],
+    "jobs": [
+      {
+        "id": "job",
+        "customerId": "customer",
+        "customerName": "Sam",
+        "rate": 99999,
+        "totalAmountCents": 30000,
+        "dateCreated": "2026-11-10T12:00:00",
+        "billingStatus": "Invoiced",
+        "operationStatus": "Finished",
+        "laborCostCents": 5000
+      }
+    ],
+    "purchases": [
+      {
+        "id": "purchase",
+        "itemId": "chemical",
+        "name": "Chlorine",
+        "customerId": "customer",
+        "date": "2026-11-10T12:00:00",
+        "price": 1000,
+        "quantityString": "2",
+        "taxAmountCents": 100,
+        "workOrderId": "job"
+      }
+    ],
+    "payrollLines": [
+      {
+        "id": "pay",
+        "technicianId": "worker",
+        "technicianName": "Alex",
+        "customerId": "customer",
+        "jobId": "job",
+        "totalAmountCents": 5000,
+        "completedDate": "2026-11-10T12:00:00",
+        "calculationStatus": "approved"
+      }
+    ],
+    "serviceStops": [
+      {
+        "id": "stop",
+        "customerId": "customer",
+        "techId": "worker",
+        "tech": "Alex",
+        "serviceDate": "2026-11-10T12:00:00",
+        "recurringServiceStopId": "recurring"
+      }
+    ],
+    "recurringServiceStops": [
+      {
+        "id": "recurring",
+        "customerId": "customer",
+        "serviceLocationId": "site",
+        "techId": "worker",
+        "tech": "Alex"
+      }
+    ],
+    "serviceAgreements": [
+      {
+        "id": "agreement",
+        "customerId": "customer",
+        "serviceLocationId": "site",
+        "status": "accepted",
+        "sourceType": "recurringService",
+        "totalAmountCents": 30000,
+        "startDate": "2026-11-01",
+        "rateType": "monthly"
+      }
+    ],
+    "salesInvoices": [
+      {
+        "id": "invoice",
+        "jobId": "job",
+        "customerId": "customer",
+        "totalAmountCents": 31000,
+        "taxAmountCents": 1000,
+        "status": "paid",
+        "invoiceDate": "2026-11-10T12:00:00"
+      }
+    ],
+    "serviceLocations": [
+      {
+        "id": "site",
+        "customerId": "customer",
+        "name": "Home"
+      }
+    ],
+    "bodiesOfWater": [
+      {
+        "id": "pool",
+        "customerId": "customer",
+        "serviceLocationId": "site",
+        "name": "Pool"
+      }
+    ],
+    "users": [
+      {
+        "id": "company-worker",
+        "userId": "worker",
+        "userName": "Alex"
+      }
+    ],
+    "vehicles": [
+      {
+        "id": "van",
+        "nickName": "Van"
+      }
+    ],
+    "activeRoutes": [
+      {
+        "id": "route",
+        "vehicalId": "van",
+        "date": "2026-11-10T12:00:00",
+        "startMilage": 100,
+        "endMilage": 125
+      }
+    ],
+    "pipelineRows": [
+      {
+        "id": "lead",
+        "customerId": "customer",
+        "customerName": "Sam",
+        "status": "active",
+        "leadSource": "Referral"
+      }
+    ]
+  }
+}

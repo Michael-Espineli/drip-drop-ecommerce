@@ -165,7 +165,7 @@ const BillingReadinessCard = ({
           <div>
             <p className="font-semibold text-slate-900">Connected Stripe account</p>
             <p className="mt-1 break-all text-sm text-slate-500">
-              {hasConnectedAccount ? connectedAccountId : 'Needs setup before customer billing'}
+              {hasConnectedAccount ? 'Stripe account connected' : 'Needs setup before customer billing'}
             </p>
           </div>
         </div>

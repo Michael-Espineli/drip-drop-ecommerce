@@ -1,3 +1,4 @@
+import NamedRecordPicker from '../../../components/NamedRecordPicker';
 import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
@@ -568,7 +569,7 @@ const ShoppingListDetailView = () => {
             userId: purchaserId,
             value: purchaserId,
             name: purchaserName,
-            label: purchaserName || purchaserId,
+            label: purchaserName || "Assigned technician",
         };
     }, [companyUserOptions, editForm.purchaserId, editForm.purchaserName]);
 
@@ -595,7 +596,7 @@ const ShoppingListDetailView = () => {
         return {
             id: purchasedItemId,
             value: purchasedItemId,
-            label: purchasedItemId,
+            label: "Connected purchase",
         };
     }, [availablePurchasedItemOptions, editForm.purchasedItem]);
 
@@ -1059,7 +1060,7 @@ const ShoppingListDetailView = () => {
     const partApprovalRequestId = getShoppingItemPartApprovalId(item);
     const displayPhotoUrl = edit ? photoPreviewUrl || editForm.photoUrl : item.photoUrl;
     const connectedPurchasedItemOption = purchasedItemOptions.find((option) => option.id === item.purchasedItem);
-    const purchasedItemDisplayName = connectedPurchasedItemOption?.label || item.purchasedItem;
+    const purchasedItemDisplayName = connectedPurchasedItemOption?.label || "Connected purchase";
     const jobCustomerId = item.customerId || jobDetails?.customerId || "";
     const jobCustomerName = item.customerName || jobDetails?.customerName || "—";
     const jobServiceLocationId = item.serviceLocationId || jobDetails?.serviceLocationId || "";
@@ -1155,7 +1156,7 @@ const ShoppingListDetailView = () => {
                                 <div className="mb-4 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-800">
                                     Created from Part Approval{" "}
                                     <Link to="/company/part-approvals" className="text-indigo-700 underline underline-offset-2">
-                                        {partApprovalRequestId}
+                                        Open part approval
                                     </Link>
                                 </div>
                             ) : null}
@@ -1341,20 +1342,7 @@ const ShoppingListDetailView = () => {
 
                                 <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Created From Part Approval</p>
-                                    {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.partApprovalRequestId}
-                                            onChange={(e) => handleEditFieldChange("partApprovalRequestId", e.target.value)}
-                                            className="w-full rounded-md border border-slate-300 p-3"
-                                        />
-                                    ) : partApprovalRequestId ? (
-                                        <Link to="/company/part-approvals" className="font-semibold text-blue-600 hover:underline">
-                                            {partApprovalRequestId}
-                                        </Link>
-                                    ) : (
-                                        <p>—</p>
-                                    )}
+                                    {partApprovalRequestId ? <Link to="/company/part-approvals" className="font-semibold text-blue-600 hover:underline">Open part approval</Link> : <p>—</p>}
                                 </div>
 
                                 {(edit ? editForm.status === SHOPPING_LIST_INVOICED_STATUS : item.invoiced || item.manualInvoiceNote) ? (
@@ -1389,26 +1377,7 @@ const ShoppingListDetailView = () => {
                                     )}
                                 </div>
 
-                                <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Product ID</p>
-                                    {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.productId || editForm.genericItemId}
-                                            onChange={(e) => {
-                                                const value = e.target.value;
-                                                setEditForm((prev) => ({
-                                                    ...prev,
-                                                    productId: value,
-                                                    genericItemId: value,
-                                                }));
-                                            }}
-                                            className="w-full rounded-md border border-slate-300 p-3"
-                                        />
-                                    ) : (
-                                        <p>{item.productId || item.genericItemId || "—"}</p>
-                                    )}
-                                </div>
+
 
                                 <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Product</p>
@@ -1469,11 +1438,7 @@ const ShoppingListDetailView = () => {
                                     )}
                                 </div>
 
-                                {(edit ? editForm.purchaserId : item.purchaserId) ? (
-                                    <p className="text-xs text-gray-500">
-                                        ID: {edit ? editForm.purchaserId : item.purchaserId}
-                                    </p>
-                                ) : null}
+
                             </div>
                         </div>
 
@@ -1671,14 +1636,7 @@ const ShoppingListDetailView = () => {
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">Customer</p>
                                         {edit ? (
-                                            <input
-                                                type="text"
-                                                value={editForm.customerId}
-                                                onChange={(e) =>
-                                                    handleEditFieldChange("customerId", e.target.value)
-                                                }
-                                                className="w-full rounded-md border border-slate-300 p-3"
-                                            />
+                                            <NamedRecordPicker companyId={recentlySelectedCompany} type="customer" label="Customer" value={editForm.customerId} currentLabel={editForm.customerName} onChange={(record) => setEditForm((current) => ({ ...current, customerId: record?.recordId || record?.id || "", customerName: record?.title || "" }))} />
                                         ) : item.customerId ? (
                                             <Link to={`/company/customers/details/${item.customerId}`} className="font-semibold text-blue-600 hover:underline">
                                                 {linkedReferenceText("Customer", item.customerId, item.customerName)}
@@ -1715,12 +1673,7 @@ const ShoppingListDetailView = () => {
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">User</p>
                                         {edit ? (
-                                            <input
-                                                type="text"
-                                                value={editForm.userId}
-                                                onChange={(e) => handleEditFieldChange("userId", e.target.value)}
-                                                className="w-full rounded-md border border-slate-300 p-3"
-                                            />
+                                            <Select aria-label="User" value={companyUserOptions.find((option) => option.value === editForm.userId) || (editForm.userId ? { value: editForm.userId, label: editForm.userName || "Assigned user" } : null)} options={companyUserOptions} isClearable isLoading={loadingSelectors} onChange={(option) => setEditForm((current) => ({ ...current, userId: option?.value || "", userName: option?.label || "" }))} styles={selectStyles} />
                                         ) : (
                                             <p>{item.userName || (item.userId ? "Assigned user" : "—")}</p>
                                         )}

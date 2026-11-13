@@ -782,7 +782,7 @@ const DataBaseItemDetailView = () => {
                 </div>
                 <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
                   <span className="font-semibold text-slate-500">Vendor ID</span>
-                  <span className="max-w-[180px] break-words text-right font-semibold text-slate-900">{purchase.venderId || "--"}</span>
+                  <span className="max-w-[180px] break-words text-right font-semibold text-slate-900">{purchase.venderName || purchase.vendorName || "Vendor"}</span>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Catalog Label</p>

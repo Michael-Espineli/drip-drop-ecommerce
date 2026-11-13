@@ -355,9 +355,9 @@ function AppErrors() {
                     )}
                   </td>
                   <td className="px-4 py-4 min-w-[240px]">
-                    <p className="font-medium text-slate-200">{error.userEmail || error.userId || 'Unknown user'}</p>
+                    <p className="font-medium text-slate-200">{error.userEmail || 'Unknown user'}</p>
                     <p className="mt-1 text-xs text-slate-500">{error.accountType || 'Unknown account'}</p>
-                    <p className="mt-3 font-medium text-slate-200">{error.companyName || error.companyId || 'No company'}</p>
+                    <p className="mt-3 font-medium text-slate-200">{error.companyName || 'Company unavailable'}</p>
                   </td>
                   <td className="px-4 py-4 min-w-[280px]">
                     <p className="font-medium text-slate-200 whitespace-pre-wrap">{error.where || '-'}</p>
@@ -382,7 +382,7 @@ function AppErrors() {
                       onClick={() => handleCopyError(error)}
                       className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-slate-800 text-xs font-bold text-slate-100 ring-1 ring-slate-700 transition hover:bg-slate-700"
                       title="Copy error details"
-                      aria-label={`Copy error ${error.id || ''}`}
+                      aria-label="Copy error details"
                     >
                       <FaCopy aria-hidden="true" />
                       Copy

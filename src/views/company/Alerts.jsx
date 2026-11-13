@@ -1,3 +1,5 @@
+import NamedRecordPicker from '../../components/NamedRecordPicker';
+import { displayReferenceValue } from '../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -487,23 +489,17 @@ const Alerts = () => {
                   <select
                     id="alert-entity-type"
                     value={form.relatedEntityType}
-                    onChange={(event) => updateForm("relatedEntityType", event.target.value)}
+                    onChange={(event) => setForm((current) => ({ ...current, relatedEntityType: event.target.value, relatedEntityId: "", relatedEntityLabel: "" }))}
                     className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   >
-                    {ALERT_RELATED_ENTITY_TYPES.map((type) => (
+                    {ALERT_RELATED_ENTITY_TYPES.filter((type) => !["chat", "other"].includes(type.value)).map((type) => (
                       <option key={type.value || "none"} value={type.value}>{type.label}</option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm font-semibold text-slate-700" htmlFor="alert-entity-id">Record ID</label>
-                  <input
-                    id="alert-entity-id"
-                    value={form.relatedEntityId}
-                    onChange={(event) => updateForm("relatedEntityId", event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="customer id"
-                  />
+                  <span className="text-sm font-semibold text-slate-700">Linked record</span>
+                  <NamedRecordPicker companyId={recentlySelectedCompany} type={form.relatedEntityType} value={form.relatedEntityId} currentLabel={form.relatedEntityLabel} label="Linked record" onChange={(record) => setForm((current) => ({ ...current, relatedEntityId: record?.recordId || record?.id || "", relatedEntityLabel: record?.title || "" }))} />
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-700" htmlFor="alert-entity-label">Label</label>
@@ -584,7 +580,7 @@ const Alerts = () => {
                         <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
                           <span>{alert.assignedToName ? `Assigned to ${alert.assignedToName}` : "Team alert"}</span>
                           {alert.relatedEntity?.type && alert.relatedEntity?.id && (
-                            <span>{alertRecordLabel(alert)}: {alert.relatedEntity.label || alert.relatedEntity.id}</span>
+                            <span>{alertRecordLabel(alert)}: {displayReferenceValue(alert.relatedEntity.label || "Open record", "Open record")}</span>
                           )}
                           {Array.isArray(alert.deliveryTargets) && alert.deliveryTargets.length > 0 && (
                             <span>{alert.deliveryTargets.join(" + ")}</span>

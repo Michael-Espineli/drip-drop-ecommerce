@@ -432,7 +432,7 @@ export const InviteSummaryCard = ({ invite, audience = "company", status, onOpen
             type="button"
             onClick={onOpen}
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-            aria-label={`View invite ${inviteId} details`}
+            aria-label="View invite details"
           >
             <InformationCircleIcon className="h-4 w-4" />
             Details
@@ -518,7 +518,7 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
 
   if (!invite) return null;
 
-  const copyInviteId = async () => copyText(invite.id, "Invite ID copied.");
+
   const copyInviteLink = async () => copyText(inviteUrl, "Invite link copied.");
 
   const additionalFields = Object.entries(invite)
@@ -558,8 +558,8 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Invite ID</div>
-                <div className="mt-1 break-all font-mono text-sm text-slate-950">{formatInviteValue(invite.id)}</div>
+
+
                 {inviteUrl ? (
                   <>
                     <div className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Invite Link</div>
@@ -576,14 +576,7 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
                 ) : null}
               </div>
               <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={copyInviteId}
-                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                >
-                  <ClipboardDocumentIcon className="h-4 w-4" />
-                  Copy ID
-                </button>
+
                 {inviteUrl ? (
                   <button
                     type="button"
@@ -602,7 +595,6 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
             <Field label="First Name" value={invite.firstName} />
             <Field label="Last Name" value={invite.lastName} />
             <Field label="Email" value={invite.email} />
-            <Field label="User ID" value={invite.userId} />
             <Field label="Company Name" value={invite.companyName} />
             {/* <Field label="Company ID" value={invite.companyId} /> */}
             <Field label="Role Name" value={invite.roleName} />

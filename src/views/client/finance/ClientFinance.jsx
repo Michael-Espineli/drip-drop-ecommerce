@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { netPaymentCents, hasPostedPayment } from '../../../utils/sales/financialMetrics';
@@ -510,7 +511,7 @@ const ClientFinance = () => {
                     <MobileRecordCard
                       key={approval.id}
                       title={approval.itemName || approval.name || 'Pool Part'}
-                      description={approval.description || approval.jobInternalId || 'Part approval'}
+                      description={displayReferenceValue(approval.description || approval.jobInternalId || 'Part approval', 'Part approval')}
                       status={approval.status || approval.approvalStatus}
                       to={`/client/part-approvals/${approval.id}`}
                       actionLabel="Review"
@@ -537,7 +538,7 @@ const ClientFinance = () => {
                         <tr key={approval.id} className="hover:bg-slate-50">
                           <td className="px-5 py-4">
                             <p className="font-semibold text-slate-950">{approval.itemName || approval.name || 'Pool Part'}</p>
-                            <p className="mt-1 max-w-xs truncate text-xs text-slate-500">{approval.description || approval.jobInternalId || 'Part approval'}</p>
+                            <p className="mt-1 max-w-xs truncate text-xs text-slate-500">{displayReferenceValue(approval.description || approval.jobInternalId || 'Part approval', 'Part approval')}</p>
                           </td>
                           <td className="px-5 py-4 text-slate-700">{approval.companyName || 'Pool company'}</td>
                           <td className="px-5 py-4 font-semibold text-slate-950">{formatCurrency(approval.plannedTotalPriceCents || approval.totalPriceCents)}</td>

@@ -3,6 +3,7 @@ import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecord
 import {netPaymentCents} from '../../../utils/sales/financialMetrics';
 import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
 import { ClientInvoicePayment } from '../../../components/billing/ClientPaymentActions';
+import ClientInvoiceStatus, { clientInvoiceStatus } from '../../../components/billing/ClientInvoiceStatus';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
@@ -20,7 +21,6 @@ import { Context } from '../../../context/AuthContext';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
 import {
-  SalesInvoiceStatus,
   SalesPaymentStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
@@ -390,21 +390,18 @@ const ClientInvoiceDetail = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <WorkspaceRecordHeader title={<>{invoice.invoiceNumber || 'Invoice'}</>} eyebrow="My billing"><div>
-          <Link to={backPath} className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+    <div className="client-theme workspace-screen min-h-screen min-w-0 bg-slate-50 p-4 sm:p-6 lg:p-8">
+        <WorkspaceRecordHeader title={invoice.invoiceNumber || 'Invoice'} eyebrow="My billing"
+          description={`${invoice.companyName || 'Pool company'} sent this invoice to ${invoice.email || emailParam || user?.email || 'your account'}.`}>
+          <div className="flex w-full flex-wrap items-center justify-between gap-3">
+          <Link to={backPath} className="inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
             <ArrowLeftIcon className="h-4 w-4" />
             {backLabel}
           </Link>
 
-          <p className="mt-1 text-sm text-slate-500">
-            {invoice.companyName || 'Pool company'} sent this invoice to {invoice.email || emailParam || user?.email || 'your account'}.
-          </p>
-        </div></WorkspaceRecordHeader>
-
-        <StatusBadge status={invoice.status || SalesInvoiceStatus.draft} />
-      </div>
+        <ClientInvoiceStatus invoice={invoice} balanceCents={balanceCents} onRefresh={()=>setRefreshTick(value=>value+1)} />
+          </div>
+        </WorkspaceRecordHeader>
 
       <section className="mb-5 rounded-xl border border-blue-200 bg-white p-5">
         <p className="text-sm text-slate-500">Amount due</p><p className="mt-1 text-3xl font-bold">{formatCurrency(balanceCents)}</p>
@@ -463,7 +460,7 @@ const ClientInvoiceDetail = () => {
             </h2>
             <dl className="mt-5 space-y-4">
               <Field label="Amount Due" value={formatCurrency(balanceCents)} />
-              <Field label="Status" value={labelize(invoice.status)} />
+              <Field label="Status" value={clientInvoiceStatus(invoice, balanceCents).label} />
               <Field label="Last Payment" value={formatDate(invoice.lastPaymentAt || invoice.paidAt)} />
             </dl>
 

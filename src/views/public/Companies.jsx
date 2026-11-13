@@ -80,6 +80,7 @@ export default function Companies() {
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [loadAttempt, setLoadAttempt] = useState(0);
 
     useEffect(() => {
         let cancelled = false;
@@ -103,7 +104,7 @@ export default function Companies() {
                 if (!cancelled) setCompanies(Array.isArray(response.companies) ? response.companies : []);
             } catch (loadError) {
                 console.error('Failed to load public companies', loadError);
-                if (!cancelled) setError(userFacingErrorMessage(loadError, loadError.message || 'Could not load companies.'));
+                if (!cancelled) setError('Company profiles are temporarily unavailable. Please try again shortly.');
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -114,7 +115,7 @@ export default function Companies() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [loadAttempt]);
 
     const visibleCompanies = useMemo(() => (
         filterCompanies(companies, searchTerm)
@@ -185,8 +186,9 @@ export default function Companies() {
 
                 <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
                     {error && (
-                        <div className="rounded-md border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-900">
-                            {error}
+                        <div role="alert" className="rounded-md border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-900">
+                            <p>{error}</p>
+                            <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="mt-3 min-h-[44px] rounded-md border border-rose-300 px-4 py-2">Try again</button>
                         </div>
                     )}
 

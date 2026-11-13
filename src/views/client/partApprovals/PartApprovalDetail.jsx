@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
@@ -274,8 +275,8 @@ const PartApprovalDetail = () => {
                 <Field label="Quantity" value={approval.quantity || '1'} />
                 <Field label="Unit Price" value={formatCurrency(unitPriceCents)} />
                 <Field label="Total" value={formatCurrency(totalPriceCents)} />
-                <Field label="Job" value={approval.jobInternalId || approval.jobName || approval.jobId} />
-                <Field label="Service Location" value={approval.serviceLocationName || approval.serviceLocationId} />
+                <Field label="Job" value={displayReferenceValue(approval.jobInternalId || approval.jobName || approval.jobId, "Job")} />
+                <Field label="Service Location" value={displayReferenceValue(approval.serviceLocationName || approval.serviceLocationId, "Service Location")} />
               </dl>
               {approval.description && (
                 <p className="mt-5 whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">

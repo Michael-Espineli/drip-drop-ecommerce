@@ -250,12 +250,12 @@ const ChemicalDosagePicker = ({
                 key={dosageId}
                 className="inline-flex max-w-full items-center gap-2 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800"
               >
-                <span className="truncate">{template ? dosageLabel(template) : dosageId}</span>
+                <span className="truncate">{template ? dosageLabel(template) : "Unavailable dosage"}</span>
                 <button
                   type="button"
                   onClick={() => toggleSelection(dosageId)}
                   className="text-blue-500 transition hover:text-rose-600"
-                  aria-label={`Remove ${template ? dosageLabel(template) : dosageId}`}
+                  aria-label={`Remove ${template ? dosageLabel(template) : "Unavailable dosage"}`}
                 >
                   <FaTimes className="text-[10px]" />
                 </button>

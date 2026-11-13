@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import RouteWorkOfferSummary from './RouteWorkOfferSummary';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
@@ -1479,7 +1480,7 @@ const OfferedWork = () => {
                               {offer.title || offer.name || offer.serviceStopTypeName || "Offered Work"}
                             </button>
                             <p className="mt-1 text-xs text-theme-subtle">
-                              {[offer.jobInternalId || offer.jobName || offer.jobId, getWorkOfferCategoryText(offer)].filter(Boolean).join(" - ") || "No job reference"}
+                              {[displayReferenceValue(offer.jobInternalId || offer.jobName || "Job", "Job"), getWorkOfferCategoryText(offer)].filter(Boolean).join(" - ") || "No job reference"}
                             </p>
                             {timelineStart && (
                               <p className="mt-2 inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
@@ -1742,7 +1743,7 @@ const OfferedWork = () => {
                       <option value="">No linked job</option>
                       {jobs.map((job) => (
                         <option key={job.id} value={job.id}>
-                          {[job.internalId, job.customerName, job.description || job.type].filter(Boolean).join(" - ") || job.id}
+                          {[displayReferenceValue(job.internalId || "Job", "Job"), job.customerName, job.description || job.type].filter(Boolean).join(" - ") || "Job"}
                         </option>
                       ))}
                     </select>

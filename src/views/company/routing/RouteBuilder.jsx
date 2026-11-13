@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from 'react';
@@ -1119,7 +1120,7 @@ const RouteBuilder = () => {
                           <p className="font-semibold text-slate-900">{stop.customerName}</p>
                           {isExistingRecurringStop && (
                             <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-                              {stop.internalId || "RSS"}
+                              {displayReferenceValue(stop.internalId || "RSS", "Service visit")}
                             </span>
                           )}
                           {hasExistingRecurringStops && (
@@ -1206,7 +1207,7 @@ const RouteBuilder = () => {
                                       <p className="font-semibold text-slate-900">{stop.customerName}</p>
                                       {isExistingRecurringStop && (
                                         <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-                                          {stop.internalId || "RSS"}
+                                          {displayReferenceValue(stop.internalId || "RSS", "Service visit")}
                                         </span>
                                       )}
                                     </div>

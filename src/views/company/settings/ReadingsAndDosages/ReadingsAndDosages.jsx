@@ -909,12 +909,12 @@ const ReadingsAndDosages = () => {
                             const item = databaseItemById.get(itemId);
                             return (
                                 <span key={itemId} className="inline-flex items-center gap-2 rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
-                                    {item ? databaseItemLabel(item) : itemId}
+                                    {item ? databaseItemLabel(item) : "Unavailable item"}
                                     <button
                                         type="button"
                                         onClick={() => toggleLinkedItemId(itemId)}
                                         className="text-blue-500 hover:text-red-600"
-                                        aria-label={`Remove ${itemId}`}
+                                        aria-label="Remove selected product"
                                     >
                                         <FaTimes />
                                     </button>
@@ -984,11 +984,11 @@ const ReadingsAndDosages = () => {
                                             className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                                         />
                                         <span>
-                                            <span className="block font-semibold">{item.name || item.id}</span>
+                                            <span className="block font-semibold">{item.name || "Item"}</span>
                                             <span className="block text-xs text-slate-500">
                                                 {[item.size ? `Size ${item.size}` : '', item.UOM || item.uom || '', item.sku ? `SKU ${item.sku}` : '', item.category]
                                                     .filter(Boolean)
-                                                    .join(' | ') || item.id}
+                                                    .join(' | ') || 'Product details unavailable'}
                                             </span>
                                         </span>
                                     </label>
@@ -1160,7 +1160,7 @@ const ReadingsAndDosages = () => {
                             <div>
                                 <p className="text-sm font-semibold text-blue-600">{activeTab === 'Readings' ? 'Reading template' : 'Dosage template'}</p>
                                 <h2 className="text-2xl font-bold text-gray-900">{selectedTemplate.name || 'Unnamed template'}</h2>
-                                <p className="mt-1 text-sm text-gray-500">{selectedTemplate.id}</p>
+
                             </div>
 
                             <div className="flex flex-wrap gap-2">
@@ -1267,7 +1267,7 @@ const ReadingsAndDosages = () => {
                                                 to={`/company/items/detail/${itemId}`}
                                                 className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900 transition hover:border-blue-300 hover:bg-blue-100"
                                             >
-                                                <span className="block font-bold">{item ? item.name || itemId : itemId}</span>
+                                                <span className="block font-bold">{item?.name || "Unavailable item"}</span>
                                                 <span className="mt-1 block text-xs text-blue-700">
                                                     {item
                                                         ? [
@@ -1394,7 +1394,7 @@ const ReadingsAndDosages = () => {
                             <tr key={template.id} className="hover:bg-blue-50/50">
                                 <td className="px-5 py-3">
                                     <p className="font-bold text-gray-900">{template.name || 'Unnamed template'}</p>
-                                    <p className="mt-1 text-xs text-gray-500">{template.id}</p>
+
                                 </td>
                                 <td className="px-5 py-3 text-gray-700">{template.UOM || '-'}</td>
                                 <td className="px-5 py-3 text-gray-700">{template.chemType || '-'}</td>
@@ -1491,7 +1491,7 @@ const ReadingsAndDosages = () => {
                                         <p className="text-left font-bold text-gray-900">
                                             {template.name || 'Unnamed template'}
                                         </p>
-                                        <p className="mt-1 text-xs text-gray-500">{template.id}</p>
+
                                     </td>
                                     <td className="px-5 py-3 text-gray-700">{template.UOM || '-'}</td>
                                     <td className="px-5 py-3 text-gray-700">{template.chemType || '-'}</td>

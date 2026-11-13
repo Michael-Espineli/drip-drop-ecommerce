@@ -39,7 +39,7 @@ const ServiceRequestDetail = () => {
 
     useEffect(() => {
         if (!user) {
-            navigate('/login');
+            navigate(`/homeownerSignIn?redirect=${encodeURIComponent(`/client/service-requests/${requestId}`)}`, { replace: true });
             return;
         }
 

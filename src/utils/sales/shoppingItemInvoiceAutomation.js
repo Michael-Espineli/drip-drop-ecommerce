@@ -43,6 +43,7 @@ const actorName = (user = {}) => (
 );
 
 export const shoppingItemAutoInvoiceOnInstallEnabled = (item = {}, companyData = {}) => {
+  if (item.jobId || item.workOrderId || item.assignedJobId) return false;
   if (item.autoInvoiceOnInstall === true) return true;
   if (item.autoInvoiceOnInstall === false) return false;
   return companyData?.[SHOPPING_ITEM_INSTALL_INVOICE_AUTOMATION_FIELD] === true;

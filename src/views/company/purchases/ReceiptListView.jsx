@@ -346,7 +346,7 @@ const ReceiptListView = () => {
                   checked={techIds.includes(user.userId)}
                   onChange={() => toggleTech(user.userId)}
                 />
-                {user.userName || user.name || user.email || user.userId}
+                {user.userName || user.name || user.email || "Technician"}
               </label>
             ))}
           </div>

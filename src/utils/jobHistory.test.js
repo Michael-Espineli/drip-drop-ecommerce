@@ -19,9 +19,10 @@ test("creation history carries the creator instead of the assigned admin and use
   expect(event.actorUserName).not.toBe("Assigned Admin");
 });
 
-test("history presentation uses user IDs and legacy timestamps without inventing authors", () => {
+test("history presentation hides user IDs and supports legacy timestamps without inventing authors", () => {
   const time = new Date("2026-10-23T18:30:00Z");
-  expect(jobHistoryActorName({ actorUserName: "Unknown", actorUserId: "auth-user" })).toBe("auth-user");
+  expect(jobHistoryActorName({ actorUserName: "Unknown", actorUserId: "auth-user" })).toBe("Creator name not recorded");
+  expect(jobHistoryActorName({ actorUserName: 'x7QaB2cD9eF0gH1jK3mN', actorUserId: 'x7QaB2cD9eF0gH1jK3mN' })).toBe('Creator name not recorded');
   expect(jobHistoryActorName({})).toBe("Creator not recorded");
   expect(jobHistoryDate({ createdAt: { toDate: () => time } })).toEqual(time);
   expect(jobHistoryDate({ createdAtMillis: time.getTime() })).toEqual(time);

@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
@@ -2152,7 +2153,7 @@ const ReviewTab = ({
             <h3 className="text-base font-semibold">Review & Confirm</h3>
             <div className="space-y-1.5 rounded-lg border border-gray-200 bg-white p-3 text-sm">
                 <p><strong>Category:</strong> {selectedCategory?.label || "Service Stop"}</p>
-                {isJobScheduler && <p><strong>Job:</strong> {job?.internalId || "Job"} for {job?.customerName}</p>}
+                {isJobScheduler && <p><strong>Job:</strong> {displayReferenceValue(job?.internalId || "Job", "Job")} for {job?.customerName}</p>}
                 <p><strong>Customer:</strong> {customerName}</p>
                 <p><strong>Location:</strong> {location?.nickName || location?.name || "Service Location"}{locationAddress ? ` at ${locationAddress}` : ""}</p>
                 <p><strong>Technician:</strong> {tech || 'Not Assigned'}</p>

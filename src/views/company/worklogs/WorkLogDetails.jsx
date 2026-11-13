@@ -162,7 +162,7 @@ const WorkLogDetails = () => {
                         <div className="space-y-4">
                             <DetailItem label="Type" value={getLogType(log)} />
                             <DetailItem label="Employee Name" value={log.userName || route?.techName} />
-                            <DetailItem label="Route" value={route?.name || route?.routeName || route?.techName || log.activeRouteId || log.routeId} />
+                            <DetailItem label="Route" value={route?.name || route?.routeName || route?.techName || "Linked route"} />
                             <DetailItem label="Job/Task" value={log.jobName || log.taskName} />
                         </div>
                         <div className="space-y-4">

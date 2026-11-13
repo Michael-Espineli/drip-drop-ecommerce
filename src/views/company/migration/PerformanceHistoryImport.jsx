@@ -524,7 +524,7 @@ function PerformanceHistoryImport() {
               <div>
                 <p className="font-semibold">Last import complete</p>
                 <p className="mt-1">
-                  Imported {lastImportSummary.importedRows} rows. Batch {lastImportSummary.importBatchId}.
+                  Imported {lastImportSummary.importedRows} rows.
                 </p>
               </div>
             </div>

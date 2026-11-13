@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { listenCompanyTodos } from "../../../utils/companyTodoAccess";
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
@@ -49,15 +50,7 @@ const todoBoardName = (todo, boardById) => {
   return boardById.get(boardId)?.name || todo.boardName || "Unknown board";
 };
 
-const todoIssueKey = (todo = {}) => {
-  const compactId = String(todo.id || "")
-    .replace(/^todo[_-]?/i, "")
-    .replace(/[^a-z0-9]/gi, "")
-    .slice(-5)
-    .toUpperCase();
-
-  return `TODO-${compactId || "ITEM"}`;
-};
+const todoIssueKey = () => "Task";
 
 const assignmentLabel = (todo = {}) => {
   if (todo.scope === TODO_SCOPE.team) return "Team task";
@@ -408,7 +401,7 @@ const TodoHistory = () => {
                         <span>{todoBoardName(todo, boardById)}</span>
                         <span>{assignmentLabel(todo)}</span>
                         {todo.relatedEntity?.type && todo.relatedEntity?.id && (
-                          <span>{todo.relatedEntity.type}: {todo.relatedEntity.label || todo.relatedEntity.id}</span>
+                          <span>{todo.relatedEntity.type}: {displayReferenceValue(todo.relatedEntity.label || "Open record", "Open record")}</span>
                         )}
                       </div>
                     </div>

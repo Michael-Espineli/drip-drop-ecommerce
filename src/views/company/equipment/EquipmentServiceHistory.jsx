@@ -309,9 +309,9 @@ export default function EquipmentServiceHistory() {
                     </td>
 
                     <td className="px-4 py-3 text-xs text-slate-600">
-                      <ReferenceLine label="Task" value={item.sourceTaskId} />
-                      <ReferenceLine label="Job" value={item.jobId} />
-                      <ReferenceLine label="Stop" value={item.serviceStopId} />
+                      <ReferenceLine label="Task" value={item.sourceTaskId ? "Task linked" : ""} />
+                      <ReferenceLine label="Job" value={item.jobInternalId || (item.jobId ? "Job linked" : "")} />
+                      <ReferenceLine label="Stop" value={item.serviceStopInternalId || (item.serviceStopId ? "Service visit linked" : "")} />
                     </td>
 
                     <td className="px-4 py-3 text-sm text-slate-700">

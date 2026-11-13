@@ -274,15 +274,7 @@ function UniversalReadingsDosages() {
 
   const renderReadingFields = () => (
     <>
-      <div>
-        <label className="text-sm font-semibold text-slate-300">Linked Dosage Id</label>
-        <input
-          type="text"
-          value={form.linkedDosage}
-          onChange={(event) => updateForm('linkedDosage', event.target.value)}
-          className={`${inputClass} mt-1`}
-        />
-      </div>
+      <p className="text-sm text-slate-400">Choose linked dosages in the company reading settings.</p>
       <div>
         <label className="text-sm font-semibold text-slate-300">High Warning</label>
         <input
@@ -329,15 +321,7 @@ function UniversalReadingsDosages() {
           className={`${inputClass} mt-1`}
         />
       </div>
-      <div>
-        <label className="text-sm font-semibold text-slate-300">Linked Item Id</label>
-        <input
-          type="text"
-          value={form.linkedItemId}
-          onChange={(event) => updateForm('linkedItemId', event.target.value)}
-          className={`${inputClass} mt-1`}
-        />
-      </div>
+      <p className="text-sm text-slate-400">Choose product links in the company dosage settings.</p>
       <div>
         <label className="text-sm font-semibold text-slate-300">Strength</label>
         <input
@@ -506,7 +490,7 @@ function UniversalReadingsDosages() {
                 <tr key={template.id} className="hover:bg-slate-900/60">
                   <td className="px-4 py-3 text-slate-100">
                     <p className="font-semibold">{template.name || 'Unnamed'}</p>
-                    <p className="text-xs text-slate-500">{template.id}</p>
+
                   </td>
                   <td className="px-4 py-3 text-slate-200">{template.chemType || '-'}</td>
                   <td className="px-4 py-3 text-slate-200">{template.UOM || '-'}</td>

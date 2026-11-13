@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import {parts as billingDateParts,zonedDate} from '../../../utils/sales/billingCalendar';
 import { canManageCustomerBilling } from '../../../utils/companyPermissionAccess';
@@ -935,9 +936,9 @@ const SalesBillingSubscriptionDetail = () => {
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">Stripe</h2>
                 <dl className="mt-4 space-y-4">
-                  <Field label="Connected Account" value={subscription.stripeConnectedAccountId} />
-                  <Field label="Stripe Customer" value={subscription.stripeCustomerId} />
-                  <Field label="Stripe Subscription" value={subscription.stripeSubscriptionId} />
+                  <Field label="Connected Account" value={displayReferenceValue(subscription.stripeConnectedAccountId, "Connected Account")} />
+                  <Field label="Stripe Customer" value={displayReferenceValue(subscription.stripeCustomerId, "Stripe Customer")} />
+                  <Field label="Stripe Subscription" value={displayReferenceValue(subscription.stripeSubscriptionId, "Stripe Subscription")} />
                   <Field label="Stripe Status" value={subscription.stripeStatus || 'Not synced'} />
                   <Field label="Checkout Status" value={labelize(subscription.checkoutStatus)} />
                 </dl>
@@ -1004,8 +1005,8 @@ const SalesBillingSubscriptionDetail = () => {
                 <h2 className="text-lg font-bold text-slate-950">Operations Setup</h2>
                 <dl className="mt-4 space-y-4">
                   <Field label="Setup Status" value={labelize(recurringSetupStatus)} />
-                  <Field label="Recurring Stop" value={subscription.recurringServiceStopId || 'Not created'} />
-                  <Field label="Service Location" value={firstServiceLocationId} />
+                  <Field label="Recurring Stop" value={displayReferenceValue(subscription.recurringServiceStopId || 'Not created', "Recurring Stop")} />
+                  <Field label="Service Location" value={firstServiceLocationId ? "Location linked" : "Not linked"} />
                 </dl>
                 {!hasRecurringServiceStop && (
                   <Link
@@ -1029,7 +1030,7 @@ const SalesBillingSubscriptionDetail = () => {
                     ) : 'Not linked'}
                   </Field>
                   <Field label="Billing Profile" value={subscription.billingProfileId ? 'Billing profile linked' : 'Not linked'} />
-                  <Field label="Customer" value={subscription.customerName || (subscription.customerId ? 'Customer' : '')} />
+                  <Field label="Customer" value={displayReferenceValue(subscription.customerName || (subscription.customerId ? 'Customer' : ''), "Customer")} />
                   <Field label="Service Locations" value={(subscription.serviceLocationIds || []).length ? `${subscription.serviceLocationIds.length} linked` : 'Not linked'} />
                 </dl>
               </section>
@@ -1039,8 +1040,8 @@ const SalesBillingSubscriptionDetail = () => {
                 <dl className="mt-4 space-y-4">
                   <Field label="Created" value={formatDate(subscription.createdAt)} />
                   <Field label="Updated" value={formatDate(subscription.updatedAt)} />
-                  <Field label="Latest Invoice" value={subscription.stripeLatestInvoiceId} />
-                  <Field label="Default Payment Method" value={subscription.stripeDefaultPaymentMethodId} />
+                  <Field label="Latest Invoice" value={displayReferenceValue(subscription.stripeLatestInvoiceId, "Latest Invoice")} />
+                  <Field label="Default Payment Method" value={displayReferenceValue(subscription.stripeDefaultPaymentMethodId, "Default Payment Method")} />
                 </dl>
               </section>
             </aside>

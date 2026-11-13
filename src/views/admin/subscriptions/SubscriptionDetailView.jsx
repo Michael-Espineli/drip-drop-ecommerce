@@ -241,7 +241,7 @@ const SubscriptionDetailView = () => {
                   className={input}
                 />
               ) : (
-                <p className={monoBox}>{subscription.stripeProductId || 'Not set'}</p>
+                <p className={monoBox}>{subscription.stripeProductId ? 'Connected' : 'Not set'}</p>
               )}
             </div>
 
@@ -256,7 +256,7 @@ const SubscriptionDetailView = () => {
                   className={input}
                 />
               ) : (
-                <p className={monoBox}>{subscription.stripePriceId || 'Not set'}</p>
+                <p className={monoBox}>{subscription.stripePriceId ? 'Connected' : 'Not set'}</p>
               )}
             </div>
 

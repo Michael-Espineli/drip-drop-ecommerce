@@ -73,13 +73,49 @@ function paymentFixture(records=base()){
    calls.push({params,options});if(sessions.has(options.idempotencyKey))return sessions.get(options.idempotencyKey);
    const session={...params,id:`cs_${sessions.size+1}`,url:'https://checkout.stripe.com/test',status:'open',amount_total:params.line_items[0].price_data.unit_amount,currency:'usd',payment_intent:`pi_${sessions.size+1}`,payment_status:'unpaid'};sessions.set(options.idempotencyKey,session);return session;
  },retrieve:async id=>[...sessions.values()].find(s=>s.id===id),expire:async id=>{const session=[...sessions.values()].find(s=>s.id===id);session.status='expired';return session;}}},paymentIntents:{retrieve:async()=>({latest_charge:{receipt_url:'https://pay.stripe.com/receipt'}})},billingPortal:{configurations:{create:async()=>({id:'bpc_config'})},sessions:{create:async(params,options)=>{calls.push({params,options});return {url:'https://billing.stripe.com/test'};}}}};
- return {db,sessions,calls,worker:createCustomerPortalBilling(db,stripe,()=>now)};
+ return {db,sessions,calls,stripe,worker:createCustomerPortalBilling(db,stripe,()=>now)};
 }
 const payRequest=()=>({auth,data:{invoiceId:'invoice',amountCents:1,returnUrl:'https://dripdrop-poolapp.com/client/billing/invoices/invoice'}});
 const eventFor=(session,type='checkout.session.completed',id='evt_first')=>({id,type,account:'acct_pool',data:{object:{...session,payment_status:'paid'}}});
 test('invoice checkout uses the trusted remaining balance, connected account and idempotent attempt',async()=>{
  const f=paymentFixture();await Promise.all([f.worker.startInvoiceCheckout(payRequest()),f.worker.startInvoiceCheckout(payRequest())]);assert.equal(f.sessions.size,1);
  const call=f.calls[0];assert.equal(call.params.line_items[0].price_data.unit_amount,15000);assert.equal(call.params.mode,'payment');assert.equal(call.options.stripeAccount,'acct_pool');assert.equal(call.params.payment_intent_data.application_fee_amount,12);assert.equal(call.params.metadata.flow,'customer_invoice_payment');
+});
+test('Checkout lets Stripe set its lifetime and saves the returned deadline',async()=>{
+ const f=paymentFixture(),create=f.stripe.checkout.sessions.create;
+ f.stripe.checkout.sessions.create=async(...args)=>({...await create(...args),expires_at:Math.floor(now.getTime()/1000)+86400});
+ await f.worker.startInvoiceCheckout(payRequest());
+ assert.equal('expires_at' in f.calls[0].params,false);
+ const invoice=f.db.records.get('salesInvoices/invoice'),attempt=f.db.records.get(`salesInvoices/invoice/portalPaymentAttempts/${invoice.portalPaymentAttemptId}`);
+ assert.equal(attempt.expiresAt.getTime(),now.getTime()+86400000);
+});
+test('a definitively rejected legacy expiry is retired before a fresh idempotent attempt',async()=>{
+ const f=paymentFixture();await f.worker.startInvoiceCheckout(payRequest());
+ const invoice=f.db.records.get('salesInvoices/invoice'),path=`salesInvoices/invoice/portalPaymentAttempts/${invoice.portalPaymentAttemptId}`,attempt=f.db.records.get(path);
+ delete attempt.sessionId;delete attempt.url;attempt.status='creating';attempt.params.expires_at=Math.floor(now.getTime()/1000)+1800;
+ const create=f.stripe.checkout.sessions.create;let rejected=0;
+ f.stripe.checkout.sessions.create=async(params,options)=>{if(params.expires_at){rejected++;throw Object.assign(Error('The `expires_at` timestamp must be at least 30 minutes from Checkout Session creation.'),{type:'StripeInvalidRequestError',statusCode:400});}return create(params,options);};
+ const results=await Promise.all([f.worker.startInvoiceCheckout(payRequest()),f.worker.startInvoiceCheckout(payRequest())]);
+ assert.ok(results.every(result=>result.url));assert.ok(rejected>=1);
+ assert.equal(f.db.records.get(path).status,'failed');
+ const next=f.db.records.get('salesInvoices/invoice');assert.equal(next.portalPaymentAttemptVersion,2);assert.notEqual(next.portalPaymentAttemptId,invoice.portalPaymentAttemptId);
+ assert.equal(f.sessions.size,2);
+});
+test('changing payment method can recover a rejected legacy creation while retiring it',async()=>{
+ const f=paymentFixture();await f.worker.startInvoiceCheckout(payRequest());
+ const invoice=f.db.records.get('salesInvoices/invoice'),path=`salesInvoices/invoice/portalPaymentAttempts/${invoice.portalPaymentAttemptId}`,attempt=f.db.records.get(path);
+ delete attempt.sessionId;attempt.status='creating';attempt.params.expires_at=1;
+ const create=f.stripe.checkout.sessions.create;
+ f.stripe.checkout.sessions.create=async(params,options)=>{if(params.expires_at)throw Object.assign(Error('The expires_at timestamp must be at least 30 minutes from creation.'),{type:'StripeInvalidRequestError',statusCode:400});return create(params,options);};
+ const req=payRequest();req.data.paymentMethodType='ach';await f.worker.startInvoiceCheckout(req);
+ assert.equal(f.db.records.get(path).status,'failed');assert.deepEqual(f.calls.at(-1).params.payment_method_types,['us_bank_account']);
+});
+test('unknown Stripe outcomes keep the exact request and idempotency key on retry',async()=>{
+ const f=paymentFixture(),create=f.stripe.checkout.sessions.create;let original;
+ f.stripe.checkout.sessions.create=async(params,options)=>{original={params,options};throw Object.assign(Error('network timeout'),{type:'StripeConnectionError'});};
+ await assert.rejects(f.worker.startInvoiceCheckout(payRequest()),/network timeout/);
+ f.stripe.checkout.sessions.create=async(params,options)=>{assert.deepEqual({params,options},original);return create(params,options);};
+ await f.worker.startInvoiceCheckout(payRequest());assert.equal(f.db.records.get('salesInvoices/invoice').portalPaymentAttemptVersion,1);
 });
 test('invoice checkout rejects foreign accounts, unverified email matches, closed invoices and unsafe return URLs',async()=>{
  for(const scenario of ['foreign','unverified','closed','unsafe','disabled']){

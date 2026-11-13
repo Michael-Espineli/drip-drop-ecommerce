@@ -1,3 +1,4 @@
+import { displayRecordReference, displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import BillingReconciliationPanel from '../../../components/billing/BillingReconciliationPanel';
 import {cashActivity} from '../../../utils/sales/cashActivity';
@@ -780,7 +781,7 @@ const CompanyAccountingWorkspace = () => {
                           <tr key={payment.id} className="align-top hover:bg-slate-50">
                             <td className="px-4 py-3">
                               <p className="font-bold text-slate-950">{payment.customerName || payment.email || "Customer"}</p>
-                              <p className="text-xs text-slate-500">{payment.invoiceId || payment.referenceNumber || payment.id}</p>
+                              <p className="text-xs text-slate-500">{displayReferenceValue(payment.invoiceNumber || payment.referenceNumber || "Invoice payment", "Invoice payment")}</p>
                             </td>
                             <td className="px-4 py-3 text-slate-700">{labelize(payment.method)}</td>
                             <td className="px-4 py-3 text-right font-bold text-slate-950">{formatCurrency(netPaymentCents(payment))}</td>
@@ -860,7 +861,7 @@ const CompanyAccountingWorkspace = () => {
                             <tr key={invoice.id} className="hover:bg-slate-50">
                               <td className="px-4 py-3">
                                 <Link to={`/company/sales/invoices/${invoice.id}`} className="font-bold text-emerald-700 hover:text-emerald-800">
-                                  {invoice.invoiceNumber || invoice.id}
+                                  {displayRecordReference(invoice, "Invoice")}
                                 </Link>
                               </td>
                               <td className="px-4 py-3 text-slate-700">{invoice.customerName || invoice.email || "Customer"}</td>
@@ -909,7 +910,7 @@ const CompanyAccountingWorkspace = () => {
                           <tr key={purchase.id} className="hover:bg-slate-50">
                             <td className="px-4 py-3">
                               <Link to={`/company/purchased-items/detail/${purchase.id}`} className="font-bold text-emerald-700 hover:text-emerald-800">
-                                {purchase.name || purchase.invoiceNum || purchase.id}
+                                {displayRecordReference(purchase, "Purchase")}
                               </Link>
                               <p className="text-xs text-slate-500">{formatDate(purchaseDate(purchase))}</p>
                             </td>
@@ -981,7 +982,7 @@ const CompanyAccountingWorkspace = () => {
                 }
               />
               <dl className="mt-5 space-y-3 text-sm">
-                <StripeInfoRow label="Connected Account" value={stripeReadiness?.accountId || stripeConnectedAccountId || "Not connected"} />
+                <StripeInfoRow label="Connected Account" value={(stripeReadiness?.accountId || stripeConnectedAccountId) ? "Connected" : "Not connected"} />
                 <StripeInfoRow
                   label="Mode"
                   value={stripeReadiness ? (stripeReadiness.livemode ? "Live" : "Test") : "Unchecked"}
@@ -1141,7 +1142,7 @@ const CompanyAccountingWorkspace = () => {
                         <tr key={invoice.id} className="hover:bg-slate-50">
                           <td className="px-3 py-2">
                             <Link to={`/company/sales/invoices/${invoice.id}`} className="font-bold text-emerald-700 hover:text-emerald-800">
-                              {invoice.invoiceNumber || invoice.id}
+                              {displayRecordReference(invoice, "Invoice")}
                             </Link>
                           </td>
                           <td className="px-3 py-2 text-slate-700">{invoice.customerName || invoice.email || "Customer"}</td>

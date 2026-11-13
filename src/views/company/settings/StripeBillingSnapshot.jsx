@@ -332,7 +332,7 @@ const StripeBillingSnapshotPanel = ({
                             </StripeStatusBadge>
                         </div>
                         <p className="mt-2 break-all text-sm text-slate-500">
-                            {hasConnectedAccount ? accountId : "No connected account saved for this company yet."}
+                            {hasConnectedAccount ? "Stripe account connected" : "No connected account saved for this company yet."}
                         </p>
                     </div>
                     {readiness?.country || readiness?.defaultCurrency || readiness?.businessType ? (
@@ -474,7 +474,7 @@ const StripeBillingSnapshotPanel = ({
                             {payouts.map((payout) => (
                                 <div key={payout.id || payout.stripePayoutId} className="grid grid-cols-[1fr_auto] gap-3 border-b border-slate-100 px-3 py-3 text-sm last:border-b-0 sm:grid-cols-[1fr_120px_120px_120px]">
                                     <div className="min-w-0">
-                                        <p className="truncate font-semibold text-slate-900">{payout.stripePayoutId || payout.id}</p>
+                                        <p className="truncate font-semibold text-slate-900">{payout.description || "Stripe payout"}</p>
                                         <p className="mt-0.5 text-xs text-slate-500">{labelize(payout.method || payout.type || "standard payout")}</p>
                                         <p className="mt-1 text-xs text-slate-600">{labelize(payout.reconciliationStatus || 'awaitingReconciliation')}{payout.unmatchedTransactionCount ? ` · ${payout.unmatchedTransactionCount} unmatched` : ''}</p>
                                         {payout.grossAmountCents != null && <p className="mt-1 text-xs text-slate-600">Gross {formatCurrencyFromCents(payout.grossAmountCents,payout.currency)} · Fees {formatCurrencyFromCents(payout.feeAmountCents,payout.currency)} · Net {formatCurrencyFromCents(payout.netAmountCents,payout.currency)}</p>}

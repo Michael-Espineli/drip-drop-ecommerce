@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowTopRightOnSquareIcon, ClipboardDocumentIcon, LinkIcon } from '@heroicons/react/24/outline';
@@ -43,12 +44,9 @@ const ConversationLinkCard = ({ link, audience = 'company', inverted = false }) 
         </div>
         <div className="min-w-0 flex-1">
           <p className={`text-xs font-semibold uppercase ${metaClasses}`}>{label}</p>
-          <p className="mt-0.5 truncate text-sm font-semibold">{normalizedLink.title}</p>
+          <p className="mt-0.5 truncate text-sm font-semibold">{displayReferenceValue(normalizedLink.title, label)}</p>
           {normalizedLink.subtitle ? (
             <p className="mt-1 line-clamp-2 text-sm text-slate-600">{normalizedLink.subtitle}</p>
-          ) : null}
-          {normalizedLink.recordId ? (
-            <p className="mt-2 truncate font-mono text-[11px] text-slate-400">{normalizedLink.recordId}</p>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">

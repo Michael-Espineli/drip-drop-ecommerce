@@ -680,19 +680,7 @@ const ShoppingListCreateView = () => {
                                     />
                                 </div>
 
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-500 mb-2">
-                                        Product ID
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={formData.genericItemId}
-                                        onChange={(e) => handleChange("genericItemId", e.target.value)}
-                                        className="w-full p-3 border border-gray-300 rounded-lg"
-                                        placeholder="Product id"
-                                        disabled={requiresDbItem}
-                                    />
-                                </div>
+
                             </div>
 
                             {requiresDbItem && (
@@ -875,18 +863,7 @@ const ShoppingListCreateView = () => {
                             </h3>
 
                             <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-500 mb-2">
-                                        Purchased Item ID
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={formData.purchasedItem}
-                                        onChange={(e) => handleChange("purchasedItem", e.target.value)}
-                                        className="w-full p-3 border border-gray-300 rounded-lg"
-                                        placeholder="Purchased item document id"
-                                    />
-                                </div>
+                                <p className="text-sm text-slate-600">Save this item, then choose a purchase from its detail page.</p>
 
                                 <div>
                                     <label className="flex items-center gap-2 text-gray-700">

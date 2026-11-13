@@ -23,7 +23,7 @@ function createJobBilling(db,now=()=>new Date()){
       const legacy=await tx.get(db.collection('salesInvoices').where('companyId','==',companyId).where('jobId','==',jobId));
       const candidates=[...new Map([...(linked?.exists?[linked]:[]),...legacy.docs].map(doc=>[doc.id,doc])).values()];
       if(candidates.some(doc=>doc.data().companyId!==companyId||doc.data().jobId&&doc.data().jobId!==jobId))fail('permission-denied','The linked invoice belongs to another job.');
-      if(candidates.some(doc=>doc.data().billingScope==='approvedPart') && !candidates.some(doc=>doc.data().billingScope!=='approvedPart'))
+      if(candidates.some(doc=>doc.data().billingScope==='approvedPart' && !['void','voided','canceled','cancelled'].includes(key(doc.data().status))))
         fail('failed-precondition','This job has separately invoiced parts. Review the remaining job scope in Sales before creating another invoice.');
       const jobCandidates=candidates.filter(doc=>doc.data().billingScope!=='approvedPart');
       const current=linked?.exists&&linked.data().billingScope!=='approvedPart'?linked:jobCandidates.find(doc=>!['void','voided','uncollectible','canceled','cancelled'].includes(key(doc.data().status)))||jobCandidates[0];
@@ -37,7 +37,8 @@ function createJobBilling(db,now=()=>new Date()){
       const acceptedPlan=(savedSource.planOptions||savedSource.solutionOptions||[]).find(plan=>(plan.planId||plan.id||plan.solutionId)===(savedSource.acceptedPlanId||savedSource.acceptedSolutionId));
       const source={...savedSource,...(acceptedPlan?{lineItems:acceptedPlan.lineItems,totalAmountCents:acceptedPlan.totalAmountCents}:{} )};
       if(agreement&&!['accepted','active'].includes(key(source.status)))fail('failed-precondition','Accept the estimate before creating its invoice.');
-      const lines=(Array.isArray(source.lineItems)&&source.lineItems.length?source.lineItems:draft.lineItems||[]).map((line,index)=>{
+      const savedLines=Array.isArray(source.lineItems)&&source.lineItems.length?source.lineItems:source.estimateLineItems;
+      const lines=(Array.isArray(savedLines)&&savedLines.length?savedLines:draft.lineItems||[]).map((line,index)=>{
         const quantity=Number(line.quantity??1),total=Number(line.totalAmountCents??line.amount??line.price??line.unitAmountCents??0);
         return {...line,id:line.id||`line_${index}`,name:line.name||line.title||`Line ${index+1}`,quantity,unitAmountCents:Number(line.unitAmountCents??(quantity?Math.round(total/quantity):0)),totalAmountCents:total};
       });
@@ -61,7 +62,7 @@ function createJobBilling(db,now=()=>new Date()){
         customerId:job.customerId||'',customerUserId:customer.customerUserId||customer.userId||source.customerUserId||null,customerName:customer.customerName||customer.name||source.customerName||draft.customerName||'',email,billingEmail:email,customerEmail:email,
         relationshipId:customer.relationshipId||source.relationshipId||'',customerCompanyRelationshipId:customer.customerCompanyRelationshipId||source.customerCompanyRelationshipId||'',
         stripeConnectedAccountId:actor.company.stripeConnectedAccountId||actor.company.stripeConnectAccountId||'',billingSubscriptionId:'',
-        invoiceNumber:draft.invoiceNumber||`${job.internalId||'JOB'}-${invoiceId.slice(-8).toUpperCase()}`,type:'oneTime',status:'open',sourceType:'jobEstimateConversion',sourceId:jobId,
+        invoiceNumber:draft.invoiceNumber||`${job.internalId||'JOB'}-${invoiceId.slice(-8).toUpperCase()}`,type:'oneTime',status:'open',billingScope:'job',sourceType:'jobEstimateConversion',sourceId:jobId,
         paymentTerms,dueDate:days?addInterval(today,'day',days,timeZone):today,deliveryMethod:source.invoiceDeliveryMethod||'email',currency:price.currency,
         lineItems:price.lines,subtotalAmountCents:price.subtotalAmountCents,discountAmountCents:price.discountAmountCents,taxAmountCents:price.taxAmountCents,totalAmountCents:price.totalAmountCents,
         amountPaidCents:0,amountDueCents:price.totalAmountCents,writeOffAmountCents:0,creditAmountCents:0,memo:source.description||source.termsSummary||source.notes||job.description||'',

@@ -32,12 +32,10 @@ export function Protected({ route, children }) {
                 <div className="mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-6 text-center">
                     <h1 className="text-2xl font-bold text-slate-900">Account profile unavailable</h1>
                     <p className="mt-3 text-sm text-slate-600">
-                        We could not load a web role for this account. Please contact support and include this user id:
+                        We could not load a web role for this account. Finish setup or contact support for help.
                     </p>
                     <Link to="/homeownerSignUp" className="mt-4 inline-flex min-h-[44px] items-center text-blue-700">Finish homeowner setup</Link>
-                    <p className="mt-3 break-all rounded-md bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">
-                        {dataBaseUser?.id || user.uid}
-                    </p>
+
                 </div>
             );
         }

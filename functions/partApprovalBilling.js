@@ -15,6 +15,7 @@ const preference = row => ['paynow', 'invoiceimmediately'].includes(key(row.paym
 const issued = invoice => Boolean(invoice.sentAt) || ['open', 'partiallypaid', 'paid', 'uncollectible'].includes(key(invoice.status));
 const closed = invoice => ['void', 'voided', 'canceled', 'cancelled', 'uncollectible'].includes(key(invoice.status));
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const jobIdFor = row => text(row.jobId || row.workOrderId || row.assignedJobId);
 
 function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } = {}) {
   const companyRef = companyId => db.collection('companies').doc(companyId);
@@ -66,6 +67,19 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
         for (const snap of targets) patch(tx, snap, { billingAutomationStatus: 'needsReview', billingAutomationError: reason });
         return { status: 'needsReview', reason };
       };
+      // Job materials are part of the accepted job scope, regardless of the
+      // install-invoicing toggle or an older part approval payment preference.
+      const jobId = jobIdFor(source) || jobIdFor(item);
+      if (jobId) {
+        const links = [...new Set(targets.map(snap => invoiceIdFor(snap.data())).filter(Boolean))];
+        const invoices = await Promise.all(links.map(id => tx.get(db.collection('salesInvoices').doc(documentId(id, 'Invoice')))));
+        if (invoices.some(snap => !snap.exists || snap.data().billingScope === 'approvedPart' || snap.data().companyId !== companyId || snap.data().jobId !== jobId || snap.data().customerId !== source.customerId) || links.length > 1) {
+          return needsReview('This job material has separate billing. Review it in Sales and include the remaining products and services on one job invoice.');
+        }
+        const fields = { billingAutomationStatus: 'awaitingJobInvoice', billingAutomationError: '' };
+        for (const snap of targets) patch(tx, snap, fields);
+        return { status: 'waiting', reason: 'job_invoice', shoppingPayload: fields };
+      }
       if (source.manuallyInvoiced || source.invoiceType === 'manual' || source.invoiced && !invoiceIdFor(source)) {
         return needsReview('Previously marked invoiced without a sales invoice. Review existing billing before creating another invoice.');
       }
@@ -98,16 +112,12 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
       if (current && (current.data().companyId !== companyId || current.data().customerId !== customerId)) return needsReview('The linked invoice belongs to a different customer or company.');
       if (current && !(approvalId && current.data().partApprovalRequestId === approvalId || shoppingItemId && current.data().shoppingListItemId === shoppingItemId)) return needsReview('The linked invoice does not identify this approved part. Review the source before billing.');
       if (current && closed(current.data())) return needsReview('The linked invoice is closed. Review it instead of issuing a duplicate.');
-      const jobId = text(source.jobId || item.jobId);
-      const jobInvoices = jobId ? await tx.get(db.collection('salesInvoices').where('companyId', '==', companyId).where('jobId', '==', jobId)) : { docs: [] };
-      if (!current && jobInvoices.docs.some(snap => snap.data().billingScope !== 'approvedPart' && !closed(snap.data()))) {
-        return needsReview('This job already has an invoice. Review its materials before issuing a separate part invoice.');
-      }
       const purchaseId = text(item.purchasedItem || source.purchasedItem || source.purchasedItemId);
       const purchaseSnap = purchaseId ? await tx.get(companyRef(companyId).collection('purchasedItems').doc(documentId(purchaseId, 'Purchase'))) : null;
       if (purchaseSnap?.exists && purchaseSnap.data().shoppingListItemId && purchaseSnap.data().shoppingListItemId !== shoppingItemId) return needsReview('Purchase and shopping links do not agree.');
       if (purchaseSnap?.exists) {
         const purchase = purchaseSnap.data();
+        if (jobIdFor(purchase)) return needsReview('This purchase belongs to a job. Include its products and services on the job invoice.');
         if (purchase.returned === true || purchase.personalPurchase === true) return needsReview('The reconciled purchase is returned or personal. Review it before billing.');
         if (purchase.customerId && purchase.customerId !== customerId) return needsReview('The reconciled purchase belongs to a different customer.');
         if (invoiceIdFor(purchase) && invoiceIdFor(purchase) !== (current?.id || deterministicId) || purchase.invoiced && !invoiceIdFor(purchase)) return needsReview('The purchase already has other billing. Review it before creating another invoice.');
@@ -183,7 +193,7 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
       const itemSnap = invoice?.shoppingListItemId ? await tx.get(shoppingRef(data.companyId, invoice.shoppingListItemId, invoice.shoppingCollectionName || 'shoppingList')) : null;
       const item = itemSnap?.data() || {};
       const purchaseSnap = item.purchasedItem ? await tx.get(companyRef(data.companyId).collection('purchasedItems').doc(item.purchasedItem)) : null;
-      if (approvalSnap && (!approvalSnap.exists || !approved(approvalSnap.data())) || item.returned === true || item.personalPurchase === true || purchaseSnap?.data()?.returned === true || purchaseSnap?.data()?.personalPurchase === true) {
+      if ([invoice, approvalSnap?.data() || {}, item, purchaseSnap?.data() || {}].some(row => jobIdFor(row || {})) || approvalSnap && (!approvalSnap.exists || !approved(approvalSnap.data())) || item.returned === true || item.personalPurchase === true || purchaseSnap?.data()?.returned === true || purchaseSnap?.data()?.personalPurchase === true) {
         tx.set(ref, { status: 'cancelled', updatedAt: now() }, { merge: true });
         if (invoiceSnap.exists) tx.set(invoiceRef, { automationEmailStatus: 'needsReview', automationEmailError: 'Fulfillment changed before sending. Review this invoice in Sales.', updatedAt: now() }, { merge: true });
         return null;
@@ -260,7 +270,7 @@ exports.reconcilePartApprovalInvoice = onDocumentWritten({ document: 'customerPa
 exports.reconcileShoppingItemInvoice = onDocumentWritten({ document: 'companies/{companyId}/shoppingList/{shoppingItemId}', retry: true }, event => {
   const data = event.data?.after?.data();
   if (!data) return null;
-  const fields = ['status', 'purchasedItem', 'partApprovalRequestId', 'approvalRequestId', 'autoInvoiceOnInstall', 'customerId', 'returned', 'personalPurchase'];
+  const fields = ['status', 'purchasedItem', 'partApprovalRequestId', 'approvalRequestId', 'autoInvoiceOnInstall', 'customerId', 'returned', 'personalPurchase', 'jobId', 'workOrderId', 'assignedJobId'];
   if (fields.every(field => same(event.data?.before?.data()?.[field], data[field]))) return null;
   return reconcileEvent(event, event.params);
 });

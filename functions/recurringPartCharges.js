@@ -6,10 +6,12 @@ const { fail } = require('./companyActor');
 const nextBill = row => ['nextbill', 'includeonnextbill'].includes(key(row.paymentPreference || row.paymentCollectionPreference));
 const approved = row => ['approved', 'resolved'].includes(key(row.approvalStatus || row.status));
 const delivered = row => ['delivered', 'installed'].includes(key(row.status || row.fulfillmentStatus));
+const jobMaterial = row => Boolean(row.jobId || row.workOrderId || row.assignedJobId);
 const usable = row => !['canceled', 'cancelled', 'superseded', 'inactive', 'expired', 'paused'].includes(key(row.status)) &&
   (row.stripeSubscriptionId ? Boolean(row.stripeCustomerId && row.stripeConnectedAccountId) && ['active', 'trialing', 'pastdue', 'unpaid'].includes(key(row.stripeStatus || row.status)) : row.manualBillingEnabled === true && row.autopayEnabled !== true && row.billingCollectionMethod !== 'automaticStripe' && !row.checkoutHold);
 
 async function billingOptions(reader, db, approval) {
+  if (jobMaterial(approval)) return [];
   const rows = await reader.get(db.collection('salesBillingSubscriptions').where('companyId', '==', approval.companyId).where('customerId', '==', approval.customerId));
   return rows.docs.filter(snap => {
     const row = snap.data(), locations = row.serviceLocationIds || [];
@@ -36,7 +38,7 @@ async function readSources(tx, db, row) {
     approval.companyId === row.companyId && approval.customerId === row.customerId && approval.shoppingListItemId === row.shoppingListItemId &&
     (item.partApprovalRequestId || item.approvalRequestId) === row.partApprovalRequestId && (!item.customerId || item.customerId === row.customerId) &&
     (delivered(item) || delivered({ status: approval.fulfillmentStatus })) &&
-    snapshots.every(snap => !snap.exists || snap.data().returned !== true && snap.data().personalPurchase !== true && (!snap.data().customerId || snap.data().customerId === row.customerId) && (!snap.data().shoppingListItemId || snap.data().shoppingListItemId === row.shoppingListItemId) && !snap.data().manuallyInvoiced && (!(snap.data().salesInvoiceId || snap.data().invoiceId) || (snap.data().salesInvoiceId || snap.data().invoiceId) === row.invoiceId) && (!snap.data().invoiced || Boolean(row.invoiceId)));
+    snapshots.every(snap => !snap.exists || !jobMaterial(snap.data()) && snap.data().returned !== true && snap.data().personalPurchase !== true && (!snap.data().customerId || snap.data().customerId === row.customerId) && (!snap.data().shoppingListItemId || snap.data().shoppingListItemId === row.shoppingListItemId) && !snap.data().manuallyInvoiced && (!(snap.data().salesInvoiceId || snap.data().invoiceId) || (snap.data().salesInvoiceId || snap.data().invoiceId) === row.invoiceId) && (!snap.data().invoiced || Boolean(row.invoiceId)));
   return { snapshots: snapshots.filter(snap => snap.exists), valid };
 }
 

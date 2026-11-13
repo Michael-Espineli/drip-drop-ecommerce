@@ -134,9 +134,8 @@ function CompanyDataExport({ exportType: exportTypeOverride = "" }) {
 
   const previewRows = exportPackage?.previewRows || EMPTY_ROWS;
   const previewHeaders = useMemo(() => {
-    if (exportPackage?.previewHeaders?.length) return exportPackage.previewHeaders;
-    if (!previewRows.length) return [];
-    return Object.keys(previewRows[0]).slice(0, 8);
+    const headers = exportPackage?.previewHeaders?.length ? exportPackage.previewHeaders : Object.keys(previewRows[0] || {});
+    return headers.filter((header) => !/(^|\s)ids?$/i.test(header)).slice(0, 8);
   }, [exportPackage?.previewHeaders, previewRows]);
 
   const Icon = config?.icon || DocumentTextIcon;

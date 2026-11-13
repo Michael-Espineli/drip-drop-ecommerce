@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../utils/displayReferences';
 import WorkspaceHeader from '../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -215,7 +216,7 @@ const Notifications = () => {
                       {alert.message && <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-600">{alert.message}</p>}
                       {alert.relatedEntity?.id && (
                         <p className="mt-2 text-xs font-semibold text-slate-500">
-                          {recordLabel}: {alert.relatedEntity.label || alert.relatedEntity.id}
+                          {recordLabel}: {displayReferenceValue(alert.relatedEntity.label || "Open record", "Open record")}
                         </p>
                       )}
                     </div>

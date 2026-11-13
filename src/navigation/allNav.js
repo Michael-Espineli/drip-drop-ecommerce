@@ -126,13 +126,13 @@ export const allNav = [
     // { id: 115, title: 'One Time Labor Contracts', icon: <FaRegFileAlt />, role: 'Company', path: '/company/laborContracts', category: 'Users' },
 
     // --- Client Routes ---
-    { id: 1, title: 'Dashboard', icon: <AiOutlineDashboard />, role: 'Client', path: '/dashboard', category: 'NA' },
-    { id: 2, title: 'My Pool', icon: <FaSwimmingPool />, role: 'Client', path: '/mypool/NA', category: 'NA' },
-    { id: 4, title: 'Equipment', icon: <GiBugNet />, role: 'Client', path: '/equipment', category: 'NA' },
+    { id: 1, title: 'Dashboard', icon: <AiOutlineDashboard />, role: 'Client', path: '/client/dashboard', category: 'NA' },
+    { id: 2, title: 'My Pool', icon: <FaSwimmingPool />, role: 'Client', path: '/client/my-pool', category: 'NA' },
+    { id: 4, title: 'Equipment', icon: <GiBugNet />, role: 'Client', path: '/client/equipment', category: 'NA' },
     { id: 5, title: 'Companies', icon: <FaRegBuilding />, role: 'Client', path: '/companies', category: 'NA' },
-    { id: 6, title: 'Messages', icon: <IoIosChatbubbles />, role: 'Client', path: '/messages', category: 'NA', featureFlagId: 'feature_flag_001' },
+    { id: 6, title: 'Messages', icon: <IoIosChatbubbles />, role: 'Client', path: '/client/chat', category: 'NA', featureFlagId: 'feature_flag_001' },
     { id: 11, title: 'Notifications', icon: <FaBell />, role: 'Client', path: '/client/notifications', category: 'NA', featureFlagId: 'feature_flag_011' },
-    { id: 7, title: 'Contracts', icon: <IoDocumentTextOutline />, role: 'Client', path: '/contracts', category: 'NA' },
+    { id: 7, title: 'Contracts', icon: <IoDocumentTextOutline />, role: 'Client', path: '/client/service-agreements', category: 'NA' },
     { id: 8, title: 'Part Approvals', icon: <FaClipboardList />, role: 'Client', path: '/client/part-approvals', category: 'NA' },
-    { id: 10, title: 'Settings', icon: <FaUserCog />, role: 'Client', path: '/settings', category: 'NA' },
+    { id: 10, title: 'Settings', icon: <FaUserCog />, role: 'Client', path: '/client/settings', category: 'NA' },
 ];

@@ -187,6 +187,13 @@ function TesterStripProfiles() {
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [draftProfile, setDraftProfile] = useState(null);
   const [enabledCompanyText, setEnabledCompanyText] = useState('');
+  const [availableCompanies, setAvailableCompanies] = useState([]);
+  const [companyOptionsError, setCompanyOptionsError] = useState('');
+  useEffect(() => onSnapshot(collection(db, 'companies'), (snapshot) => {
+    setAvailableCompanies(snapshot.docs.map((item) => ({ id: item.id, name: item.data().name || item.data().companyName || 'Company' })));
+    setCompanyOptionsError('');
+  }, () => setCompanyOptionsError('Company names could not be loaded. Existing selections are retained.')), []);
+
   const [captureGuidanceText, setCaptureGuidanceText] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [benchColors, setBenchColors] = useState({});
@@ -536,7 +543,7 @@ function TesterStripProfiles() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <span className="font-semibold text-slate-100">
-                    {profile.displayName || profile.productName || profile.id}
+                    {profile.displayName || profile.productName || "Tester strip profile"}
                   </span>
                   <span
                     className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
@@ -578,20 +585,12 @@ function TesterStripProfiles() {
           <p className="text-xs text-slate-400">Stored in universal settings for company-enabled strip scanning.</p>
         </div>
         <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-300 ring-1 ring-slate-800">
-          {draftProfile?.id || 'No profile'}
+          {draftProfile ? 'Profile selected' : 'No profile'}
         </span>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <label>
-          <span className={labelClass}>Profile Id</span>
-          <input
-            type="text"
-            value={draftProfile?.id || ''}
-            onChange={(event) => updateDraft({ id: event.target.value })}
-            className={`${inputClass} mt-1`}
-          />
-        </label>
+
         <label>
           <span className={labelClass}>Display Name</span>
           <input
@@ -685,13 +684,12 @@ function TesterStripProfiles() {
 
       <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
         <label>
-          <span className={labelClass}>Enabled Company Ids</span>
-          <textarea
-            value={enabledCompanyText}
-            onChange={(event) => setEnabledCompanyText(event.target.value)}
-            className={`${inputClass} mt-1 min-h-[120px]`}
-            placeholder="One company id per line"
-          />
+          <span className={labelClass}>Enabled Companies</span>
+          <select multiple aria-label="Enabled companies" value={textToEnabledCompanyIds(enabledCompanyText)} onChange={(event) => setEnabledCompanyText(Array.from(event.target.selectedOptions, (option) => option.value).join('\n'))} className={`${inputClass} mt-1 min-h-[120px]`}>
+            {textToEnabledCompanyIds(enabledCompanyText).filter((id) => !availableCompanies.some((company) => company.id === id)).map((id) => <option key={id} value={id}>Unavailable company</option>)}
+            {availableCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+          </select>
+          {companyOptionsError && <p role="alert" className="mt-1 text-sm text-amber-400">{companyOptionsError}</p>}
         </label>
         <label>
           <span className={labelClass}>Capture Guidance</span>
@@ -790,15 +788,7 @@ function TesterStripProfiles() {
               className={`${smallInputClass} mt-1`}
             />
           </label>
-          <label>
-            <span className={labelClass}>Pad Id</span>
-            <input
-              type="text"
-              value={pad.id || ''}
-              onChange={(event) => updatePad(pad.id, { id: event.target.value })}
-              className={`${smallInputClass} mt-1`}
-            />
-          </label>
+
           <label>
             <span className={labelClass}>Label</span>
             <input
@@ -950,7 +940,7 @@ function TesterStripProfiles() {
             <div key={pad.id} className="rounded-md border border-slate-800/70 bg-slate-900/50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-bold text-slate-100">{pad.label || pad.id}</div>
+                  <div className="text-sm font-bold text-slate-100">{pad.label || "Reading"}</div>
                   <div className="text-xs text-slate-400">
                     {match?.matchedStop?.label || '-'} · {Math.round((match?.confidence || 0) * 100)}% confidence
                   </div>

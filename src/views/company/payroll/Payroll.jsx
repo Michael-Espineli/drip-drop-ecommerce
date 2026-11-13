@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
@@ -1490,12 +1491,12 @@ const Payroll = ({ mode = "payroll" }) => {
   const workerName = (technicianId) => {
     if (technicianId === BASE_TECHNICIAN_RATE_ID) return "Base Technician Defaults";
     const worker = companyUsers.find((item) => item.userId === technicianId || item.id === technicianId);
-    return worker?.userName || worker?.name || worker?.displayName || technicianId || "-";
+    return worker?.userName || worker?.name || worker?.displayName || "Technician";
   };
 
   const workTypeName = (workTypeId) => {
     const workType = companyWorkTypes.find((item) => item.id === workTypeId);
-    return workType?.name || (workTypeId ? workTypeId : "General");
+    return workType?.name || "General";
   };
 
   const serviceStopTypeWorkTypeNames = (type) => {
@@ -1503,7 +1504,7 @@ const Payroll = ({ mode = "payroll" }) => {
     const activeNames = ids
       .map((id) => companyWorkTypes.find((item) => item.id === id))
       .filter(isActiveCompanyWorkType)
-      .map((workType) => workType.name || workType.id)
+      .map((workType) => workType.name || "Pay type")
       .filter(Boolean);
     if (activeNames.length === 0) return "No default pay types";
     return activeNames.join(", ");
@@ -3039,7 +3040,7 @@ const Payroll = ({ mode = "payroll" }) => {
                   if (!workerId) return null;
                   return (
                     <option key={workerId} value={workerId}>
-                      {worker.userName || worker.name || worker.displayName || workerId}
+                      {worker.userName || worker.name || worker.displayName || "Technician"}
                     </option>
                   );
                 })}
@@ -3227,7 +3228,7 @@ const Payroll = ({ mode = "payroll" }) => {
               <option value="">All Technicians</option>
               {companyUsers.map(worker => {
                 const id = worker.userId || worker.id || worker.docId;
-                return id ? <option key={id} value={id}>{worker.userName || worker.name || worker.displayName || id}</option> : null;
+                return id ? <option key={id} value={id}>{worker.userName || worker.name || worker.displayName || "Technician"}</option> : null;
               })}
             </select>
           </label>
@@ -3349,7 +3350,7 @@ const Payroll = ({ mode = "payroll" }) => {
                     if (!workerId) return null;
                     return (
                       <option key={workerId} value={workerId}>
-                        {worker.userName || worker.name || worker.displayName || workerId}
+                        {worker.userName || worker.name || worker.displayName || "Technician"}
                       </option>
                     );
                   })}
@@ -3601,7 +3602,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 <div className="rounded-lg border border-slate-200 bg-white p-4">
                   <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600">Payment</h3>
                   <div className="mt-3 space-y-2 text-sm text-slate-700">
-                    <p><span className="font-semibold">Reference:</span> {statement.paymentReference || statement.externalReferenceId || "-"}</p>
+                    <p><span className="font-semibold">Reference:</span> {displayReferenceValue(statement.paymentReference || statement.externalReferenceId || "-", "Payment recorded")}</p>
                     <p><span className="font-semibold">Notes:</span> {statement.paidNotes || statement.notes || "-"}</p>
                   </div>
                 </div>
@@ -4443,7 +4444,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 <tr key={worker.matrixTechnicianId}>
                   <th className={`sticky left-0 z-10 w-56 min-w-[14rem] border-b border-r border-slate-200 px-3 py-3 text-left align-top ${worker.isRateTemplate ? "bg-amber-50" : "bg-white"}`}>
                     <span className="block text-sm font-bold text-slate-900">{worker.matrixName}</span>
-                    <span className={`mt-1 block truncate text-[11px] font-normal ${worker.isRateTemplate ? "text-amber-700" : "text-slate-500"}`}>{worker.workerType || worker.role || worker.matrixTechnicianId}</span>
+                    <span className={`mt-1 block truncate text-[11px] font-normal ${worker.isRateTemplate ? "text-amber-700" : "text-slate-500"}`}>{worker.workerType || worker.role || "Technician"}</span>
                   </th>
                   {visibleRateMatrixColumnGroups.map((group) => (
                     group.columns.map((column) => {
@@ -4756,7 +4757,7 @@ const Payroll = ({ mode = "payroll" }) => {
           <button type="button" onClick={() => { setActionNotice(); setPayrollReloadVersion(version => version + 1); }}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Retry loading payroll</button>
         </div> : null}
-        {!loading && !error && !isSetupMode && activeTab === "requests" && <PayRequestsPanel companyId={recentlySelectedCompany} companyUsers={companyUsers} workTypes={companyWorkTypes} />}
+        {!loading && !error && !isSetupMode && activeTab === "requests" && <PayRequestsPanel companyId={recentlySelectedCompany} companyUsers={companyUsers} workTypes={companyWorkTypes} payItems={lineItems} />}
         {!loading && !error && !isSetupMode && activeTab === "lineItems" ? renderLineItems() : null}
         {!loading && !error && !isSetupMode && activeTab === "statements" ? renderStatements() : null}
         {!loading && !error && isSetupMode && activeTab === "overview" ? renderSetupOverview() : null}
@@ -4873,21 +4874,21 @@ const Payroll = ({ mode = "payroll" }) => {
                 <DetailField label="Total" value={moneyFromCents(detailLineItem.totalAmountCents)} accent />
                 <DetailField label="Completed" value={debugDateTime(detailLineItem.completedDate)} />
                 <DetailField label="Source" value={detailLineItem.source} />
-                <DetailField label="Technician" value={detailLineItem.technicianName || (detailLineItem.technicianId ? "Assigned technician" : "")} accent />
+                <DetailField label="Technician" value={displayReferenceValue(detailLineItem.technicianName || (detailLineItem.technicianId ? "Assigned technician" : ""), "Technician")} accent />
                 <DetailField label="Worker Type" value={detailLineItem.workerType} />
-                <DetailField label="Company" value={detailLineItem.companyName || (detailLineItem.companyId || recentlySelectedCompany ? "Selected company" : "")} />
-                <DetailField label="Service Stop" value={detailLineItem.serviceStopInternalId || (detailLineItem.serviceStopId ? "Service stop" : "")} accent />
+                <DetailField label="Company" value={displayReferenceValue(detailLineItem.companyName || (detailLineItem.companyId || recentlySelectedCompany ? "Selected company" : ""), "Company")} />
+                <DetailField label="Service Stop" value={displayReferenceValue(detailLineItem.serviceStopInternalId || (detailLineItem.serviceStopId ? "Service stop" : ""), "Service Stop")} accent />
                 <DetailField label="Stop Pay Type" value={detailLineItem.payTypeName || detailLineItem.serviceStopTypeName} />
-                <DetailField label="Job" value={detailLineItem.jobInternalId || (detailLineItem.jobId ? "Job" : "")} />
-                <DetailField label="Task" value={detailLineItem.displayTitle || detailLineItem.workTypeName || (detailLineItem.serviceStopTaskId || detailLineItem.taskId ? "Task" : "")} />
-                <DetailField label="Pay Type" value={detailLineItem.payTypeName || detailLineItem.workTypeName || (detailLineItem.payTypeId || detailLineItem.workTypeId ? "General" : "")} accent />
+                <DetailField label="Job" value={displayReferenceValue(detailLineItem.jobInternalId || (detailLineItem.jobId ? "Job" : ""), "Job")} />
+                <DetailField label="Task" value={displayReferenceValue(detailLineItem.displayTitle || detailLineItem.workTypeName || (detailLineItem.serviceStopTaskId || detailLineItem.taskId ? "Task" : ""), "Task")} />
+                <DetailField label="Pay Type" value={displayReferenceValue(detailLineItem.payTypeName || detailLineItem.workTypeName || (detailLineItem.payTypeId || detailLineItem.workTypeId ? "General" : ""), "Pay Type")} accent />
                 <DetailField label="Pay Basis" value={detailLineItem.payBasis} accent />
                 <DetailField label="Rate Type" value={rateTypeLabel(detailLineItem)} />
                 <DetailField label="Rate Amount" value={moneyFromCents(detailLineItem.rateAmountCents)} />
                 <DetailField label="Quantity" value={`${Number(detailLineItem.quantity || 0)} ${detailLineItem.quantityUnit || ""}`.trim()} />
-                <DetailField label="Rate" value={rateTypeLabel(detailLineItem) || (detailLineItem.rateId || detailLineItem.technicianRateId ? "Rate" : "")} />
-                <DetailField label="Pay Statement" value={detailLineItem.payStatementReference || detailLineItem.payStatementId} />
-                <DetailField label="Payment Ref" value={detailLineItem.paymentReference || detailLineItem.externalReferenceId} />
+                <DetailField label="Rate" value={displayReferenceValue(rateTypeLabel(detailLineItem) || (detailLineItem.rateId || detailLineItem.technicianRateId ? "Rate" : ""), "Rate")} />
+                <DetailField label="Pay Statement" value={displayReferenceValue(detailLineItem.payStatementReference || "Pay statement", "Pay statement")} />
+                <DetailField label="Payment Ref" value={displayReferenceValue(detailLineItem.paymentReference || detailLineItem.externalReferenceId, "Payment Ref")} />
               </div>
 
               <div className="mt-5 grid gap-4 lg:grid-cols-2">

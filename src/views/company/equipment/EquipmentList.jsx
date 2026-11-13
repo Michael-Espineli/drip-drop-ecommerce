@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
@@ -730,10 +731,10 @@ const ActiveJobsCell = ({ jobs = [], loading = false }) => {
           <Link
             key={job.id}
             to={`/company/jobs/detail/${job.id}`}
-            title={[job.internalId || "Job", getJobStatusLabel(job)].filter(Boolean).join(" - ")}
+            title={[displayReferenceValue(job.internalId || "Job", "Job"), getJobStatusLabel(job)].filter(Boolean).join(" - ")}
             className="max-w-[78px] truncate rounded-md border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[11px] font-bold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100"
           >
-            {job.internalId || "Job"}
+            {displayReferenceValue(job.internalId || "Job", "Job")}
           </Link>
         ))}
         {remainingCount > 0 && (

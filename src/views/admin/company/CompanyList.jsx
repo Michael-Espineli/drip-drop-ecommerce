@@ -211,7 +211,7 @@ function CompanyList() {
                     >
                       {company.name || 'Unnamed Company'}
                     </Link>
-                    <div className="mt-1 font-mono text-xs text-slate-500">{company.id}</div>
+
                   </td>
 
                   <td className="px-4 py-3 text-slate-200">

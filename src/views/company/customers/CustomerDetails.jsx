@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 
@@ -3955,7 +3956,7 @@ const RecurringTab = ({ customer }) => {
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
-                                                <p className="text-sm font-bold text-slate-900">{rs.internalId || 'RSS'}</p>
+                                                <p className="text-sm font-bold text-slate-900">{displayReferenceValue(rs.internalId || 'RSS', "Recurring service")}</p>
                                                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                                             </div>
                                             <p className="mt-1 truncate text-sm font-medium text-slate-700">
@@ -4158,7 +4159,7 @@ const RepairRequestsSection = ({ customer }) => {
                 compact
                 actions={
                     <Link
-                        to={`/company/repair-requests/internal/create/${customer.id}`}
+                        to={`/company/repair-requests/create/${customer.id}`}
                         className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm"
                     >
                         + Add
@@ -4178,7 +4179,7 @@ const RepairRequestsSection = ({ customer }) => {
                 compact
                 actions={
                     <Link
-                        to={`/company/repair-requests/external/create/${customer.id}`}
+                        to={`/request-repair/${recentlySelectedCompany}?customerId=${encodeURIComponent(customer.id)}`} target="_blank" rel="noopener noreferrer"
                         className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm"
                     >
                         + Add
@@ -4597,7 +4598,7 @@ const SalesActivitySection = ({ customer }) => {
                             </div>
                             <div>
                                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Stripe Customer</p>
-                                <p className="mt-1 truncate text-sm text-slate-700">{primaryBillingProfile.stripeCustomerId || 'Not linked'}</p>
+                                <p className="mt-1 truncate text-sm text-slate-700">{primaryBillingProfile.stripeCustomerId ? 'Linked' : 'Not linked'}</p>
                             </div>
                         </div>
                     )}
@@ -5960,7 +5961,7 @@ export default function CustomerDetails() {
                                 <div>
                                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer Reference</dt>
                                     <dd className="mt-1 font-semibold text-slate-900">
-                                        {customer.internalId || customer.company || customer.displayName || customer.email || "Customer"}
+                                        {displayReferenceValue(customer.internalId || customer.company || customer.displayName || customer.email || "Customer", "Customer")}
                                     </dd>
                                 </div>
                                 <div>

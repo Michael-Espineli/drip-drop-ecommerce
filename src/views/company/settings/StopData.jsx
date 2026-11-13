@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -243,11 +244,7 @@ const DataList = ({ title, items, fallback }) => (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="font-semibold text-slate-900">{itemName(item, fallback)}</p>
-                {(item.templateId || item.universalTemplateId) && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    {[item.templateId, item.universalTemplateId].filter(Boolean).join(" / ")}
-                  </p>
-                )}
+
               </div>
               <p className="text-sm font-bold text-slate-900">{itemAmount(item) || "-"}</p>
             </div>
@@ -293,10 +290,9 @@ const StopDataDetailModal = ({ record, onClose }) => {
           <dl className="grid gap-4 rounded-md border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-4">
             <DetailRow label="Customer" value={record.customerName} />
             <DetailRow label="Service Location" value={record.serviceLocationName} />
-            <DetailRow label="Body Of Water" value={record.bodyOfWaterName || record.bodyOfWaterId} />
-            <DetailRow label="Technician" value={record.techName || record.userId} />
-            <DetailRow label="Service Stop" value={record.serviceStopId} />
-            <DetailRow label="Record ID" value={record.id} />
+            <DetailRow label="Body Of Water" value={record.bodyOfWaterName || "Pool or spa"} />
+            <DetailRow label="Technician" value={record.techName || "Technician"} />
+            <DetailRow label="Service Visit" value={displayReferenceValue(record.serviceStopInternalId || "Service visit", "Service visit")} />
             <DetailRow label="Source" value={record.source === "stores" ? "Service Stop Stores" : "Company Stop Data"} />
             <DetailRow label="Equipment Measurements" value={record.equipmentMeasurements.length} />
           </dl>
@@ -328,7 +324,7 @@ const StopDataDetailModal = ({ record, onClose }) => {
                 <div className="mt-3 space-y-2">
                   {record.equipmentMeasurements.map((measurement, index) => (
                     <div key={`${measurement.id || measurement.equipmentId || "measurement"}-${index}`} className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700">
-                      <p className="font-semibold text-slate-900">{measurement.equipmentName || measurement.equipmentId || "Equipment"}</p>
+                      <p className="font-semibold text-slate-900">{measurement.equipmentName || "Equipment"}</p>
                       <p className="mt-1">
                         {[
                           measurement.status,
@@ -667,8 +663,8 @@ const StopData = () => {
                       <td className="whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900">{formatDate(record.date)}</td>
                       <td className="px-4 py-3 text-sm text-slate-700">{stringValue(record.customerName)}</td>
                       <td className="px-4 py-3 text-sm text-slate-700">{stringValue(record.serviceLocationName)}</td>
-                      <td className="px-4 py-3 text-sm text-slate-700">{stringValue(record.bodyOfWaterName || record.bodyOfWaterId)}</td>
-                      <td className="px-4 py-3 text-sm text-slate-700">{stringValue(record.techName || record.userId)}</td>
+                      <td className="px-4 py-3 text-sm text-slate-700">{stringValue(record.bodyOfWaterName || "Pool or spa")}</td>
+                      <td className="px-4 py-3 text-sm text-slate-700">{stringValue(record.techName || "Technician")}</td>
                       <td className="min-w-[220px] px-4 py-3 text-sm text-slate-700">{previewItems(record.readings, "Reading")}</td>
                       <td className="min-w-[220px] px-4 py-3 text-sm text-slate-700">{previewItems(record.dosages, "Dosage")}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-sm">

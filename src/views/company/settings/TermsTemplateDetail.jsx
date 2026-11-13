@@ -79,8 +79,8 @@ const templateDefaultRows = (template = {}) => {
                 optionLabel(termsTemplateMixedChemicalBillingSelectionOptions, defaults.chemicalBillingMixedSelectionMode) || 'No default',
             ]
             : null,
-        defaults.includedChemicalIds.length ? ['Included Dosage IDs', defaults.includedChemicalIds.join(', ')] : null,
-        defaults.separatelyBilledChemicalIds.length ? ['Separately Billed Dosage IDs', defaults.separatelyBilledChemicalIds.join(', ')] : null,
+        defaults.includedChemicalIds.length ? ['Included Dosages', `${defaults.includedChemicalIds.length} selected`] : null,
+        defaults.separatelyBilledChemicalIds.length ? ['Separately Billed Dosages', `${defaults.separatelyBilledChemicalIds.length} selected`] : null,
         ['Chemical Notes', defaults.chemicalBillingNotes || 'No default'],
     ].filter(Boolean);
 };
@@ -631,7 +631,6 @@ const TermsTemplateDetail = () => {
                                 ))}
                             </dl>
 
-                            <p className="mt-4 truncate text-xs text-slate-400">{template.id}</p>
                         </section>
 
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">

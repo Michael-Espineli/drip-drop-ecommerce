@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -619,7 +620,7 @@ const CompanyPartApprovalHistory = () => {
                             </Link>
                           </div>
                           {approval.jobId || shoppingListItemId || invoiceId ? (
-                            <p className="mt-1 text-[11px] text-slate-400">{compactText([approval.jobInternalId || approval.jobName, shoppingListItemId, invoiceId])}</p>
+                            <p className="mt-1 text-[11px] text-slate-400">{displayReferenceValue(approval.jobInternalId || approval.jobName || "Linked records", "Linked records")}</p>
                           ) : null}
                         </td>
                       </tr>

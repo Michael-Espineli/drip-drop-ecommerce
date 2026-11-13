@@ -1166,7 +1166,7 @@ const CreateNewPurchase = () => {
                         <td className="px-2 py-2 text-gray-700">{item.sku || "--"}</td>
                         <td className="px-2 py-2">
                           <p className="font-semibold text-gray-900">{item.name}</p>
-                          <p className="mt-1 text-xs text-gray-500">{item.description || item.itemId}</p>
+                          <p className="mt-1 text-xs text-gray-500">{item.description || item.name || "Purchased item"}</p>
                         </td>
                         <td className="px-2 py-2">
                           {item.productName ? (

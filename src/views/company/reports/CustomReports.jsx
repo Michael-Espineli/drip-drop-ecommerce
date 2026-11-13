@@ -1,13 +1,13 @@
+import WorkspaceHeader from "../../../components/workspace/WorkspaceHeader";
+import { reportCatalog, fixedGroupingReportTypes, payrollOnlyReportTypes } from "../../../utils/reports/reportCatalog";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
   collection,
   deleteDoc,
   doc,
   getDocs,
-  orderBy,
-  query,
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
@@ -26,29 +26,7 @@ import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { db } from "../../../utils/config";
-import { getCustomerTagOptions } from "../../../utils/customerTags";
-
-const reportCatalog = [
-  { value: "funReadingsDosages", label: "Fun Readings & Dosages", source: "daily reading and dosage ranges", category: "operations" },
-  { value: "readings", label: "Readings & Dosages Summary", source: "stopData readings and dosages", category: "operations" },
-  { value: "readingHealth", label: "Reading Health", source: "reading thresholds by pool", category: "operations" },
-  { value: "readingPerformance", label: "Reading Performance", source: "stopData standards by user or customer", category: "performance" },
-  { value: "pnlPerPool", label: "PNL Per Service Location", source: "service agreements by location, labor, chemicals", category: "performance" },
-  { value: "pipeline", label: "Pipeline", source: "customerPipeline, lead sources, lost and fired reasons", category: "marketing" },
-  { value: "chemicals", label: "Chemicals", source: "stopData dosages", category: "operations" },
-  { value: "waste", label: "Waste", source: "linked dosages and purchased items", category: "performance" },
-  { value: "users", label: "Users", source: "users, stops, jobs, purchases, payroll", category: "operations" },
-  { value: "job", label: "Jobs", source: "workOrders, purchases, payroll", category: "operations" },
-  { value: "vehicle", label: "Vehicle", source: "vehicals and activeRoutes", category: "operations" },
-  { value: "purchases", label: "Purchases", source: "purchasedItems and database items", category: "finance" },
-  { value: "payroll", label: "Payroll", source: "technician payroll line items", category: "finance" },
-  { value: "futurePayroll", label: "Future Payroll", source: "unpaid payroll and scheduled service stop estimates", category: "finance" },
-  { value: "pnl", label: "P.N.L.", source: "service agreements, jobs, purchases, payroll", category: "finance" },
-  { value: "tax", label: "Tax", source: "purchases and invoiced jobs", category: "finance" },
-];
-
-const fixedGroupingReportTypes = new Set(["funReadingsDosages", "readingHealth", "readingPerformance", "pnlPerPool", "pipeline"]);
-const payrollOnlyReportTypes = new Set(["payroll", "futurePayroll"]);
+import { filterCustomersByRegionalAccess, getCustomerTagOptions } from "../../../utils/customerTags";
 
 const readingOperatorOptions = [
   { value: "gt", label: "Over" },
@@ -103,7 +81,7 @@ const dateRangePresets = [
 const defaultDateRange = () =>
   dateRangePresets.find((preset) => preset.value === "thisMonth").getRange();
 
-const normalizeDocs = (snapshot) => snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+const normalizeDocs = (snapshot) => snapshot.docs.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id }));
 
 const reportLabel = (reportType) =>
   reportCatalog.find((report) => report.value === reportType)?.label || "Report";
@@ -253,8 +231,10 @@ const formatTimestamp = (value) => {
 };
 
 const CustomReports = () => {
-  const { recentlySelectedCompany, user: authUser, dataBaseUser } = useContext(Context);
-  const { can } = useCompanyPermissions();
+  const { recentlySelectedCompany, user: authUser, dataBaseUser, companyRole, companyUserAccess, selectedCustomerRegionTag, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
+  const { can, permissionsReady } = useCompanyPermissions();
+  const canViewReports = can("870");
+  const canViewCustomers = can("10");
   const canViewPayrollInformation = can("420");
   const permittedReportCatalog = useMemo(
     () => canViewPayrollInformation
@@ -272,6 +252,16 @@ const CustomReports = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [deletingReportId, setDeletingReportId] = useState("");
 
+  const scope = JSON.stringify([recentlySelectedCompany, permissionsReady, canViewReports, canViewPayrollInformation, can("872"), can("874"), can("876")]);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  useEffect(() => {
+    scopeRef.current = scope;
+    setCustomReports([]); setEditingReportId(""); setForm(createDefaultForm());
+    setAvailableReadingTemplates([]); setAvailableCustomerTags([]); setIsSaving(false); setDeletingReportId("");
+    return () => { scopeRef.current = ""; };
+  }, [scope]);
+
   const selectedReport = useMemo(
     () => reportCatalog.find((report) => report.value === form.reportType) || reportCatalog[0],
     [form.reportType]
@@ -288,22 +278,25 @@ const CustomReports = () => {
   };
 
   const fetchCustomReports = useCallback(async () => {
-    if (!recentlySelectedCompany) {
+    if (!recentlySelectedCompany || !permissionsReady || !canViewReports) {
       setCustomReports([]);
       return;
     }
 
+    const requestScope = scope;
     setIsLoading(true);
     try {
-      const reportsSnap = await getDocs(query(customReportsRef(recentlySelectedCompany), orderBy("updatedAt", "desc")));
+      const reportsSnap = await getDocs(customReportsRef(recentlySelectedCompany));
+      if (scopeRef.current !== requestScope) return;
       setCustomReports(normalizeDocs(reportsSnap));
     } catch (error) {
+      if (scopeRef.current !== requestScope) return;
       console.error("Failed to load custom reports:", error);
       toast.error(userFacingErrorMessage(error, `Could not load custom reports: ${error.message}`));
     } finally {
-      setIsLoading(false);
+      if (scopeRef.current === requestScope) setIsLoading(false);
     }
-  }, [recentlySelectedCompany]);
+  }, [recentlySelectedCompany, scope, permissionsReady, canViewReports]);
 
   useEffect(() => {
     fetchCustomReports();
@@ -324,13 +317,13 @@ const CustomReports = () => {
       try {
         const [readingsSnap, customersSnap] = await Promise.all([
           getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "readings", "readings")),
-          getDocs(collection(db, "companies", recentlySelectedCompany, "customers")),
+          canViewCustomers ? getDocs(collection(db, "companies", recentlySelectedCompany, "customers")) : Promise.resolve({ docs: [] }),
         ]);
 
         if (!isActive) return;
 
         const readingTemplates = sortReadingTemplates(normalizeDocs(readingsSnap));
-        const customerTags = getCustomerTagOptions(normalizeDocs(customersSnap));
+        const customerTags = getCustomerTagOptions(filterCustomersByRegionalAccess(normalizeDocs(customersSnap), { role: companyRole, userAccess: companyUserAccess, selectedRegionTag: selectedCustomerRegionTag, regionalAccessEnabled: featureFlagsLoaded && isFeatureEnabled("feature_flag_014") }));
 
         setAvailableReadingTemplates(readingTemplates);
         setAvailableCustomerTags(customerTags);
@@ -346,7 +339,7 @@ const CustomReports = () => {
     return () => {
       isActive = false;
     };
-  }, [recentlySelectedCompany]);
+  }, [recentlySelectedCompany, scope, companyRole, companyUserAccess, selectedCustomerRegionTag, featureFlagsLoaded, isFeatureEnabled, canViewCustomers]);
 
   useEffect(() => {
     if (!canViewPayrollInformation && payrollOnlyReportTypes.has(form.reportType)) {
@@ -452,6 +445,9 @@ const CustomReports = () => {
   });
 
   const validateForm = () => {
+    if (!permissionsReady || !canViewReports || !can(editingReportId ? "874" : "872")) {
+      toast.error("You do not have permission to save this report."); return false;
+    }
     if (!recentlySelectedCompany) {
       toast.error("Please select a company.");
       return false;
@@ -498,7 +494,8 @@ const CustomReports = () => {
 
   const handleSave = async (event) => {
     event.preventDefault();
-    if (!validateForm()) return;
+    if (isSaving || !validateForm()) return;
+    const requestScope = scope;
 
     setIsSaving(true);
     const toastId = toast.loading(editingReportId ? "Updating custom report..." : "Creating custom report...");
@@ -519,6 +516,7 @@ const CustomReports = () => {
     try {
       if (editingReportId) {
         await updateDoc(customReportDocRef(recentlySelectedCompany, editingReportId), payload);
+        if (scopeRef.current !== requestScope) { toast.dismiss(toastId); return; }
         toast.success("Custom report updated.", { id: toastId });
       } else {
         const reportRef = await addDoc(customReportsRef(recentlySelectedCompany), {
@@ -527,16 +525,18 @@ const CustomReports = () => {
           createdByUserId: actorId,
           createdByName: actorName,
         });
+        if (scopeRef.current !== requestScope) { toast.dismiss(toastId); return; }
         setEditingReportId(reportRef.id);
         toast.success("Custom report created.", { id: toastId });
       }
 
       await fetchCustomReports();
     } catch (error) {
+      if (scopeRef.current !== requestScope) { toast.dismiss(toastId); return; }
       console.error("Failed to save custom report:", error);
       toast.error(userFacingErrorMessage(error, `Could not save custom report: ${error.message}`), { id: toastId });
     } finally {
-      setIsSaving(false);
+      if (scopeRef.current === requestScope) setIsSaving(false);
     }
   };
 
@@ -546,7 +546,8 @@ const CustomReports = () => {
   };
 
   const handleDeleteReport = async (customReport) => {
-    if (!recentlySelectedCompany) return;
+    if (!recentlySelectedCompany || !can("876") || deletingReportId) return;
+    const requestScope = scope;
     const confirmed = window.confirm(`Delete ${customReport.title || "this custom report"}?`);
     if (!confirmed) return;
 
@@ -555,14 +556,16 @@ const CustomReports = () => {
 
     try {
       await deleteDoc(customReportDocRef(recentlySelectedCompany, customReport.id));
+      if (scopeRef.current !== requestScope) { toast.dismiss(toastId); return; }
       if (editingReportId === customReport.id) resetForm();
       await fetchCustomReports();
       toast.success("Custom report deleted.", { id: toastId });
     } catch (error) {
+      if (scopeRef.current !== requestScope) { toast.dismiss(toastId); return; }
       console.error("Failed to delete custom report:", error);
       toast.error(userFacingErrorMessage(error, `Could not delete custom report: ${error.message}`), { id: toastId });
     } finally {
-      setDeletingReportId("");
+      if (scopeRef.current === requestScope) setDeletingReportId("");
     }
   };
 
@@ -713,11 +716,7 @@ const CustomReports = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-4 sm:px-3 lg:px-4">
       <div className="w-full">
-        <header className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Custom Reports</h1>
-            <p className="mt-1 text-sm text-slate-600">Saved report controls.</p>
-          </div>
+        <WorkspaceHeader className="mb-3" title="Custom Reports" eyebrow="Books" description="Save report controls and reuse them on desktop or iOS." actions={
           <Link
             to="/company/reports"
             className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-500 hover:text-slate-950"
@@ -725,10 +724,10 @@ const CustomReports = () => {
             <ArrowTopRightOnSquareIcon className="h-4 w-4" />
             Reports
           </Link>
-        </header>
+        } />
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-          <form onSubmit={handleSave} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <form onSubmit={handleSave} className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">{editingReport ? "Edit Custom Report" : "New Custom Report"}</h2>
@@ -777,6 +776,7 @@ const CustomReports = () => {
                     <option key={report.value} value={report.value}>{report.label}</option>
                   ))}
                 </select>
+                <p className="mt-2 text-sm text-slate-500">{selectedReport.source}</p>
               </div>
               <div>
                 <label className="block text-sm font-semibold text-slate-700">Output</label>

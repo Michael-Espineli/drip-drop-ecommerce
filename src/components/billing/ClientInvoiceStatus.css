@@ -1,0 +1,23 @@
+.client-invoice-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    min-height: 80px;
+    min-width: 220px;
+    max-width: 100%;
+    padding: 1rem 1.5rem;
+    border-width: 2px;
+    border-style: solid;
+    border-radius: var(--app-control-radius, .375rem);
+    box-shadow: var(--app-control-shadow);
+}
+
+.client-invoice-status:hover { filter: brightness(.97); }
+.client-invoice-status:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+.client-invoice-status-caption { display: block; font-size: .75rem; font-weight: 600; line-height: 1.5; }
+.client-invoice-status-label { display: block; font-size: 1.75rem; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+    .client-invoice-status { width: 100%; min-width: 0; }
+}

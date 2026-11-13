@@ -960,7 +960,6 @@ const ProductCatalog = () => {
                     <DetailRow label="Description">
                       <p className="whitespace-pre-wrap font-normal text-slate-700">{detailProduct.description || "--"}</p>
                     </DetailRow>
-                    <DetailRow label="Product ID" value={detailProduct.id} />
                     <DetailRow label="SKU" value={detailProduct.sku} />
                     <DetailRow label="Category" value={detailProduct.category} />
                     <DetailRow label="Subcategory" value={detailProduct.subCategory} />
@@ -999,23 +998,12 @@ const ProductCatalog = () => {
                     <h2 className="text-lg font-bold text-slate-950">Catalog Summary</h2>
                     <div className="mt-3">
                       <SummaryRow label="Linked Vendor Items" value={linkedCount} />
-                      <SummaryRow label="Preferred Vendor Item" value={detailProduct.preferredVendorItemId} />
+                      <SummaryRow label="Preferred Vendor Item" value={detailProduct.preferredVendorItemId ? "Selected" : "Not selected"} />
                       <SummaryRow label="Updated" value={updatedDate} />
                       <SummaryRow label="Created" value={formatDateValue(detailProduct.createdAt)} />
                     </div>
 
-                    <div className="mt-4 border-t border-slate-100 pt-4">
-                      <p className="text-xs font-bold uppercase text-slate-500">Vendor Item IDs</p>
-                      {linkedVendorItemIds.length ? (
-                        <div className="mt-2 space-y-1">
-                          {linkedVendorItemIds.map((linkedId) => (
-                            <p key={linkedId} className="break-words text-xs font-semibold leading-5 text-slate-900">{linkedId}</p>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="mt-2 text-sm font-semibold text-slate-900">--</p>
-                      )}
-                    </div>
+
                   </section>
                 </aside>
               </section>

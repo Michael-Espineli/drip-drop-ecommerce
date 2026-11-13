@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
@@ -139,7 +140,7 @@ const LifeCycleStepper = ({ currentStatus, routed, recurringServiceStopId }) => 
                         <p className="text-sm font-semibold text-blue-900">Routing</p>
                         <p className="mt-1 text-sm text-blue-800">
                             {routed
-                                ? `Routed${recurringServiceStopId ? ` to recurringServiceStopId: ${recurringServiceStopId}` : ', but recurringServiceStopId is missing.'}`
+                                ? (recurringServiceStopId ? 'Routed to recurring service' : 'Route link unavailable')
                                 : 'Not routed yet.'}
                         </p>
                     </div>
@@ -427,8 +428,8 @@ function RecurringContractDetailView() {
                                 <Field label="Amount" value={moneyValue} />
                                 <Field label="Frequency" value={contract.frequency || contract.interval} />
                                 <Field label="Start Date" value={contract.startDate || contract.dateCreated} />
-                                <Field label="Sender" value={contract.senderName || (contract.senderId ? 'Linked sender' : '')} />
-                                <Field label="Receiver" value={contract.receiverName || (contract.receiverId ? 'Linked receiver' : '')} />
+                                <Field label="Sender" value={displayReferenceValue(contract.senderName || (contract.senderId ? 'Linked sender' : ''), "Sender")} />
+                                <Field label="Receiver" value={displayReferenceValue(contract.receiverName || (contract.receiverId ? 'Linked receiver' : ''), "Receiver")} />
                                 <Field label="Connected Account" value={contract.connectedAccount ? 'Connected' : ''} />
                                 <Field label="Price" value={contract.priceId ? 'Price configured' : ''} />
                             </div>
@@ -444,8 +445,8 @@ function RecurringContractDetailView() {
                             <div className="space-y-4">
                                 <Field label="Routed" value={contract.routed} />
                                 <Field label="Recurring Service Stop" value={contract.recurringServiceStopId ? 'Linked recurring stop' : ''} />
-                                <Field label="Service Location" value={contract.serviceLocationName || (contract.serviceLocationId ? 'Linked service location' : '')} />
-                                <Field label="Body Of Water" value={contract.bodyOfWaterName || (contract.bodyOfWaterId ? 'Linked body of water' : '')} />
+                                <Field label="Service Location" value={displayReferenceValue(contract.serviceLocationName || (contract.serviceLocationId ? 'Linked service location' : ''), "Service Location")} />
+                                <Field label="Body Of Water" value={displayReferenceValue(contract.bodyOfWaterName || (contract.bodyOfWaterId ? 'Linked body of water' : ''), "Body Of Water")} />
                             </div>
                         </SectionCard>
 
@@ -453,7 +454,7 @@ function RecurringContractDetailView() {
                             <div className="space-y-4">
                                 <Field label="Created At" value={contract.createdAt} />
                                 <Field label="Updated At" value={contract.updatedAt} />
-                                <Field label="Customer" value={contract.customerName || (contract.customerId ? 'Linked customer' : '')} />
+                                <Field label="Customer" value={displayReferenceValue(contract.customerName || (contract.customerId ? 'Linked customer' : ''), "Customer")} />
                                 <Field label="Subscription" value={contract.subscriptionId ? 'Linked subscription' : ''} />
                             </div>
                         </SectionCard>

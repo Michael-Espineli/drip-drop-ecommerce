@@ -1,0 +1,22 @@
+import React from 'react';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, matchRoutes } from 'react-router-dom';
+import { getDocs } from 'firebase/firestore';
+import { Context } from '../../../context/AuthContext';
+import { privateRoutes } from '../../../routes/routes/privateRoutes';
+import Contracts from './Contracts';
+import RecurringContracts from '../contractRecurring/RecurringContracts';
+jest.mock('../../../context/AuthContext',()=>({Context:require('react').createContext({})}));
+jest.mock('../../../utils/config',()=>({db:{}}));
+jest.mock('../../../utils/models/ServiceLocation',()=>({ServiceLocation:{}}));
+jest.mock('firebase/functions',()=>({getFunctions:()=>({}),httpsCallable:()=>async()=>({data:{subscriptions:{data:[]}}})}));
+jest.mock('firebase/firestore',()=>({collection:(_, ...parts)=>parts.join('/'),query:(ref,...filters)=>({ref,filters}),where:(field,op,value)=>({field,value}),getDocs:jest.fn(),doc:jest.fn(),updateDoc:jest.fn()}));
+beforeEach(()=>getDocs.mockImplementation(async q=>({docs:q.filters.some(f=>f.field==='status'&&f.value==='Accepted')?[{id:'contract-doc',data:()=>({receiverName:'Actual customer',rate:12500,status:'Accepted'})}]:[]})));
+test.each([[Contracts,'/company/contracts','/company/contract/createNew/NA','/company/contract/detail/contract-doc'],[RecurringContracts,'/company/recurring-contracts','/company/recurring-contracts/createNew/NA','/company/recurring-contracts/detail/contract-doc']])('contract actions use registered destinations',async(Component,url,createPath,detailPath)=>{
+ render(<Context.Provider value={{recentlySelectedCompany:'company-one'}}><MemoryRouter future={{v7_startTransition:true,v7_relativeSplatPath:true}} initialEntries={[url]}><Routes><Route path={url} element={<Component/>}/><Route path={detailPath} element={<p>Correct contract detail</p>}/></Routes></MemoryRouter></Context.Provider>);
+ const customer=await screen.findByText('Actual customer');
+ expect(screen.getByRole('link',{name:'Send New Contract'})).toHaveAttribute('href',createPath);
+ expect(matchRoutes(privateRoutes,createPath)).not.toBeNull();expect(matchRoutes(privateRoutes,detailPath)).not.toBeNull();
+ expect(screen.getByRole('link',{name:'View Past'})).toHaveAttribute('href','#past-contracts');expect(screen.getByRole('region',{name:'Past Contracts'})).toHaveAttribute('id','past-contracts');
+ fireEvent.click(customer);expect(await screen.findByText('Correct contract detail')).toBeInTheDocument();
+});

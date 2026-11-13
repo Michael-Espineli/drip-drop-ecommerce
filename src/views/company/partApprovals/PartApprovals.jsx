@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
@@ -1230,7 +1231,7 @@ const CompanyPartApprovals = () => {
                         <td className="px-5 py-3">
                           {approval.jobId ? (
                             <Link to={`/company/jobs/detail/${approval.jobId}`} className="font-semibold text-blue-700 hover:text-blue-900">
-                              {approval.jobInternalId || approval.jobName || approval.jobId}
+                              {displayReferenceValue(approval.jobInternalId || approval.jobName || "Job", "Job")}
                             </Link>
                           ) : (
                             <span className="text-slate-500">Not linked</span>
@@ -1565,7 +1566,7 @@ const PartApprovalDetailModal = ({
 	                <p className="font-semibold text-slate-900">{partName}</p>
 	              )}
 	              <p className="mt-1 text-xs text-slate-500">
-	                {catalogItemId ? `${catalogItemLabel} ID: ${catalogItemId}` : 'This approval is not connected to a product.'}
+	                {catalogItemId ? "Product linked" : "This approval is not connected to a product."}
 	              </p>
 	            </div>
 	          </div>
@@ -1579,12 +1580,12 @@ const PartApprovalDetailModal = ({
 	          <DetailField label="Item Type" value={catalogItemLabel} />
 	          <DetailField label="Product" value={catalogItemLink ? (
 	            <Link to={catalogItemLink} className="font-semibold text-blue-700 hover:text-blue-900">
-	              {catalogItemName || catalogItemId}
+	              {displayReferenceValue(catalogItemName || "Open product", "Open product")}
 	            </Link>
 	          ) : 'Not linked'} />
-	          <DetailField label="Job" value={approval.jobInternalId || approval.jobName || approval.jobId} />
-	          <DetailField label="Service Stop" value={approval.serviceStopInternalId || approval.scheduledServiceStopInternalId || approval.serviceStopId} />
-	          <DetailField label="Location" value={approval.serviceLocationName || approval.serviceLocationAddress || approval.serviceLocationId} />
+	          <DetailField label="Job" value={displayReferenceValue(approval.jobInternalId || approval.jobName || "Job", "Job")} />
+	          <DetailField label="Service Stop" value={displayReferenceValue(approval.serviceStopInternalId || approval.scheduledServiceStopInternalId || "Service visit", "Service visit")} />
+	          <DetailField label="Location" value={approval.serviceLocationName || approval.serviceLocationAddress || "Linked location"} />
 	          <DetailField label="Shopping Item" value={shoppingListItemId ? (
 	            <Link to={`/company/shopping-list/detail/${shoppingListItemId}`} className="font-semibold text-blue-700 hover:text-blue-900">
 	              Open shopping item

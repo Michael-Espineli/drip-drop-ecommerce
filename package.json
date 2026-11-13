@@ -58,7 +58,9 @@
     "verify": "npm run test:ci && npm run build",
     "eject": "react-scripts eject",
     "firebase:emulate": "firebase emulators:start --project development",
-    "test:emulate": "npm-run-all --parallel start:emulate firebase:emulate"
+    "test:emulate": "npm-run-all --parallel start:emulate firebase:emulate",
+    "reports:ios": "node scripts/build-ios-reports.cjs",
+    "reports:ios:check": "node scripts/build-ios-reports.cjs --check"
   },
   "eslintConfig": {
     "extends": [

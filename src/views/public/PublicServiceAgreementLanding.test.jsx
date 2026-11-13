@@ -130,20 +130,125 @@ test.each([['guest', privatePath, null, 'acceptPublicSalesServiceAgreement'], ['
   card.getAllByRole('checkbox').forEach(checkbox => fireEvent.click(checkbox));
   fireEvent.change(card.getByLabelText('Note', { exact: true }), { target: { value: 'Keep the gate closed.' } });
   if (user) fireEvent.click(screen.getByRole('button', { name: /^Pay right away/ }));
-  await act(async () => fireEvent.click(card.getByRole('button', { name: 'Accept Service Agreement' })));
+  fireEvent.click(card.getByRole('button', { name: 'Accept Service Agreement' }));
   await waitFor(() => expect(commands[callable]).toHaveBeenCalledWith(expect.objectContaining({ agreementId: 'agreement', signatureName: 'Home Owner Signature', acceptedTerms: true, acceptedPricing: true, acceptedAutopayNotice: true, acceptanceNote: 'Keep the gate closed.' })));
-  if (user) expect(commands[callable].mock.calls[0][0]).toEqual(expect.objectContaining({ customerBillingPreference: 'payNow', createBillingSubscriptionOnAcceptance: true }));
+  expect(commands[callable].mock.calls[0][0]).toEqual(expect.objectContaining(user
+    ? { customerBillingPreference: 'payNow', createBillingSubscriptionOnAcceptance: true }
+    : { accessToken: 'private-token' }));
 });
 test.each([['guest', privatePath, null, 'rejectPublicSalesServiceAgreement'], ['profile', profilePath, homeowner, 'rejectSalesServiceAgreement']])('the %s widget sends a change request as a change request', async (_, path, user, callable) => {
   mount(path, user);
   const card = within(await screen.findByRole('region', { name: 'Acceptance' }));
   fireEvent.change(card.getByLabelText('Questions or requested changes'), { target: { value: 'Please quote service every other week.' } });
-  await act(async () => fireEvent.click(card.getByRole('button', { name: 'Request Changes' })));
+  fireEvent.click(card.getByRole('button', { name: 'Request Changes' }));
   await waitFor(() => expect(commands[callable]).toHaveBeenCalledWith(expect.objectContaining({ agreementId: 'agreement', responseType: 'changesRequested', rejectionNote: 'Please quote service every other week.' })));
 });
 test.each([['guest', privatePath, null, 'rejectPublicSalesServiceAgreement'], ['profile', profilePath, homeowner, 'rejectSalesServiceAgreement']])('the %s widget can still decline the agreement', async (_, path, user, callable) => {
   mount(path, user);
   const card = within(await screen.findByRole('region', { name: 'Acceptance' }));
-  await act(async () => fireEvent.click(card.getByRole('button', { name: 'Decline Agreement' })));
-  expect(commands[callable]).toHaveBeenCalledWith(expect.objectContaining({ agreementId: 'agreement', responseType: 'rejected' }));
+  fireEvent.click(card.getByRole('button', { name: 'Decline Agreement' }));
+  await waitFor(() => expect(commands[callable]).toHaveBeenCalledWith(expect.objectContaining({ agreementId: 'agreement', responseType: 'rejected' })));
+});
+
+const estimatePlans = [
+  { planId: 'repair', title: 'Repair the pump', description: 'Replace the pump seal.', planTier: 1, totalAmountCents: 15000,
+    taskCount: 1, plannedStopCount: 1, materialCount: 1,
+    lineItems: [{ id: 'seal', name: 'Seal repair service', quantity: 1, totalAmountCents: 15000, unitAmountCents: 15000 }] },
+  { planId: 'replace', title: 'Replace the pump', description: 'Install a new variable speed pump.', planTier: 3, totalAmountCents: 90000,
+    taskCount: 2, plannedStopCount: 1, materialCount: 1,
+    lineItems: [{ id: 'pump', name: 'New pump installation', quantity: 1, totalAmountCents: 90000, unitAmountCents: 90000 }] },
+];
+const installPlanEstimate = (patch = {}) => {
+  const record = { ...agreement, title: 'Pump repair options', sourceType: 'oneOffJob', rateType: 'oneTime',
+    planOptions: estimatePlans, defaultPlanId: 'repair', totalAmountCents: 15000, lineItems: estimatePlans[0].lineItems, ...patch };
+  commands.getPublicServiceAgreement.mockResolvedValue({ data: { agreement: record } });
+  onSnapshot.mockImplementation((ref, next) => {
+    queueMicrotask(() => next({ exists: () => true, id: 'agreement', data: () => record }));
+    return () => {};
+  });
+  return record;
+};
+const reviewPaths = [['guest', privatePath, null, 'acceptPublicSalesServiceAgreement'], ['profile', profilePath, homeowner, 'acceptSalesServiceAgreement']];
+
+test.each(reviewPaths)('the %s review compares plans before the document and accepts the chosen scope', async (_, path, user, callable) => {
+  installPlanEstimate();
+  mount(path, user);
+  const picker = await screen.findByRole('region', { name: 'Choose a Plan' });
+  const card = await screen.findByRole('region', { name: 'Acceptance' });
+  expect(picker.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(picker).getByText('Replace the pump seal.')).toBeInTheDocument();
+  expect(within(picker).getByText('$900.00')).toBeInTheDocument();
+  expect(screen.getAllByText('Seal repair service').length).toBeGreaterThan(0);
+  fireEvent.click(within(picker).getByRole('radio', { name: 'Replace the pump' }));
+  expect(within(picker).getByRole('radio', { name: 'Replace the pump' })).toBeChecked();
+  expect(screen.queryByText('Seal repair service')).not.toBeInTheDocument();
+  expect(screen.getAllByText('New pump installation').length).toBeGreaterThan(0);
+  expect(within(card).getByText('Replace the pump')).toBeInTheDocument();
+  expect(within(card).getByText('$900.00')).toBeInTheDocument();
+  within(card).getAllByRole('checkbox').forEach(checkbox => fireEvent.click(checkbox));
+  fireEvent.click(within(card).getByRole('button', { name: 'Accept Estimate' }));
+  await waitFor(() => expect(commands[callable]).toHaveBeenCalledWith(expect.objectContaining({ selectedPlanId: 'replace', selectedSolutionId: 'replace' })));
+});
+
+test('the guest review keeps the accepted choice visible and locked after saving', async () => {
+  installPlanEstimate();
+  mount(privatePath);
+  const picker = await screen.findByRole('region', { name: 'Choose a Plan' });
+  fireEvent.click(within(picker).getByRole('radio', { name: 'Replace the pump' }));
+  const card = screen.getByRole('region', { name: 'Acceptance' });
+  within(card).getAllByRole('checkbox').forEach(checkbox => fireEvent.click(checkbox));
+  fireEvent.click(within(card).getByRole('button', { name: 'Accept Estimate' }));
+  const acceptedPicker = await screen.findByRole('region', { name: 'Accepted Plan' });
+  expect(within(acceptedPicker).getByRole('radio', { name: 'Replace the pump' })).toBeChecked();
+  within(acceptedPicker).getAllByRole('radio').forEach(radio => expect(radio).toBeDisabled());
+});
+
+test.each(reviewPaths)('the %s review preserves an explicitly free, empty plan and requires new confirmations after switching', async (_, path, user) => {
+  installPlanEstimate({ planOptions: [...estimatePlans, { planId: 'no-charge', title: 'No charge inspection', totalAmountCents: 0, lineItems: [] }] });
+  mount(path, user);
+  const picker = await screen.findByRole('region', { name: 'Choose a Plan' });
+  const card = screen.getByRole('region', { name: 'Acceptance' });
+  within(card).getAllByRole('checkbox').forEach(checkbox => fireEvent.click(checkbox));
+  fireEvent.click(within(picker).getByRole('radio', { name: 'No charge inspection' }));
+  expect(within(card).getByText('$0.00')).toBeInTheDocument();
+  expect(screen.queryByText('Seal repair service')).not.toBeInTheDocument();
+  expect(screen.queryByText('New pump installation')).not.toBeInTheDocument();
+  within(card).getAllByRole('checkbox').forEach(checkbox => expect(checkbox).not.toBeChecked());
+  expect(within(card).getByLabelText('Signature Name')).toHaveValue('Home Owner');
+});
+
+test.each(reviewPaths)('the %s review reads legacy solution options when the new options array is empty', async (_, path, user) => {
+  installPlanEstimate({ planOptions: [], solutionOptions: estimatePlans.map(({ planId, ...plan }) => ({ ...plan, solutionId: planId })),
+    defaultPlanId: '', selectedSolutionId: 'replace' });
+  mount(path, user);
+  const picker = await screen.findByRole('region', { name: 'Choose a Plan' });
+  expect(within(picker).getByRole('radio', { name: 'Replace the pump' })).toBeChecked();
+  expect(screen.getAllByText('New pump installation').length).toBeGreaterThan(0);
+});
+
+test.each(reviewPaths)('the %s review locks plan choices while acceptance is being saved', async (_, path, user, callable) => {
+  installPlanEstimate();
+  let finish;
+  commands[callable].mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  mount(path, user);
+  const picker = await screen.findByRole('region', { name: 'Choose a Plan' });
+  const card = screen.getByRole('region', { name: 'Acceptance' });
+  within(card).getAllByRole('checkbox').forEach(checkbox => fireEvent.click(checkbox));
+  fireEvent.click(within(card).getByRole('button', { name: 'Accept Estimate' }));
+  await waitFor(() => expect(commands[callable]).toHaveBeenCalled());
+  within(picker).getAllByRole('radio').forEach(radio => expect(radio).toBeDisabled());
+  await act(async () => finish({ data: { status: 'success' } }));
+});
+
+test('a live accepted plan supersedes an unsubmitted homeowner choice', async () => {
+  const record = installPlanEstimate();
+  mount(profilePath, homeowner);
+  const picker = await screen.findByRole('region', { name: 'Choose a Plan' });
+  fireEvent.click(within(picker).getByRole('radio', { name: 'Replace the pump' }));
+  const receive = onSnapshot.mock.calls.find(([ref]) => ref === 'salesAgreements/agreement')[1];
+  await act(async () => receive({ exists: () => true, id: 'agreement', data: () => ({ ...record, status: 'accepted', acceptedPlanId: 'repair' }) }));
+  const acceptedPicker = screen.getByRole('region', { name: 'Accepted Plan' });
+  expect(within(acceptedPicker).getByRole('radio', { name: 'Repair the pump' })).toBeChecked();
+  expect(within(screen.getByRole('region', { name: 'Acceptance' })).getByText('Repair the pump')).toBeInTheDocument();
+  expect(screen.queryByText('New pump installation')).not.toBeInTheDocument();
 });

@@ -1,4 +1,5 @@
 import React, { lazy } from "react";
+import NotFound from '../../views/NotFound';
 
 const SignUp = lazy(() => import("../../views/auth/SignUp"))
 const SignIn = lazy(() => import("../../views/auth/SignIn"))
@@ -33,10 +34,13 @@ const PaymentMethodSetupReturn = lazy(() => import("../../views/client/billing/P
 const SharedRecordRedirect = lazy(() => import("../../views/SharedRecordRedirect"))
 
 const TermsOfService = lazy(() => import("../../views/public/TermsOfService"))
+const AccountHomeRedirect = lazy(() => import('../../components/billing/BillingReturnPage').then((module) => ({ default: module.AccountHomeRedirect })));
 
 const ClientEmailVerification = lazy(() => import("../../views/auth/ClientEmailVerification"));
 
 const publicRoutes = [
+  { path: '/dashboard', element: <AccountHomeRedirect /> },
+  { path: '*', element: <NotFound /> },
   { path: "/client/verify-email", element: <ClientEmailVerification /> },
   {
     path: "/",

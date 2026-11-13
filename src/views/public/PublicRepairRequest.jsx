@@ -1,6 +1,6 @@
 import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { httpsCallable } from "firebase/functions";
 import { v4 as uuidv4 } from "uuid";
 import { CheckCircleIcon, PhotoIcon, WrenchScrewdriverIcon } from "@heroicons/react/24/outline";
@@ -23,6 +23,8 @@ const readPhoto = (file) => new Promise((resolve, reject) => {
 });
 
 const RepairRequestForm = ({ companyId }) => {
+  const [searchParams] = useSearchParams();
+  const requestedCustomerId = searchParams.get('customerId') || '';
   const [company, setCompany] = useState(null);
   const [users, setUsers] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -60,6 +62,9 @@ const RepairRequestForm = ({ companyId }) => {
           setCompany(data.company);
           setUsers(toOptions(data.users));
           setCustomers(toOptions(data.customers));
+          if ((data.customers || []).some((customer) => customer.id === requestedCustomerId)) {
+            setForm((current) => ({ ...current, customerId: current.customerId || requestedCustomerId }));
+          }
         }
       })
       .catch((loadFailure) => {
@@ -69,7 +74,7 @@ const RepairRequestForm = ({ companyId }) => {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [companyId, loadAttempt]);
+  }, [companyId, loadAttempt, requestedCustomerId]);
   useEffect(() => {
     if (!form.customerId) return;
     let cancelled = false;
@@ -201,7 +206,6 @@ const RepairRequestForm = ({ companyId }) => {
               <h1 id="repair-success" className="mt-5 text-3xl font-bold">Your repair request is in.</h1>
               <p className="mt-4 text-slate-600">{company.name} has received your repair request for the selected customer.</p>
               <p className="mt-4 text-sm text-slate-500">A visit has not been scheduled yet.</p>
-              <p className="mt-6 break-all rounded-lg bg-slate-50 p-3 text-xs text-slate-500">Reference: {requestId}</p>
             </section>
           ) : (
             <>

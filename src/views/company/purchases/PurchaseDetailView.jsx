@@ -21,7 +21,7 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { format } from "date-fns";
-import { displayRecordReference, linkedReferenceText } from "../../../utils/displayReferences";
+import { displayRecordReference, displayReferenceValue, linkedReferenceText } from '../../../utils/displayReferences';
 import { appAlert, appConfirm } from "../../../utils/appDialog";
 import { syncLinkedShoppingPurchase } from "../../../utils/shoppingPurchaseSync";
 import {
@@ -2276,7 +2276,7 @@ const PurchaseDetailView = () => {
                                                 <div className="min-w-0">
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         <p className="font-semibold text-gray-800">
-                                                            {job.internalId || "Job"}
+                                                            {displayReferenceValue(job.internalId || "Job", "Job")}
                                                         </p>
                                                         <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
                                                             {job.operationStatus || "Status"}

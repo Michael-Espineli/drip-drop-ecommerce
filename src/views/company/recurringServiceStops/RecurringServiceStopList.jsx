@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo } from 'react';
@@ -904,12 +905,12 @@ const RecurringServiceStopList = () => {
                                                     checked={selected}
                                                     onChange={(event) => toggleStopSelection(stop.id, event)}
                                                     className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                                    aria-label={`Select ${stop.internalId || stop.customerName || stop.id}`}
+                                                    aria-label={`Select ${displayReferenceValue(stop.internalId || stop.customerName || "Recurring service", "Recurring service")}`}
                                                 />
                                             </td>
                                         )}
                                         <td className="px-6 py-4 whitespace-nowrap">
-                                            <div className="text-sm font-semibold text-slate-900">{stop.internalId || "—"}</div>
+                                            <div className="text-sm font-semibold text-slate-900">{displayReferenceValue(stop.internalId || "—", "Service visit")}</div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="text-sm font-medium text-gray-900">{stop.customerName}</div>
@@ -986,7 +987,7 @@ const RecurringServiceStopList = () => {
                         <div className="grid flex-1 grid-cols-1 gap-4 overflow-y-auto px-5 py-5">
                             {!isBulkEditModal && editingStop && (
                                 <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
-                                    <ReadonlyDatum label="Internal ID" value={editingStop.internalId || "—"} />
+                                    <ReadonlyDatum label="Internal ID" value={displayReferenceValue(editingStop.internalId || "—", "Internal ID")} />
                                     <ReadonlyDatum label="Customer" value={editingStop.customerName || "—"} />
                                     <ReadonlyDatum label="Location" value={editingStop.address?.streetAddress || "—"} />
                                     <ReadonlyDatum label="Current Schedule" value={`${normalizedDay(editingStop)} • ${editingStop.frequency || "—"}`} />

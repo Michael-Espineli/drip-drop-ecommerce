@@ -8,8 +8,8 @@ import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 
 const functions = getFunctions();
 
-const SectionCard = ({ title, children, rightContent }) => (
-    <div className="bg-white shadow-lg rounded-2xl p-6 mb-6">
+const SectionCard = ({ title, children, rightContent, id }) => (
+    <div id={id} role={id ? "region" : undefined} aria-label={id ? title : undefined} className="scroll-mt-28 bg-white shadow-lg rounded-2xl p-6 mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <h2 className="text-xl font-bold text-gray-900">{title}</h2>
             {rightContent}
@@ -44,7 +44,7 @@ const ContractTable = ({ contracts, navigate }) => {
                         <tr
                             key={contract.id}
                             className="hover:bg-gray-50 transition-colors cursor-pointer"
-                            onClick={() => navigate(`/company/contracts/contract/${contract.id}`)}
+                            onClick={() => navigate(`/company/contract/detail/${contract.id}`)}
                         >
                             <td className="p-4 whitespace-nowrap text-sm text-gray-800 font-medium">
                                 {contract.customerName || contract.receiverName || 'N/A'}
@@ -367,18 +367,18 @@ function Contracts() {
 
                         <div className="flex flex-col sm:flex-row gap-3">
                             <Link
-                                to="/company/contracts/createNew/NA"
+                                to="/company/contract/createNew/NA"
                                 className="px-4 py-2 text-sm font-medium text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-xl shadow-sm hover:bg-yellow-100 transition"
                             >
                                 Send New Contract
                             </Link>
 
-                            <Link
-                                to="/company/contracts/past"
+                            <a
+                                href="#past-contracts"
                                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl shadow-sm hover:bg-gray-100 transition"
                             >
                                 View Past
-                            </Link>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -414,7 +414,7 @@ function Contracts() {
                     <ContractTable contracts={contractsRejected} navigate={navigate} />
                 </SectionCard>
 
-                <SectionCard title="Past Contracts">
+                <SectionCard id="past-contracts" title="Past Contracts">
                     <ContractTable contracts={contractsPast} navigate={navigate} />
                 </SectionCard>
 

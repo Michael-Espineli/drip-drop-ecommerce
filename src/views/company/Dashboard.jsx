@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../utils/displayReferences';
 import { jobStatusClass } from '../../utils/statusPresentation';
 import WorkspaceSectionHeader from '../../components/workspace/WorkspaceSectionHeader';
 import WorkspaceHeader from '../../components/workspace/WorkspaceHeader';
@@ -1100,7 +1101,7 @@ const OperationsOverviewSection = ({ overview }) => (
                     <Link key={job.id} to={`/company/jobs/detail/${job.id}`} className="block px-4 py-3 transition hover:bg-slate-50">
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <p className="truncate text-sm font-bold text-slate-900">{job.internalId || job.jobName || job.customerName || 'Job'}</p>
+                                <p className="truncate text-sm font-bold text-slate-900">{displayReferenceValue(job.internalId || job.jobName || job.customerName || 'Job', "Customer")}</p>
                                 <p className="mt-0.5 truncate text-xs text-slate-500">{job.customerName || job.description || 'Customer not set'}</p>
                             </div>
                             <span className={jobStatusClass(job.operationStatus || job.status || "Open")}>
@@ -1284,7 +1285,7 @@ const PersonalDashboardView = ({
                             <Link key={job.id} to={`/company/jobs/detail/${job.id}`} className="block px-4 py-3 transition hover:bg-slate-50">
                                 <div className="flex items-start justify-between gap-3">
                                     <div className="min-w-0">
-                                        <p className="truncate text-sm font-bold text-slate-900">{job.internalId || job.jobName || job.customerName || 'Job'}</p>
+                                        <p className="truncate text-sm font-bold text-slate-900">{displayReferenceValue(job.internalId || job.jobName || job.customerName || 'Job', "Customer")}</p>
                                         <p className="mt-0.5 truncate text-xs text-slate-500">{job.customerName || job.description || 'No customer saved'}</p>
                                     </div>
                                     <span className={jobStatusClass(job.operationStatus || job.status || "Open")}>

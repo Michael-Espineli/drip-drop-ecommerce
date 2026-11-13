@@ -8,8 +8,6 @@ export const getCompanyUserDisplayName = (user = {}, fallback = "Company User") 
   || cleanString(user.fullName)
   || cleanString(user.label)
   || cleanString(user.email)
-  || cleanString(user.userId)
-  || cleanString(user.id)
   || fallback
 );
 

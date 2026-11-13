@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import React, { useContext, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { collection, doc, onSnapshot } from "firebase/firestore";
@@ -41,7 +42,7 @@ const JobHistoryView = () => {
   return (
     <main className="mx-auto max-w-5xl px-4 py-6 md:px-7">
       <Link to={`/company/jobs/detail/${jobId}`} className="text-sm font-semibold text-blue-700 hover:underline">Back to Job</Link>
-      <h1 className="mt-4 text-2xl font-bold text-slate-900">Job History{job?.internalId ? ` · ${job.internalId}` : ""}</h1>
+      <h1 className="mt-4 text-2xl font-bold text-slate-900">Job History{job?.internalId ? ` · ${displayReferenceValue(job.internalId, "Job")}` : ""}</h1>
       <p className="mt-1 text-sm text-slate-600">Who created this job and what changed afterward.</p>
       {error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-800">{error}</p>}
       {loading ? <p role="status" className="mt-6 text-slate-500">Loading job history…</p>
@@ -56,7 +57,7 @@ const JobHistoryView = () => {
                   {event.description && <p className="mt-3 text-sm text-slate-700">{event.description}</p>}
                   {Array.isArray(event.changes) && event.changes.length > 0 && (
                     <ul className="mt-3 space-y-1 text-sm text-slate-600">
-                      {event.changes.map((change, index) => <li key={`${event.id}-${index}`}>{typeof change === "string" ? change : `${change.label || change.field || "Change"}: ${change.before ?? "—"} → ${change.after ?? "—"}`}</li>)}
+                      {event.changes.map((change, index) => <li key={`${event.id}-${index}`}>{typeof change === "string" ? change : `${change.label || change.field || "Change"}: ${displayReferenceValue(change.before, "Previous record")} → ${displayReferenceValue(change.after, "Updated record")}`}</li>)}
                     </ul>
                   )}
                 </li>

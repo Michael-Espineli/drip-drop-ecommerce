@@ -20,7 +20,8 @@ export default function InvoiceWorkflowStatus({ record, recordPath }) {
   const invoiceId = data.salesInvoiceId || data.invoiceId;
   const state = data.billingAutomationStatus;
   if (!invoiceId && !state && !error) return null;
-  const label = state === 'awaitingNextBill' ? 'Queued for the next recurring service bill.'
+  const label = state === 'awaitingJobInvoice' ? 'Included with the job’s products and services on one invoice.'
+    : state === 'awaitingNextBill' ? 'Queued for the next recurring service bill.'
     : state === 'nextBillAttached' ? 'Included on the recurring service invoice.'
     : state === 'awaitingDelivery' ? ((data.paymentPreference || data.paymentCollectionPreference) === 'nextBill' ? 'After delivery or installation, this part will join the next recurring service bill.' : 'Invoice will be created after delivery or installation.')
     : ['needsReview', 'emailNeedsReview'].includes(state) ? 'Invoice needs review'

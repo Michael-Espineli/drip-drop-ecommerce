@@ -339,7 +339,7 @@ function TesterStripSettings() {
                     </div>
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-lg font-semibold text-slate-900">{profile.displayName || profile.id}</h2>
+                        <h2 className="text-lg font-semibold text-slate-900">{profile.displayName || "Tester strip profile"}</h2>
                         {isEnabled && (
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
                             <CheckCircleIcon className="h-3.5 w-3.5" />
@@ -348,7 +348,7 @@ function TesterStripSettings() {
                         )}
                       </div>
                       <p className="mt-0.5 text-sm text-slate-500">
-                        {[profile.brand, profile.productName].filter(Boolean).join(" ") || profile.referenceSource || profile.id}
+                        {[profile.brand, profile.productName].filter(Boolean).join(" ") || profile.referenceSource || "Tester strip profile"}
                       </p>
                     </div>
                   </div>
@@ -389,7 +389,7 @@ function TesterStripSettings() {
                         <div key={`${profile.id}_${row.key}`} className="grid gap-3 p-4 md:grid-cols-[1fr_260px] md:items-center">
                           <div>
                             <p className="font-semibold text-slate-900">{row.label}</p>
-                            <p className="mt-0.5 text-sm text-slate-500">{row.pad.label || row.pad.id}</p>
+                            <p className="mt-0.5 text-sm text-slate-500">{row.pad.label || "Reading"}</p>
                           </div>
                           <select
                             value={selectedTemplateId}

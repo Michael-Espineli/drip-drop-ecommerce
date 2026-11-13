@@ -21,6 +21,9 @@ import { Context } from '../../context/AuthContext';
 import { clientServiceAgreementPath } from '../../utils/clientNavigation';
 import { isCustomerVisibleAgreement } from '../../utils/sales/customerAgreementVisibility';
 import ServiceAgreementAcceptanceCard, { emptyAgreementAcceptance } from '../../components/sales/ServiceAgreementAcceptanceCard';
+import AgreementPlanPicker from '../../components/sales/AgreementPlanPicker';
+import useAgreementPlanSelection from '../../hooks/useAgreementPlanSelection';
+import { getJobPlanDisplayName } from '../../utils/models/JobPlan';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -111,7 +114,11 @@ const PublicServiceAgreementLanding = () => {
   const [responseNote, setResponseNote] = useState('');
   const [accepting, setAccepting] = useState(false);
   const [responding, setResponding] = useState('');
-  const [selectedPlanId, setSelectedPlanId] = useState('');
+  const { planOptions, selectedPlanOption, selectedPlanId, displayLineItems, displayTotalAmountCents, selectPlan } = useAgreementPlanSelection(agreement);
+  const handlePlanSelection = (planId) => {
+    selectPlan(planId);
+    updateAcceptance({ acceptedTerms: false, acceptedPricing: false, acceptedAutopayNotice: false });
+  };
 
   useEffect(() => {
     if (openInProfile) return undefined;
@@ -163,21 +170,6 @@ const PublicServiceAgreementLanding = () => {
     };
   }, [accessToken, agreementId, emailParam, openInProfile]);
 
-  const lineItems = Array.isArray(agreement?.lineItems) ? agreement.lineItems : [];
-  const planOptions = Array.isArray(agreement?.planOptions) ? agreement.planOptions : Array.isArray(agreement?.solutionOptions) ? agreement.solutionOptions : [];
-  const selectedPlanOption = planOptions.find((option) => (
-    String(option.planId || option.solutionId || option.id || '') === String(selectedPlanId || agreement?.selectedPlanId || agreement?.selectedSolutionId || agreement?.acceptedPlanId || agreement?.acceptedSolutionId || '')
-  )) || planOptions[0] || null;
-  const displayLineItems = Array.isArray(selectedPlanOption?.lineItems) && selectedPlanOption.lineItems.length
-    ? selectedPlanOption.lineItems
-    : lineItems;
-  const displayTotalAmountCents = Number(
-    selectedPlanOption?.totalAmountCents ||
-    selectedPlanOption?.rateAmountCents ||
-    agreement?.totalAmountCents ||
-    agreement?.rateAmountCents ||
-    0
-  );
   const termsList = Array.isArray(agreement?.termsList) ? agreement.termsList : [];
   const statusKey = normalizeStatus(agreement?.status);
   const isJobEstimate = Boolean(
@@ -214,22 +206,6 @@ const PublicServiceAgreementLanding = () => {
 
     setAcceptance(current => ({ ...current, signatureName: agreement.customerName || agreement.email || emailParam || '' }));
   }, [agreement, emailParam, signatureName]);
-
-  useEffect(() => {
-    if (!agreement || selectedPlanId) return;
-    const options = Array.isArray(agreement.planOptions) ? agreement.planOptions : Array.isArray(agreement.solutionOptions) ? agreement.solutionOptions : [];
-    const defaultSolutionId =
-      agreement.acceptedPlanId ||
-      agreement.acceptedSolutionId ||
-      agreement.selectedPlanId ||
-      agreement.selectedSolutionId ||
-      agreement.defaultPlanId ||
-      agreement.defaultSolutionId ||
-      options[0]?.planId || options[0]?.solutionId ||
-      options[0]?.id ||
-      '';
-    if (defaultSolutionId) setSelectedPlanId(defaultSolutionId);
-  }, [agreement, selectedPlanId]);
 
   const acceptAgreement = async () => {
     if (!agreement || accepting || isAccepted || isClosed) return;
@@ -433,6 +409,11 @@ const PublicServiceAgreementLanding = () => {
           </p>
         </div>
 
+        <AgreementPlanPicker
+          options={planOptions} selectedPlanId={selectedPlanId} onSelect={handlePlanSelection}
+          isAccepted={isAccepted} isClosed={isClosed} busy={accepting || Boolean(responding)} recordLabel={documentLabel}
+        />
+
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-5">
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -486,55 +467,6 @@ const PublicServiceAgreementLanding = () => {
                     </a>
                   )
                 )}
-              </section>
-            )}
-
-            {planOptions.length > 0 && (
-              <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 p-5">
-                  <h2 className="text-lg font-bold text-slate-950">Plan Options</h2>
-                  <p className="mt-1 text-sm text-slate-500">Choose how you want this job solved.</p>
-                </div>
-                <div className="grid gap-3 p-5 md:grid-cols-2">
-                  {planOptions.map((option) => {
-                    const optionId = option.planId || option.solutionId || option.id || '';
-                    const active = optionId === (selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId);
-                    return (
-                      <label
-                        key={optionId || option.title}
-                        className={[
-                          'cursor-pointer rounded-lg border p-4 transition',
-                          active ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50',
-                        ].join(' ')}
-                      >
-                        <div className="flex items-start gap-3">
-                          <input
-                            type="radio"
-                            name="planOption"
-                            checked={active}
-                            onChange={() => setSelectedPlanId(optionId)}
-                            disabled={isAccepted || isClosed}
-                            className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-sm font-bold text-slate-950">
-                              {[(option.planTierLabel || option.solutionTierLabel), option.title || option.name].filter(Boolean).join(' - ') || 'Plan Option'}
-                            </span>
-                            {option.description && (
-                              <span className="mt-1 block text-sm text-slate-600">{option.description}</span>
-                            )}
-                            <span className="mt-3 block text-lg font-bold text-slate-950">
-                              {formatCurrency(option.totalAmountCents || option.rateAmountCents)}
-                            </span>
-                            <span className="mt-1 block text-xs text-slate-500">
-                              {Number(option.taskCount || 0)} task(s) • {Number(option.plannedStopCount || 0)} stop(s) • {Number(option.materialCount || 0)} material item(s)
-                            </span>
-                          </span>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
               </section>
             )}
 
@@ -622,6 +554,10 @@ const PublicServiceAgreementLanding = () => {
               recordLabel={documentLabel}
               isEstimate={isJobEstimate}
               fields={[
+                ...(selectedPlanOption ? [
+                  [isAccepted ? 'Accepted Plan' : 'Selected Plan', getJobPlanDisplayName(selectedPlanOption, 'Plan Option')],
+                  ['Plan Total', formatCurrency(displayTotalAmountCents)],
+                ] : []),
                 ['Customer', agreement.customerName || agreement.email || emailParam],
                 ['Sent', formatDate(agreement.sentAt || agreement.createdAt)],
                 ['Expires', formatDate(agreement.expiresAt)],

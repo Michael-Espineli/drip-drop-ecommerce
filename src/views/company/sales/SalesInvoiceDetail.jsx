@@ -1,3 +1,4 @@
+import { displayRecordReference, displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import StripePaymentRefund from '../../../components/billing/StripePaymentRefund';
 import SavedInvoicePayment from '../../../components/billing/SavedInvoicePayment';
@@ -241,7 +242,7 @@ const buildPrintableSalesInvoiceHtml = ({ invoice = {}, companyName = '' }) => {
   const writeOffCents = Number(invoice.writeOffAmountCents || 0);
   const balanceCents = invoiceBalanceCents(invoice);
   const preparedDate = formatDate(invoice.createdAt || invoice.sentAt || new Date());
-  const invoiceLabel = firstInvoiceText(invoice.invoiceNumber, invoice.id, 'Invoice');
+  const invoiceLabel = displayRecordReference(invoice, 'Invoice');
   const due = invoiceDueStatus(invoice, balanceCents);
   const lineItemRows = lineItems.length
     ? lineItems.map((item) => {
@@ -1130,7 +1131,7 @@ const SalesInvoiceDetail = () => {
       return;
     }
 
-    const invoiceLabel = invoice.invoiceNumber || invoice.id || 'this invoice';
+    const invoiceLabel = displayRecordReference(invoice, 'this invoice');
     const confirmed = await appConfirm({
       title: 'Delete Invoice',
       message: `Delete ${invoiceLabel}? This permanently removes the invoice record. This cannot be undone.`,
@@ -1551,7 +1552,7 @@ const SalesInvoiceDetail = () => {
                   <Field label="Last Sent" value={formatDate(invoice.emailDelivery?.lastSentAt || invoice.sentAt)} />
                   <Field label="Recipient" value={invoice.emailDelivery?.to || invoice.email} />
                   <Field label="Intended To" value={invoice.emailDelivery?.intendedTo} />
-                  <Field label="Template" value={invoice.emailDelivery?.templateId} />
+                  <Field label="Template" value={displayReferenceValue(invoice.emailDelivery?.templateId, "Template")} />
                 </dl>
               </section>
 
@@ -1560,8 +1561,8 @@ const SalesInvoiceDetail = () => {
                 <dl className="mt-4 space-y-4">
                   <Field label="Created" value={formatDate(invoice.createdAt)} />
                   <Field label="Updated" value={formatDate(invoice.updatedAt)} />
-                  <Field label="Stripe Invoice" value={invoice.stripeInvoiceId} />
-                  <Field label="Payment Intent" value={invoice.stripePaymentIntentId} />
+                  <Field label="Stripe Invoice" value={displayReferenceValue(invoice.stripeInvoiceId, "Stripe Invoice")} />
+                  <Field label="Payment Intent" value={displayReferenceValue(invoice.stripePaymentIntentId, "Payment Intent")} />
                 </dl>
                 <button
                   type="button"

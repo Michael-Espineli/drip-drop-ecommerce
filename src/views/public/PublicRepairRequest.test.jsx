@@ -81,7 +81,7 @@ test("submits directly to the company and displays a receipt without asking for 
   fireEvent.click(screen.getByRole("button", { name: "Submit repair request" }));
   await screen.findByRole("heading", { name: "Your repair request is in." });
   expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ companyId: "test-company", requesterCompanyUserId: "tech-alex", customerId: "customer-taylor", locationId: "location-main", bodyOfWaterId: "pool-main", equipmentId: "pump-main", equipmentStatusUpdate: "Needs Repair", description: "The pump is leaking.", photos: [] }));
-  expect(screen.getByText("Reference: public_rr_test")).toBeInTheDocument();
+  expect(screen.queryByText(/public_rr_test/)).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Submit repair request" })).not.toBeInTheDocument();
 });
 
@@ -155,4 +155,17 @@ test("selection load errors can be retried without losing the chosen technician 
   await screen.findByText("Backyard");
   expect(screen.getByText("Alex Technician")).toBeInTheDocument();
   expect(screen.getByText("Taylor Homeowner")).toBeInTheDocument();
+});
+
+test('the customer shortcut preselects only a customer returned by the company picker', async () => {
+  await openForm('/request-repair/test-company?customerId=customer-acme');
+  await screen.findByText('Acme Pools');
+  await screen.findByText('Acme location');
+  expect(mockGetOptions).toHaveBeenCalledWith({companyId:'test-company',customerId:'customer-acme'});
+});
+
+test('an unknown customer in the shortcut does not trigger a customer lookup', async () => {
+  await openForm('/request-repair/test-company?customerId=unavailable-customer');
+  expect(mockGetOptions).not.toHaveBeenCalled();
+  expect(screen.queryByText('unavailable-customer')).not.toBeInTheDocument();
 });

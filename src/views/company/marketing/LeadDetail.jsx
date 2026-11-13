@@ -1,3 +1,4 @@
+import { displayRecordReference } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
@@ -1309,7 +1310,7 @@ export default function LeadDetail() {
                     {canShowJobRow && (
                         <WorkflowActionRow
                             icon={FaBriefcase}
-                            title={linkedJob?.id ? `Job ${linkedJob.internalId || linkedJob.id}` : 'Job'}
+                            title={linkedJob?.id ? displayRecordReference(linkedJob, 'Job') : 'Job'}
                             badge={linkedJob?.id
                                 ? { label: linkedJob.operationStatus || 'Open', className: 'bg-blue-100 text-blue-800' }
                                 : { label: 'Not created', className: 'bg-slate-100 text-slate-700' }}

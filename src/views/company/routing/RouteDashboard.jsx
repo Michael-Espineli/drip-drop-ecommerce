@@ -4898,7 +4898,7 @@ const ServiceStopQuickView = ({ stop, route, now, isSelected, onToggleStop, onCl
                         <StopQuickViewRow label="Start Time" value={formatTimeValue(start)} />
                         <StopQuickViewRow label="End Time" value={formatTimeValue(end)} />
                         <StopQuickViewRow label="Billing" value={stop.billingStatus || (stop.isInvoiced ? 'Invoiced' : 'Not Invoiced')} />
-                        <StopQuickViewRow label="Job" value={stop.jobName || stop.jobTitle || stop.jobId || 'None'} />
+                        <StopQuickViewRow label="Job" value={stop.jobName || stop.jobTitle || (stop.jobId ? 'Linked job' : 'None')} />
                     </div>
 
                     {notes && (

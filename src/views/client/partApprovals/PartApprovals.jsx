@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { listenClientRecords } from '../../../utils/clientRecords';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
@@ -87,7 +88,7 @@ const MobileApprovalCard = ({ approval }) => (
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="break-words font-semibold text-slate-950">{approval.itemName || approval.name || 'Pool Part'}</p>
-          <p className="mt-1 line-clamp-2 text-sm text-slate-500">{approval.description || approval.jobInternalId || 'Part approval'}</p>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-500">{displayReferenceValue(approval.description || approval.jobInternalId || 'Part approval', 'Part approval')}</p>
         </div>
         <StatusBadge status={approval.status || approval.approvalStatus} />
       </div>
@@ -243,7 +244,7 @@ const PartApprovals = () => {
                     <tr key={approval.id} className="hover:bg-slate-50">
                       <td className="px-5 py-4">
                         <p className="font-semibold text-slate-950">{approval.itemName || approval.name || 'Pool Part'}</p>
-                        <p className="mt-1 max-w-xs truncate text-xs text-slate-500">{approval.description || approval.jobInternalId || 'Part approval'}</p>
+                        <p className="mt-1 max-w-xs truncate text-xs text-slate-500">{displayReferenceValue(approval.description || approval.jobInternalId || 'Part approval', 'Part approval')}</p>
                       </td>
                       <td className="px-5 py-4 text-slate-700">{approval.companyName || 'Pool company'}</td>
                       <td className="px-5 py-4 text-slate-700">{approval.quantity || '1'}</td>

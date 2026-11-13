@@ -1236,7 +1236,7 @@ const SubscriptionsTable = ({
                 </p>
               </td>
               <td className="px-5 py-4">
-                <p className="max-w-44 truncate text-xs text-slate-500">{subscription.stripeSubscriptionId || 'Not created'}</p>
+                <p className="max-w-44 truncate text-xs text-slate-500">{subscription.stripeSubscriptionId ? 'Connected to Stripe' : 'Not created'}</p>
                 <p className="mt-1 text-xs font-semibold text-slate-500">{labelize(subscription.autopayStatus || 'not setup')}</p>
                 {subscription.checkoutUrl && !isStripeManagedBilling && (
                   <a href={subscription.checkoutUrl} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-900">

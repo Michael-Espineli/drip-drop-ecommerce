@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useContext, useEffect, useMemo, useState } from "react";
@@ -190,7 +191,7 @@ const RouteStopList = ({ stops, techniciansById, onAssignStop }) => (
               <div className="flex flex-wrap items-center gap-2">
                 <p className="truncate font-semibold text-slate-900">{stop.customerName || "Unnamed stop"}</p>
                 <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-                  {stop.internalId || "RSS"}
+                  {displayReferenceValue(stop.internalId || "RSS", "Service visit")}
                 </span>
                 {stop.missingRecurringStop && (
                   <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">

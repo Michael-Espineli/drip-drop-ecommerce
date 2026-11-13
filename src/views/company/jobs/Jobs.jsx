@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { jobStatusClass } from '../../../utils/statusPresentation';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
@@ -1715,7 +1716,7 @@ const Jobs = () => {
                                                     >
                                                         <input
                                                             type="checkbox"
-                                                            aria-label={`Select job ${job.internalId || job.id}`}
+                                                            aria-label={`Select job ${displayReferenceValue(job.internalId || "Job", "Job")}`}
                                                             checked={selectedJobIds.has(job.id)}
                                                             disabled={bulkUpdating}
                                                             onChange={() => toggleJobSelection(job.id)}
@@ -1728,7 +1729,7 @@ const Jobs = () => {
                                             </td>
                                             <td className="whitespace-nowrap border-r border-slate-200 px-5 py-3 text-sm font-semibold text-slate-900">
                                                 <div className="flex items-center gap-2">
-                                                    <span>{job.internalId}</span>
+                                                    <span>{displayReferenceValue(job.internalId, "Job")}</span>
 
                                                     {(commentCounts[job.id] || 0) > 0 && (
                                                         <span

@@ -1,3 +1,4 @@
+import { displayRecordReference, displayReferenceValue } from '../../../utils/displayReferences';
 import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { jobStatusClass } from '../../../utils/statusPresentation';
@@ -7546,7 +7547,7 @@ const JobDetailView = () => {
 
     if (linkedSalesInvoice?.id) {
       const linkedSnap = await getDoc(doc(db, salesCollectionNames.invoices, linkedSalesInvoice.id));
-      if (linkedSnap.exists()) return withFirestoreDocId(linkedSnap);
+      if (linkedSnap.exists() && linkedSnap.data().billingScope !== 'approvedPart') return withFirestoreDocId(linkedSnap);
     }
 
     const invoiceId =
@@ -7557,7 +7558,7 @@ const JobDetailView = () => {
 
     if (invoiceId) {
       const invoiceSnap = await getDoc(doc(db, salesCollectionNames.invoices, invoiceId));
-      if (invoiceSnap.exists()) return withFirestoreDocId(invoiceSnap);
+      if (invoiceSnap.exists() && invoiceSnap.data().billingScope !== 'approvedPart') return withFirestoreDocId(invoiceSnap);
     }
 
     const invoicesSnap = await getDocs(
@@ -7568,9 +7569,9 @@ const JobDetailView = () => {
       )
     );
 
-    return invoicesSnap.empty
-      ? null
-      : withFirestoreDocId(invoicesSnap.docs[0]);
+    const jobInvoices = invoicesSnap.docs.filter(snapshot => snapshot.data().billingScope !== 'approvedPart');
+    const invoice = jobInvoices.find(snapshot => !['void', 'voided', 'uncollectible', 'canceled', 'cancelled'].includes(String(snapshot.data().status || '').toLowerCase())) || jobInvoices[0];
+    return invoice ? withFirestoreDocId(invoice) : null;
   };
 
   const ensureJobSalesInvoice = async (agreementInput = "", options = {}) => {
@@ -7581,7 +7582,7 @@ const JobDetailView = () => {
     const existingInvoice = await findLinkedSalesInvoice();
     // Resending an invoice never reprices or reopens its existing debt.
     // Explicit changes go through the authorized invoice command instead.
-    if (existingInvoice) {
+    if (existingInvoice && existingInvoice.billingScope !== 'approvedPart') {
       if (existingInvoice.companyId !== recentlySelectedCompany || existingInvoice.jobId && existingInvoice.jobId !== jobId) throw new Error('The linked invoice belongs to another company or job.');
       if (['void', 'voided', 'uncollectible', 'canceled', 'cancelled'].includes(String(existingInvoice.status || '').toLowerCase())) throw new Error('This job invoice is closed. Create an explicit new invoice or adjustment instead of reopening it.');
       return existingInvoice;
@@ -8117,9 +8118,9 @@ const JobDetailView = () => {
       }
 
       let automationStateUpdates = {};
-      const shouldAutoInvoiceOnInstall = item.autoInvoiceOnInstall === undefined
+      const shouldAutoInvoiceOnInstall = !jobId && (item.autoInvoiceOnInstall === undefined
         ? shoppingItemInstallInvoiceAutomationEnabled
-        : item.autoInvoiceOnInstall === true;
+        : item.autoInvoiceOnInstall === true);
       if (shouldAutoInvoiceOnInstall && !item.invoiced && !item.invoiceId && !item.salesInvoiceId) {
         const invoiceResult = await createAndSendShoppingItemInstallInvoice({
           db,
@@ -17328,7 +17329,7 @@ const JobDetailView = () => {
               Service Stop
             </p>
             <p className="mt-0.5 truncate text-sm font-bold text-slate-900">
-              {stop.internalId || stop.type || "Service Stop"}
+              {displayReferenceValue(stop.internalId || stop.type || "Service Stop", "Service visit")}
             </p>
           </div>
 
@@ -17356,7 +17357,7 @@ const JobDetailView = () => {
               onKeyDown={(event) => event.stopPropagation()}
             >
               <JobLineActionMenu
-                label={`${stop.internalId || stop.type || "Service stop"} actions`}
+                label={`${displayReferenceValue(stop.internalId || stop.type || "Service stop", "Service stop")} actions`}
                 actions={[
                   {
                     label: "View Service Stop",
@@ -19966,7 +19967,7 @@ const JobDetailView = () => {
                     </Link>
                     {job.internalId && (
                       <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                        {job.internalId}
+                        {displayReferenceValue(job.internalId, "Job")}
                       </span>
                     )}
                     <div className="min-w-[180px]">
@@ -20400,6 +20401,42 @@ const JobDetailView = () => {
             )}
 
             {activeTab === "Planned" && (
+              <section aria-labelledby="job-plan-selector-heading" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <h3 id="job-plan-selector-heading" className="text-base font-bold text-slate-900">Plans</h3>
+                <p className="mt-1 text-xs text-slate-500">Select a plan to edit, or add another way to resolve this job.</p>
+                <div className="mt-4 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <label className="block min-w-0 flex-1 text-sm font-semibold text-slate-700">
+                    Editing plan
+                    <select
+                      value={selectedPlanEditorId}
+                      onChange={(event) => handlePlanEditorSelection(event.target.value)}
+                      disabled={!canBuildJobEstimatePlan || !jobPlans.length || savingPlanEditor || Boolean(loadingPlanEditorId)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      {!jobPlans.length && <option value="">No saved plans</option>}
+                      {jobPlans.map((solution) => {
+                        const tier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
+                        return (
+                          <option key={solution.id} value={solution.id}>
+                            {getJobPlanRecommendationDisplay(tier)} - {getJobPlanDisplayName(solution, "Untitled Plan")}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => openAddPlanModal()}
+                    disabled={!canBuildJobEstimatePlan || savingPlanEditor || Boolean(loadingPlanEditorId)}
+                    className="inline-flex shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Add New Plan
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {activeTab === "Planned" && (
               <DetailDisclosure
                 panelId="planned-editor"
                 title="Plan Editor"
@@ -20441,24 +20478,6 @@ const JobDetailView = () => {
                     </div>
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <select
-                        aria-label="Editing plan"
-                        value={selectedPlanEditorId}
-                        onChange={(event) => handlePlanEditorSelection(event.target.value)}
-                        disabled={!canBuildJobEstimatePlan || !jobPlans.length || savingPlanEditor || Boolean(loadingPlanEditorId)}
-                        className="min-w-[220px] rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
-                      >
-                        {!jobPlans.length && <option value="">No saved plans</option>}
-                        {jobPlans.map((solution) => {
-                          const tier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
-                          return (
-                            <option key={solution.id} value={solution.id}>
-                              {getJobPlanRecommendationDisplay(tier)} - {getJobPlanDisplayName(solution, "Untitled Plan")}
-                            </option>
-                          );
-                        })}
-                      </select>
-
                       <div className="flex flex-wrap gap-2">
                         {canBuildJobEstimatePlan && (
                           <button
@@ -20472,22 +20491,6 @@ const JobDetailView = () => {
                           </button>
                         )}
 
-	                        <button
-	                          type="button"
-	                          onClick={handleSendEstimate}
-	                          disabled={sendingEstimateEmail || !canSendJobEstimate || savingPlanEditor || Boolean(loadingPlanEditorId)}
-	                          className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-	                        >
-	                          {sendingEstimateEmail ? "Sending..." : "Email Estimate"}
-	                        </button>
-	                        <button
-	                          type="button"
-	                          onClick={() => openAddPlanModal()}
-	                          disabled={!canBuildJobEstimatePlan || Boolean(loadingPlanEditorId)}
-	                          className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-	                        >
-	                          Add Plan
-	                        </button>
 	                      </div>
                     </div>
                   </div>
@@ -20557,7 +20560,7 @@ const JobDetailView = () => {
 	                        </div>
 	                        <div>
 	                          <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Job</dt>
-	                          <dd className="mt-0.5 font-semibold text-slate-900">{job.internalId || jobId}</dd>
+	                          <dd className="mt-0.5 font-semibold text-slate-900">{displayRecordReference(job, "Job")}</dd>
 	                        </div>
 	                        <div>
 	                          <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Saved Plan</dt>
@@ -23258,7 +23261,7 @@ const JobDetailView = () => {
               <div>
                 <h3 className="text-xl font-bold text-slate-900">Job History</h3>
                 <p className="mt-1 text-sm text-slate-600">
-                  Changes recorded for {job.internalId || job.type || "this job"}.
+                  Changes recorded for {displayReferenceValue(job.internalId || job.type || "this job", "Job")}.
                 </p>
               </div>
               <button
@@ -23832,7 +23835,7 @@ const JobDetailView = () => {
                         <input type="checkbox" checked={jobFinishServiceStopIds.includes(stop.id)} disabled={markingJobFinished}
                           onChange={(event) => selectJobFinishStops(event.target.checked ? [...jobFinishServiceStopIds, stop.id] : jobFinishServiceStopIds.filter((id) => id !== stop.id))} />
                         <span>
-                          <span className="block font-semibold text-slate-900">{stop.internalId || stop.type || "Service stop"}</span>
+                          <span className="block font-semibold text-slate-900">{displayReferenceValue(stop.internalId || stop.type || "Service stop", "Service visit")}</span>
                           <span className="block text-sm text-slate-500">{[formatDateValue(stop.serviceDate), stop.tech, stop.operationStatus, `${(jobFinishStopTasks[stop.id] || []).filter((task) => isOpenTaskStatus(task.status)).length} unfinished task(s)`].filter(Boolean).join(" · ")}</span>
                           <span className="block text-xs text-slate-500">{(jobFinishStopTasks[stop.id] || []).filter((task) => isOpenTaskStatus(task.status)).map((task) => task.name || task.type || "Unnamed task").join(", ")}</span>
                         </span>
@@ -24843,7 +24846,7 @@ const JobDetailView = () => {
                   <label className="block text-sm font-semibold text-gray-500 mb-2">
                     Job
                   </label>
-                  <h1 className="w-full p-3 border border-gray-300 rounded-lg">{job.internalId || "Linked job"}</h1>
+                  <h1 className="w-full p-3 border border-gray-300 rounded-lg">{displayReferenceValue(job.internalId || "Linked job", "Job")}</h1>
                 </div>
 
                 <div className="flex items-end">

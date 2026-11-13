@@ -285,7 +285,7 @@ function AdminUserList({ mode = 'users' }) {
                 <th className="px-4 py-3 text-left font-bold">Selected Company</th>
                 <th className="px-4 py-3 text-left font-bold">Stripe</th>
                 <th className="px-4 py-3 text-left font-bold">Created</th>
-                <th className="px-4 py-3 text-left font-bold">User ID</th>
+                <th className="px-4 py-3 text-left font-bold">Account</th>
               </tr>
             </thead>
 
@@ -362,7 +362,7 @@ function AdminUserList({ mode = 'users' }) {
                   </td>
 
                   <td className="px-4 py-3 text-slate-400">
-                    <span className="block min-w-[210px] font-mono text-xs">{user.id}</span>
+                    <span className="block min-w-[210px] font-mono text-xs">Registered</span>
                   </td>
                 </tr>
               ))}

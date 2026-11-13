@@ -1,3 +1,4 @@
+import { displayReferenceValue, linkedReferenceText } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
@@ -1497,7 +1498,7 @@ const RecurringServiceStopDetails = () => {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-slate-900">
-                    {serviceStop.internalId || "—"}
+                    {displayReferenceValue(serviceStop.internalId || "—", "Service visit")}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">{serviceStop.date || "N/A"}</p>
                 </div>
@@ -1615,7 +1616,7 @@ const RecurringServiceStopDetails = () => {
               <h1 className="text-3xl font-bold text-slate-950">Recurring Service Stop Detail</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
                 <span className="font-semibold text-slate-900">
-                  {recurringServiceStop.internalId || "—"}
+                  {displayReferenceValue(recurringServiceStop.internalId || "—", "Recurring service")}
                 </span>{" "}
                 <span className="text-slate-400">•</span>{" "}
                 {recurringServiceStop.customerName || "—"}
@@ -1628,7 +1629,7 @@ const RecurringServiceStopDetails = () => {
                   type="recurringServiceStop"
                   recordId={recurringServiceStopId}
                   title={recurringServiceStop.type || recurringServiceStop.serviceStopType || "Recurring Service Stop"}
-                  subtitle={[recurringServiceStop.customerName, recurringServiceStop.internalId, recurringServiceStop.frequency].filter(Boolean).join(" - ")}
+                  subtitle={[recurringServiceStop.customerName, displayReferenceValue(recurringServiceStop.internalId || "Recurring service", "Recurring service"), recurringServiceStop.frequency].filter(Boolean).join(" - ")}
                   companyId={recentlySelectedCompany}
                   customerId={recurringServiceStop.customerId}
                   collectionPath={`companies/${recentlySelectedCompany}/recurringServiceStop`}
@@ -2159,7 +2160,7 @@ const RecurringServiceStopDetails = () => {
                                 to={`/company/serviceStops/detail/${point.serviceStopId}`}
                                 className="font-medium text-blue-600 hover:underline"
                               >
-                                {point.serviceStopInternalId || point.serviceStopId}
+                                {linkedReferenceText("Service Stop", point.serviceStopId, point.serviceStopInternalId)}
                               </Link>
                             ) : (
                               "—"

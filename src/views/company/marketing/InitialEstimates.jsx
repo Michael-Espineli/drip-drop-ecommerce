@@ -1,3 +1,4 @@
+import { displayRecordReference } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -505,7 +506,7 @@ const InitialEstimates = () => {
                       <td className="px-4 py-4">
                         <p className="font-semibold text-slate-950">{getStopTitle(stop)}</p>
                         <p className="mt-1 max-w-xs truncate text-xs text-slate-500">
-                          {stop.description || stop.internalId || stop.id}
+                          {displayRecordReference(stop, "Service visit")}
                         </p>
                       </td>
                       <td className="px-4 py-4">

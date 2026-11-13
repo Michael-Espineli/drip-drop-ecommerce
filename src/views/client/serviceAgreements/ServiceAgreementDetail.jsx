@@ -1,8 +1,11 @@
+import { displayRecordReference } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { agreementServiceSetup } from '../../../utils/sales/agreementServiceSetup';
 import { isCustomerVisibleAgreement } from '../../../utils/sales/customerAgreementVisibility';
 import { clientServiceAgreementPath } from '../../../utils/clientNavigation';
 import ServiceAgreementAcceptanceCard, { emptyAgreementAcceptance } from '../../../components/sales/ServiceAgreementAcceptanceCard';
+import AgreementPlanPicker from '../../../components/sales/AgreementPlanPicker';
+import useAgreementPlanSelection from '../../../hooks/useAgreementPlanSelection';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
@@ -34,7 +37,6 @@ import {
 } from '../../../utils/sales/agreementCadence';
 import {
   getJobPlanDisplayName,
-  getJobPlanRecommendationDisplay,
 } from '../../../utils/models/JobPlan';
 import {
   agreementChemicalBillingMode,
@@ -466,7 +468,7 @@ const buildPrintableAgreementHtml = ({
             <h1>${escapeAgreementHtml(documentTitle)}</h1>
             <div class="document-meta">
               <span>${escapeAgreementHtml(recordLabel)}</span>
-              <span>Agreement: ${escapeAgreementHtml(agreement.id || 'Not assigned')}</span>
+              <span>Agreement: ${escapeAgreementHtml(displayRecordReference({ ...agreement, id: '' }, recordLabel))}</span>
               <span>Prepared: ${escapeAgreementHtml(preparedDate)}</span>
               <span>Status: ${escapeAgreementHtml(labelize(agreement.status || SalesAgreementStatus.draft))}</span>
             </div>
@@ -558,7 +560,11 @@ const ServiceAgreementDetail = () => {
   const [responding, setResponding] = useState('');
   const [startingCheckout, setStartingCheckout] = useState(false);
   const [responseNote, setResponseNote] = useState('');
-  const [selectedPlanId, setSelectedPlanId] = useState('');
+  const { planOptions, selectedPlanOption, selectedPlanId, displayLineItems, displayTotalAmountCents, selectPlan } = useAgreementPlanSelection(agreement);
+  const handlePlanSelection = (planId) => {
+    selectPlan(planId);
+    updateAcceptance({ acceptedTerms: false, acceptedPricing: false, acceptedAutopayNotice: false });
+  };
   const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState(SalesPaymentMethodType.ach);
   const [customerBillingPreference, setCustomerBillingPreference] = useState('requestInvoice');
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -686,24 +692,8 @@ const ServiceAgreementDetail = () => {
   useEffect(() => {
     if (!agreement || signatureName) return;
 
-    setAcceptance(current => ({ ...current, signatureName: agreement.customerName || user?.displayName || user?.email || emailParam || '' }));
+    setAcceptance(current => current.signatureName ? current : ({ ...current, signatureName: agreement.customerName || user?.displayName || user?.email || emailParam || '' }));
   }, [agreement, emailParam, signatureName, user?.displayName, user?.email]);
-
-  useEffect(() => {
-    if (!agreement || selectedPlanId) return;
-    const options = Array.isArray(agreement.planOptions) ? agreement.planOptions : Array.isArray(agreement.solutionOptions) ? agreement.solutionOptions : [];
-    const defaultSolutionId =
-      agreement.acceptedPlanId ||
-      agreement.acceptedSolutionId ||
-      agreement.selectedPlanId ||
-      agreement.selectedSolutionId ||
-      agreement.defaultPlanId ||
-      agreement.defaultSolutionId ||
-      options[0]?.planId || options[0]?.solutionId ||
-      options[0]?.id ||
-      '';
-    if (defaultSolutionId) setSelectedPlanId(defaultSolutionId);
-  }, [agreement, selectedPlanId]);
 
   useEffect(() => {
     if (!agreement) return;
@@ -713,36 +703,6 @@ const ServiceAgreementDetail = () => {
       setCustomerBillingPreference(savedPreference);
     }
   }, [agreement]);
-
-  const lineItems = useMemo(
-    () => (Array.isArray(agreement?.lineItems) ? agreement.lineItems : []),
-    [agreement]
-  );
-
-  const planOptions = useMemo(
-    () => (Array.isArray(agreement?.planOptions) ? agreement.planOptions : Array.isArray(agreement?.solutionOptions) ? agreement.solutionOptions : []),
-    [agreement]
-  );
-
-  const selectedPlanOption = useMemo(() => (
-    planOptions.find((option) => (
-      String(option.planId || option.solutionId || option.id || '') === String(selectedPlanId || agreement?.selectedPlanId || agreement?.selectedSolutionId || agreement?.acceptedPlanId || agreement?.acceptedSolutionId || '')
-    )) || planOptions[0] || null
-  ), [agreement, selectedPlanId, planOptions]);
-
-  const displayLineItems = useMemo(() => (
-    Array.isArray(selectedPlanOption?.lineItems) && selectedPlanOption.lineItems.length
-      ? selectedPlanOption.lineItems
-      : lineItems
-  ), [lineItems, selectedPlanOption]);
-
-  const displayTotalAmountCents = Number(
-    selectedPlanOption?.totalAmountCents ||
-    selectedPlanOption?.rateAmountCents ||
-    agreement?.totalAmountCents ||
-    agreement?.rateAmountCents ||
-    0
-  );
 
   const termsList = useMemo(
     () => (Array.isArray(agreement?.termsList) ? agreement.termsList : []),
@@ -840,9 +800,9 @@ const ServiceAgreementDetail = () => {
     : 'border-amber-200 bg-amber-50 text-amber-800';
   const serviceLocationDisplay = agreementServiceLocationDisplay(agreement || {});
   const preparedDate = formatDate(agreement?.sentAt || agreement?.createdAt);
-  const serviceSectionNumber = planOptions.length > 0 ? '4' : '3';
-  const chemicalSectionNumber = planOptions.length > 0 ? '5' : '4';
-  const termsSectionNumber = planOptions.length > 0 ? '6' : '5';
+  const serviceSectionNumber = '3';
+  const chemicalSectionNumber = '4';
+  const termsSectionNumber = '5';
   const separatelyBilledChemicalDisplay = chemicalSelectionDisplay(
     agreement?.separatelyBilledChemicalIds,
     agreement?.separatelyBilledChemicalKeywords
@@ -1170,6 +1130,11 @@ const ServiceAgreementDetail = () => {
         </div>
       )}
 
+      <AgreementPlanPicker
+        options={planOptions} selectedPlanId={selectedPlanId} onSelect={handlePlanSelection}
+        isAccepted={isAccepted} isClosed={isClosed} busy={accepting || Boolean(responding)} recordLabel={recordLabel}
+      />
+
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0">
           <article className="overflow-hidden rounded-sm border border-slate-300 bg-white shadow-sm">
@@ -1191,7 +1156,7 @@ const ServiceAgreementDetail = () => {
               </p>
 
               <dl className="mt-6 grid grid-cols-1 gap-4 border-y border-slate-300 py-4 sm:grid-cols-2 lg:grid-cols-4">
-                <DocumentField label={`${recordLabel} Number`} value={agreement.id} />
+                <DocumentField label={`${recordLabel} Reference`} value={displayRecordReference({ ...agreement, id: "" }, recordLabel)} />
                 <DocumentField label="Prepared" value={preparedDate} />
                 <DocumentField label="Total" value={formatCurrency(displayTotalAmountCents)} />
                 <DocumentField label="Status" value={labelize(agreement.status || SalesAgreementStatus.draft)} />
@@ -1222,60 +1187,6 @@ const ServiceAgreementDetail = () => {
                   <DocumentField label="Offer Expires" value={formatDate(agreement.expiresAt)} />
                 </dl>
               </DocumentSection>
-
-              {planOptions.length > 0 && (
-                <DocumentSection number="3" title="Plan Selection">
-                  <p className="mb-4 text-sm leading-6 text-slate-700">
-                    Select the service plan you want accepted. The selected plan controls the services and total shown here.
-                  </p>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {planOptions.map((option) => {
-                      const optionId = option.planId || option.solutionId || option.id || '';
-                      const active = optionId === (selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId);
-                      const recommendationRank = option.planTier || option.solutionTier || option.recommendationRank;
-                      return (
-                        <label
-                          key={optionId || option.title}
-                          className={[
-                            'cursor-pointer rounded-md border p-4 transition',
-                            active ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50',
-                          ].join(' ')}
-                        >
-                          <span className="flex items-start gap-3">
-                            <input
-                              type="radio"
-                              name="planOption"
-                              checked={active}
-                              onChange={() => setSelectedPlanId(optionId)}
-                              disabled={isAccepted || isClosed}
-                              className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <span className="min-w-0 flex-1">
-                              {recommendationRank && (
-                                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                  {getJobPlanRecommendationDisplay(recommendationRank)}
-                                </span>
-                              )}
-                              <span className="block text-sm font-bold text-slate-950">
-                                {getJobPlanDisplayName(option, 'Plan Option')}
-                              </span>
-                              {option.description && (
-                                <span className="mt-1 block text-sm leading-5 text-slate-600">{option.description}</span>
-                              )}
-                              <span className="mt-3 block text-lg font-bold text-slate-950">
-                                {formatCurrency(option.totalAmountCents || option.rateAmountCents)}
-                              </span>
-                              <span className="mt-1 block text-xs text-slate-500">
-                                {Number(option.taskCount || 0)} task(s) / {Number(option.plannedStopCount || 0)} stop(s) / {Number(option.materialCount || 0)} material item(s)
-                              </span>
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </DocumentSection>
-              )}
 
               <DocumentSection number={serviceSectionNumber} title="Services And Products">
                 {agreement.description && (
@@ -1356,6 +1267,10 @@ const ServiceAgreementDetail = () => {
             recordLabel={recordLabel}
             isEstimate={isEstimate}
             fields={[
+              ...(selectedPlanOption ? [
+                [isAccepted ? 'Accepted Plan' : 'Selected Plan', getJobPlanDisplayName(selectedPlanOption, 'Plan Option')],
+                ['Plan Total', formatCurrency(displayTotalAmountCents)],
+              ] : []),
               ['Customer', agreement.customerName || user?.email],
               ['Sent', formatDate(agreement.sentAt || agreement.createdAt)],
               ['Expires', formatDate(agreement.expiresAt)],

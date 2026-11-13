@@ -72,12 +72,14 @@ export function ClientInvoicePayment({
         paymentMethodType,
         returnUrl: window.location.href
       });
-      if (data.url) window.location.assign(data.url);else {
+      if (data.url) window.location.assign(data.url);else if (data.status === 'processing') {
         setProcessing(true);
         setBusy(false);
-      }
+      } else throw new Error('Payment could not be opened. Please try again.');
     } catch (err) {
-      setError(err.message || 'Could not open payment. Your invoice remains available here.');
+      setError(err.code === 'functions/internal' || err.message === 'INTERNAL'
+        ? 'Payment could not be opened. Please try again. If this continues, contact your pool company.'
+        : err.message || 'Could not open payment. Your invoice remains available here.');
       setBusy(false);
     }
   };

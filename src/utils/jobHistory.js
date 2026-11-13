@@ -1,3 +1,4 @@
+import { isOpaqueId } from './displayReferences';
 const text = (value) => typeof value === "string" ? value.trim() : "";
 const meaningfulName = (value) => text(value) && !["unknown", "unknown user"].includes(text(value).toLowerCase());
 
@@ -21,8 +22,12 @@ export const buildJobCreatedHistory = ({ job, creator, createdAt, createdAtMilli
   };
 };
 
-export const jobHistoryActorName = (event = {}) =>
-  (meaningfulName(event.actorUserName) ? event.actorUserName : "") || event.actorUserId || event.tech || "Creator not recorded";
+export const jobHistoryActorName = (event = {}) => {
+  const name = [event.actorUserName, event.tech].find((value) => (
+    meaningfulName(value) && value !== event.actorUserId && !isOpaqueId(value)
+  ));
+  return name || (event.actorUserId ? 'Creator name not recorded' : 'Creator not recorded');
+};
 
 export const jobHistoryDate = (event = {}) => {
   const value = event.createdAt || event.createdAtMillis || event.date;

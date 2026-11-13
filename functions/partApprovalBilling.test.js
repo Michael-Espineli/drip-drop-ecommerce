@@ -82,8 +82,8 @@ test('manual-invoiced history and closed invoices require review instead of dupl
   const f = fixture(); f.db.set(a, { invoiced: true, manuallyInvoiced: true }, { merge: true }); assert.equal((await f.ensure()).status, 'needsReview'); assert.equal(f.invoices().length, 0);
   const g = fixture(), r = await g.ensure(); g.db.set(`salesInvoices/${r.invoiceId}`, { status: 'void' }, { merge: true }); assert.equal((await g.ensure()).status, 'needsReview'); assert.equal(g.invoices().length, 1);
 });
-test('existing job invoice blocks a second automatic part invoice', async () => {
-  const f = fixture({ 'salesInvoices/job-invoice': { companyId: 'company', jobId: 'job', status: 'open' } }); f.db.set(a, { jobId: 'job' }, { merge: true }); assert.equal((await f.ensure()).status, 'needsReview'); assert.equal(f.invoices().length, 1);
+test('job material waits for the combined job invoice instead of creating a second bill', async () => {
+  const f = fixture({ 'salesInvoices/job-invoice': { companyId: 'company', jobId: 'job', status: 'open' } }); f.db.set(a, { jobId: 'job' }, { merge: true }); assert.equal((await f.ensure()).reason, 'job_invoice'); assert.equal(f.invoices().length, 1);
 });
 test('manual draft override requires billing authority and does not queue email', async () => {
   const f = fixture({ [`${c}/settings/companyWide`]: { partApprovalAutoSendInvoices: true } }); await assert.rejects(f.ensure({ manualDraft: true, auth: { uid: 'technician' } }), /billing access/);
@@ -105,9 +105,20 @@ test('the approved pricing snapshot wins over later shopping or approval price e
  const f=fixture();f.db.set(a,{approvedPricingSnapshot:{quantity:'2',plannedUnitPriceCents:3000,plannedTotalPriceCents:6000},plannedTotalPriceCents:90000},{merge:true});
  const r=await f.ensure();assert.equal(f.row(`salesInvoices/${r.invoiceId}`).totalAmountCents,6000);
 });
-test('separate approved parts on the same job can each create their own invoice',async()=>{
+test('legacy separately billed job parts require review before further billing',async()=>{
  const f=fixture({'salesInvoices/other-part':{companyId:'company',customerId:'customer',jobId:'job',billingScope:'approvedPart',status:'open'}});
- f.db.set(a,{jobId:'job'},{merge:true});assert.equal((await f.ensure()).status,'created');assert.equal(f.invoices().length,2);
+ f.db.set(a,{jobId:'job',salesInvoiceId:'other-part'},{merge:true});assert.equal((await f.ensure()).status,'needsReview');assert.equal(f.invoices().length,1);
+});
+test('job scope wins over approval timing, next bill, manual drafts and install automation',async()=>{
+ for(const field of ['jobId','workOrderId','assignedJobId'])for(const paymentPreference of ['payNow','sendInvoice','nextBill']) {
+  const f=fixture();f.db.set(s,{[field]:'job',status:'Installed',autoInvoiceOnInstall:true},{merge:true});f.db.set(a,{paymentPreference},{merge:true});
+  const r=await f.ensure({manualDraft:true,auth:{uid:'owner'}});assert.equal(r.reason,'job_invoice');assert.equal(f.row(s).billingAutomationStatus,'awaitingJobInvoice');assert.equal(f.invoices().length,0);assert.equal(f.emails.length,0);
+ }
+ const f=fixture();f.db.set(s,{customerId:'customer',jobId:'job',autoInvoiceOnInstall:true,status:'Installed'});assert.equal((await f.service.ensure({companyId:'company',shoppingItemId:'shopping'})).reason,'job_invoice');assert.equal(f.invoices().length,0);
+});
+test('moving a queued standalone part into a job cancels its automatic invoice email',async()=>{
+ const f=fixture({[`${c}/settings/companyWide`]:{partApprovalAutoSendInvoices:true}}),r=await f.ensure();f.db.set(s,{jobId:'job'},{merge:true});
+ await f.service.processEmail(r.queueId);assert.equal(f.emails.length,0);assert.equal(f.row(`billingEmailQueue/${r.queueId}`).status,'cancelled');
 });
 test('a returned item cancels queued automatic email before sending',async()=>{
  const f=fixture({[`${c}/settings/companyWide`]:{partApprovalAutoSendInvoices:true}}),r=await f.ensure();

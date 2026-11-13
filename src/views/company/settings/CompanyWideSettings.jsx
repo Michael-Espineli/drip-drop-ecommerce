@@ -802,7 +802,7 @@ const CompanyOverview = ({ overview, currentUserId }) => {
           <OverviewRow label="Customer billing" value={onOffLabel(customerBillingEnabled)} />
           <OverviewRow label="Agreement subscriptions" value={onOffLabel(agreementSubscriptionAutomationEnabled)} />
           <OverviewRow label="Installed-item invoices" value={onOffLabel(installInvoiceAutomationEnabled)} />
-          <OverviewRow label="Connected account" value={connectedAccountId || "Not connected"} muted={!connectedAccountId} />
+          <OverviewRow label="Connected account" value={connectedAccountId ? "Connected" : "Not connected"} muted={!connectedAccountId} />
           <OverviewRow label="Last billing update" value={formatDateTime(company.salesBillingAutomationUpdatedAt)} />
           {customerBillingEnabled && !connectedAccountId ? (
             <div className="py-2">

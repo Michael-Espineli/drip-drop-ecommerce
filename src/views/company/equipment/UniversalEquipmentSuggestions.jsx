@@ -463,7 +463,7 @@ const UniversalEquipmentSuggestions = () => {
                                 {compact([equipment.type, equipment.make, equipment.model]) || equipment.name || "Equipment"}
                               </p>
                               <p className="mt-2 text-xs text-slate-500">
-                                {existingUniversalEquipmentId ? `Catalog ID: ${existingUniversalEquipmentId}` : "No catalog match"}
+                                {existingUniversalEquipmentId ? "Equipment catalog linked" : "No catalog match"}
                               </p>
                             </>
                           ) : (
@@ -474,7 +474,7 @@ const UniversalEquipmentSuggestions = () => {
 
                       {suggestion.reconciledUniversalEquipmentId && (
                         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-                          Matched to {compact([suggestion.reconciledMake, suggestion.reconciledModel]) || suggestion.reconciledUniversalEquipmentId}
+                          Matched to {compact([suggestion.reconciledMake, suggestion.reconciledModel]) || "Catalog match"}
                         </div>
                       )}
                     </div>

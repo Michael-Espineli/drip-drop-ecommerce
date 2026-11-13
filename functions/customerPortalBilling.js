@@ -97,7 +97,10 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
         paymentAttemptId: attemptId,
         paymentMethodType
       };
-      const expiresAt = new Date(now().getTime() + 30 * 60000);
+      // Stripe measures its minimum lifetime when it receives the request. An
+      // absolute 30-minute deadline saved before network calls is already too
+      // early by then, and retries keep replaying that rejected request.
+      const expiresAt = new Date(now().getTime() + 24 * 3600000);
       const params = {
         mode: 'payment',
         payment_method_types: [paymentMethodType==='ach'?'us_bank_account':'card'],
@@ -118,8 +121,7 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
           application_fee_amount: Math.round(balance * (paymentMethodType==='ach'?0.19:0.08) / 100)
         },
         success_url: success.toString().replace(/%7BCHECKOUT_SESSION_ID%7D/gi, '{CHECKOUT_SESSION_ID}'),
-        cancel_url: cancel.toString(),
-        expires_at: Math.floor(expiresAt.getTime() / 1000)
+        cancel_url: cancel.toString()
       };
       if (invoice.email) params.customer_email = invoice.email;
       const attempt = {
@@ -147,11 +149,31 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
       };
     });
     const attemptRef = invoiceRef.collection('portalPaymentAttempts').doc(draft.attemptId);
+    const createSession = async () => {
+      try {
+        return await stripe.checkout.sessions.create(draft.attempt.params, {
+          stripeAccount: draft.attempt.connectedAccount, idempotencyKey: draft.attemptId
+        });
+      } catch (error) {
+        // Only a definite validation rejection proves no session was created.
+        // Never replace parameters/keys after a timeout or unknown outcome.
+        if (draft.attempt.params.expires_at && error.type === 'StripeInvalidRequestError' &&
+          error.statusCode === 400 && /expires_at.*(?:30 minutes|24 hours|past|future)/i.test(error.message || '')) {
+          await db.runTransaction(async tx => {
+            const saved = await tx.get(attemptRef);
+            if (!saved.data()?.sessionId) tx.set(attemptRef, {status:'failed', failureReason:'invalid_checkout_expiration', updatedAt:now()}, {merge:true});
+          });
+          return null;
+        }
+        throw error;
+      }
+    };
     if (draft.retire) {
       const options = { stripeAccount: draft.attempt.connectedAccount };
       const session = draft.attempt.sessionId
         ? await stripe.checkout.sessions.retrieve(draft.attempt.sessionId, {}, options)
-        : await stripe.checkout.sessions.create(draft.attempt.params, { ...options, idempotencyKey: draft.attemptId });
+        : await createSession();
+      if (!session) return startInvoiceCheckout(request);
       if (session.status === 'complete') return { status: 'processing', message: 'Your payment is being confirmed.' };
       if (session.status === 'open') await stripe.checkout.sessions.expire(session.id, {}, options);
       await attemptRef.set({ sessionId: session.id, status: 'expired', updatedAt: now() }, { merge: true });
@@ -181,17 +203,16 @@ function createCustomerPortalBilling(db, stripe, now = () => new Date()) {
     }
     const account = await stripe.accounts.retrieve(draft.attempt.connectedAccount);
     if (!account.charges_enabled) fail('failed-precondition', 'The company payment account is not ready. Contact the company.');
-    const session = await stripe.checkout.sessions.create(draft.attempt.params, {
-      stripeAccount: draft.attempt.connectedAccount,
-      idempotencyKey: draft.attemptId
-    });
+    const session = await createSession();
+    if (!session) return startInvoiceCheckout(request);
     const publish = await db.runTransaction(async tx => {
       const [invoiceSnap, savedAttempt] = await Promise.all([tx.get(invoiceRef), tx.get(attemptRef)]);
       const invoice = invoiceSnap.data() || {};
       if (invoice.billingMutation || invoice.portalPaymentAttemptId !== draft.attemptId || invoiceBalance(invoice) !== draft.attempt.balanceCents ||
         !['open', 'overdue', 'partiallypaid'].includes(normalized(invoice.status).replace(/[^a-z]/g, '')) ||
         ['expired', 'failed'].includes(savedAttempt.data()?.status)) return false;
-      tx.set(attemptRef, {sessionId:session.id,url:session.url,status:'open'},{merge:true});
+      tx.set(attemptRef, {sessionId:session.id,url:session.url,status:'open',
+        ...(session.expires_at ? {expiresAt:new Date(session.expires_at * 1000)} : {})},{merge:true});
       return true;
     });
     if (!publish) {

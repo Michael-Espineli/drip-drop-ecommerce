@@ -1,3 +1,4 @@
+import { displayRecordReference } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -438,7 +439,7 @@ const ActiveCustomersWithoutCoverage = ({ mode = "serviceAgreements" }) => {
                         >
                           {customerDisplayName(customer)}
                         </Link>
-                        <p className="mt-1 text-xs text-slate-500">{customer.internalId || customer.id}</p>
+                        <p className="mt-1 text-xs text-slate-500">{displayRecordReference(customer, "Customer")}</p>
                       </td>
                       <td className="px-5 py-4 align-top text-sm text-slate-600">
                         {customerContact(customer) || "No contact on file"}

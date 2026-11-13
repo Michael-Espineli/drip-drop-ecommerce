@@ -72,7 +72,7 @@ const WorkLogCard = ({ log, route }) => {
                         {log.userName || route?.techName || 'Unknown technician'}
                     </h3>
                     <p className="mt-1 text-sm text-gray-500">
-                        {route?.name || route?.routeName || route?.techName || log.activeRouteId || 'Route not found'}
+                        {route?.name || route?.routeName || route?.techName || 'Linked route'}
                     </p>
                 </div>
 
@@ -244,7 +244,7 @@ const WorkLogs = () => {
                                 >
                                     <option value="">{routes.length > 0 ? 'All routes' : 'No routes for date'}</option>
                                     {routes.map(route => (
-                                        <option key={route.id} value={route.id}>{route.name || route.routeName || route.techName || route.id}</option>
+                                        <option key={route.id} value={route.id}>{route.name || route.routeName || route.techName || "Route"}</option>
                                     ))}
                                 </select>
                             </label>

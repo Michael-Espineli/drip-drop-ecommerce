@@ -1216,12 +1216,14 @@ export const fetchConversationLinkPickerItems = async ({
   chat = {},
   user = null,
   companyId = '',
+  maxResults = 100,
 }) => {
   const records = audience === 'client'
     ? await loadClientConversationLinkRecords({ db, type, user, chat })
     : await loadCompanyConversationLinkRecords({ db, type, chat, companyId });
 
-  return sortFreshestRecords(dedupeRecords(records)).slice(0, 100);
+  const sorted = sortFreshestRecords(dedupeRecords(records));
+  return maxResults === null ? sorted : sorted.slice(0, maxResults);
 };
 
 export const isOutgoingMessage = (message = {}, { userId, companyId = '' } = {}) => (

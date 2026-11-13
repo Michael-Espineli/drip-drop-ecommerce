@@ -1445,7 +1445,7 @@ const JobTemplates = () => {
           const linkedItem = itemMap.get(idValue);
           return (
             <span key={`${fallbackLabel}-${idValue}`} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-              {linkedItem?.name || `${fallbackLabel} ${String(idValue).slice(-6)}`}
+              {linkedItem?.name || fallbackLabel}
             </span>
           );
         })}

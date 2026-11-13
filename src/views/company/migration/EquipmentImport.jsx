@@ -733,7 +733,7 @@ function EquipmentImport() {
 
             {lastImportSummary && (
               <div className="mt-4 border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-                Imported {lastImportSummary.rows} rows in batch {lastImportSummary.importBatchId}. Updated {lastImportSummary.updateRows}, created {lastImportSummary.createRows}, and skipped {lastImportSummary.skippedRows || 0}.
+                Imported {lastImportSummary.rows} rows. Updated {lastImportSummary.updateRows}, created {lastImportSummary.createRows}, and skipped {lastImportSummary.skippedRows || 0}.
               </div>
             )}
 

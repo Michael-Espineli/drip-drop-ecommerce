@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
@@ -3494,7 +3495,7 @@ const CompanyUserDetails = () => {
                                                     <tr key={rate.id} className="align-top">
                                                         <td className="px-4 py-3">
                                                             <p className="font-semibold text-slate-900">{workTypeNameForRate(rate)}</p>
-                                                            <p className="mt-1 max-w-[220px] truncate text-xs text-slate-500">{rate.workTypeId || rate.ratePlanId || "General rate"}</p>
+                                                            <p className="mt-1 max-w-[220px] truncate text-xs text-slate-500">{displayReferenceValue(rate.workTypeName || rate.ratePlanName || "General rate", "General rate")}</p>
                                                         </td>
                                                         <td className="px-4 py-3 text-slate-700">{labelize(rate.payBasis)}</td>
                                                         <td className="px-4 py-3 text-slate-700">{labelize(rate.rateType)}</td>
@@ -3523,7 +3524,7 @@ const CompanyUserDetails = () => {
                                                 <div className="flex items-start justify-between gap-3">
                                                     <div className="min-w-0">
                                                         <p className="truncate text-sm font-semibold text-slate-950">{rateSheet.templateName || "Rate Sheet Item"}</p>
-                                                        <p className="mt-1 truncate text-xs text-slate-500">{rateSheet.templateId || "No template id"}</p>
+                                                        <p className="mt-1 truncate text-xs text-slate-500">{rateSheet.templateId ? "Template linked" : "No template linked"}</p>
                                                     </div>
                                                     <Badge className={getRateStatusClass(rateSheet.status)}>{labelize(rateSheet.status)}</Badge>
                                                 </div>
@@ -3820,7 +3821,7 @@ const CompanyUserDetails = () => {
                 <Section title="Linked Company" description="Contractor relationship information.">
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <DetailField label="Company Name" value={user.linkedCompanyName} />
-                        <DetailField label="Company Reference" value={user.linkedCompanyId || (user.linkedCompanyName ? "Linked company" : "")} />
+                        <DetailField label="Company Reference" value={displayReferenceValue(user.linkedCompanyId || (user.linkedCompanyName ? "Linked company" : ""), "Company Reference")} />
                     </div>
                 </Section>
             )}
@@ -4150,7 +4151,7 @@ const CompanyUserDetails = () => {
                                             </p>
                                             {item.isComplete && (
                                                 <p className="mt-1 text-xs text-slate-500">
-                                                    By {item.completedByName || item.completedByUserId || "Management"}
+                                                    By {item.completedByName || "Management"}
                                                 </p>
                                             )}
                                         </div>

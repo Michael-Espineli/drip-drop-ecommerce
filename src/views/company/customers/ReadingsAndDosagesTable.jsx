@@ -1,4 +1,6 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
+import { linkedReferenceText } from '../../../utils/displayReferences';
 
 const ReadingsAndDosagesTable = ({ stopData, readingTemplates, dosageTemplates }) => {
 
@@ -37,7 +39,7 @@ const ReadingsAndDosagesTable = ({ stopData, readingTemplates, dosageTemplates }
                                 <th key={template.id} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{template.name}</th>
                             )
                         ))}
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stop ID</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service Visit</th>
                     </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -68,12 +70,12 @@ const ReadingsAndDosagesTable = ({ stopData, readingTemplates, dosageTemplates }
                                 );
                             })}
                             <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                <button
-                                    onClick={() => console.log(`Show Detail View For Service Stop ${data.serviceStopId}`)}
+                                <Link
+                                    to={`/company/serviceStops/detail/${encodeURIComponent(data.serviceStopId)}`}
                                     className="text-blue-600 hover:text-blue-900"
                                 >
-                                    {data.serviceStopId}
-                                </button>
+                                    {linkedReferenceText('Service Visit', data.serviceStopId, data.serviceStopInternalId)}
+                                </Link>
                             </td>
                         </tr>
                     ))}

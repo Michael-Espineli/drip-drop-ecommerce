@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
 import { arrayRemove, arrayUnion, collection, doc, query, where, orderBy, getDocs, startAfter, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -1261,7 +1262,7 @@ const PurchaseListView = () => {
                   checked={techIds.includes(user.userId)}
                   onChange={() => toggleTech(user.userId)}
                 />
-                <span className="truncate">{user.userName || user.name || user.email || user.userId}</span>
+                <span className="truncate">{user.userName || user.name || user.email || "Technician"}</span>
               </label>
             ))}
           </div>
@@ -1643,7 +1644,7 @@ const PurchaseListView = () => {
             shoppingSelection.purchase?.shoppingListItemId ? (
               <div className="flex justify-between gap-2">
                 <p className="text-sm text-gray-500">
-                  Current link: {shoppingSelection.purchase.shoppingListItemId}
+                  Current link: Shopping item connected
                 </p>
                 <button
                   type="button"
@@ -1774,7 +1775,7 @@ const PurchaseListView = () => {
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-semibold text-gray-800">{job.internalId || job.type || "Job"}</p>
+                        <p className="font-semibold text-gray-800">{displayReferenceValue(job.internalId || job.type || "Job", "Job")}</p>
                         <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
                           {job.operationStatus || "Status"}
                         </span>

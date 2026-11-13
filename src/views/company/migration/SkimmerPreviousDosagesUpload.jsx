@@ -2074,7 +2074,7 @@ function SkimmerPreviousDosagesUpload() {
                             <option value="">Select pool</option>
                             {bodyOptions.map((bodyOfWater) => (
                               <option key={bodyOfWater.id} value={bodyOfWater.id}>
-                                {bodyOfWater.name || bodyOfWater.id}
+                                {bodyOfWater.name || "Pool or spa"}
                               </option>
                             ))}
                           </select>

@@ -1,3 +1,4 @@
+import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
@@ -2104,7 +2105,7 @@ const EquipmentDetail = () => {
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="font-semibold text-gray-800">{job.internalId || "Job"}</p>
+                            <p className="font-semibold text-gray-800">{displayReferenceValue(job.internalId || "Job", "Job")}</p>
                             <p className="mt-1 text-sm text-gray-600">{job.description || job.type || "Job"}</p>
                             {job.equipmentTasks?.length ? (
                               <p className="mt-1 text-xs text-gray-500">
@@ -2285,8 +2286,8 @@ const EquipmentDetail = () => {
                     <Field label="Catalog Model">
                       <p className="text-sm font-semibold text-gray-800">{displayCompactValue(catalogInfo.model)}</p>
                     </Field>
-                    <Field label="Universal ID">
-                      <p className="truncate text-sm font-semibold text-gray-800">{displayCompactValue(catalogInfo.id)}</p>
+                    <Field label="Catalog match">
+                      <p className="truncate text-sm font-semibold text-gray-800">{catalogInfo.id ? "Linked" : "Not linked"}</p>
                     </Field>
                   </div>
                 </div>
