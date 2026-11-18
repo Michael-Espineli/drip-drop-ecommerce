@@ -6,7 +6,6 @@ const functions1 = require('firebase-functions/v1');
 const { getFirestore } = require("firebase-admin/firestore");
 const { v4: uuidv4 } = require('uuid');
 const { Timestamp } = require('firebase-admin/firestore');
-const { defineSecret } = require('firebase-functions/params');
 // The Firebase Admin SDK to access Firestore.
 const admin = require("firebase-admin");
 const { title } = require("process");
@@ -29,8 +28,6 @@ const recurringAccess = require("../recurringAccess").createRecurringAccess(db, 
   verifyIdToken: (token) => admin.auth().verifyIdToken(token, true),
 });
 const recurringCallable = (action, handler) => functions.https.onCall(recurringAccess.wrap(action, handler));
-
-const mySecret = defineSecret('stripe_secret_key');
 
 const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
 const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
@@ -105,6 +102,15 @@ const DEFAULT_CUSTOMER_PIPELINE_ITEMS = [
     sortOrder: 40,
     itemType: "internal",
     linkType: "serviceAgreement",
+    isDefault: true,
+  },
+  {
+    id: "default_billing_setup",
+    title: "Billing Ready",
+    description: "Payment authorization or office-approved invoice billing is ready.",
+    sortOrder: 45,
+    itemType: "internal",
+    linkType: "billingSetup",
     isDefault: true,
   },
   {
@@ -5165,7 +5171,7 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
     }
 
     const firestore = getFirestore();
-    const hasAccess = await userCanAccessCompany(firestore, authUserId, companyId);
+    const hasAccess = await companyAuthorization.hasPermission(firestore, authUserId, companyId, "612");
     if (!hasAccess) {
       return {
         status: 403,
@@ -5196,6 +5202,11 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
 
     const company = companySnap.data() || {};
     const lead = leadSnap.data() || {};
+    const existingConversion = value => ({status: 200, alreadyConverted: true, leadId, companyId,
+      customerId: value.customerId || value.companyCustomerId, customerName: value.customerName || '',
+      serviceLocationId: value.serviceLocationId || value.companyServiceLocationId || '', bodyOfWaterId: value.bodyOfWaterId || '',
+      bodyOfWaterIds: value.bodyOfWaterIds || [], equipmentIds: value.equipmentIds || [], relationshipId: value.relationshipId || ''});
+
 
     if (lead.companyId && lead.companyId !== companyId) {
       return {
@@ -5204,6 +5215,7 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
       };
     }
 
+    if (lead.customerId || lead.companyCustomerId) return existingConversion(lead);
     const formData = payload.formData || payload.customer || {};
     const serviceLocationData = payload.serviceLocationData || {};
     const bodyOfWaterData = payload.bodyOfWaterData || {};
@@ -5370,6 +5382,8 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
         displayAsCompany,
         active: true,
         isActive: true,
+        onboardingRequired: true,
+        lifecycleStatus: "prospect",
         email,
         phoneNumber,
         phoneLabel: "",
@@ -5677,7 +5691,21 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
       }),
     });
 
-    await commitFirestoreWrites(firestore, writes);
+    if (writes.length > 450) throw new Error('Convert this lead with fewer equipment parts, then add the remaining equipment afterward.');
+    const previous = await firestore.runTransaction(async transaction => {
+      const current = await transaction.get(leadRef);
+      if (!current.exists || current.data().companyId !== companyId) throw new Error('Lead is unavailable for this company.');
+      if (current.data().customerId || current.data().companyCustomerId) return existingConversion(current.data());
+      const existingCustomer = await transaction.get(companyRef.collection('customers').doc(customerId));
+      if (existingCustomer.exists) throw new Error('Use Link Existing Customer to preserve the existing customer records.');
+      if (serviceLocationId) {
+        const existingLocation = await transaction.get(companyRef.collection('serviceLocations').doc(serviceLocationId));
+        if (existingLocation.exists) throw new Error('Choose a new service location for this customer conversion.');
+      }
+      for (const write of writes) transaction.set(write.ref, write.data, {merge: write.merge !== false});
+      return null;
+    });
+    if (previous) return previous;
 
     return {
       status: 200,

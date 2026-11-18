@@ -53,3 +53,44 @@ export const isShoppingListStatusClosed = (status) => {
 };
 
 export const shoppingItemNeedsAction = (status) => !isShoppingListStatusClosed(status);
+
+const approvalReadyStatusValues = new Set(["approved", "approvedawaitingpurchase"]);
+const rejectedShoppingStatusValues = new Set(["customerrejected", "rejected", "denied"]);
+const waitingApprovalShoppingStatusValues = new Set([
+  "needsapproval",
+  "needscustomerapproval",
+  "customerapproval",
+  "pendingapproval",
+  "pendingcustomerapproval",
+  "awaitingcustomerapproval",
+]);
+const partApprovalSourceTypes = new Set([
+  "partapproval",
+  "partapprovalrequest",
+  "customerpartapproval",
+  "customerpartapprovalrequest",
+]);
+
+const shoppingItemApprovalIsReady = (item, status) => {
+  const sourceType = normalizeShoppingListStatus(item.sourceType || item.sourceRecordType || item.sourceRecordTypeLabel);
+  const approvalRequired = item.customerApprovalRequired || item.partApprovalRequestId ||
+    item.approvalRequestId || item.customerApprovalRequestId || partApprovalSourceTypes.has(sourceType) ||
+    waitingApprovalShoppingStatusValues.has(status);
+  if (!approvalRequired) return true;
+
+  return [
+    item.status,
+    item.customerApprovalStatus,
+    item.customerApprovalResponse,
+    item.approvalStatus,
+    item.response,
+    item.fulfillmentStatus,
+  ].some((value) => approvalReadyStatusValues.has(normalizeShoppingListStatus(value)));
+};
+
+export const shoppingItemIsReadyToPurchase = (item = {}) => {
+  const status = normalizeShoppingListStatus(item.status);
+  return !rejectedShoppingStatusValues.has(status) &&
+    canonicalShoppingListStatus(status) === SHOPPING_LIST_STATUS.needToPurchase &&
+    shoppingItemApprovalIsReady(item, status);
+};

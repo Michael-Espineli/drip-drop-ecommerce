@@ -7,6 +7,7 @@ import { query, collection, getDocs, where, updateDoc, orderBy, doc, getDoc } fr
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
+import { getCustomerLifecycleLabel } from '../../../utils/customerLocationData';
 import { Equipment } from '../../../utils/models/Equipment';
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
@@ -304,7 +305,7 @@ export default function Customers() {
             const phone = getCustomerPhone(customer);
             const address = getCustomerAddressLine(customer);
             const tags = normalizeCustomerTags(customer.tags);
-            const statusLabel = customer.active === false ? 'Inactive' : 'Active';
+            const statusLabel = getCustomerLifecycleLabel(customer);
 
             return {
                 value: customer.id,
@@ -443,7 +444,9 @@ export default function Customers() {
             const matchesStatus =
                 statusFilter === 'all' ||
                 (statusFilter === 'active' && customer.active === true) ||
-                (statusFilter === 'inactive' && customer.active !== true);
+                (statusFilter === 'inactive' && customer.active !== true) ||
+                (statusFilter === 'prospect' && customer.active !== false && customer.lifecycleStatus === 'prospect') ||
+                (statusFilter === 'ready' && customer.active !== false && customer.lifecycleStatus === 'readyForService');
             const matchesTags = customerHasAnyTag(customer, selectedTags);
 
             return matchesSearch && matchesStatus && matchesTags;
@@ -902,7 +905,9 @@ export default function Customers() {
                                 <div className="inline-flex w-full rounded-md border border-slate-200 bg-white p-1 sm:w-auto">
                                     {[
                                         { value: 'all', label: 'All' },
-                                        { value: 'active', label: 'Active' },
+                                        { value: 'active', label: 'Current' },
+                                        { value: 'prospect', label: 'Prospects' },
+                                        { value: 'ready', label: 'Ready for first service' },
                                         { value: 'inactive', label: 'Inactive' },
                                     ].map((option) => (
                                         <button
@@ -1050,7 +1055,7 @@ export default function Customers() {
                                             </td>
                                             <td className="px-5 py-3">
                                                 <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${customer.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                                                    {customer.active ? 'Active' : 'Inactive'}
+                                                    {getCustomerLifecycleLabel(customer)}
                                                 </span>
                                             </td>
                                         </tr>

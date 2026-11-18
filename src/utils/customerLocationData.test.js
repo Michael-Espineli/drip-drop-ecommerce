@@ -1,4 +1,6 @@
 import { formatAddressLabel, normalizeAddress } from "./customerLocationData";
+import { Customer } from './models/Customer';
+import { ServiceLocation } from './models/ServiceLocation';
 
 describe("customer location address helpers", () => {
   it("normalizes service-location addresses from legacy iOS field names", () => {
@@ -30,4 +32,13 @@ describe("customer location address helpers", () => {
 
     expect(formatAddressLabel(address)).toBe("456 Filter Court Fresno CA 93722");
   });
+});
+
+test('customer and location edits preserve server onboarding fields without adding them to legacy records', () => {
+  const gate = {required: true, agreementId: 'agreement', status: 'pending'};
+  const saved = new Customer({id: 'new', firstName: 'Before', onboardingRequired: true, lifecycleStatus: 'prospect', serviceOnboarding: gate});
+  saved.firstName = 'Updated';
+  expect(saved.toFirestore()).toMatchObject({firstName: 'Updated', onboardingRequired: true, lifecycleStatus: 'prospect', serviceOnboarding: gate});
+  expect(new Customer({id: 'legacy'}).toFirestore()).not.toHaveProperty('onboardingRequired');
+  expect(new ServiceLocation({id: 'site', serviceOnboarding: gate}).toFirestore()).toMatchObject({serviceOnboarding: gate});
 });

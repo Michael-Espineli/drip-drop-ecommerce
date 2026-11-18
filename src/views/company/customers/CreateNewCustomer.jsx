@@ -232,6 +232,8 @@ const CreateNewCustomer = () => {
                 hireDate: new Date(),
                 phoneLabel: ""
             });
+            customerPayload.onboardingRequired = true;
+            customerPayload.lifecycleStatus = 'prospect';
             const existingCustomersSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers'));
             const duplicateMatches = findDuplicateCustomerMatches(
                 customerPayload,

@@ -226,6 +226,7 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     cancelAtPeriodEnd: false,
     canceledAt: null,
     applicationFeePercent: null,
+    ...(agreement.onboardingWorkflowVersion === 1 ? {onboardingWorkflowVersion: 1, onboardingBilling: agreement.onboardingBilling || {}, manualBillingEnabled: false, manualBillingAutoSendEnabled: false, firstInvoiceSendAt: null, manualBillingNextInvoiceAt: null, currentPeriodStart: null, currentPeriodEnd: null, billingCollectionMethod: 'onboardingPending'} : {}),
   };
 };
 

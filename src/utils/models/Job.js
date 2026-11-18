@@ -168,6 +168,10 @@ export class Job {
     job.acceptedSolutionTierLabel = data.acceptedSolutionTierLabel ?? '';
     job.planSelectionStatus = data.planSelectionStatus ?? data.solutionSelectionStatus ?? '';
     job.solutionSelectionStatus = data.solutionSelectionStatus ?? data.planSelectionStatus ?? '';
+    job.sourceTemplateId = data.sourceTemplateId ?? '';
+    job.jobTemplateId = data.jobTemplateId ?? '';
+    job.createdFromBasicWorkOrderForm = data.createdFromBasicWorkOrderForm ?? false;
+    job.basicWorkOrderMode = data.basicWorkOrderMode ?? '';
 
     return job;
   }

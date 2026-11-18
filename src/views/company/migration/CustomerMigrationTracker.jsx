@@ -1,3 +1,4 @@
+import {onboardingPipelineComplete} from '../../../utils/sales/onboardingPipeline';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -5,6 +6,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDoc,
   orderBy,
   query,
   serverTimestamp,
@@ -754,6 +756,7 @@ const buildCustomerOffboardingOperations = async ({
 
 const makeRelatedIndexes = ({
   serviceAgreements = [],
+  estimateStops = [],
   recurringServiceStops = [],
   equipment = [],
   serviceLocations = [],
@@ -775,6 +778,7 @@ const makeRelatedIndexes = ({
   });
 
   return {
+    estimateStopsById: new Map(estimateStops.map(stop => [stop.id, stop])),
     agreementsByCustomerId: byCustomer(serviceAgreements),
     agreementsByLeadId,
     recurringByCustomerId: byCustomer(recurringServiceStops),
@@ -809,24 +813,10 @@ const linkComplete = (row, stage, relatedIndexes) => {
     case "customer":
       return Boolean(customerId);
     case "initialEstimate":
-      return Boolean(
-        row.raw?.estimateId ||
-        row.raw?.serviceEstimateServiceStopId ||
-        row.raw?.initialEstimateServiceStopId
-      );
     case "serviceAgreement":
-      return Boolean(
-        (customerId && relatedIndexes.agreementsByCustomerId.get(customerId)?.length) ||
-        (leadId && relatedIndexes.agreementsByLeadId.get(leadId)?.length) ||
-        row.raw?.agreementId ||
-        row.raw?.serviceAgreementId
-      );
+    case "billingSetup":
     case "routing":
-      return Boolean(
-        (customerId && relatedIndexes.recurringByCustomerId.get(customerId)?.length) ||
-        row.raw?.recurringServiceStopId ||
-        row.raw?.routeId
-      );
+      return onboardingPipelineComplete(row, stage.linkType, relatedIndexes);
     case "equipment":
       return Boolean(
         (customerId && relatedIndexes.equipmentByCustomerId.get(customerId)?.length) ||
@@ -1162,17 +1152,19 @@ function CustomerMigrationTracker() {
       setCustomers(nextCustomers);
       setLeads(nextLeads);
       setRows(nextRows);
-      setPipelineItems(
-        templateSnap.empty
-          ? DEFAULT_PIPELINE_TEMPLATE_ITEMS.map(normalizePipelineItem)
-          : templateSnap.docs.map((itemDoc, index) => normalizePipelineItem({ id: itemDoc.id, ...itemDoc.data() }, index * 10))
-      );
+      const configuredStages = templateSnap.empty ? DEFAULT_PIPELINE_TEMPLATE_ITEMS.map(normalizePipelineItem)
+        : templateSnap.docs.map((itemDoc, index) => normalizePipelineItem({id: itemDoc.id, ...itemDoc.data()}, index * 10));
+      if (!configuredStages.some(stage => stage.linkType === 'billingSetup')) configuredStages.push(normalizePipelineItem(DEFAULT_PIPELINE_TEMPLATE_ITEMS.find(stage => stage.linkType === 'billingSetup')));
+      setPipelineItems(configuredStages);
       setLeadSources(
         leadSourceSnap.empty
           ? DEFAULT_LEAD_SOURCES.map(normalizeLeadSourceItem)
           : leadSourceSnap.docs.map((sourceDoc, index) => normalizeLeadSourceItem({ id: sourceDoc.id, ...sourceDoc.data() }, index * 10))
       );
+      const estimateStopIds = [...new Set(nextLeads.flatMap(lead => [lead.serviceEstimateServiceStopId, lead.initialEstimateServiceStopId]).filter(Boolean))];
+      const estimateStops = await Promise.all(estimateStopIds.map(id => getDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', id))));
       setRelatedIndexes(makeRelatedIndexes({
+        estimateStops: estimateStops.filter(snapshot => snapshot.exists()).map(snapshot => ({...snapshot.data(), id: snapshot.id})),
         serviceAgreements: agreementSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })),
         recurringServiceStops: recurringSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })),
         equipment: equipmentSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })),

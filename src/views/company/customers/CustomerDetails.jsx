@@ -51,6 +51,7 @@ import {
 } from '../../../utils/customerTags';
 import {
     getCustomerDisplayName,
+    getCustomerLifecycleLabel,
     normalizeAddress,
     normalizeContact,
     normalizeCustomerForFirestore,
@@ -1122,7 +1123,7 @@ const ProfileTab = ({
                         ) : (
                             <div className="flex items-center">
                                 <span className={`px-2 py-1 text-xs font-semibold rounded-full ${customer.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                    {customer.active ? 'Active' : 'Inactive'}
+                                    {getCustomerLifecycleLabel(customer)}
                                 </span>
                             </div>
                         )}
@@ -5858,7 +5859,7 @@ export default function CustomerDetails() {
                                     &larr; Back to Customers
                                 </Link>
                                 <StatusBadge tone={customer.active ? 'emerald' : 'rose'}>
-                                    {customer.active ? 'Active' : 'Inactive'}
+                                    {getCustomerLifecycleLabel(customer)}
                                 </StatusBadge>
                                 {customer.userId ? (
                                     <StatusBadge tone="blue">Homeowner Account Linked</StatusBadge>

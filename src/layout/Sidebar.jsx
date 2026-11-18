@@ -20,8 +20,7 @@ import {
 } from '../utils/equipmentMaintenance';
 import {
     SHOPPING_LIST_STATUS,
-    canonicalShoppingListStatus,
-    normalizeShoppingListStatus,
+    shoppingItemIsReadyToPurchase,
 } from '../utils/shoppingListStatus';
 import {
     TODO_LIST_FEATURE_FLAG_ID,
@@ -104,65 +103,6 @@ const purchaseReadyShoppingStatusValues = [
     "approved",
     "Approved",
 ];
-
-const approvalReadyStatusValues = new Set([
-    "approved",
-    "approvedawaitingpurchase",
-]);
-
-const rejectedShoppingStatusValues = new Set([
-    "customerrejected",
-    "rejected",
-    "denied",
-]);
-
-const waitingApprovalShoppingStatusValues = new Set([
-    "needsapproval",
-    "needscustomerapproval",
-    "customerapproval",
-    "pendingapproval",
-    "pendingcustomerapproval",
-    "awaitingcustomerapproval",
-]);
-
-const shoppingItemComesFromPartApproval = (item = {}) => {
-    const sourceType = normalizeShoppingListStatus(item.sourceType || item.sourceRecordType || item.sourceRecordTypeLabel);
-
-    return Boolean(
-        item.partApprovalRequestId ||
-        item.approvalRequestId ||
-        item.customerApprovalRequestId ||
-        sourceType === "partapproval" ||
-        sourceType === "partapprovalrequest" ||
-        sourceType === "customerpartapproval" ||
-        sourceType === "customerpartapprovalrequest"
-    );
-};
-
-const shoppingItemApprovalIsReady = (item = {}) => {
-    const approvalRequired = Boolean(item.customerApprovalRequired || shoppingItemComesFromPartApproval(item));
-    if (!approvalRequired) return true;
-
-    return [
-        item.status,
-        item.customerApprovalStatus,
-        item.customerApprovalResponse,
-        item.approvalStatus,
-        item.response,
-        item.fulfillmentStatus,
-    ].some((value) => approvalReadyStatusValues.has(normalizeShoppingListStatus(value)));
-};
-
-const shoppingItemIsReadyToPurchase = (item = {}) => {
-    const status = normalizeShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase);
-    if (rejectedShoppingStatusValues.has(status)) return false;
-    if (waitingApprovalShoppingStatusValues.has(status) && !shoppingItemApprovalIsReady(item)) return false;
-
-    return (
-        canonicalShoppingListStatus(item.status || SHOPPING_LIST_STATUS.needToPurchase) === SHOPPING_LIST_STATUS.needToPurchase &&
-        shoppingItemApprovalIsReady(item)
-    );
-};
 
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();

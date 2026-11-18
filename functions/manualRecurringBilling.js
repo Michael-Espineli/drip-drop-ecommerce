@@ -41,6 +41,10 @@ function createManualRecurringBilling(db,now=()=>new Date(),stripeProvider=()=>r
       const reason=eligibility(subscription,now(),scheduled);
       if(reason){if(scheduled)return {skipped:reason};fail('failed-precondition',reason);}
       const agreement=await readAgreement(tx,db,subscription),terms=agreementTerms(subscription,agreement,company);
+      if(subscription.onboardingWorkflowVersion===1&&(key(agreement.status)!=='accepted'||subscription.onboardingAuthorizationHash!==require('./serviceOnboarding').authorizationHash({...agreement,id:subscription.agreementId}))){
+        if(!scheduled)fail('failed-precondition','The current service agreement needs acceptance before billing.');
+        return {skipped:'agreementNeedsAcceptance'};
+      }
       if(terms.closed || terms.endAt && period.periodStart.getTime()>=terms.endAt){
         if(!scheduled)fail('failed-precondition','This service agreement has ended. No new billing period can be created.');
         tx.set(ref,{status:'expired',manualBillingEnabled:false,manualBillingAutoSendEnabled:false,manualBillingStatus:'agreementEnded',nextAction:'reviewEndedAgreement',updatedAt:now()},{merge:true});
@@ -51,7 +55,15 @@ function createManualRecurringBilling(db,now=()=>new Date(),stripeProvider=()=>r
         tx.set(ref,{manualBillingStatus:'finalPeriodReview',billingReviewRequired:true,billingReviewReason:'finalPeriodExtendsBeyondAgreement',nextAction:'reviewFinalInvoice',updatedAt:now()},{merge:true});
         return {skipped:'finalPeriodReview'};
       }
-      const price=pricing(subscription),invoiceRef=db.collection('salesInvoices').doc(period.invoiceId),invoice=await tx.get(invoiceRef);
+      let price=pricing(subscription);
+      const initialProration=subscription.onboardingWorkflowVersion===1&&subscription.onboardingProrationApplied===true&&
+        millis(subscription.onboardingInitialPeriodStart)===period.periodStart.getTime()&&Array.isArray(subscription.onboardingInitialLineItems);
+      if(initialProration){
+        const lines=subscription.onboardingInitialLineItems,subtotalAmountCents=lines.reduce((sum,line)=>sum+Number(line.totalAmountCents||0),0);
+        const taxAmountCents=Number(subscription.onboardingInitialTaxAmountCents||0),discountAmountCents=Number(subscription.onboardingInitialDiscountAmountCents||0);
+        price={...price,lines,subtotalAmountCents,taxAmountCents,discountAmountCents,totalAmountCents:subtotalAmountCents-discountAmountCents+taxAmountCents};
+      }
+      const invoiceRef=db.collection('salesInvoices').doc(period.invoiceId),invoice=await tx.get(invoiceRef);
       if(invoice.exists&&(invoice.data().companyId!==subscription.companyId||invoice.data().billingSubscriptionId!==subscriptionId))fail('failed-precondition','An unrelated invoice uses this billing period identifier.');
       const partBilling=createRecurringPartCharges(db,null,now);
       const parts=invoice.exists?{eligible:[],invalid:[]}:await partBilling.readManual(tx,subscription);
@@ -88,7 +100,17 @@ function createManualRecurringBilling(db,now=()=>new Date(),stripeProvider=()=>r
       const page=await query.get();
       for(const doc of page.docs){scanned++;try{
         if(doc.data().checkoutHold&&!doc.data().stripeSubscriptionId)await require('./subscriptionCheckout').createSubscriptionCheckout(db,stripeProvider(),now).releaseExpiredHold(doc.ref);
-        if((await generate({subscriptionId:doc.id,scheduled:true})).created)created++;
+        const result=await generate({subscriptionId:doc.id,scheduled:true});
+        if(result.created)created++;
+        if(doc.data().onboardingWorkflowVersion===1&&doc.data().onboardingCollectionMethod==='savedMethod'){
+          const invoices=await db.collection('salesInvoices').where('billingSubscriptionId','==',doc.id).get();
+          const collector=require('./savedCustomerPayments').createSavedCustomerPayments(db,stripeProvider(),now);
+          for(const invoice of invoices.docs){
+            const bill=invoice.data();
+            if(['open','overdue','partiallypaid'].includes(key(bill.status))&&Number(bill.amountDueCents||0)>=50)
+              await collector.collectRecurringInvoice({subscriptionId:doc.id,invoiceId:invoice.id});
+          }
+        }
       }catch(error){failed++;console.error('Manual billing generation failed',{subscriptionId:doc.id,error:error.message});}}
       cursor=page.size===200?page.docs.at(-1):null;
     }while(cursor);

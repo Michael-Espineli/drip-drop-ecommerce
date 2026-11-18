@@ -252,16 +252,90 @@ test('bulk Finish Stops leaves payroll to automatic processing without a per-sto
     if (ref.endsWith('/serviceStops')) return { docs: ['one', 'two'].map(id => ({ id, data: () => ({
       operationStatus: 'Scheduled', techId: 'tech', serviceDate: new Date(), estimatedDuration: 30,
     }) })) };
-    if (ref.endsWith('/tasks')) return { docs: [{ id: 'task', data: () => ({ status: 'Scheduled' }) }] };
+    if (ref.endsWith('/tasks')) return { docs: [
+      { id: 'task', data: () => ({ status: 'Scheduled' }) },
+      { id: 'assigned-task', data: () => ({ status: 'Scheduled', workerId: 'different-tech', workerName: 'Sam', contractedRate: 25 }) },
+      { id: 'finished-task', data: () => ({ status: 'Finished', completedAt: new Date('2026-11-01') }) },
+    ] };
     return initial(ref);
   });
   await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
   const payrollReads = getDocs.mock.calls.filter(([ref]) => ref.endsWith('/technicianPayLineItems')).length;
   fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
-  expect(await screen.findByText(/Finished 2 service stop\(s\) and 2 task\(s\)\. Payroll is updating/)).toBeInTheDocument();
+  expect(await screen.findByText(/Finished 2 service stop\(s\) and 4 task\(s\)\. Payroll is updating/)).toBeInTheDocument();
   expect(mockCommit).toHaveBeenCalledTimes(2);
   expect(mockUpdate.mock.calls.filter(([path]) => path.endsWith('/tasks/task'))).toHaveLength(2);
   expect(mockUpdate.mock.calls.every(([, payload]) => payload.manualFinishSource === 'payroll_setup_bulk_finish')).toBe(true);
+  const taskUpdates = mockUpdate.mock.calls.filter(([path]) => path.includes('/tasks/'));
+  expect(taskUpdates).toHaveLength(4);
+  expect(taskUpdates.every(([path, payload]) => !path.endsWith('/finished-task') &&
+    !Object.hasOwn(payload, 'workerId') && !Object.hasOwn(payload, 'workerName') && !Object.hasOwn(payload, 'contractedRate'))).toBe(true);
+  expect(mockUpdate.mock.calls.filter(([path]) => !path.includes('/tasks/')).every(([, payload]) => payload.completedWithoutCustomerEmail)).toBe(true);
   expect(getDocs.mock.calls.filter(([ref]) => ref.endsWith('/technicianPayLineItems'))).toHaveLength(payrollReads);
   expect(technicianWorkflow).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['loading permissions', false, [], 'Service stop permissions are still loading. Please wait.'],
+  ['missing stop viewing', true, ['244', '420', '424'], 'You need View Service Stops and Edit Service Stops access to finish stops for payroll.'],
+  ['missing stop editing', true, ['240', '420', '424'], 'You need View Service Stops and Edit Service Stops access to finish stops for payroll.'],
+  ['payroll-only access', true, ['420', '424'], 'You need View Service Stops and Edit Service Stops access to finish stops for payroll.'],
+])('bulk Finish Stops is disabled with %s', async (_, ready, permissions, reason) => {
+  mockPermissionsReady = ready;
+  mockCan.mockImplementation(id => permissions.includes(id));
+  await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
+  const button = screen.getByRole('button', { name: 'Finish Stops' });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAccessibleDescription(reason);
+  fireEvent.click(button);
+  expect(getDocs.mock.calls.filter(([ref]) => ref.endsWith('/serviceStops'))).toHaveLength(0);
+  expect(mockCommit).not.toHaveBeenCalled();
+});
+
+test('bulk Finish Stops reports the Firebase source when the initial stop query is denied', async () => {
+  const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const initial = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async ref => {
+    if (ref.endsWith('/serviceStops')) throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+    return initial(ref);
+  });
+  try {
+    await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
+    fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
+    expect(await screen.findByText(/Could not finish stops while finding unfinished service stops\. Firebase Firestore permission denied/)).toBeInTheDocument();
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Finish Stops' })).toBeEnabled();
+  } finally { consoleError.mockRestore(); }
+});
+
+test('bulk Finish Stops retains confirmed progress after a denied batch and retries remaining stops', async () => {
+  const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const initial = getDocs.getMockImplementation();
+  let remaining = ['one', 'two'];
+  getDocs.mockImplementation(async ref => {
+    if (ref.endsWith('/serviceStops')) return { docs: remaining.map(id => ({ id, data: () => ({
+      operationStatus: 'Scheduled', techId: 'tech', serviceDate: new Date(), estimatedDuration: 30,
+    }) })) };
+    if (ref.endsWith('/tasks')) return { docs: [{ id: 'task', data: () => ({ status: 'Scheduled' }) }] };
+    return initial(ref);
+  });
+  let commits = 0;
+  mockCommit.mockImplementation(async () => {
+    commits += 1;
+    if (commits === 2) throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+    remaining.shift();
+  });
+  try {
+    await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
+    fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
+    expect(await screen.findByText(/Finished 1 service stop\(s\) and 1 task\(s\) before the error/)).toHaveTextContent('Completed changes are kept; retry the same range');
+    expect(consoleError).toHaveBeenCalledWith('Error finishing service stops for payroll:', expect.any(Error), expect.objectContaining({
+      serviceStopId: 'two', phase: 'saving a service stop and its tasks', finishedStops: 1, finishedTasks: 1,
+    }));
+    const writesBeforeRetry = mockUpdate.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
+    expect(await screen.findByText(/Finished 1 service stop\(s\) and 1 task\(s\)\. Payroll is updating/)).toBeInTheDocument();
+    expect(mockUpdate.mock.calls.slice(writesBeforeRetry).every(([path]) => path.includes('/serviceStops/two'))).toBe(true);
+    expect(mockCommit).toHaveBeenCalledTimes(3);
+  } finally { consoleError.mockRestore(); }
 });

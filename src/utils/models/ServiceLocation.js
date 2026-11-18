@@ -30,6 +30,9 @@ export class ServiceLocation {
     this.label = normalized.label;
     this.isActive = normalized.isActive;
     this.active = normalized.active;
+    for (const field of ['serviceOnboarding', 'firstServiceCompletedAt']) {
+      if (Object.prototype.hasOwnProperty.call(normalized, field)) this[field] = normalized[field];
+    }
   }
 
   static fromFirestore(snapshot, options) {

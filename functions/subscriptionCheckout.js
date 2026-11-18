@@ -25,6 +25,7 @@ function createSubscriptionCheckout(db,stripe,now=()=>new Date()){
    if(!platform&&record.stripeSubscriptionId&&liveSubscription(record.stripeStatus || record.status))return {already:record.stripeSubscriptionId};
    const appSubs=platform?await tx.get(ref.collection('subscriptions')):null;
    if(appSubs?.docs.some(doc=>doc.data().stripeSubscriptionId&&liveSubscription(doc.data().status)))return {already:appSubs.docs.find(doc=>doc.data().stripeSubscriptionId&&liveSubscription(doc.data().status)).data().stripeSubscriptionId};
+   if(!platform&&record.onboardingWorkflowVersion===1)fail('failed-precondition','Use the service agreement payment setup to preserve its signup-date billing schedule.');
    const price=platform?null:pricing(record);
    const agreement=platform?{}:await readAgreement(tx,db,record),terms=platform?{}:agreementTerms(record,agreement,company);
    if(!platform && (terms.closed || terms.endAt && terms.endAt<=now().getTime()))fail('failed-precondition','This service agreement has ended. Review its terms before setting up billing.');

@@ -1,12 +1,18 @@
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { query, collection, getDocs, orderBy } from "firebase/firestore";
+import { getDocs } from "firebase/firestore";
 import { Link, useLocation } from "react-router-dom";
 import "react-datepicker/dist/react-datepicker.css";
 import { format } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { getItemPhotoUrl } from "../../../utils/itemPhotos";
+import { findLinkedProductForVendorItem, getProductDisplayName, getProductSellPriceCents, productCatalogCollectionRef, vendorItemsCollectionRef } from "../../../utils/productCatalog";
+import WorkspaceHeader from "../../../components/workspace/WorkspaceHeader";
+import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
+import { userFacingErrorMessage } from "../../../utils/permissionErrors";
+import toast from "react-hot-toast";
+import CreateVendorItemModal from "./CreateVendorItemModal";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 const ALL_FILTER_VALUE = "all";
@@ -52,68 +58,52 @@ const DatabaseItems = () => {
   const [sortOption, setSortOption] = useState("nameAsc");
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reload, setReload] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  useEffect(() => { setCreateOpen(false); }, [recentlySelectedCompany]);
 
   useEffect(() => {
-    (async () => {
-      if (!recentlySelectedCompany) {
-        setGenericItemList([]);
-        return;
-      }
-
+    let active = true;
+    setGenericItemList([]);
+    setLoading(true);
+    setLoadError("");
+    const load = async () => {
+      if (!recentlySelectedCompany) { setLoading(false); return; }
       try {
-        // Get vendor-specific database items.
-        let genericItemQuery = query(
-          collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"),
-          orderBy("name")
-        );
-        const genericItemQuerySnapshot = await getDocs(genericItemQuery);
-        const items = genericItemQuerySnapshot.docs.map((itemDoc) => {
-          const itemData = itemDoc.data();
-          const dateUpdated = itemData.dateUpdated?.toDate ? itemData.dateUpdated.toDate() : new Date();
-          const formattedDate1 = format(dateUpdated, "MM / d / yyyy");
-
-          const rateCents = Number(itemData.rate || 0);
-          const rateDouble = rateCents / 100;
-          const formattedRateUSD = formatCurrency(rateDouble);
-
-          const sellPriceCents = Number(itemData.sellPrice ?? itemData.billingRate ?? 0);
-          const sellPriceDouble = sellPriceCents / 100;
-          const formattedSellPriceUSD = formatCurrency(sellPriceDouble);
-
+        const [vendorSnap, productSnap] = await Promise.all([
+          getDocs(vendorItemsCollectionRef(db, recentlySelectedCompany)),
+          getDocs(productCatalogCollectionRef(db, recentlySelectedCompany)),
+        ]);
+        if (!active) return;
+        const products = productSnap.docs.map((entry) => ({ ...entry.data(), id: entry.id }));
+        const items = vendorSnap.docs.map((entry) => {
+          const data = { ...entry.data(), id: entry.id };
+          const product = findLinkedProductForVendorItem(data, products);
+          const rawDate = data.dateUpdated || data.updatedAt || data.createdAt;
+          const date = rawDate ? rawDate.toDate?.() || new Date(rawDate) : null;
+          const millis = date?.getTime() || 0;
+          const rateCents = Number(data.rate ?? data.cost ?? 0);
+          const sellPriceCents = product ? getProductSellPriceCents(product) : Number(data.sellPrice ?? data.billingRate ?? 0);
           return {
-            UOM: itemData.UOM || "",
-            billable: Boolean(itemData.billable),
-            category: itemData.category || "",
-            color: itemData.color,
-            dateUpdated: formattedDate1,
-            dateUpdatedMillis: dateUpdated.getTime(),
-            description: itemData.description,
-            id: itemData.id || itemDoc.id,
-            name: itemData.name,
-            rateCents,
-            rate: formattedRateUSD,
-            size: itemData.size,
-            sku: itemData.sku,
-            storeName: itemData.storeName,
-            subCategory: itemData.subCategory,
-            timesPurchased: Number(itemData.timesPurchased || 0),
-            venderId: itemData.venderId,
-            label: itemData.name + " " + itemData.rate + " " + itemData.sku,
-            sellPriceCents,
-            sellPrice: formattedSellPriceUSD,
-            billingRate: formattedSellPriceUSD,
-            tracking: itemData.tracking || "",
-            photoUrl: getItemPhotoUrl(itemData),
+            ...data, UOM: data.UOM || data.uom || "", category: data.category || "", subCategory: data.subCategory || "",
+            billable: Boolean(data.billable), storeName: data.storeName || data.vendorName || "",
+            dateUpdated: millis ? format(date, "MMM d, yyyy") : "--", dateUpdatedMillis: millis,
+            rateCents, rate: formatCurrency(rateCents / 100), sellPriceCents, sellPrice: formatCurrency(sellPriceCents / 100),
+            timesPurchased: Number(data.timesPurchased || 0), photoUrl: getItemPhotoUrl(data),
+            productId: product?.id || "", productName: product ? getProductDisplayName(product) : "",
           };
         });
-
         setGenericItemList(items);
       } catch (error) {
-        console.log("Error");
-        console.log(error);
-      }
-    })();
-  }, [recentlySelectedCompany]);
+        if (active) setLoadError(userFacingErrorMessage(error, "Could not load vendor items."));
+      } finally { if (active) setLoading(false); }
+    };
+    load();
+    return () => { active = false; };
+  }, [recentlySelectedCompany, reload]);
 
   const searchMatchedItems = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -129,6 +119,7 @@ const DatabaseItems = () => {
         item.sku,
         item.storeName,
         item.tracking,
+        item.productName,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedSearch))
@@ -221,351 +212,80 @@ const DatabaseItems = () => {
     }).format(number);
   }
 
+  const filterClass = "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+  const linkedProductsOnPage = new Set(paginatedItems.map((item) => item.productId).filter(Boolean)).size;
+  const filters = [
+    { label: "Filter by category", value: categoryFilter, set: setCategoryFilter, all: "All Categories", options: categoryOptions },
+    { label: "Filter by subcategory", value: subCategoryFilter, set: setSubCategoryFilter, all: "All Subcategories", options: subCategoryOptions },
+    { label: "Filter by UOM", value: uomFilter, set: setUomFilter, all: "All UOM", options: uomOptions },
+    { label: "Filter by billable status", value: billableFilter, set: setBillableFilter, all: "All Billing", options: [{ value: "billable", label: "Billable" }, { value: "nonBillable", label: "Not Billable" }] },
+  ];
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        {/* Header */}
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Vendor Items</p>
-              <h2 className="mt-1 text-3xl font-bold text-slate-950">Vendor Item Catalog</h2>
-            <p className="text-sm text-slate-500 mt-1">Browse and manage supplier-specific purchasable items, costs, SKUs, and Product Catalog links.</p>
-          </div>
-            <div className="flex flex-wrap gap-2">
-            <Link to="/company/product-catalog/reconciliation" className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700">
-                Product Catalog Reconciliation
-            </Link>
-            {can("910") && (
-                <Link to={`${vendorItemsBasePath}/bulk-upload`} className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
-                Upload Vendor Items
-            </Link>
-            )}
-            {can("852") && (
-              <Link
-                  className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
-                to={`${vendorItemsBasePath}/createNew`}
-              >
-                Create Vendor Item
-              </Link>
-            )}
-            </div>
-          </div>
+        <WorkspaceHeader title="Vendor Items" eyebrow="Vendor Item Catalog" description="Supplier-specific purchasable items, costs, SKUs, and connected products."
+          actions={<>
+            {can("852") && <button type="button" disabled={!recentlySelectedCompany} onClick={() => setCreateOpen(true)} className={workspaceButtonClass({ tone: "blue" })}>Add new</button>}
+            <Link to="/company/product-catalog/reconciliation" className={workspaceButtonClass({ tone: "blue" })}>Product Catalog Reconciliation</Link>
+            {can("910") && <Link to={`${vendorItemsBasePath}/bulk-upload`} className={workspaceButtonClass({ tone: "slate" })}>Upload Vendor Items</Link>}
+            <Link to="/company/product-catalog" className={workspaceButtonClass({ tone: "slate" })}>Product Catalog</Link>
+          </>}
+        />
+        <section className="grid gap-3 md:grid-cols-3">
+          {[['Vendor Items', genericItemList.length], ['Visible Results', sortedItems.length], ['Linked Products On Page', linkedProductsOnPage]].map(([label, value], index) => <div key={label} className={`rounded-lg border p-4 shadow-sm ${index === 2 ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white"}`}>
+            <p className={`text-xs font-bold uppercase tracking-wide ${index === 2 ? "text-blue-700" : "text-slate-500"}`}>{label}</p>
+            <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+          </div>)}
         </section>
-
-        {/* Controls */}
+        {loadError && <div role="alert" className="rounded-lg border border-rose-200 bg-white p-4"><p>{loadError}</p><button type="button" onClick={() => setReload((value) => value + 1)} className={workspaceButtonClass({ tone: "blue" })}>Retry vendor items</button></div>}
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid gap-3 border-b border-slate-200 p-5 xl:grid-cols-[minmax(280px,1fr)_repeat(5,minmax(150px,190px))_auto]">
-            <div className="w-full">
-              <div className="relative">
-                <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m0 0A7.5 7.5 0 104.5 4.5a7.5 7.5 0 0012.15 12.15z" />
-                  </svg>
-                </span>
-
-                {/* Search Bar */}
-                <input
-                  className="w-full rounded-md border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  type="text"
-                  name="search"
-                  placeholder="Search vendor items"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              aria-label="Filter by category"
-            >
-              <option value={ALL_FILTER_VALUE}>All Categories</option>
-              {categoryOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={subCategoryFilter}
-              onChange={(e) => setSubCategoryFilter(e.target.value)}
-              aria-label="Filter by subcategory"
-            >
-              <option value={ALL_FILTER_VALUE}>All Subcategories</option>
-              {subCategoryOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={uomFilter}
-              onChange={(e) => setUomFilter(e.target.value)}
-              aria-label="Filter by UOM"
-            >
-              <option value={ALL_FILTER_VALUE}>All UOM</option>
-              {uomOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={billableFilter}
-              onChange={(e) => setBillableFilter(e.target.value)}
-              aria-label="Filter by billable status"
-            >
-              <option value={ALL_FILTER_VALUE}>All Billing</option>
-              <option value="billable">Billable</option>
-              <option value="nonBillable">Not Billable</option>
-            </select>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={sortOption}
-              onChange={(e) => setSortOption(e.target.value)}
-              aria-label="Sort vendor items"
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-
-            <div className="flex items-center gap-2">
-                <select
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  value={pageSize}
-                  onChange={(e) => setPageSize(Number(e.target.value))}
-                aria-label="Rows per page"
-                >
-                  {PAGE_SIZE_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              {(searchTerm || activeFilterCount > 0 || sortOption !== "nameAsc") && (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                >
-                  Clear
-                </button>
-              )}
+          <div className="grid gap-3 border-b border-slate-200 p-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <input className={filterClass} aria-label="Search vendor items" placeholder="Search vendor items" value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} />
+            {filters.map((field) => <select key={field.label} aria-label={field.label} value={field.value} onChange={(event) => field.set(event.target.value)} className={filterClass}>
+              <option value={ALL_FILTER_VALUE}>{field.all}</option>
+              {field.options.map((option) => <option key={typeof option === 'string' ? option : option.value} value={typeof option === 'string' ? option : option.value}>{typeof option === 'string' ? option : option.label}</option>)}
+            </select>)}
+            <select aria-label="Sort vendor items" value={sortOption} onChange={(event) => setSortOption(event.target.value)} className={filterClass}>{SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+            <div className="flex flex-wrap gap-2">
+              <select aria-label="Rows per page" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} className={filterClass}>{PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}</select>
+              {(searchTerm || activeFilterCount || sortOption !== "nameAsc") ? <button type="button" onClick={clearFilters} className={workspaceButtonClass({ tone: "slate" })}>Clear</button> : null}
             </div>
           </div>
-
-          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-            <div>{resultSummaryText}</div>
-            <div>{activeFilterCount ? `${activeFilterCount} filter${activeFilterCount === 1 ? "" : "s"} active` : "No field filters active"}</div>
-          </div>
-
-          {/* Table */}
-          <div className="overflow-x-auto border-t border-slate-200">
-            <table className="min-w-[1280px] w-full">
-              <thead className="bg-slate-50">
-                <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  <th className="px-5 py-3 border-b border-slate-200">Name</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Category</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Subcategory</th>
-                  <th className="px-5 py-3 border-b border-slate-200">UOM</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Billable</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Description</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Rate</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Product Sell Price</th>
-                  <th className="px-5 py-3 border-b border-slate-200">SKU</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Vendor</th>
-                  <th className="px-5 py-3 border-b border-slate-200">Tracking</th>
-                </tr>
-              </thead>
-
+          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between"><span>{resultSummaryText}</span><span>{activeFilterCount ? `${activeFilterCount} filters active` : "No field filters active"}</span></div>
+          <div className="overflow-x-auto">
+            <table className="min-w-[1160px] w-full">
+              <thead className="bg-slate-50"><tr className="text-left text-xs font-bold uppercase tracking-wide text-slate-500">{['Vendor Item', 'Category', 'Subcategory', 'UOM', 'Availability', 'Unit Cost', 'Product Sell Price', 'Product', 'Vendor', 'Actions'].map((label) => <th key={label} className="border-b border-slate-200 px-5 py-3">{label}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-200 bg-white">
-                {paginatedItems?.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50 transition">
-                    <td className="px-5 py-3 text-sm font-semibold text-slate-900">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="flex h-full w-full items-center gap-3 hover:text-blue-700"
-                      >
-                        <span className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                          {item.photoUrl ? (
-                            <img src={item.photoUrl} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-slate-400">
-                              Photo
-                            </span>
-                          )}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate">{item.name}</span>
-                          {item.sku ? (
-                            <span className="block text-xs font-normal text-slate-500">{item.sku}</span>
-                          ) : null}
-                        </span>
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.category || "--"}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.subCategory || "--"}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.UOM || "--"}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${item.billable ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                          {item.billable ? "Billable" : "Not Billable"}
-                        </span>
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-600">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.description || "--"}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.rate}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.sellPrice}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.sku}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.storeName || "--"}
-                      </Link>
-                    </td>
-
-                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
-                      <Link
-                        to={`${vendorItemsBasePath}/detail/${item.id}`}
-                        className="block w-full h-full"
-                        style={{ display: "block", width: "100%", height: "100%" }}
-                      >
-                        {item.tracking || "--"}
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-
-                {filteredItems.length === 0 && (
-                  <tr>
-                    <td colSpan={11} className="px-6 py-12 text-center">
-                      <div className="mx-auto max-w-sm">
-                        <div className="text-sm font-semibold text-slate-800">No vendor items found</div>
-                        <div className="text-sm text-slate-500 mt-1">
-                          {genericItemList.length === 0
-                            ? "Create a new vendor item to start building your audit catalog."
-                            : "Adjust your search to see more vendor items."}
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
+                {loading ? <tr><td colSpan={10} className="px-5 py-8 text-sm text-slate-500">Loading vendor items...</td></tr> : paginatedItems.length ? paginatedItems.map((item) => <tr key={item.id} className="align-top hover:bg-slate-50">
+                  <td className="px-5 py-3"><Link to={`${vendorItemsBasePath}/detail/${item.id}`} className="font-semibold text-blue-700 hover:text-blue-900">{item.name || "Vendor item"}</Link><p className="mt-1 text-xs leading-5 text-slate-500">{item.description || "--"}</p>{item.sku && <p className="mt-1 text-xs text-slate-400">SKU {item.sku}</p>}</td>
+                  <td className="px-5 py-3 text-sm text-slate-700">{item.category || "--"}</td>
+                  <td className="px-5 py-3 text-sm text-slate-700">{item.subCategory || "--"}</td>
+                  <td className="px-5 py-3 text-sm text-slate-700">{item.UOM || "--"}</td>
+                  <td className="px-5 py-3 text-sm"><span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${item.billable ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-600"}`}>{item.billable ? "Billable" : "Not Billable"}</span>{item.active === false && <p className="mt-1 text-xs text-slate-500">Inactive</p>}</td>
+                  <td className="px-5 py-3 text-sm font-semibold text-slate-900">{item.rate}</td>
+                  <td className="px-5 py-3 text-sm font-semibold text-slate-900">{item.sellPrice}{!item.productId && <p className="mt-1 text-xs font-normal text-slate-500">Vendor default</p>}</td>
+                  <td className="px-5 py-3 text-sm">{item.productId ? <Link to={`/company/product-catalog/${item.productId}`} className="font-semibold text-blue-700 hover:underline">{item.productName}</Link> : <span className="text-slate-500">Not connected</span>}</td>
+                  <td className="px-5 py-3 text-sm text-slate-700">{item.storeName || "--"}</td>
+                  <td className="px-5 py-3"><Link to={`${vendorItemsBasePath}/detail/${item.id}`} className={workspaceButtonClass({ tone: "slate", className: "text-xs" })}>View</Link></td>
+                </tr>) : <tr><td colSpan={10} className="px-5 py-8 text-sm text-slate-500">{loadError ? "Vendor items could not be loaded." : "No vendor items found. Adjust your filters or add a new vendor item."}</td></tr>}
               </tbody>
             </table>
           </div>
-
-          <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              {resultSummaryText}
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                className="rounded-md border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-              >
-                Previous
-              </button>
-              <span className="px-2 font-semibold text-slate-700">
-                Page {currentPage} of {pageCount}
-              </span>
-              <button
-                className="rounded-md border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={currentPage === pageCount}
-                onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
-              >
-                Next
-              </button>
+          <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-4 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+            <span>{resultSummaryText}</span><div className="flex items-center gap-2">
+              <button type="button" disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className={workspaceButtonClass({ tone: "slate" })}>Previous</button>
+              <span className="px-2 font-semibold">Page {currentPage} of {pageCount}</span>
+              <button type="button" disabled={currentPage === pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))} className={workspaceButtonClass({ tone: "slate" })}>Next</button>
             </div>
           </div>
         </section>
       </div>
+      {createOpen && can("852") && <CreateVendorItemModal key={recentlySelectedCompany} onClose={() => setCreateOpen(false)} onCreated={() => {
+        setCreateOpen(false);
+        setReload((value) => value + 1);
+        toast.success("Vendor item created.");
+      }} />}
     </div>
   );
 };
-
 export default DatabaseItems;

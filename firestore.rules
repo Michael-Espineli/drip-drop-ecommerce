@@ -607,7 +607,7 @@ service cloud.firestore {
         let before = get(path).data;
         let stop = getAfter(path).data;
         let work = getAfter(/databases/$(database)/documents/companies/$(companyId)/serviceStopCompletionWork/$(stopId)).data;
-        return stop.operationStatus == "Finished" && stop.completionWorkStatus == "queued"
+        return onboardingStopReady(stop) && stop.operationStatus == "Finished" && stop.completionWorkStatus == "queued"
           && stop.completionWorkRequestId is string && stop.completionWorkRequestId.size() > 0 && stop.completionWorkRequestId.size() <= 200
           && stop.completionWorkRequestId != before.get("completionWorkRequestId", "")
           && stop.completionWorkQueuedAt == request.time && stop.completionWorkQueuedByUserId == request.auth.uid
@@ -701,6 +701,28 @@ service cloud.firestore {
           || (name == "subscriptions" && action == 0 && permitted("890"))
           || (name in ["stripePayouts", "stripeBalanceTransactions"] && action == 0 && companyBillingPermission(companyId, ["400", "404", "408"]))
           || (name == "customerMigrationTracker" && permitted(["910", "910", "910", "910"][action]));
+      }
+      function onboardingStopReady(data) {
+        let customerId = data.get("customerId", "");
+        let locationId = data.get("serviceLocationId", "");
+        let customer = customerId != "" ? get(/databases/$(database)/documents/companies/$(companyId)/customers/$(customerId)) : null;
+        let location = locationId != "" ? get(/databases/$(database)/documents/companies/$(companyId)/serviceLocations/$(locationId)) : null;
+        let gate = location != null ? location.data.get("serviceOnboarding", {}) : {};
+        let required = gate.get("required", false) == true || (customer != null && customer.data.get("onboardingRequired", false) == true);
+        return data.get("jobId", "") != "" || data.get("workOrderId", "") != ""
+          || data.get("serviceStopTypeUseCaseRawValue", "") in ["estimate", "serviceEstimate", "serviceAgreementEstimate", "jobEstimate", "customerRelationship"]
+          || data.get("type", "").lower().matches(".*(estimate|survey|inspection).*")
+          || !required || gate.get("status", "") in ["ready", "active"]
+          || (customer != null && customer.data.get("firstServiceCompletedAt", null) != null);
+      }
+      function onboardingExecutionAllowed(before, after) {
+        return !after.diff(before).affectedKeys().hasAny(["startTime", "endTime", "operationStatus", "completionWorkStatus"])
+          || (after.get("startTime", null) == null && after.get("endTime", null) == null && !(after.get("operationStatus", "") in ["Finished", "In Progress"]))
+          || (onboardingStopReady(before) && onboardingStopReady(after));
+      }
+      function preservesOnboardingRecord(name) {
+        return !(name in ["customers", "serviceLocations"]) || (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["serviceOnboarding", "onboardingRequired", "firstServiceCompletedAt"])
+          && (resource.data.get("onboardingRequired", false) != true || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["lifecycleStatus"])));
       }
       function canManagePay() { return permitted("424"); }
       function canReadPay() { return permitted("420") || permitted("424"); }
@@ -962,9 +984,9 @@ service cloud.firestore {
       }
       match /serviceStops/{stopId} {
         allow read: if permitted("240") || assignedStop(resource.data);
-        allow create: if hasCompanyAccess(companyId) && ((request.resource.data.get("jobId", "") != "" && get(jobPath(request.resource.data.jobId)) == null) || permitted("242")) && validInitialJobStop(stopId, request.resource.data) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
+        allow create: if ((request.resource.data.get("startTime", null) == null && request.resource.data.get("endTime", null) == null && request.resource.data.get("operationStatus", "") != "Finished") || onboardingStopReady(request.resource.data)) && hasCompanyAccess(companyId) && ((request.resource.data.get("jobId", "") != "" && get(jobPath(request.resource.data.jobId)) == null) || permitted("242")) && validInitialJobStop(stopId, request.resource.data) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
         allow update: if ((assignedStop(resource.data) && (executionUpdate() || stopCompletionUpdate())) || permitted("244")) && (preservesPayTerms() || canManagePay())
-          && preservesCompletionResults()
+          && preservesCompletionResults() && onboardingExecutionAllowed(resource.data, request.resource.data)
           && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(completionRequestFields()) || validCompletionRequest(stopId));
         allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "246");
         match /{subcollection}/{nested=**} {
@@ -1029,8 +1051,8 @@ service cloud.firestore {
       }
       match /{companyCollection}/{document=**} {
         allow read: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 0);
-        allow create: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 1);
-        allow update: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 2);
+        allow create: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 1) && (!(companyCollection in ["customers", "serviceLocations"]) || !request.resource.data.keys().hasAny(["serviceOnboarding", "firstServiceCompletedAt"]));
+        allow update: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 2) && preservesOnboardingRecord(companyCollection);
         allow delete: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 3);
       }
       match /adminNotes/{noteId} { allow read, write: if isDripDropAdmin(); }
@@ -1176,8 +1198,8 @@ service cloud.firestore {
 
     match /salesAgreements/{agreementId} {
       allow read: if canReadSalesAgreementRecord(resource.data);
-      allow create: if canCreateSalesAgreementRecord(request.resource.data);
-      allow update: if canUpdateSalesAgreementRecord(resource.data) && preservesSalesIdentity();
+      allow create: if canCreateSalesAgreementRecord(request.resource.data) && !request.resource.data.keys().hasAny(["onboardingBilling", "onboardingReadiness", "onboardingReleasedAt", "onboardingReleasedByUserId"]);
+      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(["onboardingWorkflowVersion", "onboardingBilling", "onboardingReadiness", "onboardingReleasedAt", "onboardingReleasedByUserId"]) && canUpdateSalesAgreementRecord(resource.data) && preservesSalesIdentity();
       allow delete: if canDeleteSalesAgreementRecord(resource.data);
     }
 
@@ -1191,11 +1213,13 @@ service cloud.firestore {
     match /salesBillingSubscriptions/{billingSubscriptionId} {
       allow read: if canReadSalesRecord(resource.data);
       allow create: if canCompanyWriteSalesRecord(request.resource.data)
+        && request.resource.data.get("onboardingWorkflowVersion", 0) != 1
         && request.resource.data.get("stripeSubscriptionId", "") in ["", null]
         && request.resource.data.get("stripeCustomerId", "") in ["", null]
         && !request.resource.data.keys().hasAny(["checkoutAttemptId", "checkoutHold", "checkoutVersion", "checkoutSessionId", "checkoutCustomerData", "billingReviewRequired", "stripePricingSnapshotHash", "checkoutCancellationRequested", "checkoutCancellationId", "checkoutCancellationStatus", "billingEndAt", "stripeCancelAt"])
         && request.resource.data.get("autopayEnabled", false) != true;
       allow update: if canCompanyWriteSalesRecord(resource.data) && preservesSalesIdentity() && preservesStripeBillingFields()
+        && (resource.data.get("onboardingWorkflowVersion", 0) != 1 || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["onboardingWorkflowVersion", "onboardingAuthorizationHash", "onboardingBilling", "onboardingCollectionMethod", "onboardingPaymentProfileId", "onboardingPaymentMethodId", "onboardingPaymentAuthorizedAt", "onboardingProrationApplied", "onboardingInitialAmountCents", "onboardingInitialLineItems", "onboardingInitialTaxAmountCents", "onboardingInitialDiscountAmountCents", "status", "manualBillingEnabled", "manualBillingAutoSendEnabled", "billingAnchorDay", "billingSendAnchorDay", "billingTimeZone", "manualBillingNextPeriodStart", "manualBillingNextPeriodEnd", "manualBillingNextInvoiceAt", "amountCents", "lineItems", "taxAmountCents", "discountAmountCents"]))
         && ((resource.data.get("stripeSubscriptionId", "") in ["", null] && resource.data.get("checkoutHold", false) != true)
           || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["status", "amountCents", "lineItems", "currency", "interval", "intervalCount", "currentPeriodStart", "currentPeriodEnd", "cancelAtPeriodEnd", "applicationFeePercent", "taxAmountCents", "discountAmountCents", "billingTimeZone", "billingAnchorDay", "billingSendAnchorDay", "manualBillingNextPeriodStart", "manualBillingNextPeriodEnd", "manualBillingNextInvoiceAt"]));
       allow delete: if canCompanyWriteSalesRecord(resource.data) && resource.data.get("stripeSubscriptionId", "") in ["", null]

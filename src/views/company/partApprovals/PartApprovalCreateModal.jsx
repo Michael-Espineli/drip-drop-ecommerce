@@ -13,6 +13,7 @@ import {
   where,
 } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import ProductAvailabilityFields from "../productCatalog/ProductAvailabilityFields";
 import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
 import { itemPhotoFieldsFromSource } from '../../../utils/itemPhotos';
@@ -23,7 +24,7 @@ import {
   getProductDisplayName,
   getProductSellPriceCents,
   isProductAvailableForPartApproval,
-  productCatalogCollectionRef,
+  loadProductsWithCosts,
   productCatalogDocRef,
 } from '../../../utils/productCatalog';
 
@@ -179,8 +180,8 @@ const normalizeServiceLocationOption = (docId, data = {}) => {
 const normalizeDbItemOption = (docId, data = {}) => {
   const id = data.id || docId;
   const name = getProductDisplayName({ ...data, id });
-  const unitCostCents = Number(data.rate || data.cost || 0);
-  const unitPriceCents = getProductSellPriceCents(data) || Number(data.rate || data.cost || 0);
+  const unitCostCents = Number(data.rate ?? data.cost ?? 0);
+  const unitPriceCents = getProductSellPriceCents(data) || Number(data.rate ?? data.cost ?? 0);
   const photoFields = itemPhotoFieldsFromSource(data, name);
   const availableForPartApproval = isProductAvailableForPartApproval(data);
 
@@ -282,7 +283,7 @@ const PartApprovalCreateModal = ({
       setLoading(true);
 
       try {
-        const itemsPromise = getDocs(productCatalogCollectionRef(db, companyId));
+        const itemsPromise = loadProductsWithCosts(db, companyId);
         const customersPromise = fixedCustomerOption
           ? Promise.resolve(null)
           : getDocs(collection(db, 'companies', companyId, 'customers'));
@@ -291,8 +292,8 @@ const PartApprovalCreateModal = ({
         if (!active) return;
 
         setDbItems(
-          itemsSnap.docs
-            .map((itemDoc) => normalizeDbItemOption(itemDoc.id, itemDoc.data()))
+          itemsSnap
+            .map((item) => normalizeDbItemOption(item.id, item))
             .filter((item) => item.active !== false && item.availableForPartApproval)
             .sort((left, right) => left.name.localeCompare(right.name))
         );
@@ -464,6 +465,7 @@ const PartApprovalCreateModal = ({
         ...buildProductFromVendorItem({
           productId: newProductId,
           overrides: {
+            ...form.productAvailability,
             name: itemName,
             description: itemDescription,
             sellPrice: unitPriceCents,
@@ -840,6 +842,17 @@ const PartApprovalCreateModal = ({
               </div>
             </div>
           </div>
+
+          {form.mode === 'manual' && (
+            <ProductAvailabilityFields
+              value={form.productAvailability}
+              onChange={(patch) => setForm((current) => ({
+                ...current,
+                productAvailability: { ...current.productAvailability, ...patch },
+              }))}
+              disabled={saving}
+            />
+          )}
 
           <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:flex-wrap sm:justify-end">
             <button

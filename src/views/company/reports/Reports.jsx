@@ -1533,6 +1533,18 @@ const Reports = () => {
                         <p className="text-sm text-slate-500">No reading templates found.</p>
                       )}
                     </div>
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={addReadingPerformanceStandard}
+                        disabled={!availableReadingTemplates.length}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Add standard"
+                      >
+                        <PlusIcon className="h-4 w-4" />
+                        Add
+                      </button>
+                    </div>
                   </div>
                 ) : null}
 

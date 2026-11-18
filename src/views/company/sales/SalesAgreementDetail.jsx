@@ -1,3 +1,4 @@
+import ServiceOnboardingPanel from './components/ServiceOnboardingPanel';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import ServicePayrollTaskEditor from './ServicePayrollTaskEditor';
@@ -2319,6 +2320,10 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       toast.error(`Your role cannot edit ${documentPluralLabel.toLowerCase()}.`);
       return;
     }
+    if (agreement.onboardingWorkflowVersion === 1 && (billingSubscription?.onboardingPaymentMethodId || billingSubscription?.manualBillingLastInvoiceId)) {
+      toast.error('Billing has started. Review the active billing arrangement before replacing agreement terms.');
+      return;
+    }
     setEditDraft(createEditDraft(agreement));
     setEditing(true);
   };
@@ -2664,6 +2669,10 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
       return;
     }
 
+    if (agreement.onboardingWorkflowVersion === 1 && (billingSubscription?.onboardingPaymentMethodId || billingSubscription?.manualBillingLastInvoiceId)) {
+      toast.error('Billing has started. Review the active billing arrangement before replacing agreement terms.');
+      return;
+    }
     const nextLineItems = (editDraft.lineItems || [])
       .map((item) => {
         const quantity = Math.max(Number(item.quantity) || 0, 0);
@@ -2882,7 +2891,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
     setMarkingAccepted(true);
 
     try {
-      if (agreementIsJobEstimate) {
+      if (agreementIsJobEstimate || agreement.onboardingWorkflowVersion === 1) {
         const selectedPlanId =
           selectedEstimatePlanId ||
           salesPlanOptionId(selectedEstimatePlanOption || {}) ||
@@ -2916,7 +2925,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
         });
 
         setSelectedEstimatePlanId(result.data?.selectedPlanId || selectedPlanId);
-        toast.success(`Estimate accepted: ${selectedPlanTitle}.`);
+        toast.success(agreementIsJobEstimate ? `Estimate accepted: ${selectedPlanTitle}.` : 'Service agreement accepted. Complete the onboarding checklist before first service.');
         closeAcceptanceModal();
         return;
       }
@@ -3763,7 +3772,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                   <div>
                     <dt className="text-slate-500">Real Emails Flag</dt>
                     <dd className="mt-1 font-semibold text-slate-900">
-                      {emailDelivery.realEmailsEnabled === true || emailDelivery.realEmailsEnabled === 'true' ? 'Enabled' : 'Disabled'}
+                      {emailDelivery.realEmailsEnabled === true || emailDelivery.realEmailsEnabled === 'true' ? 'Enabled at last send' : emailDelivery.realEmailsEnabled === false || emailDelivery.realEmailsEnabled === 'false' ? 'Disabled at last send' : 'No delivery recorded'}
                     </dd>
                   </div>
                   <div>
@@ -3918,6 +3927,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                 </dl>
               </section>
 
+              {agreement.onboardingWorkflowVersion === 1 ? <ServiceOnboardingPanel agreement={agreement} canManage={can('404')} /> : (
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-lg font-bold text-slate-950">
@@ -4040,6 +4050,7 @@ const SalesAgreementDetail = ({ detailMode = 'agreement' }) => {
                   </Link>
                 )}
               </section>
+              )}
             </aside>
 
             <aside className="lg:order-3 lg:col-span-2 xl:col-span-1">

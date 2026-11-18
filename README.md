@@ -48,6 +48,16 @@ For production:
 npm run deploy:prod
 ```
 
+If deployment fails with a Secret Manager `403` saying billing must be enabled,
+check the [production project's linked billing account](https://console.cloud.google.com/billing/linkedaccount?project=the-pool-app-3e652).
+The account must be open and active; a linked account or a project reporting
+`billingEnabled: true` does not rule out an account closure. Reopen the account
+or link an active account, resolve any payment issues shown in the console,
+allow the change to propagate, then rerun `npm run deploy:prod`. See Google's
+[billing account recovery instructions](https://docs.cloud.google.com/billing/docs/how-to/close-or-reopen-billing-account).
+Cloud Functions deployment requires active Blaze billing even when no Secret
+Manager parameters are declared.
+
 `firebase use development` only changes which Firebase project CLI commands target. It does not change the Firebase config baked into the React browser bundle.
 
 Firestore uses memory caching by default to avoid browser IndexedDB transaction failures that can leave the client unable to read or write. Cached documents and pending offline writes do not survive a page reload in this mode; let writes finish before closing the page. Set `REACT_APP_FIRESTORE_PERSISTENT_CACHE=true` at build/start time to opt into persistent multi-tab caching. Authentication persistence is configured separately. This setting does not clear existing IndexedDB data.

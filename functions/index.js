@@ -526,3 +526,13 @@ exports.getPartApprovalRecurringOptions = callableGeneral.getPartApprovalRecurri
 exports.syncRecurringPartInvoice = require('./recurringPartCharges').syncRecurringPartInvoice;
 
 exports.reviewStoppedPartBillingPlan = require('./recurringPartCharges').reviewStoppedPartBillingPlan;
+
+// New pool service signup, invoice approval, and first-service readiness.
+const serviceOnboarding = require('./serviceOnboarding');
+exports.manageServiceOnboarding = serviceOnboarding.manageServiceOnboarding;
+exports.onServiceOnboardingAgreementWritten = serviceOnboarding.onServiceOnboardingAgreementWritten;
+exports.onServiceOnboardingSubscriptionWritten = serviceOnboarding.onServiceOnboardingSubscriptionWritten;
+exports.onServiceOnboardingRouteWritten = serviceOnboarding.onServiceOnboardingRouteWritten;
+exports.onServiceOnboardingStopWritten = serviceOnboarding.onServiceOnboardingStopWritten;
+exports.createServiceOnboardingCheckout = require('./savedCustomerPayments').createServiceOnboardingCheckout;
+exports.linkLeadToExistingCustomer = serviceOnboarding.linkLeadToExistingCustomer;

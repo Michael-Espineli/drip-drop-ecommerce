@@ -6,7 +6,8 @@ export function agreementServiceSetup(agreement = {}, subscription = {}) {
   const recurringServiceStopId = firstText(agreement.recurringServiceStopId, subscription.recurringServiceStopId);
   const recurringRouteId = firstText(agreement.recurringRouteId, subscription.recurringRouteId);
   const setupStatus = normalize(agreement.operationsSetupStatus || subscription.operationsSetupStatus);
-  const isEstimate = ['oneoffjob', 'workoffer', 'lead'].includes(normalize(agreement.sourceType)) ||
+  const isEstimate = ['oneoffjob', 'workoffer'].includes(normalize(agreement.sourceType)) ||
+    (normalize(agreement.sourceType) === 'lead' && !agreement.serviceCadence && !agreement.rateType) ||
     normalize(agreement.rateType) === 'onetime' || normalize(agreement.serviceCadence) === 'onetime';
   const visible = normalize(agreement.status) === 'accepted' && !isEstimate;
   const routeReady = Boolean(recurringRouteId || [

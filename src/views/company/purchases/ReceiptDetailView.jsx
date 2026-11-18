@@ -244,7 +244,9 @@ const ReceiptDetailView = () => {
 
                     return {
                         id: purchaseData.id || docSnap.id,
-                        itemId: purchaseData.itemId || "",
+                        itemId: purchaseData.itemId || purchaseData.dbItemId || purchaseData.dataBaseItemId || "",
+                        productId: purchaseData.productId || purchaseData.genericItemId || "",
+                        productName: purchaseData.productName || purchaseData.genericItemName || "Product",
                         name: purchaseData.name,
                         category: purchaseData.category || "Uncategorized",
                         invoiceNum: purchaseData.invoiceNum,
@@ -708,6 +710,7 @@ const ReceiptDetailView = () => {
                                                         >
                                                             {item.name}
                                                         </Link>
+                                                        {item.productId && <Link to={`/company/product-catalog/${item.productId}`} className="mt-1 block text-xs font-semibold text-blue-700 hover:underline">Product: {item.productName}</Link>}
                                                     </td>
                                                     <td className="whitespace-nowrap p-4">
                                                         {item.itemId ? (

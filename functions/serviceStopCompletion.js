@@ -271,6 +271,8 @@ exports.processServiceStopCompletionWork = onDocumentWritten(
         companyId,
       };
 
+      await require("./serviceOnboardingGate").assertServiceOnboardingReady({get: ref => ref.get()}, db, companyId, serviceStop);
+
       if (
         requestId &&
         cleanString(serviceStop.completionWorkRequestId) &&

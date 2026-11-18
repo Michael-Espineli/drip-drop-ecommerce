@@ -46,7 +46,8 @@ function billingPeriod(subscription={},company={},now=new Date()) {
   const end=savedEnd>start.getTime()?dayStart(savedEnd,timeZone):add(start);
   const dueDays=({net7:7,net14:14,net15:15,net30:30})[key(subscription.paymentTerms)]||0;
   const dueDate=dueDays?addInterval(dayStart(invoiceSendAt,timeZone),'day',dueDays,timeZone):dayStart(invoiceSendAt,timeZone);
-  const nextInvoiceAt=add(invoiceSendAt,sendAnchorDay);
+  const nextInvoiceAt=subscription.onboardingWorkflowVersion===1&&subscription.onboardingCollectionMethod==='savedMethod'
+    ? end : add(invoiceSendAt,sendAnchorDay);
   return {timeZone,anchorDay,sendAnchorDay,invoiceSendAt,periodStart:start,periodEnd:end,nextPeriodStart:end,nextPeriodEnd:add(end),nextInvoiceAt,dueDate,
     nextDueDate:dueDays?addInterval(dayStart(nextInvoiceAt,timeZone),'day',dueDays,timeZone):dayStart(nextInvoiceAt,timeZone),
     invoiceId:`si_${subscription.id}_${dateKey(start,timeZone)}`,invoiceNumber:`REC-${dateKey(start,timeZone)}-${String(subscription.id||'').slice(-6).toUpperCase()}`};

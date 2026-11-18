@@ -322,7 +322,10 @@ const PurchaseDetailView = () => {
                         techName: purchaseData.techName || "",
                         venderName: purchaseData.venderName || "",
                         date: formattedDate,
-                        itemId: purchaseData.itemId || "",
+                        itemId: purchaseData.itemId || purchaseData.dbItemId || purchaseData.dataBaseItemId || "",
+                        productId: purchaseData.productId || purchaseData.genericItemId || databaseItemData.productId || databaseItemData.genericItemId || "",
+                        productName: purchaseData.productName || purchaseData.genericItemName || databaseItemData.productName || databaseItemData.genericItemName || "Product",
+                        vendorItemName: databaseItemData.name || purchaseData.name || "Vendor item",
                         category: resolvedCategory,
                         subCategory: resolvedSubCategory,
                         notes: purchaseData.notes || "",
@@ -1412,14 +1415,18 @@ const PurchaseDetailView = () => {
                                     </p>
                                 </div>
 
-                                <Link
+                                {purchase.receiptId && <Link
                                     to={`/company/receipts/detail/${purchase.receiptId}`}
                                     className="inline-flex items-center py-2 px-4 bg-blue-100 text-blue-800 font-semibold rounded-lg hover:bg-blue-200 transition"
                                 >
                                     Receipt: {purchase.invoiceNum || "View Receipt"}
-                                </Link>
+                                </Link>}
                             </div>
 
+                            <div className="mb-5 flex flex-wrap gap-3">
+                                {purchase.itemId && <Link to={`/company/items/detail/${purchase.itemId}`} className="font-semibold text-blue-700 hover:underline">Vendor item: {purchase.vendorItemName}</Link>}
+                                {purchase.productId && <Link to={`/company/product-catalog/${purchase.productId}`} className="font-semibold text-blue-700 hover:underline">Product: {purchase.productName}</Link>}
+                            </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-700">
                                 <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">

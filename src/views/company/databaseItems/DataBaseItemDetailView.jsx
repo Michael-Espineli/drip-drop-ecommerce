@@ -14,6 +14,12 @@ import { toast } from "react-hot-toast";
 import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import CatalogConnections from "../productCatalog/CatalogConnections";
+import CatalogPurchaseHistory from "../productCatalog/CatalogPurchaseHistory";
+import { DetailRow, SummaryRow, AvailabilityRow } from "../productCatalog/CatalogDetailRows";
+import WorkspaceHeader from "../../../components/workspace/WorkspaceHeader";
+import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
+import { isProductAvailableForPartPurchase } from "../../../utils/productCatalog";
 import {
   applyDatabaseItemDosageLinksLocally,
   dosageLabel,
@@ -68,6 +74,9 @@ const DataBaseItemDetailView = () => {
   const { id } = useParams();
 
   const [purchase, setPurchase] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reload, setReload] = useState(0);
   const [edit, setEdit] = useState(false);
   const [rate, setRate] = useState("");
   const [uom, setUom] = useState("");
@@ -91,20 +100,28 @@ const DataBaseItemDetailView = () => {
   const [equipmentMapping, setEquipmentMapping] = useState(() => emptyDatabaseEquipmentMapping());
 
   useEffect(() => {
+    let active = true;
+    setPurchase({});
+    setEdit(false);
+    setLoading(true);
+    setLoadError("");
     (async () => {
-      if (!recentlySelectedCompany || !id) return;
+      if (!recentlySelectedCompany || !id) { setLoading(false); return; }
 
       try {
         const docRef = doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id);
         const docSnap = await getDoc(docRef);
+        if (!active) return;
         if (docSnap.exists()) {
           const itemData = docSnap.data();
           const dateUpdated = itemData.dateUpdated?.toDate ? itemData.dateUpdated.toDate() : new Date();
           const formattedDate = format(dateUpdated, "MM / d / yyyy");
-          const rateDollars = Number(itemData.rate || 0) / 100;
+          const rateDollars = Number(itemData.rate ?? itemData.cost ?? 0) / 100;
           const sellPriceDollars = Number(itemData.sellPrice ?? itemData.billingRate ?? 0) / 100;
 
           setPurchase({
+            ...itemData,
+            active: itemData.active !== false,
             UOM: itemData.UOM || "",
             billable: Boolean(itemData.billable),
             category: itemData.category || "",
@@ -134,14 +151,14 @@ const DataBaseItemDetailView = () => {
             ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(itemData)),
           });
         } else {
-          console.log("No such document!");
+          setLoadError("This vendor item could not be found.");
         }
       } catch (error) {
-        console.log("Error");
-        console.log(error);
-      }
+        if (active) setLoadError(userFacingErrorMessage(error, "Could not load this vendor item."));
+      } finally { if (active) setLoading(false); }
     })();
-  }, [id, recentlySelectedCompany]);
+    return () => { active = false; };
+  }, [id, recentlySelectedCompany, reload]);
 
   useEffect(() => {
     return () => {
@@ -381,76 +398,43 @@ const DataBaseItemDetailView = () => {
 
   const inputClass = "mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
   const labelClass = "block text-sm font-semibold text-slate-700";
-  const currentBillable = edit ? billable : Boolean(purchase.billable);
   const displayPhotoUrl = edit ? photoPreviewUrl || photoUrl : purchase.photoUrl;
   const currentAllowsEquipmentMapping = edit
     ? isEquipmentDatabaseCategory(category)
     : isEquipmentDatabaseCategory(purchase.category);
   const displayEquipmentMapping = databaseEquipmentMappingFromItem(edit ? equipmentMapping : purchase);
-  const billableBadgeClass = currentBillable
-    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-    : "border-slate-200 bg-slate-100 text-slate-600";
+  if (!recentlySelectedCompany) return <div className="p-5">Select a company to view this vendor item.</div>;
+  if (loading || loadError) return <div className="px-2 py-6 sm:px-3 lg:px-4"><div className="rounded-lg border border-slate-200 bg-white p-5" role={loadError ? "alert" : "status"}>
+    <p>{loading ? "Loading vendor item..." : loadError}</p>
+    {loadError && <button type="button" onClick={() => setReload((value) => value + 1)} className={workspaceButtonClass({ tone: "blue" })}>Retry vendor item</button>}
+  </div></div>;
 
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <Link to={vendorItemsBasePath} className="app-back-link">
-                &larr; Back to Vendor Items
-              </Link>
-              <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Vendor Item</p>
-              <h1 className="mt-1 break-words text-3xl font-bold text-slate-950">
-                {edit ? "Edit Vendor Item" : purchase.name || "Vendor Item"}
-              </h1>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700">
-                  Updated {purchase.dateUpdated || "--"}
-                </span>
-                <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold ${billableBadgeClass}`}>
-                  {currentBillable ? "Billable" : "Not Billable"}
-                </span>
-              </div>
-            </div>
-
+        <WorkspaceHeader
+          title={edit ? `Edit ${purchase.name || "Vendor Item"}` : purchase.name || "Vendor Item"}
+          eyebrow="Vendor Item"
+          description={purchase.description || "Supplier-specific pricing, product connections, and purchasing history."}
+          meta={<>
+            <span className="workspace-header-badge">{purchase.storeName || "Vendor"}</span>
+            <span className="workspace-header-badge">{[purchase.category, purchase.subCategory].filter(Boolean).join(" / ") || "Uncategorized"}</span>
+            <span className="workspace-header-badge">Unit Cost {purchase.rateFormatted || formatCurrency(0)}</span>
+            <span className="workspace-header-badge">{purchase.UOM || "Unit"}</span>
+            <span className="workspace-header-badge">Updated {purchase.dateUpdated || "--"}</span>
+          </>}
+          actions={<div className="flex w-full flex-wrap items-center justify-between gap-3">
+            <Link to={vendorItemsBasePath} className={workspaceButtonClass({ tone: "slate" })}>← Back to Vendor Items</Link>
             <div className="flex flex-wrap gap-2">
-              {edit ? (
-                <>
-                  {can("856") && (
-                    <button
-                      onClick={(e) => deleteItem(e)}
-                      className="inline-flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-bold text-red-700 shadow-sm transition hover:bg-red-100"
-                    >
-                      Delete
-                    </button>
-                  )}
-                  <button
-                    onClick={(e) => cancelEdit(e)}
-                    className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={(e) => saveEdit(e)}
-                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-                  >
-                    Save
-                  </button>
-                </>
-              ) : (
-                can("854") && (
-                  <button
-                    onClick={(e) => editItem(e)}
-                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-                  >
-                    Edit
-                  </button>
-                )
-              )}
+              <Link to="/company/product-catalog" className={workspaceButtonClass({ tone: "slate" })}>Products</Link>
+              {edit ? <>
+                {can("856") && <button type="button" onClick={deleteItem} className={workspaceButtonClass({ tone: "rose" })}>Delete</button>}
+                <button type="button" onClick={cancelEdit} className={workspaceButtonClass({ tone: "slate" })}>Cancel</button>
+                <button type="button" onClick={saveEdit} className={workspaceButtonClass({ tone: "blue" })}>Save</button>
+              </> : can("854") && <button type="button" onClick={editItem} className={workspaceButtonClass({ tone: "blue" })}>Edit</button>}
             </div>
-          </div>
-        </section>
+          </div>}
+        />
 
         {edit ? (
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -684,33 +668,25 @@ const DataBaseItemDetailView = () => {
             )}
           </section>
         ) : (
-          <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,360px)]">
-            <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-              <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
-                <h2 className="text-lg font-bold text-slate-950">Catalog Details</h2>
-                <p className="mt-1 text-sm text-slate-500">Pricing, classification, and item identifiers.</p>
+          <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <article className="rounded-lg border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
+                <h2 className="text-lg font-bold text-slate-950">Vendor Item Sheet</h2>
+                <p className="mt-1 text-sm text-slate-500">Supplier-specific facts for purchasing, product matching, and field use.</p>
               </div>
-
-              <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
-                <DetailField label="Name" value={purchase.name} />
-                <DetailField label="SKU" value={purchase.sku} />
-                <DetailField label="Billing" value={purchase.billable ? "Billable" : "Not Billable"} />
-                <DetailField label="Rate" value={purchase.rateFormatted} />
-                <DetailField label="Sell Price" value={purchase.sellPrice || purchase.billingRate} />
-                <DetailField label="UOM" value={purchase.UOM} />
-                <DetailField label="Category" value={purchase.category} />
-                <DetailField label="Subcategory" value={purchase.subCategory} />
-                <DetailField label="Color" value={purchase.color} />
-                <DetailField label="Size" value={purchase.size} />
-                <DetailField label="Tracking" value={purchase.tracking} />
-                <DetailField label="Vendor" value={purchase.storeName} />
-              </div>
-
-              <div className="border-t border-slate-200 p-5">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Description</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{purchase.description || "--"}</p>
-              </div>
-
+              {displayPhotoUrl && <div className="px-5 pt-5 sm:px-6"><img src={displayPhotoUrl} alt={purchase.name || "Vendor item"} className="h-40 w-full rounded-md border border-slate-200 object-contain" /></div>}
+              <dl className="px-5 sm:px-6">
+                <DetailRow label="Display Name" value={purchase.name} />
+                <DetailRow label="Description"><p className="whitespace-pre-wrap font-normal text-slate-700">{purchase.description || "--"}</p></DetailRow>
+                <DetailRow label="SKU" value={purchase.sku} />
+                <DetailRow label="Vendor" value={purchase.storeName} />
+                <DetailRow label="Category" value={purchase.category} />
+                <DetailRow label="Subcategory" value={purchase.subCategory} />
+                <DetailRow label="Unit of Measure" value={purchase.UOM} />
+                <DetailRow label="Size" value={purchase.size} />
+                <DetailRow label="Color" value={purchase.color} />
+                <DetailRow label="Tracking" value={purchase.tracking} />
+              </dl>
               {currentAllowsEquipmentMapping && (
                 <div className="border-t border-slate-200 p-5">
                   <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Equipment Mapping</p>
@@ -750,48 +726,33 @@ const DataBaseItemDetailView = () => {
                   <p className="mt-2 text-sm text-slate-500">No dosages linked yet.</p>
                 )}
               </div>
-            </div>
-
-            <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                {displayPhotoUrl ? (
-                  <img src={displayPhotoUrl} alt="" className="h-48 w-full object-cover" />
-                ) : (
-                  <div className="flex h-48 w-full items-center justify-center text-sm font-semibold text-slate-400">
-                    No photo
-                  </div>
-                )}
-              </div>
-              <h2 className="text-lg font-bold text-slate-950">Vendor Item Summary</h2>
-              <div className="mt-4 space-y-3 text-sm text-slate-700">
-                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                  <span className="font-semibold text-slate-500">Updated</span>
-                  <span className="text-right font-semibold text-slate-900">{purchase.dateUpdated || "--"}</span>
+            </article>
+            <aside className="space-y-6">
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-bold text-slate-950">Availability</h2>
+                <p className="mt-1 text-sm text-slate-500">How this vendor item can be used.</p>
+                <ul className="mt-3 divide-y divide-slate-100">
+                  <AvailabilityRow label="Active" description="Active supplier catalog item." available={purchase.active !== false && !purchase.archived} />
+                  <AvailabilityRow label="Part Purchase" description="Available for purchasing workflows." available={purchase.active !== false && !purchase.archived && isProductAvailableForPartPurchase(purchase)} />
+                  <AvailabilityRow label="Billable Default" description="Purchases default to billable." available={purchase.billable} tone="emerald" />
+                </ul>
+              </section>
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-bold text-slate-950">Catalog Summary</h2>
+                <div className="mt-3">
+                  <SummaryRow label="Unit Cost" value={purchase.rateFormatted || formatCurrency(0)} />
+                  <SummaryRow label="Vendor Sell Price" value={purchase.sellPrice || purchase.billingRate || formatCurrency(0)} />
+                  <SummaryRow label="Vendor" value={purchase.storeName} />
+                  <SummaryRow label="Times Purchased" value={purchase.timesPurchased ?? 0} />
+                  <SummaryRow label="Linked Dosages" value={linkedDosages.length} />
+                  <SummaryRow label="Updated" value={purchase.dateUpdated} />
                 </div>
-                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                  <span className="font-semibold text-slate-500">Times Purchased</span>
-                  <span className="text-right font-semibold text-slate-900">{purchase.timesPurchased ?? "--"}</span>
-                </div>
-                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                  <span className="font-semibold text-slate-500">Tracking</span>
-                  <span className="text-right font-semibold text-slate-900">{purchase.tracking || "--"}</span>
-                </div>
-                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                  <span className="font-semibold text-slate-500">Linked Dosages</span>
-                  <span className="text-right font-semibold text-slate-900">{linkedDosages.length}</span>
-                </div>
-                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
-                  <span className="font-semibold text-slate-500">Vendor ID</span>
-                  <span className="max-w-[180px] break-words text-right font-semibold text-slate-900">{purchase.venderName || purchase.vendorName || "Vendor"}</span>
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Catalog Label</p>
-                  <p className="mt-2 break-words font-semibold text-slate-900">{purchase.label || purchase.name || "--"}</p>
-                </div>
-              </div>
+              </section>
             </aside>
           </section>
         )}
+        {!edit && <CatalogConnections vendorItemId={id} revision={`${recentlySelectedCompany}:${purchase.rate}`} />}
+        {!edit && <CatalogPurchaseHistory vendorItemId={id} />}
       </div>
     </div>
   );

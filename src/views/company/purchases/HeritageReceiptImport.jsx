@@ -2,19 +2,22 @@ import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "react-select";
-import { arrayUnion, collection, doc, getDocs, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
+import { arrayUnion, collection, doc, getDocs, orderBy, query, updateDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
 import * as pdfjsLib from "pdfjs-dist/webpack";
 import { FaCheckCircle, FaReceipt, FaSpinner, FaStepForward } from "react-icons/fa";
+import { ProductAvailabilityDisclosure } from "../productCatalog/ProductAvailabilityFields";
 import { Context } from "../../../context/AuthContext";
 import { db, storage } from "../../../utils/config";
+import { createReceiptBatch } from "../../../utils/receiptBatch";
 import {
   buildProductFromVendorItem,
   buildVendorItemProductPatch,
-  findSuggestedProductForVendorItem,
+  findLinkedProductForVendorItem,
   getProductDisplayName,
+  getProductSellPriceCents,
   productCatalogCollectionRef,
   productCatalogDocRef,
   productOptionSearchText,
@@ -144,7 +147,7 @@ const databaseItemRateCents = (item) => Number(item?.rate || 0);
 
 const billingRateFromDatabaseItem = (item) => {
   const billingRateCents = Number(item?.billingRate ?? item?.sellPrice ?? 0);
-  return billingRateCents ? formatDollarsFromCents(billingRateCents) : "";
+  return (billingRateCents / 100).toFixed(2);
 };
 
 const calculatedLineAmount = (quantity, unitPrice) => {
@@ -155,11 +158,11 @@ const calculatedLineAmount = (quantity, unitPrice) => {
 const vendorItemProductLink = (vendorItem, products = []) => {
   if (!vendorItem) return { productId: "", productName: "" };
 
-  const suggestedProduct = findSuggestedProductForVendorItem(vendorItem, products);
-  const productId = suggestedProduct?.id || vendorItem.productId || vendorItem.genericItemId || "";
+  const suggestedProduct = findLinkedProductForVendorItem(vendorItem, products);
+  const productId = suggestedProduct?.id || "";
   const productName = suggestedProduct
     ? getProductDisplayName(suggestedProduct)
-    : vendorItem.productName || vendorItem.genericItemName || "";
+    : "";
 
   return { productId, productName };
 };
@@ -506,7 +509,10 @@ const HeritageReceiptImport = () => {
 
         setVendors(vendorList);
         setCompanyUsers(users);
-        setDatabaseItems(items);
+        setDatabaseItems(items.map((item) => {
+          const product = findLinkedProductForVendorItem(item, productItems);
+          return product ? { ...item, billingRate: getProductSellPriceCents(product), sellPrice: getProductSellPriceCents(product) } : item;
+        }));
         setProducts(productItems);
         setSelectedVendorId(heritageVendor?.id || "");
         setSelectedTechId((currentTechId) => currentTechId || getCompanyUserId(defaultTech));
@@ -635,7 +641,7 @@ const HeritageReceiptImport = () => {
         createProduct: !productLink.productId,
         productName: productLink.productName || getProductDisplayName(line),
         billable: Boolean(match?.billable),
-        billingRate: match?.billingRate ? String(Number(match.billingRate) / 100) : "",
+        billingRate: match?.billingRate != null ? String(Number(match.billingRate) / 100) : "",
         category: match?.category || line.category,
       };
     });
@@ -892,6 +898,7 @@ const HeritageReceiptImport = () => {
 
     setSaving(true);
     try {
+      const batch = createReceiptBatch(db);
       const receiptId = `com_rec_${uuidv4()}`;
       const receiptDate = receipt.invoiceDate ? new Date(`${receipt.invoiceDate}T12:00:00`) : new Date();
       const purchasedItemIds = [];
@@ -944,7 +951,7 @@ const HeritageReceiptImport = () => {
           databaseItemWasCreated = true;
         }
 
-        const existingProductId = line.matchedProductId || databaseItem?.productId || databaseItem?.genericItemId || "";
+        const existingProductId = databaseItem?.productId || databaseItem?.genericItemId || line.matchedProductId || "";
         let linkedProduct = productsForNextReceipt.find((product) => product.id === existingProductId) || null;
 
         if (!linkedProduct && line.createProduct && databaseItem && itemId) {
@@ -953,6 +960,7 @@ const HeritageReceiptImport = () => {
             productId,
             vendorItem: { ...databaseItem, id: itemId },
             overrides: {
+              ...line.productAvailability,
               name: line.productName || databaseItem.name || line.name,
               sellPrice: centsFromDollars(line.billingRate || line.unitPrice || ""),
             },
@@ -960,17 +968,14 @@ const HeritageReceiptImport = () => {
             now,
           });
 
-          await setDoc(productCatalogDocRef(db, recentlySelectedCompany, productId), linkedProduct);
+          batch.set(productCatalogDocRef(db, recentlySelectedCompany, productId), linkedProduct);
           createdProducts.push(linkedProduct);
           productsForNextReceipt = [...productsForNextReceipt, linkedProduct];
         } else if (linkedProduct && itemId) {
-          await updateDoc(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), {
+          batch.update(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), {
             storeItems: arrayUnion(databaseItem?.name || line.name || itemId),
             storeItemsIds: arrayUnion(itemId),
             vendorItemIds: arrayUnion(itemId),
-            active: true,
-            availableForPartPurchase: true,
-            partPurchaseAvailable: true,
             dateUpdated: now,
             updatedAt: now,
           });
@@ -984,11 +989,11 @@ const HeritageReceiptImport = () => {
         }
 
         if (databaseItemWasCreated && databaseItem) {
-          await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId), databaseItem);
+          batch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId), databaseItem);
           createdDatabaseItems.push(databaseItem);
           databaseItemsForNextReceipt = [...databaseItemsForNextReceipt, databaseItem];
         } else if (linkedProduct && itemId && !vendorItemAlreadyLinkedToProduct) {
-          await updateDoc(
+          batch.update(
             doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId),
             buildVendorItemProductPatch(linkedProduct, now)
           );
@@ -997,7 +1002,7 @@ const HeritageReceiptImport = () => {
         const purchaseId = `comp_pi_${uuidv4()}`;
         purchasedItemIds.push(purchaseId);
 
-        await setDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchaseId), {
+        batch.set(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchaseId), {
           id: purchaseId,
           receiptId,
           invoiceNum: receipt.invoiceNum.trim(),
@@ -1008,6 +1013,8 @@ const HeritageReceiptImport = () => {
           techId: getCompanyUserId(selectedTech),
           techName: getCompanyUserDisplayName(selectedTech),
           itemId,
+          dbItemId: itemId,
+          dataBaseItemId: itemId,
           name: databaseItem?.name || line.name || line.sku || "Purchased Item",
           category: databaseItem?.category || line.category || inferCategory(`${line.sku} ${line.name}`),
           subCategory: databaseItem?.subCategory || "Misc",
@@ -1048,7 +1055,7 @@ const HeritageReceiptImport = () => {
         ? saveSubtotal + saveTax
         : enteredTotal || lineTotals.total;
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "receipts", receiptId), {
+      batch.set(doc(db, "companies", recentlySelectedCompany, "receipts", receiptId), {
         id: receiptId,
         invoiceNum: receipt.invoiceNum.trim(),
         date: receiptDate,
@@ -1067,6 +1074,8 @@ const HeritageReceiptImport = () => {
         source: "heritageReceiptImport",
         rawVendorName: receipt.vendorName || "",
       });
+
+      await batch.commit();
 
       if (createdDatabaseItems.length) {
         setDatabaseItems((prev) => {
@@ -1382,7 +1391,7 @@ const HeritageReceiptImport = () => {
                 <tbody>
                   {lines.map((line) => {
                     const matchedDatabaseItem = databaseItemsById.get(line.matchedItemId) || null;
-                    const linkedProductId = line.matchedProductId || matchedDatabaseItem?.productId || matchedDatabaseItem?.genericItemId || "";
+                    const linkedProductId = matchedDatabaseItem?.productId || matchedDatabaseItem?.genericItemId || line.matchedProductId || "";
                     const linkedProduct = productsById.get(linkedProductId) || null;
                     const linkedProductName = linkedProduct
                       ? getProductDisplayName(linkedProduct)
@@ -1469,7 +1478,7 @@ const HeritageReceiptImport = () => {
                             />
                             New vendor item
                           </label>
-                          {linkedProductId ? (
+                          {linkedProduct ? (
                             <p className="mt-2 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-800">
                               Product link inherited{linkedProductName ? `: ${linkedProductName}` : ""}
                             </p>
@@ -1483,6 +1492,13 @@ const HeritageReceiptImport = () => {
                               Create product link
                             </label>
                           ) : null}
+                          {!linkedProduct && line.createProduct && (matchedDatabaseItem || line.createDatabaseItem) && (
+                            <ProductAvailabilityDisclosure
+                              value={line.productAvailability}
+                              onChange={(patch) => updateLine(line.id, { productAvailability: { ...line.productAvailability, ...patch } })}
+                              disabled={saving}
+                            />
+                          )}
                           {priceChange ? (
                             <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
                               <p className="font-semibold">

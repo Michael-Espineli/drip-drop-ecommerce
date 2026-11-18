@@ -15,7 +15,8 @@ export const monthlyRecurringCents = (subscription={}) => {
   return Math.round(amount/(months*count));
 };
 export const isRecurringAgreement = agreement => !['onetime','oneoff'].includes(key(agreement.rateType)) &&
-  !['onetime','oneoff'].includes(key(agreement.serviceCadence)) && !['oneoffjob','workoffer','lead'].includes(key(agreement.sourceType));
+  !['onetime','oneoff'].includes(key(agreement.serviceCadence)) && !['oneoffjob','workoffer'].includes(key(agreement.sourceType)) &&
+  !(key(agreement.sourceType)==='lead' && !agreement.rateType && !agreement.serviceCadence);
 export const needsBillingFollowUp = (agreement,subscriptions,invoices) => isRecurringAgreement(agreement)
   ? !subscriptions.some(subscription=>subscription.agreementId===agreement.id&&['active','trialing'].includes(key(subscription.stripeStatus||subscription.status)))
   : !invoices.some(invoice=>(invoice.agreementId===agreement.id||(agreement.jobId&&invoice.jobId===agreement.jobId))&&!['void','voided','canceled','cancelled'].includes(key(invoice.status)));

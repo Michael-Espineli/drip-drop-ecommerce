@@ -33,7 +33,60 @@ export const getVendorItemDisplayName = (vendorItem = {}) =>
 export const getProductSellPriceCents = (product = {}) =>
   Number(product.sellPrice ?? product.billingRate ?? product.defaultSellPrice ?? 0);
 
-export const getVendorItemCostCents = (vendorItem = {}) => Number(vendorItem.rate || vendorItem.cost || 0);
+export const getVendorItemCostCents = (vendorItem = {}) => Number(vendorItem.rate ?? vendorItem.cost ?? 0);
+
+export const productVendorItemIds = (product = {}) => [...new Set([
+  ...(Array.isArray(product.vendorItemIds) ? product.vendorItemIds : []),
+  ...(Array.isArray(product.storeItemsIds) ? product.storeItemsIds : []),
+  product.preferredVendorItemId,
+].filter(Boolean))];
+
+// Explicit supplier links take precedence over stale product-side arrays.
+// Names are suggestions only: two suppliers can sell different items with the same name.
+export const findLinkedProductForVendorItem = (vendorItem = {}, products = []) => {
+  const explicitId = vendorItem.productId || vendorItem.genericItemId;
+  if (explicitId) return products.find((product) => product.id === explicitId) || null;
+  const matches = products.filter((product) => productVendorItemIds(product).includes(vendorItem.id));
+  return matches.length === 1 ? matches[0] : null;
+};
+
+export const linkedVendorItemsForProduct = (product = {}, vendorItems = [], products = [product]) =>
+  vendorItems.filter((vendor) => findLinkedProductForVendorItem(vendor, products)?.id === product.id);
+
+export const getProductDefaultCostCents = (product = {}) =>
+  Number(product.defaultCostCents ?? product.cost ?? product.rate ?? 0);
+
+export const getProductCostInfo = (product = {}, vendorItems = [], products = [product]) => {
+  const linked = linkedVendorItemsForProduct(product, vendorItems, products);
+  const vendor = linked.find((item) => item.id === product.preferredVendorItemId)
+    || [...linked].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+  const vendorCosts = linked.map(getVendorItemCostCents).filter(Number.isFinite);
+  return {
+    costCents: vendor ? getVendorItemCostCents(vendor) : getProductDefaultCostCents(product),
+    vendorItem: vendor || null,
+    linkedVendorItems: linked,
+    minVendorCostCents: vendorCosts.length ? Math.min(...vendorCosts) : null,
+    maxVendorCostCents: vendorCosts.length ? Math.max(...vendorCosts) : null,
+    source: vendor ? "vendor" : "manual",
+  };
+};
+
+export const buildProductCostIndex = (products = [], vendorItems = []) => {
+  const byId = new Map(products.map((product) => [product.id, product]));
+  const reverse = new Map();
+  for (const product of products) for (const id of productVendorItemIds(product)) {
+    if (!reverse.has(id)) reverse.set(id, new Set());
+    reverse.get(id).add(product.id);
+  }
+  const vendors = new Map(products.map((product) => [product.id, []]));
+  for (const vendor of vendorItems) {
+    const explicit = vendor.productId || vendor.genericItemId;
+    const owners = reverse.get(vendor.id);
+    const owner = explicit || (owners?.size === 1 ? [...owners][0] : "");
+    if (byId.has(owner)) vendors.get(owner).push(vendor);
+  }
+  return new Map(products.map((product) => [product.id, getProductCostInfo(product, vendors.get(product.id))]));
+};
 
 // Some older iOS product rows put the product ID in itemId. It must never
 // become a supplier document ID when editing a quote or updating catalog cost.
@@ -126,7 +179,8 @@ export const buildProductFromVendorItem = ({
     createdAt: now,
     updatedAt: now,
     sku: overrides.sku || vendorItem.sku || "",
-    rate: 0,
+    rate: Number(overrides.defaultCostCents ?? overrides.cost ?? overrides.rate ?? 0),
+    defaultCostCents: Number(overrides.defaultCostCents ?? overrides.cost ?? overrides.rate ?? 0),
     sellPrice,
     billingRate: sellPrice,
     billable: Boolean(overrides.billable ?? vendorItem.billable ?? sellPrice),
@@ -167,6 +221,8 @@ export const buildVendorItemProductPatch = (product = {}, now = new Date()) => {
 };
 
 export const findSuggestedProductForVendorItem = (vendorItem = {}, products = []) => {
+  const linked = findLinkedProductForVendorItem(vendorItem, products);
+  if (linked) return linked;
   const existingProductId = vendorItem.productId || vendorItem.genericItemId || "";
   if (existingProductId) {
     const linkedProduct = products.find((product) => product.id === existingProductId);
@@ -184,22 +240,21 @@ export const findSuggestedProductForVendorItem = (vendorItem = {}, products = []
 };
 
 export const buildJobProductCatalog = (products = [], vendorItems = []) => {
-  const productForVendor = (vendor) => products.find((product) =>
-    product.id === (vendor.genericItemId || vendor.productId) ||
-    [...(product.vendorItemIds || []), ...(product.storeItemsIds || []), product.preferredVendorItemId].includes(vendor.id)
-  );
+  const costs = buildProductCostIndex(products, vendorItems);
+  const vendorProducts = new Map(products.flatMap((product) => costs.get(product.id).linkedVendorItems.map((vendor) => [vendor.id, product])));
+  const productForVendor = (vendor) => vendorProducts.get(vendor.id);
   const linkedVendors = vendorItems.map((vendor) => {
     const product = productForVendor(vendor);
     return product ? { ...vendor, genericItemId: product.id, sellPrice: getProductSellPriceCents(product), billingRate: getProductSellPriceCents(product), taxable: Boolean(product.taxable), billable: product.billable ?? true } : vendor;
   });
   const options = products.filter((product) => product.active !== false && !product.archived && isProductAvailableForJobs(product)).map((product) => {
-    const vendor = linkedVendors.find((item) => item.id === product.preferredVendorItemId) || linkedVendors.find((item) => item.genericItemId === product.id);
+    const { vendorItem: vendor, costCents } = costs.get(product.id);
     return {
       ...vendor, ...product, name: getProductDisplayName(product), genericItemId: product.id,
       category: vendor?.category || product.category || "",
       ...databaseEquipmentMappingPatch(databaseEquipmentMappingFromItem(vendor || product)),
       dbItemId: vendor?.id || "", dataBaseItemId: vendor?.id || "",
-      rate: getVendorItemCostCents(vendor), cost: getVendorItemCostCents(vendor),
+      rate: costCents, cost: costCents,
       sellPrice: getProductSellPriceCents(product), billingRate: getProductSellPriceCents(product),
       billable: product.billable ?? true, catalogSource: "product",
     };
@@ -217,4 +272,14 @@ export const loadJobProductCatalog = async (db, companyId) => {
   ]);
   const records = (snapshot) => snapshot.docs.map((entry) => ({ ...entry.data(), id: entry.id }));
   return buildJobProductCatalog(records(products), records(vendors));
+};
+
+export const loadProductsWithCosts = async (db, companyId) => {
+  const [productSnap, vendorSnap] = await Promise.all([
+    getDocs(productCatalogCollectionRef(db, companyId)), getDocs(vendorItemsCollectionRef(db, companyId)),
+  ]);
+  const products = productSnap.docs.map((entry) => ({ ...entry.data(), id: entry.id }));
+  const vendors = vendorSnap.docs.map((entry) => ({ ...entry.data(), id: entry.id }));
+  const costs = buildProductCostIndex(products, vendors);
+  return products.map((product) => ({ ...product, rate: costs.get(product.id).costCents, cost: costs.get(product.id).costCents }));
 };

@@ -1168,6 +1168,7 @@ const publicServiceAgreementSnapshot = (agreement = {}, options = {}) => {
         previousAgreementId: agreement.previousAgreementId || "",
         renewalSourceAgreementId: agreement.renewalSourceAgreementId || "",
         billingSubscriptionId: agreement.billingSubscriptionId || "",
+        onboardingWorkflowVersion: agreement.onboardingWorkflowVersion || 0,
         billingFlowStatus: agreement.billingFlowStatus || "",
         billingFlowNextAction: agreement.billingFlowNextAction || "",
         customerCanPayImmediately: agreement.customerCanPayImmediately === true,

@@ -1,3 +1,4 @@
+import ServiceOnboardingPayment from '../../../components/sales/ServiceOnboardingPayment';
 import { displayRecordReference } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { agreementServiceSetup } from '../../../utils/sales/agreementServiceSetup';
@@ -59,7 +60,7 @@ const isEstimateAgreement = (agreement = {}) => {
   return (
     sourceType === 'oneoffjob' ||
     sourceType === 'workoffer' ||
-    sourceType === 'lead' ||
+    (sourceType === 'lead' && !rateType && !serviceCadence) ||
     rateType === 'onetime' ||
     serviceCadence === 'onetime'
   );
@@ -1293,7 +1294,7 @@ const ServiceAgreementDetail = () => {
             responding={responding}
           />
 
-          {!isAccepted && !isClosed && <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          {!isAccepted && !isClosed && agreement.onboardingWorkflowVersion !== 1 && <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-bold text-slate-950">Billing Choice</h2>
             <p className="mt-1 text-sm text-slate-500">Choose how you would like to be billed when you accept.</p>
             <div className="mt-4 grid gap-2">
@@ -1353,6 +1354,7 @@ const ServiceAgreementDetail = () => {
             </section>
           )}
 
+          {agreement.onboardingWorkflowVersion === 1 ? (isAccepted ? <ServiceOnboardingPayment agreement={agreement} email={emailParam} accessToken={accessTokenParam} /> : <p className="rounded-lg bg-blue-50 p-4 text-sm text-blue-900">After acceptance, complete payment setup or contact the office about invoice billing. Monthly billing follows your signup date with month-end fallback. Proration requires company approval.</p>) : (
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
               <CreditCardIcon className="h-5 w-5 text-slate-400" />
@@ -1409,6 +1411,7 @@ const ServiceAgreementDetail = () => {
               </p>
             )}
           </section>
+          )}
         </aside>
       </div>
       {!isAccepted && !isClosed && <div className="fixed inset-x-0 bottom-[calc(64px+env(safe-area-inset-bottom,0px))] z-30 border-t border-slate-200 bg-white px-4 py-2 lg:hidden"><a href="#client-agreement-response" className="flex min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Review terms & respond</a></div>}

@@ -2504,10 +2504,10 @@ const CreateNewJob = () => {
                         <div className="space-y-6">
                             <SectionCard
                                 title="Assignment"
-                                subtitle="Choose who owns the job and who it is for."
+                                subtitle="Choose who owns the job, the issue priority, and the starter plan recommendation rank."
                             >
                                 <div className="grid gap-4 lg:grid-cols-2">
-                                    <div>
+                                    <div className="lg:col-span-2">
                                         <label className={fieldLabelClasses}>Admin</label>
                                         <Select
                                             options={adminList}
@@ -2519,29 +2519,62 @@ const CreateNewJob = () => {
                                     </div>
 
                                     <div>
-                                        <label className={fieldLabelClasses}>Customer</label>
-	                                        <Select
-	                                            options={customerList}
-	                                            value={selectedCustomer}
-	                                            onChange={(option) => {
-                                                    setSelectedCustomer(option);
-                                                    setSelectedServiceLocation(null);
-                                                    setSelectedBodyOfWater(null);
-                                                    setSelectedEquipment(null);
-                                                }}
-	                                            placeholder="Select Customer"
-	                                            styles={selectStyles}
-	                                            isDisabled={!!customerIdParam || !!repairRequest?.customerId}
-                                        />
+                                        <label htmlFor="job-issue-priority" className={fieldLabelClasses}>Issue Priority</label>
+                                        <select
+                                            id="job-issue-priority"
+                                            value={issuePriorityLevel}
+                                            onChange={(e) => setIssuePriorityLevel(normalizeIssuePriority(e.target.value))}
+                                            className={fieldInputClasses}
+                                        >
+                                            {ISSUE_PRIORITY_OPTIONS.map((option) => (
+                                                <option key={option.value} value={option.value}>
+                                                    {option.value} - {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label htmlFor="job-starter-plan-tier" className={fieldLabelClasses}>Starter Plan Recommendation Rank</label>
+                                        <select
+                                            id="job-starter-plan-tier"
+                                            value={starterPlanTier}
+                                            onChange={(e) => setStarterPlanTier(normalizeJobPlanTier(e.target.value))}
+                                            className={fieldInputClasses}
+                                        >
+                                            {JOB_PLAN_TIER_OPTIONS.map((option) => (
+                                                <option key={option.value} value={option.value}>
+                                                    {getJobPlanRecommendationDisplay(option.value)}
+                                                </option>
+                                            ))}
+                                        </select>
                                     </div>
                                 </div>
                             </SectionCard>
 
                             <SectionCard
-                                title="Location & Assets"
-                                subtitle="Tie the job to the service location and any related pool or equipment."
+                                title="Customer and Location"
+                                subtitle="Choose the customer, service location, and any related pool or equipment."
                             >
-                                <div className="grid gap-4 lg:grid-cols-3">
+                                <div className="grid gap-4 lg:grid-cols-2">
+                                    <div>
+                                        <label htmlFor="create-job-customer" className={fieldLabelClasses}>Customer</label>
+                                        <Select
+                                            inputId="create-job-customer"
+                                            options={customerList}
+                                            value={selectedCustomer}
+                                            onChange={(option) => {
+                                                setSelectedCustomer(option);
+                                                setSelectedServiceLocation(null);
+                                                setSelectedBodyOfWater(null);
+                                                setSelectedEquipment(null);
+                                            }}
+                                            placeholder="Select Customer"
+                                            styles={selectStyles}
+                                            isDisabled={!!customerIdParam || !!repairRequest?.customerId}
+                                        />
+                                    </div>
+
                                     <div>
                                         <label className={fieldLabelClasses}>Service Location</label>
 	                                        <Select
@@ -2614,11 +2647,28 @@ const CreateNewJob = () => {
                                         subtitle="Labor plus billable materials"
                                         tone="blue"
                                     />
-                                    <StatCard
-                                        title="Internal Cost"
-                                        value={moneyFromCents(calculatedPlanInternalCostCents)}
-                                        subtitle="Labor plus material cost"
-                                    />
+                                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-gray-800">
+                                        <p className="text-xs font-semibold uppercase tracking-wider opacity-70">Internal Cost</p>
+                                        <table className="mt-3 w-full text-sm">
+                                            <caption className="sr-only">Internal cost breakdown</caption>
+                                            <tbody>
+                                                <tr>
+                                                    <th scope="row" className="pb-2 pr-3 text-left font-normal">Material Cost</th>
+                                                    <td className="pb-2 text-right font-semibold tabular-nums">{moneyFromCents(plannedMaterialCostCents)}</td>
+                                                </tr>
+                                                <tr>
+                                                    <th scope="row" className="pb-3 pr-3 text-left font-normal"><span aria-hidden="true">+ </span>Planned Labor</th>
+                                                    <td className="pb-3 text-right font-semibold tabular-nums">{moneyFromCents(plannedTotalLaborCents)}</td>
+                                                </tr>
+                                            </tbody>
+                                            <tfoot>
+                                                <tr className="border-t border-gray-200">
+                                                    <th scope="row" className="pt-3 pr-3 text-left font-semibold">Total</th>
+                                                    <td className="pt-3 text-right text-xl font-bold tabular-nums">{moneyFromCents(calculatedPlanInternalCostCents)}</td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
                                     <StatCard
                                         title="Projected Profit"
                                         value={moneyFromCents(projectedProfitCents)}
@@ -2627,78 +2677,8 @@ const CreateNewJob = () => {
                                     />
                                 </div>
 
-                                <dl className="mt-5 grid gap-3 border-t border-slate-200 pt-4 sm:grid-cols-3">
-                                    <div>
-                                        <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                                            Materials
-                                        </dt>
-                                        <dd className="mt-1 text-sm font-bold text-slate-900">
-                                            {moneyFromCents(plannedMaterialCostCents)}
-                                        </dd>
-                                    </div>
-
-                                    <div>
-                                        <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                                            Planned Labor
-                                        </dt>
-                                        <dd className="mt-1 text-sm font-bold text-slate-900">
-                                            {moneyFromCents(plannedTotalLaborCents)}
-                                        </dd>
-                                    </div>
-
-                                    <div>
-                                        <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                                            Projected Profit
-                                        </dt>
-                                        <dd
-                                            className={[
-                                                "mt-1 text-sm font-bold",
-                                                projectedProfitCents < 0 ? "text-red-700" : "text-green-700",
-                                            ].join(" ")}
-                                        >
-                                            {moneyFromCents(projectedProfitCents)}
-                                        </dd>
-                                    </div>
-                                </dl>
                             </SectionCard>
 
-                            <SectionCard
-                                title="Priority & Plan"
-                                subtitle="Set the problem priority and the starter plan recommendation rank."
-                            >
-                                <div className="grid gap-4 lg:grid-cols-2">
-                                    <div>
-                                        <label htmlFor="job-issue-priority" className={fieldLabelClasses}>Issue Priority</label>
-                                        <select
-                                            id="job-issue-priority"
-                                            value={issuePriorityLevel}
-                                            onChange={(e) => setIssuePriorityLevel(normalizeIssuePriority(e.target.value))}
-                                            className={fieldInputClasses}
-                                        >
-                                            {ISSUE_PRIORITY_OPTIONS.map((option) => (
-                                                <option key={option.value} value={option.value}>
-                                                    {option.value} - {option.label}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-                                    <div>
-                                        <label className={fieldLabelClasses}>Starter Plan Recommendation Rank</label>
-                                        <select
-                                            value={starterPlanTier}
-                                            onChange={(e) => setStarterPlanTier(normalizeJobPlanTier(e.target.value))}
-                                            className={fieldInputClasses}
-                                        >
-                                            {JOB_PLAN_TIER_OPTIONS.map((option) => (
-                                                <option key={option.value} value={option.value}>
-                                                    {getJobPlanRecommendationDisplay(option.value)}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                </div>
-                            </SectionCard>
                         </div>
 
                         <section className="flex min-h-[24rem] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:sticky xl:top-6 xl:min-h-[calc(100vh-20rem)]">
@@ -3340,20 +3320,6 @@ const CreateNewJob = () => {
                                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Estimated Price</p>
                                 <p className="mt-1 text-2xl font-bold text-slate-950">{moneyFromCents(calculatedPlanPriceCents)}</p>
                             </div>
-                            <button
-                                type="button"
-                                onClick={createNewJob}
-                                disabled={creating}
-                                aria-disabled={!canCreateJob || creating}
-                                className={[
-                                    "w-full rounded-md px-4 py-2.5 text-sm font-semibold shadow-sm transition sm:w-auto",
-                                    canCreateJob && !creating
-                                        ? "bg-blue-600 text-white hover:bg-blue-700"
-                                        : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
-                                ].join(" ")}
-                            >
-                                {creating ? "Creating..." : "Create Job"}
-                            </button>
                         </div>
                     </div>
                 </div></WorkspaceRecordHeader>
@@ -3461,7 +3427,7 @@ const CreateNewJob = () => {
                                     <p className="mt-0.5 text-xs text-slate-500">{activeCreateSectionMeta?.helper}</p>
                                 </div>
 
-                                <div className="flex flex-wrap gap-2">
+                                <div className="flex shrink-0 flex-wrap items-center gap-2">
                                     {previousCreateSection && (
                                         <button
                                             type="button"
@@ -3471,7 +3437,7 @@ const CreateNewJob = () => {
                                             Previous
                                         </button>
                                     )}
-                                    {nextCreateSection ? (
+                                    {nextCreateSection && (
                                         <button
                                             type="button"
                                             onClick={() => setActiveCreateSection(nextCreateSection)}
@@ -3479,16 +3445,21 @@ const CreateNewJob = () => {
                                         >
                                             Next
                                         </button>
-                                    ) : (
-                                        <button
-                                            type="button"
-                                            onClick={createNewJob}
-                                            disabled={creating}
-                                            className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {creating ? "Creating..." : "Create Job"}
-                                        </button>
                                     )}
+                                    <button
+                                        type="button"
+                                        onClick={createNewJob}
+                                        disabled={creating}
+                                        aria-disabled={!canCreateJob || creating}
+                                        className={[
+                                            "rounded-md px-3 py-2 text-xs font-semibold shadow-sm transition",
+                                            canCreateJob && !creating
+                                                ? "bg-blue-600 text-white hover:bg-blue-700"
+                                                : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
+                                        ].join(" ")}
+                                    >
+                                        {creating ? "Creating..." : "Create Job"}
+                                    </button>
                                 </div>
                             </div>
                         </div>

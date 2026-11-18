@@ -25,6 +25,7 @@ export const PIPELINE_LINK_TYPES = [
   { value: "customer", label: "Customer" },
   { value: "initialEstimate", label: "Initial Estimate" },
   { value: "serviceAgreement", label: "Service Agreement" },
+  { value: "billingSetup", label: "Billing Ready" },
   { value: "routing", label: "Routing" },
   { value: "equipment", label: "Equipment" },
   { value: "locationPhotos", label: "Location Photos" },
@@ -66,6 +67,15 @@ export const DEFAULT_PIPELINE_TEMPLATE_ITEMS = [
     sortOrder: 40,
     itemType: "internal",
     linkType: "serviceAgreement",
+    isDefault: true,
+  },
+  {
+    id: "default_billing_setup",
+    title: "Billing Ready",
+    description: "Payment authorization or office-approved invoice billing is ready.",
+    sortOrder: 45,
+    itemType: "internal",
+    linkType: "billingSetup",
     isDefault: true,
   },
   {

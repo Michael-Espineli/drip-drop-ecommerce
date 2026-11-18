@@ -1,21 +1,39 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
-import { ArrowLeftIcon, PencilSquareIcon, PhotoIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeftIcon, FunnelIcon, MagnifyingGlassIcon, PencilSquareIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
 import { getDocs, setDoc, writeBatch } from "firebase/firestore";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import CatalogConnections from "./CatalogConnections";
+import { DetailRow, SummaryRow, AvailabilityRow } from "./CatalogDetailRows";
+import WorkspaceHeader from "../../../components/workspace/WorkspaceHeader";
+import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
+import ProductAvailabilityFields from "./ProductAvailabilityFields";
+import ProductBulkAvailability from "./ProductBulkAvailability";
+import ProductCatalogFilters, { DEFAULT_PRODUCT_SORT } from "./ProductCatalogFilters";
+import { canBulkEditProduct, PRODUCT_BULK_EDIT_LIMIT } from "../../../utils/productAvailability";
+import { deleteCatalogProduct } from "../../../utils/productVendorConnections";
+import { appConfirm } from "../../../utils/appDialog";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+  CATEGORY_OPTIONS, DEFAULT_CATEGORY, DEFAULT_SUBCATEGORY, DEFAULT_UOM, SUBCATEGORY_OPTIONS, UOM_OPTIONS,
+} from "../databaseItems/databaseItemOptions";
 import {
   buildProductFromVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
+  buildProductCostIndex,
+  getProductDefaultCostCents,
+  linkedVendorItemsForProduct,
   getVendorItemCostCents,
   getVendorItemDisplayName,
   isProductAvailableForJobs,
   isProductAvailableForPartApproval,
   isProductAvailableForPartPurchase,
+  productCatalogAvailabilityFields,
   productCatalogCollectionRef,
   productCatalogDocRef,
   vendorItemDocRef,
@@ -23,27 +41,23 @@ import {
 } from "../../../utils/productCatalog";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
-const ALL_FILTER_VALUE = "all";
 
-const SORT_OPTIONS = [
-  { value: "nameAsc", label: "Name A-Z" },
-  { value: "nameDesc", label: "Name Z-A" },
-  { value: "categoryAsc", label: "Category A-Z" },
-  { value: "sellPriceHigh", label: "Sell price high-low" },
-  { value: "sellPriceLow", label: "Sell price low-high" },
-  { value: "updatedNewest", label: "Recently updated" },
-  { value: "updatedOldest", label: "Oldest updated" },
+const PRODUCT_SELECT_FIELDS = [
+  { field: "category", label: "Category", options: CATEGORY_OPTIONS },
+  { field: "subCategory", label: "Subcategory", options: SUBCATEGORY_OPTIONS },
+  { field: "UOM", label: "UOM", options: UOM_OPTIONS },
 ];
 
 const PRODUCT_FORM_DEFAULTS = {
   name: "",
   specificName: "",
   description: "",
-  category: "Misc",
-  subCategory: "Misc",
-  UOM: "Unit",
+  category: DEFAULT_CATEGORY.label,
+  subCategory: DEFAULT_SUBCATEGORY.label,
+  UOM: DEFAULT_UOM.label,
   sku: "",
   sellPrice: "",
+  defaultCost: "",
   billable: true,
   active: true,
   availableForJobs: true,
@@ -56,6 +70,10 @@ const money = (cents) =>
     style: "currency",
     currency: "USD",
   }).format(Number(cents || 0) / 100);
+
+const vendorCostRange = (info) => info.minVendorCostCents === info.maxVendorCostCents
+  ? money(info.minVendorCostCents)
+  : `${money(info.minVendorCostCents)} – ${money(info.maxVendorCostCents)}`;
 
 const centsFromDollarInput = (value) => {
   const parsed = Number(String(value || "").replace(/[^0-9.-]/g, ""));
@@ -134,14 +152,9 @@ const getProductImageUrl = (product = {}) => {
   return firstImage?.url || firstImage?.downloadURL || firstImage?.src || "";
 };
 
-const getProductInitials = (product = {}) => {
-  const words = getProductDisplayName(product).split(/\s+/).filter(Boolean);
-  return `${words[0]?.[0] || "P"}${words[1]?.[0] || ""}`.toUpperCase();
-};
-
 const normalizeProduct = (productId, data = {}) => ({
   ...data,
-  id: data.id || productId,
+  id: productId,
   commonName: data.commonName || data.name || "",
   name: data.name || data.commonName || "",
   specificName: data.specificName || "",
@@ -168,7 +181,7 @@ const mapVendorItemDoc = (vendorItemDoc) => {
 
   return {
     ...data,
-    id: data.id || vendorItemDoc.id,
+    id: vendorItemDoc.id,
     name: data.name || "",
     description: data.description || "",
     category: data.category || "",
@@ -201,46 +214,11 @@ const productSearchText = (product = {}) =>
     .join(" ")
     .toLowerCase();
 
-const linkedVendorItemCount = (product = {}) => {
-  const linkedIds = product.vendorItemIds || product.storeItemsIds || [];
-  const linkedNames = product.storeItems || [];
-  return Math.max(Array.isArray(linkedIds) ? linkedIds.length : 0, Array.isArray(linkedNames) ? linkedNames.length : 0);
-};
-
-const productLinkedVendorItemIds = (product = {}) =>
-  new Set(
-    [
-      ...(Array.isArray(product.vendorItemIds) ? product.vendorItemIds : []),
-      ...(Array.isArray(product.storeItemsIds) ? product.storeItemsIds : []),
-      product.preferredVendorItemId,
-    ].filter(Boolean)
-  );
-
-const productLinkedVendorItemNames = (product = {}) =>
-  new Set(
-    (Array.isArray(product.storeItems) ? product.storeItems : [])
-      .map((name) => getVendorItemDisplayName({ name }).toLowerCase())
-      .filter(Boolean)
-  );
-
-const isVendorItemLinkedToProduct = (vendorItem = {}, product = {}) => {
-  if (!product?.id) return false;
-  const linkedIds = productLinkedVendorItemIds(product);
-  if (vendorItem.productId === product.id || vendorItem.genericItemId === product.id) return true;
-  if (linkedIds.has(vendorItem.id)) return true;
-
-  const linkedNames = productLinkedVendorItemNames(product);
-  return linkedNames.has(getVendorItemDisplayName(vendorItem).toLowerCase());
-};
-
 const productPatchFromForm = (form, productId, now = new Date()) => {
   const name = form.name.trim();
   const description = form.description.trim();
   const specificName = form.specificName.trim() || description || name;
   const sellPrice = centsFromDollarInput(form.sellPrice);
-  const availableForPartPurchase = Boolean(form.availableForPartPurchase);
-  const availableForPartApproval = Boolean(form.availableForPartApproval);
-  const availableForJobs = Boolean(form.availableForJobs);
 
   return {
     id: productId,
@@ -255,77 +233,21 @@ const productPatchFromForm = (form, productId, now = new Date()) => {
     sku: form.sku.trim(),
     sellPrice,
     billingRate: sellPrice,
+    defaultCostCents: centsFromDollarInput(form.defaultCost),
+    rate: centsFromDollarInput(form.defaultCost),
+    cost: centsFromDollarInput(form.defaultCost),
     billable: Boolean(form.billable),
-    active: Boolean(form.active),
-    availableForJobs,
-    availableForJob: availableForJobs,
-    jobProductAvailable: availableForJobs,
-    availableForPartApproval,
-    partApprovalAvailable: availableForPartApproval,
-    availableForCustomerSale: availableForPartApproval,
-    availableForPartPurchase,
-    partPurchaseAvailable: availableForPartPurchase,
+    ...productCatalogAvailabilityFields(form),
     dateUpdated: now,
     updatedAt: now,
   };
 };
 
-const pillToneClasses = {
-  slate: "border-slate-200 bg-slate-100 text-slate-600",
-  blue: "border-blue-200 bg-blue-50 text-blue-700",
-  emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
-  amber: "border-amber-200 bg-amber-50 text-amber-700",
-};
-
-const dotToneClasses = {
-  blue: "bg-blue-500",
-  emerald: "bg-emerald-500",
-  indigo: "bg-indigo-500",
-};
-
-const StatusPill = ({ children, tone = "slate" }) => (
-  <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold ${pillToneClasses[tone] || pillToneClasses.slate}`}>
-    {children}
-  </span>
-);
-
-const DetailRow = ({ label, value, children }) => {
-  const content = children ?? value;
-  const hasContent = content !== null && content !== undefined && content !== "";
-
-  return (
-    <div className="grid gap-1 border-b border-slate-100 py-4 last:border-b-0 sm:grid-cols-[170px_minmax(0,1fr)] sm:gap-6">
-      <dt className="text-xs font-bold uppercase text-slate-500">{label}</dt>
-      <dd className="min-w-0 break-words text-sm font-semibold leading-6 text-slate-900">{hasContent ? content : "--"}</dd>
-    </div>
-  );
-};
-
-const SummaryRow = ({ label, value }) => {
-  const hasValue = value !== null && value !== undefined && value !== "";
-
-  return (
-    <div className="flex justify-between gap-4 border-b border-slate-100 py-3 last:border-b-0">
-      <span className="text-sm font-semibold text-slate-500">{label}</span>
-      <span className="max-w-[190px] break-words text-right text-sm font-semibold text-slate-900">{hasValue ? value : "--"}</span>
-    </div>
-  );
-};
-
-const AvailabilityRow = ({ label, description, available, tone = "blue" }) => (
-  <li className="flex gap-3 py-3">
-    <span className={`mt-2 h-2.5 w-2.5 flex-none rounded-full ${available ? dotToneClasses[tone] || dotToneClasses.blue : "bg-slate-300"}`} />
-    <span className="min-w-0">
-      <span className="block text-sm font-bold text-slate-900">{label}</span>
-      <span className="mt-0.5 block text-sm leading-6 text-slate-500">{available ? description : "Not available for this workflow."}</span>
-    </span>
-  </li>
-);
-
 const ProductCatalog = () => {
   const { recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const location = useLocation();
+  const navigate = useNavigate();
   const { productId } = useParams();
   const settingsCatalogContext = location.pathname.toLowerCase().startsWith("/company/settings");
   const productCatalogBasePath = settingsCatalogContext ? "/company/settings/product-catalog" : "/company/product-catalog";
@@ -336,41 +258,62 @@ const ProductCatalog = () => {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState(ALL_FILTER_VALUE);
-  const [subCategoryFilter, setSubCategoryFilter] = useState(ALL_FILTER_VALUE);
-  const [uomFilter, setUomFilter] = useState(ALL_FILTER_VALUE);
-  const [billableFilter, setBillableFilter] = useState(ALL_FILTER_VALUE);
-  const [sortOption, setSortOption] = useState("nameAsc");
+  const [filters, setFilters] = useState({});
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [sortOption, setSortOption] = useState(DEFAULT_PRODUCT_SORT);
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState(PRODUCT_FORM_DEFAULTS);
-  const [vendorItems, setVendorItems] = useState([]);
-  const [vendorItemsLoading, setVendorItemsLoading] = useState(false);
+  const [allVendorItems, setVendorItems] = useState([]);
+  const [catalogError, setCatalogError] = useState("");
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const activeCompany = useRef(recentlySelectedCompany);
+  activeCompany.current = recentlySelectedCompany;
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setBulkOpen(false);
+  }, [recentlySelectedCompany, searchTerm, filters]);
 
+  const loadGeneration = useRef(0);
   const loadCatalog = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     if (!recentlySelectedCompany) {
       setProducts([]);
+      setVendorItems([]);
       setLoading(false);
       return;
     }
 
     setLoading(true);
+    setCatalogError("");
+    setProducts([]);
+    setVendorItems([]);
     try {
-      const productSnap = await getDocs(productCatalogCollectionRef(db, recentlySelectedCompany));
+      const [productSnap, vendorSnap] = await Promise.all([getDocs(productCatalogCollectionRef(db, recentlySelectedCompany)), getDocs(vendorItemsCollectionRef(db, recentlySelectedCompany))]);
+      if (generation !== loadGeneration.current) return;
       setProducts(productSnap.docs.map(mapProductDoc));
+      setVendorItems(vendorSnap.docs.map(mapVendorItemDoc));
     } catch (error) {
+      if (generation !== loadGeneration.current) return;
+      setCatalogError(userFacingErrorMessage(error, "Could not load catalog costs and connections."));
       console.error("Unable to load product catalog:", error);
       toast.error(userFacingErrorMessage(error, "Could not load the Product Catalog."));
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
+    setEditingProduct(null);
+    setIsCreateModalOpen(false);
+    setFiltersOpen(false);
     loadCatalog();
+    return () => { loadGeneration.current += 1; };
   }, [loadCatalog]);
 
   const detailProduct = useMemo(
@@ -378,32 +321,11 @@ const ProductCatalog = () => {
     [productId, products]
   );
 
-  const loadConnectedVendorItems = useCallback(async () => {
-    if (!recentlySelectedCompany || !detailProduct) {
-      setVendorItems([]);
-      setVendorItemsLoading(false);
-      return;
-    }
-
-    setVendorItemsLoading(true);
-    try {
-      const vendorItemSnap = await getDocs(vendorItemsCollectionRef(db, recentlySelectedCompany));
-      const connectedItems = vendorItemSnap.docs
-        .map(mapVendorItemDoc)
-        .filter((vendorItem) => isVendorItemLinkedToProduct(vendorItem, detailProduct))
-        .sort((left, right) => compareText(getVendorItemDisplayName(left), getVendorItemDisplayName(right)));
-      setVendorItems(connectedItems);
-    } catch (error) {
-      console.error("Unable to load connected vendor items:", error);
-      toast.error(userFacingErrorMessage(error, "Could not load linked vendor items."));
-    } finally {
-      setVendorItemsLoading(false);
-    }
-  }, [detailProduct, recentlySelectedCompany]);
-
-  useEffect(() => {
-    loadConnectedVendorItems();
-  }, [loadConnectedVendorItems]);
+  const vendorItems = useMemo(() => detailProduct ? linkedVendorItemsForProduct(detailProduct, allVendorItems, products) : [], [detailProduct, allVendorItems, products]);
+  const connectionCatalog = useMemo(() => ({ products, vendorItems: allVendorItems }), [products, allVendorItems]);
+  const productCosts = useMemo(() => buildProductCostIndex(products, allVendorItems), [products, allVendorItems]);
+  const costInfo = (product) => productCosts.get(product.id);
+  const linkedVendorItemCount = (product) => productCosts.get(product.id)?.linkedVendorItems.length || 0;
 
   const searchMatchedProducts = useMemo(() => {
     const lowerSearch = searchTerm.trim().toLowerCase();
@@ -412,20 +334,16 @@ const ProductCatalog = () => {
     return products.filter((product) => productSearchText(product).includes(lowerSearch));
   }, [products, searchTerm]);
 
-  const categoryOptions = useMemo(() => getUniqueOptions(searchMatchedProducts, "category"), [searchMatchedProducts]);
-  const subCategoryOptions = useMemo(() => getUniqueOptions(searchMatchedProducts, "subCategory"), [searchMatchedProducts]);
-  const uomOptions = useMemo(() => getUniqueOptions(searchMatchedProducts, "UOM"), [searchMatchedProducts]);
+  const catalogFilterOptions = useMemo(() => PRODUCT_SELECT_FIELDS.map(({ field, label }) => ({
+    field, label, values: getUniqueOptions(searchMatchedProducts, field),
+  })), [searchMatchedProducts]);
 
   const filteredProducts = useMemo(() => {
-    return searchMatchedProducts.filter((product) => {
-      if (categoryFilter !== ALL_FILTER_VALUE && product.category !== categoryFilter) return false;
-      if (subCategoryFilter !== ALL_FILTER_VALUE && product.subCategory !== subCategoryFilter) return false;
-      if (uomFilter !== ALL_FILTER_VALUE && product.UOM !== uomFilter) return false;
-      if (billableFilter === "billable" && !product.billable) return false;
-      if (billableFilter === "nonBillable" && product.billable) return false;
-      return true;
-    });
-  }, [billableFilter, categoryFilter, searchMatchedProducts, subCategoryFilter, uomFilter]);
+    const selectedFields = Object.entries(filters);
+    return searchMatchedProducts.filter((product) => selectedFields.every(([field, value]) => (
+      typeof value === "boolean" ? Boolean(product[field]) === value : normalizeFilterValue(product[field]) === value
+    )));
+  }, [filters, searchMatchedProducts]);
 
   const sortedProducts = useMemo(() => {
     return [...filteredProducts].sort((left, right) => {
@@ -446,23 +364,29 @@ const ProductCatalog = () => {
           return compareNumber(right.dateUpdatedMillis, left.dateUpdatedMillis) || compareText(getProductDisplayName(left), getProductDisplayName(right));
         case "updatedOldest":
           return compareNumber(left.dateUpdatedMillis, right.dateUpdatedMillis) || compareText(getProductDisplayName(left), getProductDisplayName(right));
-        case "nameAsc":
         default:
           return compareText(getProductDisplayName(left), getProductDisplayName(right));
       }
     });
   }, [filteredProducts, sortOption]);
 
-  const activeFilterCount = [
-    categoryFilter,
-    subCategoryFilter,
-    uomFilter,
-    billableFilter,
-  ].filter((value) => value !== ALL_FILTER_VALUE).length;
+  const activeFilterCount = Object.keys(filters).length;
 
   const pageCount = Math.max(1, Math.ceil(sortedProducts.length / pageSize));
   const startIndex = (currentPage - 1) * pageSize;
   const paginatedProducts = sortedProducts.slice(startIndex, startIndex + pageSize);
+  const eligiblePage = paginatedProducts.filter(canBulkEditProduct);
+  const eligibleFiltered = sortedProducts.filter(canBulkEditProduct);
+  const pageSelected = eligiblePage.length > 0 && eligiblePage.every((product) => selectedIds.has(product.id));
+  const setSelection = (ids, add) => {
+    if (add && new Set([...selectedIds, ...ids]).size > PRODUCT_BULK_EDIT_LIMIT) { toast.error(`Select up to ${PRODUCT_BULK_EDIT_LIMIT} products at a time.`); return; }
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      ids.forEach((id) => add ? next.add(id) : next.delete(id));
+      if (next.size > PRODUCT_BULK_EDIT_LIMIT) return current;
+      return next;
+    });
+  };
   const displayStart = sortedProducts.length === 0 ? 0 : startIndex + 1;
   const displayEnd = Math.min(startIndex + pageSize, sortedProducts.length);
   const resultSummaryText = `Showing ${displayStart}-${displayEnd} of ${sortedProducts.length}${
@@ -470,8 +394,8 @@ const ProductCatalog = () => {
   }`;
 
   const totalLinkedVendorItemsOnPage = useMemo(
-    () => paginatedProducts.reduce((total, product) => total + linkedVendorItemCount(product), 0),
-    [paginatedProducts]
+    () => paginatedProducts.reduce((total, product) => total + (productCosts.get(product.id)?.linkedVendorItems.length || 0), 0),
+    [paginatedProducts, productCosts]
   );
 
   useEffect(() => {
@@ -482,19 +406,21 @@ const ProductCatalog = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [billableFilter, categoryFilter, pageSize, searchTerm, sortOption, subCategoryFilter, uomFilter]);
+  }, [filters, pageSize, searchTerm, sortOption]);
 
   const updateForm = (updates) => {
     setForm((current) => ({ ...current, ...updates }));
   };
 
-  const clearFilters = () => {
-    setSearchTerm("");
-    setCategoryFilter(ALL_FILTER_VALUE);
-    setSubCategoryFilter(ALL_FILTER_VALUE);
-    setUomFilter(ALL_FILTER_VALUE);
-    setBillableFilter(ALL_FILTER_VALUE);
-    setSortOption("nameAsc");
+  const applyFilters = (nextFilters, nextSort) => {
+    setFilters((current) => {
+      const entries = Object.entries(nextFilters);
+      const sameFilters = entries.length === Object.keys(current).length
+        && entries.every(([field, value]) => current[field] === value);
+      return sameFilters ? current : nextFilters;
+    });
+    setSortOption(nextSort);
+    setFiltersOpen(false);
   };
 
   const openCreateModal = () => {
@@ -504,7 +430,7 @@ const ProductCatalog = () => {
   };
 
   const closeProductModal = () => {
-    if (saving) return;
+    if (saving || deleting) return;
     setIsCreateModalOpen(false);
     setEditingProduct(null);
   };
@@ -516,11 +442,12 @@ const ProductCatalog = () => {
       name: getProductDisplayName(product),
       specificName: product.specificName || "",
       description: product.description || "",
-      category: product.category || "Misc",
-      subCategory: product.subCategory || "Misc",
-      UOM: product.UOM || "Unit",
+      category: product.category || PRODUCT_FORM_DEFAULTS.category,
+      subCategory: product.subCategory || PRODUCT_FORM_DEFAULTS.subCategory,
+      UOM: product.UOM || PRODUCT_FORM_DEFAULTS.UOM,
       sku: product.sku || "",
       sellPrice: dollarsFromCents(getProductSellPriceCents(product)),
+      defaultCost: dollarsFromCents(getProductDefaultCostCents(product)),
       billable: Boolean(product.billable),
       active: product.active !== false,
       availableForJobs: isProductAvailableForJobs(product),
@@ -531,7 +458,7 @@ const ProductCatalog = () => {
 
   const createProduct = async (event) => {
     event.preventDefault();
-    if (!recentlySelectedCompany) return;
+    if (!recentlySelectedCompany || !requirePermission("852", "create products")) return;
 
     const productName = form.name.trim();
     if (!productName) {
@@ -539,6 +466,10 @@ const ProductCatalog = () => {
       return;
     }
 
+    if (!Number.isFinite(Number(form.defaultCost || 0)) || Number(form.defaultCost || 0) < 0) {
+      toast.error("Enter a valid unit cost of zero or more.");
+      return;
+    }
     setSaving(true);
     try {
       const now = new Date();
@@ -555,15 +486,6 @@ const ProductCatalog = () => {
           sku: form.sku,
           sellPrice: centsFromDollarInput(form.sellPrice),
           billable: form.billable,
-          active: form.active,
-          availableForJobs: form.availableForJobs,
-          availableForJob: form.availableForJobs,
-          jobProductAvailable: form.availableForJobs,
-          availableForPartApproval: form.availableForPartApproval,
-          partApprovalAvailable: form.availableForPartApproval,
-          availableForCustomerSale: form.availableForPartApproval,
-          availableForPartPurchase: form.availableForPartPurchase,
-          partPurchaseAvailable: form.availableForPartPurchase,
         },
         source: "manualProductCatalog",
         now,
@@ -590,7 +512,7 @@ const ProductCatalog = () => {
 
   const saveProduct = async (event) => {
     event.preventDefault();
-    if (!recentlySelectedCompany || !editingProduct) return;
+    if (saving || deleting || !recentlySelectedCompany || !editingProduct || !requirePermission("854", "update products")) return;
 
     const productName = form.name.trim();
     if (!productName) {
@@ -598,14 +520,18 @@ const ProductCatalog = () => {
       return;
     }
 
+    if (!Number.isFinite(Number(form.defaultCost || 0)) || Number(form.defaultCost || 0) < 0) {
+      toast.error("Enter a valid unit cost of zero or more.");
+      return;
+    }
     setSaving(true);
     try {
       const now = new Date();
       const productPatch = productPatchFromForm(form, editingProduct.id, now);
       const batch = writeBatch(db);
-      batch.set(productCatalogDocRef(db, recentlySelectedCompany, editingProduct.id), productPatch, { merge: true });
+      batch.update(productCatalogDocRef(db, recentlySelectedCompany, editingProduct.id), productPatch);
 
-      const linkedItemsToUpdate = vendorItems.filter((vendorItem) => isVendorItemLinkedToProduct(vendorItem, editingProduct));
+      const linkedItemsToUpdate = linkedVendorItemsForProduct(editingProduct, allVendorItems, products);
       linkedItemsToUpdate.slice(0, 450).forEach((vendorItem) => {
         batch.set(
           vendorItemDocRef(db, recentlySelectedCompany, vendorItem.id),
@@ -626,7 +552,7 @@ const ProductCatalog = () => {
       setProducts((current) => current.map((product) => (product.id === editingProduct.id ? nextProduct : product)));
       setVendorItems((current) =>
         current.map((vendorItem) =>
-          isVendorItemLinkedToProduct(vendorItem, editingProduct)
+          linkedItemsToUpdate.some((item) => item.id === vendorItem.id)
             ? { ...vendorItem, productName, genericItemName: productName }
             : vendorItem
         )
@@ -641,9 +567,40 @@ const ProductCatalog = () => {
     }
   };
 
+  const deleteProduct = async () => {
+    const companyId = recentlySelectedCompany;
+    if (saving || deleting || !companyId || !editingProduct || !requirePermission("856", "delete products")) return;
+
+    const generation = loadGeneration.current;
+    setDeleting(true);
+    try {
+      const confirmed = await appConfirm({
+        title: "Delete Product",
+        message: `Permanently delete ${getProductDisplayName(editingProduct)} from the catalog? This disconnects its vendor items.`,
+        confirmLabel: "Delete Product",
+        variant: "danger",
+      });
+      if (!confirmed || activeCompany.current !== companyId || generation !== loadGeneration.current) return;
+
+      await deleteCatalogProduct({ db, companyId, productId: editingProduct.id });
+      toast.success("Product deleted.");
+      if (activeCompany.current !== companyId) return;
+
+      setEditingProduct(null);
+      setSelection([editingProduct.id], false);
+      if (detailMode) navigate(productCatalogBasePath, { replace: true });
+      await loadCatalog();
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Could not delete this product."));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const renderProductModal = () => {
     const editing = Boolean(editingProduct);
     if (!isCreateModalOpen && !editing) return null;
+    const busy = saving || deleting;
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6">
@@ -657,6 +614,7 @@ const ProductCatalog = () => {
               <button
                 type="button"
                 onClick={closeProductModal}
+                disabled={busy}
                 className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
               >
                 Close
@@ -695,32 +653,24 @@ const ProductCatalog = () => {
               </label>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block text-sm font-semibold text-slate-700">
-                  Category
-                  <input
-                    value={form.category}
-                    onChange={(event) => updateForm({ category: event.target.value })}
-                    className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
-
-                <label className="block text-sm font-semibold text-slate-700">
-                  Subcategory
-                  <input
-                    value={form.subCategory}
-                    onChange={(event) => updateForm({ subCategory: event.target.value })}
-                    className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
-
-                <label className="block text-sm font-semibold text-slate-700">
-                  UOM
-                  <input
-                    value={form.UOM}
-                    onChange={(event) => updateForm({ UOM: event.target.value })}
-                    className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
+                {PRODUCT_SELECT_FIELDS.map(({ field, label, options }) => {
+                  const savedValue = editingProduct?.[field];
+                  const hasLegacyValue = savedValue && !options.some((option) => option.label === savedValue);
+                  return (
+                    <label key={field} className="block text-sm font-semibold text-slate-700">
+                      {label}
+                      <select
+                        value={form[field]}
+                        onChange={(event) => updateForm({ [field]: event.target.value })}
+                        disabled={busy}
+                        className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        {hasLegacyValue && <option value={savedValue}>{savedValue}</option>}
+                        {options.map((option) => <option key={option.id} value={option.label}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  );
+                })}
 
                 <label className="block text-sm font-semibold text-slate-700">
                   SKU
@@ -742,6 +692,11 @@ const ProductCatalog = () => {
                 </label>
               </div>
 
+              <label className="block text-sm font-semibold text-slate-700">
+                Manual Unit Cost
+                <input type="number" min="0" step="0.01" value={form.defaultCost} onChange={(event) => updateForm({ defaultCost: event.target.value })} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="0.00" />
+                <span className="mt-1 block text-xs font-normal text-slate-500">Used when no vendor item is connected. A connected vendor supplies the product cost; the sell price stays separate.</span>
+              </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                   <input
@@ -755,73 +710,32 @@ const ProductCatalog = () => {
                     <span className="mt-1 block text-xs text-slate-500">Available for invoice pricing.</span>
                   </span>
                 </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.active}
-                    onChange={(event) => updateForm({ active: event.target.checked })}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span>
-                    <span className="block font-bold text-slate-900">Active</span>
-                    <span className="mt-1 block text-xs text-slate-500">Shown in catalog pickers.</span>
-                  </span>
-                </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.availableForJobs}
-                    onChange={(event) => updateForm({ availableForJobs: event.target.checked })}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span>
-                    <span className="block font-bold text-slate-900">Jobs</span>
-                    <span className="mt-1 block text-xs text-slate-500">Selectable for job materials and work orders.</span>
-                  </span>
-                </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.availableForPartApproval}
-                    onChange={(event) => updateForm({ availableForPartApproval: event.target.checked })}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span>
-                    <span className="block font-bold text-slate-900">Part Approval Sales</span>
-                    <span className="mt-1 block text-xs text-slate-500">Sell directly to customers without a job.</span>
-                  </span>
-                </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.availableForPartPurchase}
-                    onChange={(event) => updateForm({ availableForPartPurchase: event.target.checked })}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span>
-                    <span className="block font-bold text-slate-900">Part Purchase</span>
-                    <span className="mt-1 block text-xs text-slate-500">Selectable for purchasing.</span>
-                  </span>
-                </label>
               </div>
+              <ProductAvailabilityFields value={form} onChange={updateForm} disabled={busy} />
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              {editing && can("856") && (
+                <button
+                  type="button"
+                  onClick={deleteProduct}
+                  disabled={busy}
+                  className={workspaceButtonClass({ tone: "rose", className: "mr-auto" })}
+                >
+                  Delete Product
+                </button>
+              )}
               <button
                 type="button"
                 onClick={closeProductModal}
-                disabled={saving}
+                disabled={busy}
                 className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                disabled={saving}
+                disabled={busy}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
               >
                 {saving ? "Saving..." : editing ? "Save Product" : "Create Product"}
@@ -843,18 +757,19 @@ const ProductCatalog = () => {
     );
   }
 
+  if (catalogError) return <div role="alert" className="m-5 rounded-lg border p-5"><p>{catalogError}</p><button type="button" onClick={loadCatalog}>Retry catalog</button></div>;
+
   if (detailMode) {
-    const linkedCount = vendorItemsLoading ? linkedVendorItemCount(detailProduct || {}) : vendorItems.length;
+    const linkedCount = vendorItems.length;
     const productImageUrl = detailProduct ? getProductImageUrl(detailProduct) : "";
     const productTitle = detailProduct ? getProductDisplayName(detailProduct) : "";
     const productDescription = detailProduct?.description || detailProduct?.specificName || "";
     const categoryTrail = [detailProduct?.category, detailProduct?.subCategory].filter(Boolean).join(" / ") || "Uncategorized";
-    const linkedVendorItemIds = detailProduct ? Array.from(productLinkedVendorItemIds(detailProduct)) : [];
     const updatedDate = detailProduct ? formatDateValue(detailProduct.dateUpdated || detailProduct.updatedAt || detailProduct.createdAt) : "--";
 
     return (
       <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-        <div className="mx-auto w-full max-w-7xl space-y-6">
+        <div className="w-full space-y-6">
 
           {loading ? (
             <section className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
@@ -862,90 +777,25 @@ const ProductCatalog = () => {
             </section>
           ) : detailProduct ? (
             <>
-              <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 px-5 py-3 sm:px-6">
-                  <Link to={productCatalogBasePath} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700 hover:text-blue-900">
-                    <ArrowLeftIcon className="h-4 w-4" />
-                    Back to Products
-                  </Link>
-                </div>
-
-                <div className="grid lg:grid-cols-[minmax(280px,38%)_minmax(0,1fr)]">
-                  <div className="border-b border-slate-200 bg-slate-100 p-5 sm:p-6 lg:border-b-0 lg:border-r">
-                    <div className="flex aspect-[4/3] min-h-[250px] items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-white">
-                      {productImageUrl ? (
-                        <img
-                          src={productImageUrl}
-                          alt={productTitle}
-                          className="h-full w-full object-contain"
-                        />
-                      ) : (
-                        <div className="flex h-32 w-32 flex-col items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-400">
-                          <PhotoIcon className="h-9 w-9" />
-                          <span className="mt-2 text-2xl font-bold text-slate-600">{getProductInitials(detailProduct)}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <StatusPill tone="blue">{detailProduct.category || "Uncategorized"}</StatusPill>
-                      {detailProduct.subCategory ? <StatusPill>{detailProduct.subCategory}</StatusPill> : null}
-                      <StatusPill>{detailProduct.UOM || "Unit"}</StatusPill>
-                    </div>
+              <WorkspaceHeader
+                title={productTitle}
+                eyebrow="Product Catalog Item"
+                description={productDescription || "Manage product details, availability, and vendor connections."}
+                meta={<>
+                  <span className="workspace-header-badge">{categoryTrail}</span>
+                  <span className="workspace-header-badge">{detailProduct.UOM || "Unit"}</span>
+                  <span className="workspace-header-badge">Sell Price {money(getProductSellPriceCents(detailProduct))}</span>
+                  <span className="workspace-header-badge">{detailProduct.active ? "Active" : "Inactive"}</span>
+                  <span className="workspace-header-badge">Updated {updatedDate}</span>
+                </>}
+                actions={<div className="flex w-full flex-wrap items-center justify-between gap-3">
+                  <Link to={productCatalogBasePath} className={workspaceButtonClass({ tone: "slate" })}><ArrowLeftIcon className="h-4 w-4" />Back to Products</Link>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" disabled={!can("854")} onClick={() => openEditModal(detailProduct)} className={workspaceButtonClass({ tone: "blue" })}><PencilSquareIcon className="h-4 w-4" />Edit</button>
+                    <Link to={vendorItemsPath} className={workspaceButtonClass({ tone: "slate" })}><ShoppingBagIcon className="h-4 w-4" />Vendor Items</Link>
                   </div>
-
-                  <div className="p-5 sm:p-6 lg:p-8">
-                    <p className="text-xs font-bold uppercase text-blue-700">Product Catalog Item</p>
-                    <div className="mt-2 flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0">
-                        <h1 className="break-words text-3xl font-bold leading-tight text-slate-950 sm:text-4xl">{productTitle}</h1>
-                        <p className="mt-3 text-sm font-semibold text-slate-500">{categoryTrail}</p>
-                        <p className="mt-4 max-w-3xl whitespace-pre-wrap text-base leading-7 text-slate-600">
-                          {productDescription || "No description has been added yet."}
-                        </p>
-                      </div>
-                      <div className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 xl:min-w-[180px] xl:text-right">
-                        <p className="text-xs font-bold uppercase text-slate-500">Sell Price</p>
-                        <p className="mt-1 text-3xl font-bold text-slate-950">{money(getProductSellPriceCents(detailProduct))}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">{detailProduct.UOM ? `per ${detailProduct.UOM}` : "Unit price"}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 flex flex-wrap gap-2">
-                      <StatusPill>Updated {updatedDate}</StatusPill>
-                      <StatusPill tone={detailProduct.active ? "blue" : "slate"}>{detailProduct.active ? "Active" : "Inactive"}</StatusPill>
-                      <StatusPill tone={detailProduct.billable ? "emerald" : "slate"}>{detailProduct.billable ? "Billable" : "Not Billable"}</StatusPill>
-                      <StatusPill tone={isProductAvailableForJobs(detailProduct) ? "indigo" : "slate"}>
-                        {isProductAvailableForJobs(detailProduct) ? "Jobs" : "No Jobs"}
-                      </StatusPill>
-                      <StatusPill tone={isProductAvailableForPartApproval(detailProduct) ? "emerald" : "slate"}>
-                        {isProductAvailableForPartApproval(detailProduct) ? "Part Approval Sales" : "Job Only"}
-                      </StatusPill>
-                      <StatusPill tone={isProductAvailableForPartPurchase(detailProduct) ? "blue" : "slate"}>
-                        {isProductAvailableForPartPurchase(detailProduct) ? "Part Purchase" : "No Part Purchase"}
-                      </StatusPill>
-                    </div>
-
-                    <div className="mt-6 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openEditModal(detailProduct)}
-                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
-                      >
-                        <PencilSquareIcon className="h-4 w-4" />
-                        Edit
-                      </button>
-                      <Link
-                        to={vendorItemsPath}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                      >
-                        <ShoppingBagIcon className="h-4 w-4" />
-                        Vendor Items
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              </section>
+                </div>}
+              />
 
               <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
                 <article className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -954,6 +804,7 @@ const ProductCatalog = () => {
                     <p className="mt-1 text-sm text-slate-500">Readable catalog facts for purchasing, billing, and field use.</p>
                   </div>
 
+                  {productImageUrl && <div className="px-5 pt-5 sm:px-6"><img src={productImageUrl} alt={productTitle} className="h-40 w-full rounded-md border border-slate-200 object-contain" /></div>}
                   <dl className="px-5 sm:px-6">
                     <DetailRow label="Display Name" value={productTitle} />
                     <DetailRow label="Specific Name" value={detailProduct.specificName} />
@@ -997,8 +848,12 @@ const ProductCatalog = () => {
                   <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <h2 className="text-lg font-bold text-slate-950">Catalog Summary</h2>
                     <div className="mt-3">
+                      <SummaryRow label="Sell Price" value={money(getProductSellPriceCents(detailProduct))} />
+                      <SummaryRow label="Unit Cost" value={money(costInfo(detailProduct).costCents)} />
+                      {costInfo(detailProduct).minVendorCostCents !== null && <SummaryRow label="Vendor Cost Range" value={vendorCostRange(costInfo(detailProduct))} />}
+                      <SummaryRow label="Cost Source" value={costInfo(detailProduct).vendorItem ? getVendorItemDisplayName(costInfo(detailProduct).vendorItem) : "Manual cost"} />
                       <SummaryRow label="Linked Vendor Items" value={linkedCount} />
-                      <SummaryRow label="Preferred Vendor Item" value={detailProduct.preferredVendorItemId ? "Selected" : "Not selected"} />
+                      <SummaryRow label="Preferred Vendor Item" value={vendorItems.find((item) => item.id === detailProduct.preferredVendorItemId)?.name || "Not selected"} />
                       <SummaryRow label="Updated" value={updatedDate} />
                       <SummaryRow label="Created" value={formatDateValue(detailProduct.createdAt)} />
                     </div>
@@ -1008,67 +863,7 @@ const ProductCatalog = () => {
                 </aside>
               </section>
 
-              <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-950">Connected Vendor Items</h2>
-                    <p className="mt-1 text-sm text-slate-500">Supplier-specific items linked to this database product.</p>
-                  </div>
-                  <span className="rounded-md bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                    {linkedCount} linked
-                  </span>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="min-w-[880px] w-full">
-                    <thead className="bg-white">
-                      <tr className="text-left text-xs font-bold uppercase text-slate-500">
-                        <th className="border-b border-slate-200 px-5 py-3">Vendor Item</th>
-                        <th className="border-b border-slate-200 px-5 py-3">Vendor</th>
-                        <th className="border-b border-slate-200 px-5 py-3">Category</th>
-                        <th className="border-b border-slate-200 px-5 py-3">Cost</th>
-                        <th className="border-b border-slate-200 px-5 py-3">Sell Price</th>
-                        <th className="border-b border-slate-200 px-5 py-3">SKU</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 bg-white">
-                      {vendorItemsLoading ? (
-                        <tr>
-                          <td colSpan={6} className="px-5 py-8 text-sm text-slate-500">Loading linked vendor items...</td>
-                        </tr>
-                      ) : vendorItems.length ? (
-                        vendorItems.map((vendorItem) => (
-                          <tr key={vendorItem.id} className="align-top hover:bg-slate-50">
-                            <td className="px-5 py-3">
-                              <Link
-                                to={`${vendorItemsPath}/detail/${vendorItem.id}`}
-                                className="font-semibold text-blue-700 hover:text-blue-900"
-                              >
-                                {getVendorItemDisplayName(vendorItem)}
-                              </Link>
-                              <p className="mt-1 text-xs leading-5 text-slate-500">{vendorItem.description || "--"}</p>
-                            </td>
-                            <td className="px-5 py-3 text-sm text-slate-700">{vendorItem.storeName || "--"}</td>
-                            <td className="px-5 py-3 text-sm text-slate-700">
-                              {vendorItem.category || "--"}
-                              {vendorItem.subCategory ? <span className="block text-xs text-slate-500">{vendorItem.subCategory}</span> : null}
-                            </td>
-                            <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(vendorItem.costCents)}</td>
-                            <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(vendorItem.sellPriceCents)}</td>
-                            <td className="px-5 py-3 text-sm text-slate-700">{vendorItem.sku || "--"}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
-                            No vendor items are connected to this product yet.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+              <CatalogConnections productId={detailProduct.id} catalog={connectionCatalog} onChange={loadCatalog} />
             </>
           ) : (
             <section className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
@@ -1088,38 +883,14 @@ const ProductCatalog = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Product Catalog</p>
-              <h1 className="mt-1 text-3xl font-bold text-slate-950">Products</h1>
-              <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-500">
-                Products are the generic database items used for jobs and invoices. Vendor Items stay connected underneath for costs, receipts, and audit history.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={openCreateModal}
-                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
-              >
-                Add new
-              </button>
-              <Link
-                to={productCatalogReconciliationPath}
-                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
-              >
-                Product Catalog Reconciliation
-              </Link>
-              <Link
-                to={vendorItemsPath}
-                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-              >
-                Vendor Items
-              </Link>
-            </div>
-          </div>
-        </section>
+        <WorkspaceHeader title="Product Catalog" description="Products are the generic database items used for jobs and invoices. Vendor Items stay connected underneath for costs, receipts, and audit history."
+          actions={<>
+            <button type="button" disabled={!can("852")} onClick={openCreateModal} className={workspaceButtonClass({ tone: "blue" })}>Add new</button>
+            {can("854") && <button type="button" disabled={!selectedIds.size} onClick={() => setBulkOpen(true)} className={workspaceButtonClass({ tone: "blue" })}>Bulk Edit Availability</button>}
+            <Link to={productCatalogReconciliationPath} className={workspaceButtonClass({ tone: "blue" })}>Product Catalog Reconciliation</Link>
+            <Link to={vendorItemsPath} className={workspaceButtonClass({ tone: "slate" })}>Vendor Items</Link>
+          </>}
+        />
 
         <section className="grid gap-3 md:grid-cols-3">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -1136,128 +907,59 @@ const ProductCatalog = () => {
           </div>
         </section>
 
+        {can("854") && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 text-sm">
+          <span className="font-semibold text-slate-700">{selectedIds.size} selected</span>
+          <button type="button" disabled={loading || !eligiblePage.length} onClick={() => setSelection(eligiblePage.map((product) => product.id), !pageSelected)} className={workspaceButtonClass({ tone: "slate" })}>{pageSelected ? "Deselect page" : "Select page"}</button>
+          <button type="button" disabled={loading || !eligibleFiltered.length || eligibleFiltered.length > PRODUCT_BULK_EDIT_LIMIT} onClick={() => setSelectedIds(new Set(eligibleFiltered.map((product) => product.id)))} className={workspaceButtonClass({ tone: "slate" })}>Select all filtered ({eligibleFiltered.length})</button>
+          {selectedIds.size > 0 && <button type="button" onClick={() => setSelectedIds(new Set())} className={workspaceButtonClass({ tone: "slate" })}>Clear selection</button>}
+          {eligibleFiltered.length > PRODUCT_BULK_EDIT_LIMIT && <span>Select up to {PRODUCT_BULK_EDIT_LIMIT} products per update.</span>}
+        </div>}
+
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid gap-3 border-b border-slate-200 p-5 xl:grid-cols-[minmax(280px,1fr)_repeat(5,minmax(150px,190px))_auto]">
-            <div className="w-full">
-              <div className="relative">
-                <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m0 0A7.5 7.5 0 104.5 4.5a7.5 7.5 0 0012.15 12.15z" />
-                  </svg>
-                </span>
-                <input
-                  className="w-full rounded-md border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  type="text"
-                  name="search"
-                  placeholder="Search products"
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                />
-              </div>
+          <div className="flex flex-wrap items-center justify-end gap-2 border-b border-slate-200 p-3 sm:gap-3 sm:px-5">
+            <div className="relative min-w-0 basis-full sm:flex-1">
+              <MagnifyingGlassIcon aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                type="search"
+                aria-label="Search products"
+                placeholder="Search products"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+              />
             </div>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={categoryFilter}
-              onChange={(event) => setCategoryFilter(event.target.value)}
-              aria-label="Filter by category"
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              onClick={() => setFiltersOpen(true)}
+              className={workspaceButtonClass({ tone: activeFilterCount ? "blue" : "slate", className: "h-11 shrink-0 whitespace-nowrap" })}
             >
-              <option value={ALL_FILTER_VALUE}>All Categories</option>
-              {categoryOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-
+              <FunnelIcon aria-hidden="true" className="h-4 w-4" />
+              {activeFilterCount ? `Filters (${activeFilterCount})` : "Filters"}
+            </button>
             <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={subCategoryFilter}
-              onChange={(event) => setSubCategoryFilter(event.target.value)}
-              aria-label="Filter by subcategory"
+              className="h-11 shrink-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+              aria-label="Rows per page"
             >
-              <option value={ALL_FILTER_VALUE}>All Subcategories</option>
-              {subCategoryOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
+              {PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option} per page</option>)}
             </select>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={uomFilter}
-              onChange={(event) => setUomFilter(event.target.value)}
-              aria-label="Filter by UOM"
-            >
-              <option value={ALL_FILTER_VALUE}>All UOM</option>
-              {uomOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={billableFilter}
-              onChange={(event) => setBillableFilter(event.target.value)}
-              aria-label="Filter by billable status"
-            >
-              <option value={ALL_FILTER_VALUE}>All Billing</option>
-              <option value="billable">Billable</option>
-              <option value="nonBillable">Not Billable</option>
-            </select>
-
-            <select
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              value={sortOption}
-              onChange={(event) => setSortOption(event.target.value)}
-              aria-label="Sort products"
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-
-            <div className="flex items-center gap-2">
-              <select
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                value={pageSize}
-                onChange={(event) => setPageSize(Number(event.target.value))}
-                aria-label="Rows per page"
-              >
-                {PAGE_SIZE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-              {(searchTerm || activeFilterCount > 0 || sortOption !== "nameAsc") && (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
           </div>
 
-          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-            <div>{resultSummaryText}</div>
-            <div>{activeFilterCount ? `${activeFilterCount} filter${activeFilterCount === 1 ? "" : "s"} active` : "No field filters active"}</div>
-          </div>
+          <p className="px-5 py-3 text-xs text-slate-500">{resultSummaryText}</p>
 
           <div className="overflow-x-auto border-t border-slate-200">
             <table className="min-w-[1160px] w-full">
               <thead className="bg-slate-50">
                 <tr className="text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                  {can("854") && <th className="border-b border-slate-200 px-5 py-3"><input type="checkbox" aria-label="Select all products on this page" checked={pageSelected} disabled={!eligiblePage.length} ref={(node) => { if (node) node.indeterminate = !pageSelected && eligiblePage.some((product) => selectedIds.has(product.id)); }} onChange={(event) => setSelection(eligiblePage.map((product) => product.id), event.target.checked)} /></th>}
                   <th className="border-b border-slate-200 px-5 py-3">Product</th>
                   <th className="border-b border-slate-200 px-5 py-3">Category</th>
                   <th className="border-b border-slate-200 px-5 py-3">Subcategory</th>
                   <th className="border-b border-slate-200 px-5 py-3">UOM</th>
                   <th className="border-b border-slate-200 px-5 py-3">Availability</th>
+                  <th className="border-b border-slate-200 px-5 py-3">Unit Cost</th>
                   <th className="border-b border-slate-200 px-5 py-3">Sell Price</th>
                   <th className="border-b border-slate-200 px-5 py-3">Vendor Items</th>
                   <th className="border-b border-slate-200 px-5 py-3">Actions</th>
@@ -1266,11 +968,12 @@ const ProductCatalog = () => {
               <tbody className="divide-y divide-slate-200 bg-white">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="px-5 py-8 text-sm text-slate-500">Loading products...</td>
+                    <td colSpan={can("854") ? 10 : 9} className="px-5 py-8 text-sm text-slate-500">Loading products...</td>
                   </tr>
                 ) : paginatedProducts.length ? (
                   paginatedProducts.map((product) => (
                     <tr key={product.id} className="align-top hover:bg-slate-50">
+                      {can("854") && <td className="px-5 py-3"><input type="checkbox" aria-label={`Select ${getProductDisplayName(product)}`} disabled={!canBulkEditProduct(product)} checked={selectedIds.has(product.id)} onChange={(event) => setSelection([product.id], event.target.checked)} /></td>}
                       <td className="px-5 py-3">
                         <Link to={`${productCatalogBasePath}/${product.id}`} className="font-semibold text-blue-700 hover:text-blue-900">
                           {getProductDisplayName(product)}
@@ -1283,6 +986,7 @@ const ProductCatalog = () => {
                       <td className="px-5 py-3 text-sm text-slate-700">{product.UOM || "--"}</td>
                       <td className="px-5 py-3 text-sm text-slate-700">
                         <div className="flex flex-wrap gap-1">
+                          {!product.active && <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">Inactive</span>}
                           <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.billable ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
                             {product.billable ? "Billable" : "Not Billable"}
                           </span>
@@ -1297,6 +1001,11 @@ const ProductCatalog = () => {
                           </span>
                         </div>
                       </td>
+                      <td className="px-5 py-3 text-sm font-semibold text-slate-900">
+                        {money(costInfo(product).costCents)}
+                        <p className="mt-1 text-xs font-normal text-slate-500">{costInfo(product).vendorItem ? getVendorItemDisplayName(costInfo(product).vendorItem) : "Manual cost"}</p>
+                        {costInfo(product).linkedVendorItems.length > 1 && <p className="mt-1 text-xs font-normal text-slate-500">Range: {vendorCostRange(costInfo(product))}</p>}
+                      </td>
                       <td className="px-5 py-3 text-sm font-semibold text-slate-900">{money(getProductSellPriceCents(product))}</td>
                       <td className="px-5 py-3 text-sm text-slate-700">
                         <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
@@ -1304,27 +1013,20 @@ const ProductCatalog = () => {
                         </span>
                       </td>
                       <td className="px-5 py-3 text-sm text-slate-700">
-                        <div className="flex flex-wrap gap-2">
-                          <Link
-                            to={`${productCatalogBasePath}/${product.id}`}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                          >
-                            View
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(product)}
-                            className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
-                          >
-                            Edit
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          disabled={!can("854")}
+                          onClick={() => openEditModal(product)}
+                          className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+                        >
+                          Edit
+                        </button>
                       </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={8} className="px-5 py-10 text-center text-sm text-slate-500">
+                    <td colSpan={can("854") ? 10 : 9} className="px-5 py-10 text-center text-sm text-slate-500">
                       No products found.
                     </td>
                   </tr>
@@ -1358,6 +1060,22 @@ const ProductCatalog = () => {
         </section>
       </div>
 
+      {filtersOpen && (
+        <ProductCatalogFilters
+          filters={filters}
+          sortOption={sortOption}
+          catalogOptions={catalogFilterOptions}
+          onApply={applyFilters}
+          onClose={() => setFiltersOpen(false)}
+        />
+      )}
+      {bulkOpen && <ProductBulkAvailability productIds={[...selectedIds]} onClose={() => setBulkOpen(false)} onSaved={() => {
+        if (activeCompany.current !== recentlySelectedCompany) return;
+        setBulkOpen(false);
+        setSelectedIds(new Set());
+        toast.success(`Updated availability for ${selectedIds.size} products.`);
+        loadCatalog();
+      }} />}
       {renderProductModal()}
     </div>
   );

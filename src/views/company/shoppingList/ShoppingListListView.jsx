@@ -1,8 +1,9 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { collection, doc, getDoc, getDocs, orderBy, query, Timestamp, updateDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, orderBy, query, runTransaction, serverTimestamp, Timestamp, updateDoc } from "firebase/firestore";
 import {
     ArrowsRightLeftIcon,
+    CheckCircleIcon,
     EllipsisVerticalIcon,
     FunnelIcon,
     PencilSquareIcon,
@@ -12,9 +13,11 @@ import {
 import toast from "react-hot-toast";
 import { db, functions, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { format } from "date-fns";
 import { appConfirm } from "../../../utils/appDialog";
 import { getCallableAuthPayload } from "../../../utils/callableAuth";
+import { userFacingErrorMessage } from "../../../utils/permissionErrors";
 import {
     getItemPhotoUrl,
     itemPhotoFieldsFromSource,
@@ -31,6 +34,8 @@ import {
     SHOPPING_LIST_STATUS,
     SHOPPING_LIST_STATUS_OPTIONS,
     canonicalShoppingListStatus,
+    normalizeShoppingListStatus,
+    shoppingItemIsReadyToPurchase,
     shoppingListStatusMatches,
 } from "../../../utils/shoppingListStatus";
 import {
@@ -81,6 +86,11 @@ const areStatusSetsEqual = (left = [], right = []) => (
 );
 
 const compactString = (value) => String(value || "").trim();
+
+const canMarkItemPurchased = (item) => !item.invoiced && !item.returned &&
+    canonicalShoppingListStatus(item.invoiceStatus) !== SHOPPING_LIST_INVOICED_STATUS &&
+    !["cancelled", "canceled", "returned"].includes(normalizeShoppingListStatus(item.status)) &&
+    shoppingItemIsReadyToPurchase(item);
 
 const timestampToDate = (value) => {
     if (value?.toDate) return value.toDate();
@@ -251,7 +261,9 @@ const ShoppingListListView = () => {
         recentlySelectedCompany,
         shoppingItemInstallInvoiceAutomationEnabled,
         user,
+        dataBaseUser,
     } = useContext(Context);
+    const { can } = useCompanyPermissions();
     const navigate = useNavigate();
     const [shoppingList, setShoppingList] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -266,6 +278,7 @@ const ShoppingListListView = () => {
     const [statusUpdateInvoiceNote, setStatusUpdateInvoiceNote] = useState("");
     const [statusUpdateAutoInvoiceOnInstall, setStatusUpdateAutoInvoiceOnInstall] = useState(false);
     const [savingStatusUpdate, setSavingStatusUpdate] = useState(false);
+    const [markingPurchasedItemId, setMarkingPurchasedItemId] = useState("");
     const [photoFile, setPhotoFile] = useState(null);
     const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
     const [photoError, setPhotoError] = useState("");
@@ -376,6 +389,7 @@ const ShoppingListListView = () => {
                     purchasedItem: data.purchasedItem || "",
                     invoiced: !!data.invoiced,
                     invoiceStatus: data.invoiceStatus || "",
+                    returned: data.returned,
                     manualInvoiceNote: data.manualInvoiceNote || data.invoiceNote || "",
                     autoInvoiceOnInstall: data.autoInvoiceOnInstall === undefined
                         ? shoppingItemInstallInvoiceAutomationEnabled === true
@@ -383,6 +397,12 @@ const ShoppingListListView = () => {
                     customerApprovalRequired: !!data.customerApprovalRequired,
                     customerApprovalStatus: data.customerApprovalStatus || "",
                     partApprovalRequestId: data.partApprovalRequestId || data.approvalRequestId || "",
+                    customerApprovalRequestId: data.customerApprovalRequestId,
+                    customerApprovalResponse: data.customerApprovalResponse,
+                    approvalStatus: data.approvalStatus,
+                    response: data.response,
+                    fulfillmentStatus: data.fulfillmentStatus,
+                    sourceType: data.sourceType || data.sourceRecordType || data.sourceRecordTypeLabel,
                     activityDateMillis,
                 };
             });
@@ -629,7 +649,9 @@ const ShoppingListListView = () => {
 
         setOpenActionMenuId(itemId);
         setActionMenuPosition({
-            top: buttonRect.bottom + 8,
+            ...(window.innerHeight - buttonRect.bottom < 168
+                ? { bottom: window.innerHeight - buttonRect.top + 8 }
+                : { top: buttonRect.bottom + 8 }),
             left,
         });
     };
@@ -640,6 +662,7 @@ const ShoppingListListView = () => {
     };
 
     const handleRowKeyDown = (event, itemId) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         openItemDetail(itemId);
@@ -848,6 +871,63 @@ const ShoppingListListView = () => {
             console.log(error);
         } finally {
             setDeletingItemId("");
+        }
+    };
+
+    const markItemPurchased = async (item) => {
+        if (!recentlySelectedCompany || markingPurchasedItemId || !can("104") || !canMarkItemPurchased(item)) return;
+
+        closeActionMenu();
+        setMarkingPurchasedItemId(item.id);
+
+        try {
+            const itemRef = doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id);
+            const now = Timestamp.now();
+            const actorId = user?.uid || user?.id || dataBaseUser?.id || "";
+            const actorName = getCompanyUserDisplayName(dataBaseUser || {}, getCompanyUserDisplayName(user || {}, ""));
+            const purchase = await runTransaction(db, async (transaction) => {
+                const snapshot = await transaction.get(itemRef);
+                const current = snapshot.data();
+                if (!current || !canMarkItemPurchased(current)) return null;
+                const date = timestampToDate(current.datePurchased) || timestampToDate(current.purchasedAt) || now.toDate();
+                const purchaserId = current.purchaserId || actorId;
+                const purchaserName = current.purchaserName || companyUserOptions.find((option) => option.id === purchaserId)?.userName ||
+                    (purchaserId === actorId ? actorName : "");
+
+                transaction.update(itemRef, {
+                    status: SHOPPING_LIST_STATUS.purchased,
+                    datePurchased: Timestamp.fromDate(date),
+                    purchasedAt: current.purchasedAt || serverTimestamp(),
+                    purchasedByUserId: current.purchasedByUserId || actorId,
+                    purchasedByUserName: current.purchasedByUserName || actorName,
+                    purchaserId,
+                    purchaserName,
+                    needsAction: false,
+                    updatedAt: serverTimestamp(),
+                });
+
+                return { date, purchaserId, purchaserName };
+            });
+
+            if (!purchase) {
+                toast.error("This item is no longer ready to purchase.");
+                return;
+            }
+
+            setShoppingList((items) => items.map((current) => current === item ? {
+                ...current,
+                status: SHOPPING_LIST_STATUS.purchased,
+                datePurchased: format(purchase.date, "MM / d / yyyy"),
+                datePurchasedInput: format(purchase.date, "yyyy-MM-dd"),
+                purchaserId: purchase.purchaserId,
+                purchaserName: purchase.purchaserName,
+                activityDateMillis: now.toMillis(),
+            } : current));
+            toast.success("Marked as purchased.");
+        } catch (error) {
+            toast.error(userFacingErrorMessage(error, "Could not mark the shopping item as purchased."));
+        } finally {
+            setMarkingPurchasedItemId("");
         }
     };
 
@@ -1340,6 +1420,7 @@ const ShoppingListListView = () => {
                                         <button
                                             type="button"
                                             onClick={(event) => toggleActionMenu(item.id, event)}
+                                            disabled={markingPurchasedItemId === item.id}
                                             className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-slate-900"
                                             aria-label={`Actions for ${item.name || "shopping item"}`}
                                             aria-expanded={openActionMenuId === item.id}
@@ -1507,7 +1588,7 @@ const ShoppingListListView = () => {
                     />
                     <div
                         className="fixed z-50 w-[232px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-xl"
-                        style={{ top: actionMenuPosition.top, left: actionMenuPosition.left }}
+                        style={actionMenuPosition}
                     >
                         <button
                             type="button"
@@ -1528,6 +1609,17 @@ const ShoppingListListView = () => {
                             <ArrowsRightLeftIcon className="h-4 w-4" />
                             Update Status
                         </button>
+                        {can("104") && canMarkItemPurchased(openActionItem) && (
+                            <button
+                                type="button"
+                                onClick={() => markItemPurchased(openActionItem)}
+                                disabled={Boolean(markingPurchasedItemId)}
+                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-60"
+                            >
+                                <CheckCircleIcon className="h-4 w-4" />
+                                Mark as Purchased
+                            </button>
+                        )}
                         <button
                             type="button"
                             onClick={() => openPurchasedItemConnection(openActionItem)}

@@ -1,3 +1,5 @@
+import LeadCustomerLink from './LeadCustomerLink';
+import LeadFollowUp from './LeadFollowUp';
 import { displayRecordReference } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from 'react';
@@ -23,8 +25,6 @@ import {
     FaBriefcase,
     FaCalendarAlt,
     FaCheckCircle,
-    FaChevronDown,
-    FaChevronRight,
     FaEnvelope,
     FaExternalLinkAlt,
     FaFileSignature,
@@ -57,7 +57,7 @@ const SERVICE_STOP_OPERATION_STATUS = {
 };
 
 const SERVICE_ESTIMATE_VISIT_LABEL = 'Service Estimate';
-const panelClass = 'rounded-lg border border-gray-200 bg-white p-5 shadow-sm';
+const panelClass = 'min-w-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm';
 const actionButtonClass = 'inline-flex w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50';
 const secondaryActionButtonClass = 'inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50';
 const successActionButtonClass = 'inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50';
@@ -153,8 +153,8 @@ const jobAmountCents = (job = {}) => (
 );
 
 const InfoList = ({ title, items }) => (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-        <h3 className="text-base font-bold text-slate-900">{title}</h3>
+    <section className={panelClass}>
+        <h2 className="mb-4 border-b border-slate-200 pb-3 text-lg font-bold text-slate-950">{title}</h2>
         <dl className="mt-3 divide-y divide-slate-200">
             {items.map((item) => {
                 const displayValue = item.value === null || item.value === undefined || item.value === ''
@@ -164,14 +164,14 @@ const InfoList = ({ title, items }) => (
                 return (
                     <div key={item.label} className="py-3 first:pt-0 last:pb-0">
                         <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</dt>
-                        <dd className={`mt-1 text-sm font-medium text-slate-900 ${item.className || ''}`}>
+                        <dd className={`mt-1 break-words text-sm font-medium text-slate-900 ${item.className || ''}`}>
                             {displayValue}
                         </dd>
                     </div>
                 );
             })}
         </dl>
-    </div>
+    </section>
 );
 
 const PreviewFields = ({ items }) => {
@@ -370,7 +370,6 @@ export default function LeadDetail() {
 
     const [savingDescription, setSavingDescription] = useState(false);
     const [descriptionDraft, setDescriptionDraft] = useState('');
-    const [sharedDescriptionOpen, setSharedDescriptionOpen] = useState(true);
     const [savingPrivateNotes, setSavingPrivateNotes] = useState(false);
     const [privateNotesDraft, setPrivateNotesDraft] = useState('');
     const [privateNotesSavedValue, setPrivateNotesSavedValue] = useState('');
@@ -444,7 +443,6 @@ export default function LeadDetail() {
                     const initialDescription = String(leadData.serviceDescription || '');
                     setLead(enhancedLead);
                     setDescriptionDraft(initialDescription);
-                    setSharedDescriptionOpen(Boolean(initialDescription.trim()));
                     setLeadSourceDraft(leadData.leadSource || leadData.marketingSource || leadData.sourceLabel || leadData.source || 'Manual');
                     setCancelReasonDraft(leadData.lostReason || leadData.cancelReason || leadData.statusChangeReason || '');
 
@@ -729,6 +727,18 @@ export default function LeadDetail() {
         setAcceptingAgreement(true);
 
         try {
+            if (linkedAgreement.onboardingWorkflowVersion === 1) {
+                const authPayload = await getCallableAuthPayload();
+                await httpsCallable(functions, 'acceptSalesServiceAgreement')({...authPayload,
+                    agreementId: linkedAgreement.id, companyId: recentlySelectedCompany,
+                    acceptanceSource: 'customerOffline', acceptanceNote: 'Office recorded customer acceptance from the lead.',
+                    acceptedByName: actorName, signatureName: actorName, acceptedTerms: true, acceptedPricing: true,
+                    acceptedAutopayNotice: true, createBillingSubscription: false});
+                setLinkedAgreement(current => ({...current, status: SalesAgreementStatus.accepted}));
+                if (completeLead) setLead(current => ({...current, status: 'Completed', leadStatus: 'Completed'}));
+                toast.success('Agreement accepted. Billing and service setup are still checked separately.');
+                return true;
+            }
             const acceptancePayload = {
                 status: SalesAgreementStatus.accepted,
                 acceptedAt: serverTimestamp(),
@@ -1055,7 +1065,6 @@ export default function LeadDetail() {
                 ...prev,
                 serviceDescription: nextDescription,
             }));
-            setSharedDescriptionOpen(Boolean(String(nextDescription || '').trim()));
 
             toast.success('Description updated.');
         } catch (error) {
@@ -1105,7 +1114,6 @@ export default function LeadDetail() {
     const contactPhone = compactText(ownerDetails.phoneNumber, ownerDetails.phone, homeownerPhone);
     const formattedServiceAddress = formatServiceAddress(serviceLocationAddress);
     const createdByDisplayName = compactText(creatorName, lead.createdByName, lead.createdByUserName, lead.creatorEmail);
-    const hasSharedDescription = Boolean(String(descriptionDraft || '').trim());
     const publicIntake = lead.publicLeadIntake || lead.leadIntake || {};
     const publicBodiesOfWater = Array.isArray(publicIntake.bodiesOfWater) ? publicIntake.bodiesOfWater : [];
     const publicEquipment = [
@@ -1398,192 +1406,259 @@ export default function LeadDetail() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                        <Link to="/company/leads" className="text-sm font-medium text-gray-600 hover:text-gray-900">
-                            &larr; Back to Leads
-                        </Link>
-
-                        <h2 className="text-3xl font-bold text-gray-800">Lead Detail</h2>
-                        <p className="text-gray-600 mt-1">View and manage lead details.</p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-3">
-                        {can("614") && (
-                            <button
-                                type="button"
-                                onClick={() => navigate(`/company/leads/${lead.id}/edit`)}
-                                className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
-                            >
-                                Edit
-                            </button>
-                        )}
-                    </div>
-                    </div>
-                </section>
-
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                    <div className="space-y-6 lg:col-span-2">
-                        <div className={panelClass}>
-                            <div className="flex items-center justify-between mb-6">
-                                <h1 className="text-3xl font-bold text-gray-900">{serviceName}</h1>
-                                <span className="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-800">
+                <section className={panelClass}>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                            <h1 className="text-3xl font-bold text-slate-950">Lead Detail</h1>
+                            <div className="mt-2 flex flex-wrap items-center gap-3">
+                                <p className="break-words text-sm text-slate-600">{serviceName || contactName || 'View and manage lead details.'}</p>
+                                <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
                                     {status}
                                 </span>
                             </div>
+                        </div>
+                        <div className="flex shrink-0 flex-wrap gap-3">
+                            <Link to="/company/leads" className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50">
+                                Back to Leads
+                            </Link>
+                            {can("614") && (
+                                <button
+                                    type="button"
+                                    onClick={() => navigate(`/company/leads/${leadId}/edit`)}
+                                    className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                                >
+                                    Edit Lead
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </section>
 
-                            <div className="mb-6 rounded-md border border-gray-200 bg-gray-50 p-4">
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                    <div>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                                                Shared Description
-                                            </p>
-                                            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
-                                                Visible to homeowner
-                                            </span>
-                                        </div>
-                                        <p className="mt-1 text-sm text-gray-600">
-                                            This text is saved on the homeowner service request and can be seen by the homeowner/client account.
-                                        </p>
-                                    </div>
+                <div className="grid min-h-[calc(100vh-13rem)] gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(380px,0.65fr)]">
+                    <section className="flex min-w-0 min-h-[32rem] flex-col rounded-lg border border-amber-200 bg-amber-50 p-5 shadow-sm xl:min-h-[calc(100vh-13rem)]">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <label htmlFor="leadPrivateNotes" className="text-lg font-bold text-slate-950">Company Private Notes</label>
+                                <span className="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-xs font-semibold text-amber-700">
+                                    Company only
+                                </span>
+                            </div>
+                            {can("614") && (
+                                <button
+                                    type="button"
+                                    onClick={savePrivateNotes}
+                                    disabled={savingPrivateNotes || privateNotesDraft === privateNotesSavedValue}
+                                    className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {savingPrivateNotes ? 'Saving...' : 'Save Notes'}
+                                </button>
+                            )}
+                        </div>
+                        <textarea
+                            id="leadPrivateNotes"
+                            rows={24}
+                            className="min-h-[28rem] w-full flex-1 resize-none rounded-md border border-amber-300 bg-white px-4 py-3 text-base leading-7 text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-100 xl:min-h-0"
+                            placeholder="Add internal lead notes for your team."
+                            value={privateNotesDraft}
+                            onChange={(event) => setPrivateNotesDraft(event.target.value)}
+                            readOnly={!can("614")}
+                            onBlur={() => {
+                                if (can("614") && !savingPrivateNotes && privateNotesDraft !== privateNotesSavedValue) {
+                                    savePrivateNotes();
+                                }
+                            }}
+                        />
+                    </section>
 
-                                    <div className="flex shrink-0 items-center gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={() => setSharedDescriptionOpen((open) => !open)}
-                                            aria-expanded={sharedDescriptionOpen}
-                                            className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1 text-sm font-semibold text-gray-700 transition hover:bg-gray-100"
-                                        >
-                                            {sharedDescriptionOpen ? (
-                                                <FaChevronDown className="text-xs" />
-                                            ) : (
-                                                <FaChevronRight className="text-xs" />
-                                            )}
-                                            {sharedDescriptionOpen ? 'Collapse' : hasSharedDescription ? 'Expand' : 'Add'}
-                                        </button>
-
-                                        {can("614") && sharedDescriptionOpen && (
-                                            <button
-                                                type="button"
-                                                onClick={saveDescription}
-                                                disabled={
-                                                    savingDescription ||
-                                                    descriptionDraft === String(lead.serviceDescription || '')
-                                                }
-                                                className={[
-                                                    'px-3 py-1 rounded-lg text-sm font-semibold transition border',
-                                                    savingDescription ||
-                                                        descriptionDraft === String(lead.serviceDescription || '')
-                                                        ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100',
-                                                ].join(' ')}
-                                            >
-                                                {savingDescription ? 'Saving...' : 'Save'}
-                                            </button>
-                                        )}
-                                    </div>
+                    <div className="min-w-0 space-y-6">
+                        <section className={panelClass}>
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <label htmlFor="leadSharedDescription" className="text-lg font-bold text-slate-950">Shared Description</label>
+                                    <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                                        Visible to homeowner
+                                    </span>
                                 </div>
-
-                                {sharedDescriptionOpen ? (
-                                    <textarea
-                                        className="mt-2 w-full min-h-[120px] p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white"
-                                        placeholder="Add the shared request description..."
-                                        value={descriptionDraft}
-                                        onChange={(e) => setDescriptionDraft(e.target.value)}
-                                        readOnly={!can("614")}
-                                        onBlur={() => {
-                                            if (can("614") && descriptionDraft !== String(lead.serviceDescription || '')) {
-                                                saveDescription();
-                                            }
-                                        }}
-                                    />
-                                ) : (
-                                    <p className="mt-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600">
-                                        {hasSharedDescription ? descriptionDraft : 'No shared description yet.'}
-                                    </p>
+                                {can("614") && (
+                                    <button
+                                        type="button"
+                                        onClick={saveDescription}
+                                        disabled={savingDescription || descriptionDraft === String(lead.serviceDescription || '')}
+                                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {savingDescription ? 'Saving...' : 'Save Description'}
+                                    </button>
                                 )}
                             </div>
+                            <textarea
+                                id="leadSharedDescription"
+                                rows={5}
+                                className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                placeholder="Optional homeowner-facing summary."
+                                value={descriptionDraft}
+                                onChange={(event) => setDescriptionDraft(event.target.value)}
+                                readOnly={!can("614")}
+                                onBlur={() => {
+                                    if (can("614") && !savingDescription && descriptionDraft !== String(lead.serviceDescription || '')) {
+                                        saveDescription();
+                                    }
+                                }}
+                            />
+                        </section>
 
-                            <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4">
-                                <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <p className="text-xs font-semibold text-amber-700 uppercase tracking-wider">
-                                                Company Private Notes
-                                            </p>
-                                            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-700 border border-amber-200">
-                                                Company only
-                                            </span>
-                                        </div>
-                                        <p className="mt-1 text-sm text-amber-800">
-                                            Internal notes for your team. These are stored under the company account, not on the homeowner request.
-                                        </p>
-                                    </div>
-
-                                    {can("614") && (
+                        <section className={panelClass}>
+                            <h2 className="mb-4 border-b border-slate-200 pb-3 text-lg font-bold text-slate-950">Lead Info</h2>
+                            <dl>
+                                <dt className="text-sm font-medium text-slate-700">Service Name</dt>
+                                <dd className="mt-1 break-words text-sm text-slate-900">{serviceName || 'N/A'}</dd>
+                            </dl>
+                            {can("614") ? (
+                                <div className="mt-4">
+                                    <label htmlFor="leadSource" className="block text-sm font-medium text-slate-700">Lead Source</label>
+                                    <select
+                                        id="leadSource"
+                                        value={leadSourceDraft}
+                                        onChange={(event) => {
+                                            setLeadSourceDraft(event.target.value);
+                                            saveLeadSource(event.target.value);
+                                        }}
+                                        disabled={savingLeadSource}
+                                        className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                                    >
+                                        {!leadSources.some((item) => item.name === leadSourceDraft) && (
+                                            <option value={leadSourceDraft}>{leadSourceDraft}</option>
+                                        )}
+                                        {leadSources.map((sourceItem) => (
+                                            <option key={sourceItem.id || sourceItem.name} value={sourceItem.name}>{sourceItem.name}</option>
+                                        ))}
+                                    </select>
+                                    <div className="mt-2 flex gap-2">
+                                        <input
+                                            type="text"
+                                            aria-label="New lead source"
+                                            value={newLeadSourceDraft}
+                                            onChange={(event) => setNewLeadSourceDraft(event.target.value)}
+                                            className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            placeholder="Add new source"
+                                        />
                                         <button
                                             type="button"
-                                            onClick={savePrivateNotes}
-                                            disabled={
-                                                savingPrivateNotes ||
-                                                privateNotesDraft === privateNotesSavedValue
-                                            }
-                                            className={[
-                                                'px-3 py-1 rounded-lg text-sm font-semibold transition border',
-                                                savingPrivateNotes ||
-                                                    privateNotesDraft === privateNotesSavedValue
-                                                    ? 'bg-amber-100 text-amber-400 border-amber-200 cursor-not-allowed'
-                                                    : 'bg-white text-amber-800 border-amber-300 hover:bg-amber-100',
-                                            ].join(' ')}
+                                            onClick={handleAddLeadSource}
+                                            disabled={savingLeadSource}
+                                            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
-                                            {savingPrivateNotes ? 'Saving...' : 'Save'}
+                                            Add
                                         </button>
-                                    )}
+                                    </div>
                                 </div>
+                            ) : (
+                                <dl className="mt-4">
+                                    <dt className="text-sm font-medium text-slate-700">Lead Source</dt>
+                                    <dd className="mt-1 break-words text-sm text-slate-900">{activeLeadSource}</dd>
+                                </dl>
+                            )}
+                            <dl className="mt-4 grid gap-4 border-t border-slate-200 pt-4 sm:grid-cols-2">
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Submitted</dt>
+                                    <dd className="mt-1 text-sm text-slate-900">{formatDateValue(createdAt)}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Created By</dt>
+                                    <dd className="mt-1 break-words text-sm text-slate-900">{createdByDisplayName || 'N/A'}</dd>
+                                </div>
+                            </dl>
+                        </section>
 
-                                <textarea
-                                    className="mt-2 w-full min-h-[240px] p-3 border border-amber-300 rounded-lg focus:ring-amber-500 focus:border-amber-500 bg-white"
-                                    placeholder="Add internal follow-up notes, pricing thoughts, access details, or sales context..."
-                                    value={privateNotesDraft}
-                                    onChange={(e) => setPrivateNotesDraft(e.target.value)}
-                                    readOnly={!can("614")}
-                                    onBlur={() => {
-                                        if (
-                                            can("614") &&
-                                            !savingPrivateNotes &&
-                                            privateNotesDraft !== privateNotesSavedValue
-                                        ) {
-                                            savePrivateNotes();
-                                        }
-                                    }}
-                                />
+                        <InfoList
+                            title="Homeowner"
+                            items={[
+                                { label: 'Name', value: contactName },
+                                { label: 'Phone', value: contactPhone },
+                                { label: 'Email', value: contactEmail },
+                            ]}
+                        />
+                        <InfoList
+                            title="Service Location"
+                            items={[
+                                { label: 'Service Address', value: formattedServiceAddress, className: 'whitespace-pre-line' },
+                            ]}
+                        />
+                    </div>
+                </div>
+
+                {!linkedCustomerId && can('612') && can('10') && <LeadCustomerLink lead={lead} companyId={recentlySelectedCompany} onLinked={updates => setLead(current => ({...current, ...updates}))} />}
+                <LeadFollowUp leadId={lead.id} companyId={recentlySelectedCompany} canEdit={can("614")} />
+
+                <div className="grid items-start gap-6 xl:grid-cols-2">
+                    <div className="space-y-6">
+                        {can("614") && (
+                            <div className={panelClass}>
+                                <h3 className="text-lg font-semibold text-gray-800">Lead Stage</h3>
+                                <div className="mt-4 grid grid-cols-2 gap-2">
+                                    {LEAD_STAGE_OPTIONS.map((option) => {
+                                        const selected = status === option.value;
+                                        return (
+                                            <button
+                                                key={option.value}
+                                                type="button"
+                                                onClick={() => handleStatusChange(option.value)}
+                                                disabled={savingStatus}
+                                                className={[
+                                                    'min-h-[68px] rounded-md border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60',
+                                                    selected
+                                                        ? leadStageButtonClasses[option.value]
+                                                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+                                                ].join(' ')}
+                                            >
+                                                <span className="block text-sm font-bold">{option.label}</span>
+                                                <span className="mt-1 block text-xs opacity-80">{option.helper}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {showCancelReason || status === 'Cancelled' ? (
+                                    <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 p-3">
+                                        <label className="block text-sm font-semibold text-rose-800">Lost / cancelled reason</label>
+                                        <textarea
+                                            value={cancelReasonDraft}
+                                            onChange={(event) => setCancelReasonDraft(event.target.value)}
+                                            rows={3}
+                                            className="mt-2 w-full rounded-md border border-rose-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                                            placeholder="Price, timing, no response, wrong fit..."
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => handleStatusChange('Cancelled', { reason: cancelReasonDraft.trim() || 'No reason provided', skipCancellationDialog: true })}
+                                            disabled={savingStatus}
+                                            className="mt-2 w-full rounded-md bg-rose-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {savingStatus ? 'Saving...' : 'Save Cancelled Stage'}
+                                        </button>
+                                    </div>
+                                ) : null}
                             </div>
+                        )}
 
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                <InfoList
-                                    title="Contact Info"
-                                    items={[
-                                        { label: 'Name', value: contactName },
-                                        { label: 'Email', value: contactEmail, className: 'break-words' },
-                                        { label: 'Phone', value: contactPhone },
-                                        { label: 'Service Address', value: formattedServiceAddress, className: 'whitespace-pre-line' },
-                                    ]}
-                                />
-                                <InfoList
-                                    title="Lead Info"
-                                    items={[
-                                        { label: 'Submitted', value: formatDateValue(createdAt) },
-                                        { label: 'Lead Source', value: activeLeadSource },
-                                        { label: 'Created By', value: createdByDisplayName },
-                                    ]}
-                                />
+                        {linkedCustomerId && (
+                            <div className={panelClass}>
+                                <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                                    Associated Customer
+                                </h3>
+                                <p className="text-gray-800 mb-3">{customerName || contactName || 'Linked customer'}</p>
+                                <Link
+                                    to={`/company/customers/details/${linkedCustomerId}`}
+                                    className={actionButtonClass}
+                                >
+                                    View Customer Profile
+                                </Link>
                             </div>
-                        </div>
+                        )}
 
+                    </div>
+                    {renderWorkflowActions()}
+                </div>
                         {hasPublicIntakeDetails && (
                             <div className={panelClass}>
                                 <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1715,111 +1790,6 @@ export default function LeadDetail() {
                             </div>
                         )}
 
-                    </div>
-
-                    <div className="space-y-6">
-                        {can("614") && (
-                            <div className={panelClass}>
-                                <h3 className="text-lg font-semibold text-gray-800">Lead Stage</h3>
-                                <div className="mt-4 grid grid-cols-2 gap-2">
-                                    {LEAD_STAGE_OPTIONS.map((option) => {
-                                        const selected = status === option.value;
-                                        return (
-                                            <button
-                                                key={option.value}
-                                                type="button"
-                                                onClick={() => handleStatusChange(option.value)}
-                                                disabled={savingStatus}
-                                                className={[
-                                                    'min-h-[68px] rounded-md border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60',
-                                                    selected
-                                                        ? leadStageButtonClasses[option.value]
-                                                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
-                                                ].join(' ')}
-                                            >
-                                                <span className="block text-sm font-bold">{option.label}</span>
-                                                <span className="mt-1 block text-xs opacity-80">{option.helper}</span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                                {showCancelReason || status === 'Cancelled' ? (
-                                    <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 p-3">
-                                        <label className="block text-sm font-semibold text-rose-800">Lost / cancelled reason</label>
-                                        <textarea
-                                            value={cancelReasonDraft}
-                                            onChange={(event) => setCancelReasonDraft(event.target.value)}
-                                            rows={3}
-                                            className="mt-2 w-full rounded-md border border-rose-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
-                                            placeholder="Price, timing, no response, wrong fit..."
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={() => handleStatusChange('Cancelled', { reason: cancelReasonDraft.trim() || 'No reason provided', skipCancellationDialog: true })}
-                                            disabled={savingStatus}
-                                            className="mt-2 w-full rounded-md bg-rose-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                            {savingStatus ? 'Saving...' : 'Save Cancelled Stage'}
-                                        </button>
-                                    </div>
-                                ) : null}
-                            </div>
-                        )}
-
-                        {can("614") && (
-                            <div className={panelClass}>
-                                <h3 className="text-lg font-semibold text-gray-800">Lead Source</h3>
-                                <select
-                                    value={leadSourceDraft}
-                                    onChange={(event) => {
-                                        setLeadSourceDraft(event.target.value);
-                                        saveLeadSource(event.target.value);
-                                    }}
-                                    disabled={savingLeadSource}
-                                    className="mt-4 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100"
-                                >
-                                    {leadSources.map((sourceItem) => (
-                                        <option key={sourceItem.id || sourceItem.name} value={sourceItem.name}>{sourceItem.name}</option>
-                                    ))}
-                                </select>
-                                <div className="mt-3 flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={newLeadSourceDraft}
-                                        onChange={(event) => setNewLeadSourceDraft(event.target.value)}
-                                        className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                                        placeholder="Add new source"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={handleAddLeadSource}
-                                        disabled={savingLeadSource}
-                                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        Add
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-
-                        {linkedCustomerId && (
-                            <div className={panelClass}>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-4">
-                                    Associated Customer
-                                </h3>
-                                <p className="text-gray-800 mb-3">{customerName || contactName || 'Linked customer'}</p>
-                                <Link
-                                    to={`/company/customers/details/${linkedCustomerId}`}
-                                    className={actionButtonClass}
-                                >
-                                    View Customer Profile
-                                </Link>
-                            </div>
-                        )}
-
-                        {renderWorkflowActions()}
-                    </div>
-                </div>
             </div>
             <LeadCancellationDialog
                 lead={showCancelDialog ? lead : null}

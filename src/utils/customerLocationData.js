@@ -152,6 +152,9 @@ export const normalizeCustomerForFirestore = (customer = {}) => {
 
   return {
     ...normalized,
+    ...Object.fromEntries(['onboardingRequired', 'lifecycleStatus', 'serviceOnboarding', 'firstServiceCompletedAt']
+      .filter(field => Object.prototype.hasOwnProperty.call(customer, field))
+      .map(field => [field, customer[field]])),
     duplicateKeys: asStringArray([
       ...asStringArray(customer.duplicateKeys),
       ...buildCustomerDuplicateKeys({
@@ -193,5 +196,15 @@ export const normalizeServiceLocationForFirestore = (serviceLocation = {}) => {
     label,
     isActive,
     active: isActive,
+    ...Object.fromEntries(['serviceOnboarding', 'firstServiceCompletedAt']
+      .filter(field => Object.prototype.hasOwnProperty.call(serviceLocation, field))
+      .map(field => [field, serviceLocation[field]])),
   };
+};
+
+export const getCustomerLifecycleLabel = (customer = {}) => {
+  if ((customer.active ?? customer.isActive) === false) return 'Inactive';
+  if (customer.lifecycleStatus === 'prospect') return 'Prospect';
+  if (customer.lifecycleStatus === 'readyForService') return 'Ready for first service';
+  return 'Active';
 };

@@ -32,6 +32,9 @@ export class Customer {
         this.linkedAt = normalizeDateValue(data.linkedAt, null);
         this.linkedInviteId = normalized.linkedInviteId;
         this.duplicateKeys = Array.isArray(data.duplicateKeys) ? data.duplicateKeys : normalized.duplicateKeys;
+        for (const field of ['onboardingRequired', 'lifecycleStatus', 'serviceOnboarding', 'firstServiceCompletedAt']) {
+            if (Object.prototype.hasOwnProperty.call(normalized, field)) this[field] = normalized[field];
+        }
         this.migrationSource = data.migrationSource || null;
         this.sourceContactFields = data.sourceContactFields || null;
         this.mergedCustomerIds = Array.isArray(data.mergedCustomerIds) ? data.mergedCustomerIds : [];

@@ -1,3 +1,4 @@
+import ServiceOnboardingPayment from '../../components/sales/ServiceOnboardingPayment';
 import { userFacingErrorMessage } from '../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
@@ -405,7 +406,7 @@ const PublicServiceAgreementLanding = () => {
         <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
           <p className="font-bold">Reviewing from the email</p>
           <p className="mt-1">
-            You can review and accept this {documentLabelLower} here without creating an account. Create or sign in to a homeowner account afterward for portal access and billing setup.
+            You can review and accept this {documentLabelLower} here without creating an account. {agreement.onboardingWorkflowVersion === 1 ? 'Continue to secure billing setup after acceptance. A homeowner account is optional for future portal access.' : 'Create or sign in to a homeowner account afterward for portal access and billing setup.'}
           </p>
         </div>
 
@@ -576,13 +577,15 @@ const PublicServiceAgreementLanding = () => {
               responding={responding}
             />
 
+            {isAccepted && agreement.onboardingWorkflowVersion === 1 && <ServiceOnboardingPayment agreement={agreement} email={emailParam} accessToken={accessToken} />}
+
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
                 <CreditCardIcon className="h-5 w-5 text-slate-400" />
                 Portal and Billing
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Sign in or create a homeowner account for portal access, payment setup, and future service history.
+                {agreement.onboardingWorkflowVersion === 1 ? 'Create an optional homeowner account for future service history and portal access.' : 'Sign in or create a homeowner account for portal access, payment setup, and future service history.'}
               </p>
 
               <div className="mt-5 flex flex-col gap-2">

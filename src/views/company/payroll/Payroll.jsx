@@ -923,6 +923,7 @@ const Payroll = ({ mode = "payroll" }) => {
   const [statementGenerationInfo, setStatementGenerationInfo] = useState({});
   const [previewProgress, setPreviewProgress] = useState(0);
   const statementActionRef = useRef(false);
+  const serviceStopBackfillActionRef = useRef(false);
   const payrollCatalogCache = useRef(new Map());
   const appliedCatalogKey = useRef(null);
   const [statementFilters, setStatementFilters] = useState(defaultStatementFilters);
@@ -2406,6 +2407,10 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const showServiceStopBackfill = recentlySelectedCompany === SERVICE_STOP_BACKFILL_COMPANY_ID;
   const showServiceStopBackfillPanel = showServiceStopBackfill && (isSetupMode || activeTab === "lineItems");
+  const finishStopsDisabledReason = savingAction ? "Wait for the current payroll action to finish."
+    : !permissionsReady ? "Service stop permissions are still loading. Please wait."
+    : !can("240") || !can("244") ? "You need View Service Stops and Edit Service Stops access to finish stops for payroll."
+    : !startDate || !endDate || endDate < startDate ? "Choose a valid service stop date range first." : "";
 
   const serviceStopTypeForStop = (stop = {}) => {
     const typeId = stop.typeId || stop.serviceStopTypeId || "";
@@ -2422,24 +2427,8 @@ const Payroll = ({ mode = "payroll" }) => {
     );
   };
 
-  const workerForStop = (stop = {}) => {
-    const workerId = stop.techId || stop.userId || stop.technicianId || "";
-    const knownWorker = companyUsers.find((companyUser) =>
-      companyUser.userId === workerId ||
-      companyUser.id === workerId ||
-      companyUser.docId === workerId
-    );
-
-    return knownWorker || {
-      id: workerId,
-      userId: workerId,
-      userName: stop.tech || stop.techName || stop.userName || "Technician",
-      workerType: stop.workerType || "",
-    };
-  };
-
   const finishUnfinishedServiceStopsForRange = async () => {
-    if (!showServiceStopBackfill || !recentlySelectedCompany) return;
+    if (!showServiceStopBackfill || !recentlySelectedCompany || serviceStopBackfillActionRef.current || finishStopsDisabledReason) return;
 
     const start = dateAtStartOfDay(startDate);
     const end = dateAtEndOfDay(endDate);
@@ -2449,6 +2438,7 @@ const Payroll = ({ mode = "payroll" }) => {
     }
 
     const actionKey = "finish-service-stop-range";
+    serviceStopBackfillActionRef.current = true;
     setSavingAction(actionKey);
     setActionNotice();
     setBackfillResult(null);
@@ -2459,6 +2449,10 @@ const Payroll = ({ mode = "payroll" }) => {
       detail: "Finding unfinished service stops...",
     });
 
+    let finishedStops = 0;
+    let finishedTasks = 0;
+    let activeStopId = "";
+    let phase = "finding unfinished service stops";
     try {
       const stopsSnap = await getDocs(
         query(
@@ -2487,10 +2481,10 @@ const Payroll = ({ mode = "payroll" }) => {
         detail: `0/${totalUnfinishedStops} service stops ready`,
       });
 
-      let finishedTasks = 0;
-
       for (let index = 0; index < unfinishedStops.length; index += 1) {
         const stop = unfinishedStops[index];
+        activeStopId = stop.id;
+        phase = "reading service stop tasks";
         setBackfillProgress({
           action: "Finishing Stops",
           current: index + 1,
@@ -2507,19 +2501,9 @@ const Payroll = ({ mode = "payroll" }) => {
         const fallbackDuration = Number(stop.estimatedDuration || stop.duration || 0);
         const startAt = dateFromValue(stop.startTime) || new Date(completedAt.getTime() - fallbackDuration * 60000);
         const duration = minutesBetween(startAt, completedAt) || fallbackDuration;
-        const worker = workerForStop(stop);
-        const finishedTasksForStop = rawTasks.map((task) => ({
-          ...task,
-          status: isFinishedStatus(task.status) ? task.status : "Finished",
-          workerId: task.workerId || worker.userId || stop.techId || "",
-          workerName: task.workerName || worker.userName || worker.name || stop.tech || "",
-          completedAt: dateFromValue(task.completedAt) || completedAt,
-          updatedAt: completedAt,
-        }));
-        const newlyFinishedTasks = finishedTasksForStop.filter((task) => {
-          const original = rawTasks.find((item) => item.id === task.id);
-          return original && !isFinishedStatus(original.status);
-        });
+        // Payroll inherits the stop's technician when workerId is empty. Filling
+        // worker fields here changes protected pay terms and can deny the batch.
+        const newlyFinishedTasks = rawTasks.filter((task) => !isFinishedStatus(task.status));
 
         const batch = writeBatch(db);
 
@@ -2541,19 +2525,19 @@ const Payroll = ({ mode = "payroll" }) => {
           batch.update(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks", task.id), {
             status: "Finished",
             manualFinishSource: "payroll_setup_bulk_finish",
-            workerId: task.workerId,
-            workerName: task.workerName,
             completedAt,
             updatedAt: completedAt,
           });
         });
 
+        phase = "saving a service stop and its tasks";
         await batch.commit();
+        finishedStops += 1;
         finishedTasks += newlyFinishedTasks.length;
       }
 
       const result = {
-        finishedStops: unfinishedStops.length,
+        finishedStops,
         finishedTasks,
       };
       setBackfillProgress({
@@ -2567,9 +2551,16 @@ const Payroll = ({ mode = "payroll" }) => {
         `Finished ${result.finishedStops} service stop(s) and ${result.finishedTasks} task(s). Payroll is updating; reload this page shortly to review it.`
       );
     } catch (err) {
-      console.error("Error finishing service stops for payroll:", err);
-      setActionFailure(err.message || "Could not finish service stops for that date range.");
+      console.error("Error finishing service stops for payroll:", err, {
+        companyId: recentlySelectedCompany, serviceStopId: activeStopId, phase, finishedStops, finishedTasks,
+      });
+      if (finishedStops) setBackfillResult({ finishedStops, finishedTasks });
+      const progress = finishedStops
+        ? `Finished ${finishedStops} service stop(s) and ${finishedTasks} task(s) before the error. Completed changes are kept; retry the same range to finish the remaining stops. `
+        : "";
+      setActionFailure(`${progress}Could not finish stops while ${phase}. ${userFacingErrorMessage(err, err.message || "Please try again.")}`);
     } finally {
+      serviceStopBackfillActionRef.current = false;
       setSavingAction("");
       setBackfillProgress(null);
     }
@@ -4712,7 +4703,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 <PayrollActionButton
                   type="button"
                   onClick={finishUnfinishedServiceStopsForRange}
-                  disabledReason={savingAction ? "Wait for the current payroll action to finish." : ""}
+                  disabledReason={finishStopsDisabledReason}
                   className="rounded-md bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingAction === "finish-service-stop-range" ? "Finishing" : "Finish Stops"}

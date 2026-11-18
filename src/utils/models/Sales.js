@@ -283,6 +283,7 @@ export class SalesBillingProfile {
 
 export class SalesAgreement {
   constructor({
+    onboardingWorkflowVersion = 0,
     id = `sa_${uuidv4()}`,
     companyId,
     companyName = '',
@@ -382,6 +383,7 @@ export class SalesAgreement {
     acceptedNote = '',
     acceptedSnapshot = null,
   }) {
+    this.onboardingWorkflowVersion = onboardingWorkflowVersion;
     this.id = id;
     this.companyId = companyId;
     this.companyName = companyName;

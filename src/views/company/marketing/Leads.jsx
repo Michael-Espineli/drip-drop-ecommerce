@@ -2,6 +2,7 @@ import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { subDays } from 'date-fns';
 import { Context } from '../../../context/AuthContext'; // Adjust path if necessary
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
@@ -42,6 +43,8 @@ const StatCard = ({ title, count, Icon, color, selected, selectedClass, onClick 
     </button>
 );
 
+const completedLeadLabel = 'Completed (last 30 days)';
+
 const statusCardConfigs = [
     {
         key: 'pending',
@@ -61,7 +64,7 @@ const statusCardConfigs = [
     },
     {
         key: 'completed',
-        title: 'Completed',
+        title: completedLeadLabel,
         value: 'Completed',
         Icon: CheckCircleIcon,
         color: 'bg-emerald-50 text-emerald-600',
@@ -86,6 +89,13 @@ const actionButtonClass = 'inline-flex items-center justify-center gap-1.5 round
 
 const normalizeLeadStatusKey = (status = '') => String(status || '').trim().toLowerCase();
 
+const toDate = (value) => {
+    if (!value) return null;
+    if (typeof value?.toDate === 'function') return value.toDate();
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 const getNormalizedLeadSource = (lead = {}) => {
     const explicitSource = String(lead.leadSource || lead.marketingSource || lead.sourceLabel || '').trim();
     if (explicitSource) return explicitSource;
@@ -99,11 +109,15 @@ const getNormalizedLeadSource = (lead = {}) => {
 };
 
 export default function Leads() {
-    const [leads, setLeads] = useState([]);
+    const [leadRecords, setLeadRecords] = useState([]);
+    const [currentTime, setCurrentTime] = useState(Date.now);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('Pending');
     const [sourceFilter, setSourceFilter] = useState('All');
+    const [followUps, setFollowUps] = useState({});
+    const [followUpFilter, setFollowUpFilter] = useState('all');
+    const [followUpError, setFollowUpError] = useState('');
     const [cancellingLeadId, setCancellingLeadId] = useState('');
     const [cancelDialogLead, setCancelDialogLead] = useState(null);
     const [cancelDialogTargets, setCancelDialogTargets] = useState({});
@@ -112,6 +126,14 @@ export default function Leads() {
     const { can } = useCompanyPermissions();
     const db = getFirestore();
     const navigate = useNavigate();
+    const leads = useMemo(() => {
+        const cutoff = subDays(new Date(currentTime), 30).getTime();
+        return leadRecords.filter((lead) => {
+            if (normalizeLeadStatusKey(lead.status) !== 'completed') return true;
+            const completedAt = toDate(lead.dateCompleted)?.getTime();
+            return completedAt >= cutoff && completedAt <= currentTime;
+        });
+    }, [leadRecords, currentTime]);
     const publicLeadFormUrl = useMemo(() => (
         recentlySelectedCompany && typeof window !== 'undefined'
             ? `${window.location.origin}/request-service/${recentlySelectedCompany}`
@@ -129,12 +151,10 @@ export default function Leads() {
         }, { pending: 0, inProgress: 0, completed: 0, cancelled: 0 })
     ), [leads]);
 
-    const toDate = (value) => {
-        if (!value) return null;
-        if (typeof value?.toDate === 'function') return value.toDate();
-        const parsed = new Date(value);
-        return Number.isNaN(parsed.getTime()) ? null : parsed;
-    };
+    useEffect(() => {
+        const timer = window.setInterval(() => setCurrentTime(Date.now()), 60_000);
+        return () => window.clearInterval(timer);
+    }, []);
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -148,7 +168,8 @@ export default function Leads() {
         const leadsQuery = query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId));
         const unsubscribeLeads = onSnapshot(leadsQuery, snapshot => {
             const leadsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setLeads(leadsData.sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0)));
+            setCurrentTime(Date.now());
+            setLeadRecords(leadsData.sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0)));
             setLoading(false);
         }, err => {
             console.error("Error fetching leads:", err);
@@ -161,11 +182,21 @@ export default function Leads() {
 
     }, [db, recentlySelectedCompany]);
 
+    useEffect(() => {
+        setFollowUps({}); setFollowUpError('');
+        if (!recentlySelectedCompany) return undefined;
+        return onSnapshot(collection(db, 'companies', recentlySelectedCompany, 'leadPrivateNotes'), snapshot => {
+            setFollowUps(Object.fromEntries(snapshot.docs.map(item => [item.id, item.data().salesFollowUp || {}])));
+        }, error => { setFollowUps({}); setFollowUpError(error.message || 'Could not load sales follow-up.'); });
+    }, [db, recentlySelectedCompany]);
+
     const visibleLeads = useMemo(() => {
         const term = searchTerm.trim().toLowerCase();
 
         return leads.filter((lead) => {
             const matchesSearch = !term || [
+                followUps[lead.id]?.ownerName,
+                followUps[lead.id]?.nextAction,
                 lead.homeownerName,
                 lead.homeownerEmail,
                 lead.homeownerPhone,
@@ -187,9 +218,19 @@ export default function Leads() {
             const normalizedSource = getNormalizedLeadSource(lead);
             const matchesSource = sourceFilter === 'All' || normalizedSource === sourceFilter;
 
-            return matchesSearch && matchesStatus && matchesSource;
+            const followUp = followUps[lead.id] || {};
+            const due = toDate(followUp.nextContactAt);
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const dueDay = due ? new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime() : null;
+            const open = !['completed', 'cancelled', 'canceled'].includes(normalizeLeadStatusKey(lead.status));
+            const matchesFollowUp = followUpFilter === 'all' || (open && (
+                (followUpFilter === 'overdue' && dueDay !== null && dueDay < today.getTime()) ||
+                (followUpFilter === 'today' && dueDay === today.getTime()) ||
+                (followUpFilter === 'unassigned' && !followUp.ownerName)
+            ));
+            return matchesSearch && matchesStatus && matchesSource && matchesFollowUp;
         });
-    }, [leads, searchTerm, sourceFilter, statusFilter]);
+    }, [leads, searchTerm, sourceFilter, statusFilter, followUps, followUpFilter]);
 
     const renderStatus = (status) => {
         const colors = {
@@ -448,6 +489,7 @@ export default function Leads() {
                     </div>
                 </div>
 
+                {followUpError && <p role="alert" className="rounded-md bg-amber-50 p-3 text-sm text-amber-900">Sales follow-up is unavailable: {followUpError}</p>}
                 {/* Header Stats */}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     {statusCardConfigs.map(({ key, value, ...card }) => (
@@ -462,7 +504,7 @@ export default function Leads() {
                 </div>
 
                 <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                    <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-[1.4fr_1fr_1fr]">
+                    <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
                         <input
                             type="search"
                             value={searchTerm}
@@ -470,11 +512,11 @@ export default function Leads() {
                             placeholder="Search homeowner, email, phone, address..."
                             className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                         />
-                        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
+                        <select aria-label="Lead status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
                             <option value="All">All statuses</option>
                             <option value="Pending">Pending</option>
                             <option value="In Progress">In Progress</option>
-                            <option value="Completed">Completed</option>
+                            <option value="Completed">{completedLeadLabel}</option>
                             <option value="Cancelled">Cancelled</option>
                         </select>
                         <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
@@ -482,6 +524,9 @@ export default function Leads() {
                             {sourceOptions.map((source) => (
                                 <option key={source} value={source}>{source}</option>
                             ))}
+                        </select>
+                        <select aria-label="Sales follow-up filter" value={followUpFilter} disabled={Boolean(followUpError)} onChange={event => { setFollowUpFilter(event.target.value); if (event.target.value !== 'all') setStatusFilter('All'); }} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+                            <option value="all">All follow-up</option><option value="overdue">Overdue follow-up</option><option value="today">Due today</option><option value="unassigned">Unassigned salesperson</option>
                         </select>
                     </div>
                     <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
@@ -508,6 +553,7 @@ export default function Leads() {
                                         <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
                                         <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Source</th>
                                         <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Customer Link</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Sales Follow-up</th>
                                         <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
                                     </tr>
                                 </thead>
@@ -526,6 +572,11 @@ export default function Leads() {
                                             <td className="whitespace-nowrap px-5 py-3">{renderStatus(lead.status)}</td>
                                             <td className="whitespace-nowrap px-5 py-3">{renderSource(lead)}</td>
                                             <td className="whitespace-nowrap px-5 py-3">{renderLinkStatus(lead)}</td>
+                                            <td className="max-w-xs px-5 py-3 text-sm text-slate-700">
+                                                <p className="font-semibold">{followUps[lead.id]?.ownerName || 'Unassigned'}</p>
+                                                <p>{followUps[lead.id]?.nextAction || 'Set next action'}</p>
+                                                <p className="text-xs text-slate-500">{toDate(followUps[lead.id]?.nextContactAt)?.toLocaleDateString() || 'No follow-up date'}</p>
+                                            </td>
                                             <td className="whitespace-nowrap px-5 py-3">
                                                 <div className="flex flex-wrap gap-2">
                                                     {!getLinkedCustomerId(lead) && can("612") && (

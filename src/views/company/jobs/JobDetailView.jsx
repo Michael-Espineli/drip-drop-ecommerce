@@ -19,6 +19,7 @@ import ServicePayrollCostPreview from "../sales/ServicePayrollCostPreview";
 import { taskDefaultsFromPayItem, updateServiceTaskPayrollField } from "../../../utils/payroll/servicePayrollPreview";
 
 import JobNextVisitSnapshot from "./JobNextVisitSnapshot";
+import JobSiteDetails, { JobSelectedSiteItems } from "./JobSiteDetails";
 import React, { useCallback, useEffect, useMemo, useRef, useState, useContext } from "react";
 import { Link, useParams, useNavigate, useLocation, UNSAFE_NavigationContext } from "react-router-dom";
 import {
@@ -181,6 +182,7 @@ import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogP
 import JobTaskProductPicker from "./JobTaskProductPicker";
 import ServiceTaskProductFields from "./ServiceTaskProductFields";
 import { buildTaskProductOptions, findTaskProduct, planProductId, productTaskIds, taskProductIds, unlinkTaskFromPlanProduct } from "../../../utils/jobPlanProducts";
+import ProductAvailabilityFields from "../productCatalog/ProductAvailabilityFields";
 import { stageJobTaskProduct } from "../../../utils/jobTaskProductWrites";
 import {
   EQUIPMENT_DATABASE_CATEGORY,
@@ -261,7 +263,6 @@ const JOB_DETAIL_SECTIONS = [
   { id: "create-plans", tab: "Planned", label: "Create Plans", helper: "Create estimates based on services and products" },
   { id: "actual", tab: "Actual", label: "Actual", helper: "Service stops, payroll, and purchased parts" },
   { id: "billing", tab: "Billing", label: "Billing", helper: "Estimate, invoice, and payment lifecycle" },
-  { id: "history", tab: "History", label: "History", helper: "Change orders and job audit trail" },
 ];
 const DEFAULT_JOB_DETAIL_SECTION_ID = "overview";
 const JOB_DETAIL_TABS = JOB_DETAIL_SECTIONS.map((section) => section.tab);
@@ -283,8 +284,6 @@ const DEFAULT_OPEN_DETAIL_PANELS = {
   "actual-offers": false,
   "billing-summary": true,
   "billing-agreements": false,
-  "history-summary": true,
-  "history-change-orders": false,
 };
 const withFirestoreDocId = (docSnap) => {
   const data = docSnap.data();
@@ -1199,6 +1198,9 @@ const JobDetailView = () => {
   const [selectedServiceLocationId, setSelectedServiceLocationId] = useState("");
   const [loadingServiceLocations, setLoadingServiceLocations] = useState(false);
   const [serviceLocationsError, setServiceLocationsError] = useState("");
+  const [loadingSiteDetails, setLoadingSiteDetails] = useState(true);
+  const [siteDetailsError, setSiteDetailsError] = useState("");
+  const siteDetailsRequestRef = useRef(0);
 
   const [job, setJob] = useState({
     adminId: "",
@@ -1437,6 +1439,7 @@ const JobDetailView = () => {
     if (!jobId) return;
     if (!section || !JOB_DETAIL_SECTION_IDS.includes(section)) {
       const normalizedSection = JOB_DETAIL_SECTION_ID_BY_TAB[section] || String(section || "").toLowerCase();
+      if (normalizedSection === "history") setShowJobHistoryModal(true);
       const nextSection = JOB_DETAIL_SECTION_IDS.includes(normalizedSection) ? normalizedSection : DEFAULT_JOB_DETAIL_SECTION_ID;
       navigate({ pathname: `/company/jobs/detail/${jobId}/${nextSection}`, search: location.search }, {
         replace: true,
@@ -8003,6 +8006,14 @@ const JobDetailView = () => {
     );
   };
 
+  const selectAllRemainingJobFinishWork = () => {
+    setAllJobFinishTasks(true);
+    selectJobFinishStops(unfinishedJobFinishStops.map((stop) => stop.id));
+    setJobFinishServiceIds(laborLineItems.map((line) => line.id));
+    setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(shoppingList));
+    setCloseoutCancelVisits(true);
+  };
+
   const setJobFinishShoppingItemAction = (itemId, action) => {
     if (!itemId) return;
     setJobFinishShoppingItemActions((prev) => ({
@@ -9637,70 +9648,87 @@ const JobDetailView = () => {
   };
 
   const loadJobSiteDetails = useCallback(async (serviceLocationId) => {
-    const locSnap = serviceLocationId
-      ? await getDoc(doc(db, "companies", recentlySelectedCompany, "serviceLocations", serviceLocationId))
-      : null;
-    const site = locSnap?.exists() ? locSnap.data() : {};
-    setServiceLocation({
-      id: serviceLocationId || "",
-      bodiesOfWaterId: site.bodiesOfWaterId || [],
-      gateCode: site.gateCode || "",
-      nickName: site.nickName || "",
-      streetAddress: site.address?.streetAddress || "",
-      city: site.address?.city || "",
-      state: site.address?.state || "",
-      zip: site.address?.zip || "",
-      active: site.active,
-    });
-    if (serviceLocationId) {
-      const [bodySnap, equipmentSnap] = await Promise.all([
-        getDocs(
-          query(
-            collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"),
-            where("serviceLocationId", "==", serviceLocationId)
-          )
-        ),
-        getDocs(
-          query(
-            collection(db, "companies", recentlySelectedCompany, "equipment"),
-            where("serviceLocationId", "==", serviceLocationId)
-          )
-        ),
-      ]);
+    const requestId = ++siteDetailsRequestRef.current;
+    setLoadingSiteDetails(true);
+    setSiteDetailsError("");
+    setTaskBodyOfWaterList([]);
+    setTaskEquipmentList([]);
+    setServiceLocation({ id: serviceLocationId || "", bodiesOfWaterId: [] });
+    try {
+      const locSnap = serviceLocationId
+        ? await getDoc(doc(db, "companies", recentlySelectedCompany, "serviceLocations", serviceLocationId))
+        : null;
+      const site = locSnap?.exists() ? locSnap.data() : {};
+      if (requestId !== siteDetailsRequestRef.current) return;
+      setServiceLocation({
+        id: serviceLocationId || "",
+        bodiesOfWaterId: site.bodiesOfWaterId || [],
+        gateCode: site.gateCode || "",
+        nickName: site.nickName || "",
+        streetAddress: site.address?.streetAddress || "",
+        city: site.address?.city || "",
+        state: site.address?.state || "",
+        zip: site.address?.zip || "",
+        active: site.active,
+      });
+      if (serviceLocationId) {
+        const [bodySnap, equipmentSnap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"),
+              where("serviceLocationId", "==", serviceLocationId)
+            )
+          ),
+          getDocs(
+            query(
+              collection(db, "companies", recentlySelectedCompany, "equipment"),
+              where("serviceLocationId", "==", serviceLocationId)
+            )
+          ),
+        ]);
 
-      setTaskBodyOfWaterList(
-        bodySnap.docs.map((docSnap) => {
-          const data = docSnap.data();
-          const id = data.id || docSnap.id;
+        if (requestId !== siteDetailsRequestRef.current) return;
 
-          return {
-            ...data,
-            id,
-            value: id,
-            label: data.name || "Body Of Water",
-          };
-        })
-      );
+        setTaskBodyOfWaterList(
+          bodySnap.docs.map((docSnap) => {
+            const data = docSnap.data();
+            const id = data.id || docSnap.id;
 
-      setTaskEquipmentList(
-        equipmentSnap.docs.map((docSnap) => {
-          const data = docSnap.data();
-          const id = data.id || docSnap.id;
-          const label = data.name
-            ? `${data.name}${data.type ? ` — ${data.type}` : ""}`
-            : data.model || "Equipment";
+            return {
+              ...data,
+              id,
+              value: id,
+              label: data.name || "Body Of Water",
+            };
+          })
+        );
 
-          return {
-            ...data,
-            id,
-            value: id,
-            label,
-          };
-        })
-      );
-    } else {
-      setTaskBodyOfWaterList([]);
-      setTaskEquipmentList([]);
+        setTaskEquipmentList(
+          equipmentSnap.docs.map((docSnap) => {
+            const data = docSnap.data();
+            const id = data.id || docSnap.id;
+            const label = data.name
+              ? `${data.name}${data.type ? ` — ${data.type}` : ""}`
+              : data.model || "Equipment";
+
+            return {
+              ...data,
+              id,
+              value: id,
+              label,
+            };
+          })
+        );
+      } else {
+        setTaskBodyOfWaterList([]);
+        setTaskEquipmentList([]);
+      }
+    } catch (error) {
+      if (requestId !== siteDetailsRequestRef.current) return;
+      console.error("Failed to load job site details", error);
+      setSiteDetailsError(userFacingErrorMessage(error, "Unable to load this site's equipment and bodies of water. Please try again."));
+    } finally {
+      if (requestId === siteDetailsRequestRef.current) setLoadingSiteDetails(false);
     }
   }, [recentlySelectedCompany]);
 
@@ -10574,9 +10602,14 @@ const JobDetailView = () => {
         // These references belong to the previous site. Existing task/stop history stays intact.
         updates.bodyOfWaterId = "";
         updates.bodyOfWaterName = "";
+        updates.bodyOfWaterIds = [];
+        updates.bodyOfWaterNames = [];
         updates.equipmentId = "";
         updates.equipmentName = "";
         updates.equipmentIds = [];
+        updates.companyEquipmentId = "";
+        updates.companyEquipmentIds = [];
+        updates.equipmentNames = [];
       }
 
       if (
@@ -10744,9 +10777,14 @@ const JobDetailView = () => {
           serviceLocationName: j.serviceLocationName || "",
           bodyOfWaterId: j.bodyOfWaterId || "",
           bodyOfWaterName: j.bodyOfWaterName || "",
+          bodyOfWaterIds: j.bodyOfWaterIds || [],
+          bodyOfWaterNames: j.bodyOfWaterNames || [],
           equipmentId: j.equipmentId || "",
           equipmentName: j.equipmentName || "",
           equipmentIds: j.equipmentIds || [],
+          companyEquipmentId: j.companyEquipmentId || "",
+          companyEquipmentIds: j.companyEquipmentIds || [],
+          equipmentNames: j.equipmentNames || [],
           adminId: j.adminId || "",
           adminName: j.adminName || "",
           billingStatus: j.billingStatus || "",
@@ -13613,29 +13651,36 @@ const JobDetailView = () => {
         ...(isEquipmentItem ? databaseEquipmentMappingPatch(shoppingDbItemForm.equipmentMapping) : {}),
       };
 
-      const product = buildProductFromVendorItem({ productId: `com_generic_${uuidv4()}`, vendorItem: item });
+      const product = buildProductFromVendorItem({
+        productId: `com_generic_${uuidv4()}`,
+        vendorItem: item,
+        overrides: shoppingDbItemForm.productAvailability,
+      });
       const batch = writeBatch(db);
       batch.set(productCatalogDocRef(db, recentlySelectedCompany, product.id), product);
       batch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), { ...item, ...buildVendorItemProductPatch(product) });
       await batch.commit();
 
-      const vendorOption = buildShoppingDbItemOption({ ...item, genericItemId: product.id }, id);
-      const option = buildShoppingDbItemOption(buildJobProductCatalog([product], [item]).products[0], product.id);
-      setJobProductList((prev) => [...prev, option]);
-      setShoppingDbItemList((prev) =>
-        [...(prev || []).filter((existing) => existing.id !== id), vendorOption].sort((left, right) =>
-          String(left.name || "").localeCompare(String(right.name || ""))
-        )
-      );
-      handleShoppingDbItemChange(option);
-      setShoppingFormData((prev) => ({
-        ...prev,
-        subCategory: "Data Base",
-        dbItemId: option.id,
-        genericItemId: product.id,
-        name: option.name,
-        description: option.description,
-      }));
+      const [catalogOption] = buildJobProductCatalog([product], [item]).products;
+      if (catalogOption) {
+        const vendorOption = buildShoppingDbItemOption({ ...item, genericItemId: product.id }, id);
+        const option = buildShoppingDbItemOption(catalogOption, product.id);
+        setJobProductList((prev) => [...prev, option]);
+        setShoppingDbItemList((prev) =>
+          [...(prev || []).filter((existing) => existing.id !== id), vendorOption].sort((left, right) =>
+            String(left.name || "").localeCompare(String(right.name || ""))
+          )
+        );
+        handleShoppingDbItemChange(option);
+        setShoppingFormData((prev) => ({
+          ...prev,
+          subCategory: "Data Base",
+          dbItemId: option.id,
+          genericItemId: product.id,
+          name: option.name,
+          description: option.description,
+        }));
+      }
       resetShoppingDbItemCreator();
       toast.success("Database item created");
     } catch (err) {
@@ -16131,6 +16176,15 @@ const JobDetailView = () => {
         )}
       </div>
 
+      <ProductAvailabilityFields
+        className="mt-4"
+        value={shoppingDbItemForm.productAvailability}
+        onChange={(patch) => setShoppingDbItemForm((current) => ({
+          ...current,
+          productAvailability: { ...current.productAvailability, ...patch },
+        }))}
+        disabled={savingShoppingDbItem}
+      />
       <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
         <button
           type="button"
@@ -16298,6 +16352,7 @@ const JobDetailView = () => {
                   "description",
                   order.customerMessage || order.customerFacingNote || order.estimateNote || ""
                 );
+                setShowJobHistoryModal(false);
                 handleJobTabChange("Billing");
                 toast.success("Change order note copied to the estimate message.");
               }}
@@ -17798,11 +17853,6 @@ const JobDetailView = () => {
       label: "Billing",
       helper: "Estimate, invoice, and payment lifecycle",
       count: billingPlanEstimateRows.length ? String(billingPlanEstimateRows.length) : "",
-    },
-    History: {
-      label: "History",
-      helper: "Change orders and job audit trail",
-      count: String((jobHistory?.length || 0) + (changeOrders?.length || 0)),
     },
   };
   const siteAddress = [serviceLocation.streetAddress, serviceLocation.city, serviceLocation.state, serviceLocation.zip]
@@ -19680,13 +19730,13 @@ const JobDetailView = () => {
     if (!newShoppingList) return null;
 
     return (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="add-planned-product-title"
-      >
-        <div className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/20 p-4">
+        <div
+          className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-planned-product-title"
+        >
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
             <div>
               <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Planned Product</p>
@@ -20224,8 +20274,21 @@ const JobDetailView = () => {
                                     )}
                                   </>
                                 ) : siteAddress || "Not set"}
+                                <div>
+                                  <JobSiteDetails
+                                    key={`${jobId}:${job.serviceLocationId}`}
+                                    job={job}
+                                    site={serviceLocation}
+                                    bodiesOfWater={taskBodyOfWaterList}
+                                    equipment={taskEquipmentList}
+                                    loading={loadingSiteDetails}
+                                    error={siteDetailsError}
+                                    onRetry={() => loadJobSiteDetails(job.serviceLocationId)}
+                                  />
+                                </div>
                               </dd>
                             </div>
+                            <JobSelectedSiteItems job={job} bodiesOfWater={taskBodyOfWaterList} equipment={taskEquipmentList} />
                           </dl>
 
                           <dl className="divide-y divide-slate-200 border-y border-slate-200">
@@ -22130,107 +22193,6 @@ const JobDetailView = () => {
               </DetailDisclosure>
             )}
 
-            {activeTab === "History" && (
-              <div className="space-y-6">
-                <DetailDisclosure
-                  panelId="history-summary"
-                  title="History Summary"
-                  helper="Change-order totals and tracked update counts"
-                  count={(jobHistory?.length || 0) + (changeOrders?.length || 0)}
-                  collapsible={false}
-                >
-                  <div className="bg-white shadow-lg rounded-xl p-6">
-                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                      <div>
-                        <h3 className="text-xl font-bold text-gray-800">History</h3>
-                        <p className="text-gray-600 mt-1">
-                          Change orders and job updates for this work order.
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={openChangeOrderModal}
-                        className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-                      >
-                        New Change Order
-                      </button>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-                      <StatCard
-                        title="History Events"
-                        value={String(jobHistory.length)}
-                        subtitle="Tracked job changes"
-                      />
-                      <StatCard
-                        title="Change Orders"
-                        value={String(changeOrders.length)}
-                        subtitle={`${openChangeOrders.length} open`}
-                        tone="amber"
-                      />
-                      <StatCard
-                        title="Price Impact"
-                        value={moneyFromCents(changeOrders.reduce((total, order) => total + cents(order.priceImpactCents), 0))}
-                        subtitle="All change orders"
-                        tone="blue"
-                      />
-                      <StatCard
-                        title="Cost Impact"
-                        value={moneyFromCents(
-                          changeOrders.reduce(
-                            (total, order) => total + cents(order.laborCostImpactCents) + cents(order.materialCostImpactCents),
-                            0
-                          )
-                        )}
-                        subtitle="Services plus products"
-                        tone="red"
-                      />
-                    </div>
-                  </div>
-                </DetailDisclosure>
-
-                <DetailDisclosure
-                  panelId="history-change-orders"
-                  title="Change Orders"
-                  helper="Scope, price, services, products, and schedule changes"
-                  count={changeOrders.length}
-                  collapsible={false}
-                >
-                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                    <div className="bg-white shadow-lg rounded-xl p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h4 className="text-lg font-bold text-gray-800">Change Orders</h4>
-                          <p className="text-gray-600 mt-1 text-sm">
-                            Requests that change scope, price, services, products, or schedule.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-6 space-y-3">
-                        {changeOrdersLoading ? (
-                          <div className="text-gray-500">Loading change orders…</div>
-                        ) : !changeOrders.length ? (
-                          <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                            <p className="text-gray-700 font-medium">No change orders yet.</p>
-                            <button
-                              type="button"
-                              onClick={openChangeOrderModal}
-                              className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-                            >
-                              Create Change Order
-                            </button>
-                          </div>
-                        ) : (
-                          changeOrders.map((order) => renderChangeOrderCard(order))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </DetailDisclosure>
-              </div>
-            )}
             {activeTab === "Billing" && (
               <div className="space-y-6">
                 <DetailDisclosure
@@ -23256,10 +23218,10 @@ const JobDetailView = () => {
       )}
       {showJobHistoryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div role="dialog" aria-labelledby="job-history-title" className="flex max-h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
               <div>
-                <h3 className="text-xl font-bold text-slate-900">Job History</h3>
+                <h3 id="job-history-title" className="text-xl font-bold text-slate-900">Job History</h3>
                 <p className="mt-1 text-sm text-slate-600">
                   Changes recorded for {displayReferenceValue(job.internalId || job.type || "this job", "Job")}.
                 </p>
@@ -23274,7 +23236,7 @@ const JobDetailView = () => {
             </div>
 
             <div className="overflow-y-auto p-5">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <StatCard
                   title="History Events"
                   value={String(jobHistory.length)}
@@ -23291,6 +23253,15 @@ const JobDetailView = () => {
                   value={moneyFromCents(changeOrders.reduce((total, order) => total + cents(order.priceImpactCents), 0))}
                   subtitle="All change orders"
                   tone="blue"
+                />
+                <StatCard
+                  title="Cost Impact"
+                  value={moneyFromCents(changeOrders.reduce(
+                    (total, order) => total + cents(order.laborCostImpactCents) + cents(order.materialCostImpactCents),
+                    0
+                  ))}
+                  subtitle="Services plus products"
+                  tone="red"
                 />
                 <StatCard
                   title="Last Updated"
@@ -23814,7 +23785,7 @@ const JobDetailView = () => {
 	            <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-4">
                 <label className="flex gap-2 font-semibold"><input type="checkbox" checked={closeoutWholeJob} disabled={markingJobFinished} onChange={e=>setCloseoutWholeJob(e.target.checked)} />Finish the entire job</label>
                 {closeoutWholeJob && <label className="flex gap-2"><input type="checkbox" checked={closeoutCancelVisits} disabled={markingJobFinished} onChange={e=>setCloseoutCancelVisits(e.target.checked)} />Cancel unchecked visits, unscheduled planned visits, and unaccepted offers</label>}
-                <button type="button" disabled={markingJobFinished} className="rounded border px-3 py-2 font-semibold disabled:opacity-50" onClick={()=>{setAllJobFinishTasks(true);selectJobFinishStops(unfinishedJobFinishStops.map((stop)=>stop.id));setJobFinishServiceIds(laborLineItems.map(v=>v.id));setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(shoppingList));setCloseoutCancelVisits(true);}}>Quick Finish All Remaining Work</button>
+                <button type="button" disabled={markingJobFinished} className="rounded border px-3 py-2 font-semibold disabled:opacity-50" onClick={selectAllRemainingJobFinishWork}>Quick Finish All Remaining Work</button>
                 <p className="text-xs text-slate-600">Quick Finish selects all remaining work and service stops, marks products installed, and cancels unused plans and unaccepted offers when finishing the job.</p>
                 <h3 className="font-bold">Service items</h3>
                 {laborLineItems.map(line=><label key={line.id} className="flex gap-2"><input type="checkbox" checked={line.completionStatus === "Finished" || jobFinishServiceIds.includes(line.id)} disabled={markingJobFinished || line.completionStatus === "Finished"} onChange={e=>{setJobFinishServiceIds(ids=>e.target.checked?[...ids,line.id]:ids.filter(v=>v!==line.id));if(e.target.checked)setJobFinishTaskIds(ids=>[...new Set([...ids,...getLaborLineTaskIds(line)])]);}} />{line.name || "Service"}</label>)}
@@ -24018,6 +23989,14 @@ const JobDetailView = () => {
 	                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
 	              >
 	                Cancel
+	              </button>
+	              <button
+	                type="button"
+	                onClick={selectAllRemainingJobFinishWork}
+	                disabled={markingJobFinished}
+	                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+	              >
+	                Quick Finish All Remaining Work
 	              </button>
 	              <button
 	                type="button"

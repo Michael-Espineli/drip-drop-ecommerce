@@ -134,6 +134,7 @@ test('creating an approval and product saves linked records with unit prices in 
   await openModal({}, {
     defaultForm: { ...defaultForm, unitCost: '12.34', unitPrice: '25.67', quantity: '3', description: 'Replacement seal' },
   });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Part Approval Sales', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Create Customer Approval and Create New Product' }));
 
   await waitFor(() => expect(batch.commit).toHaveBeenCalledTimes(1));
@@ -153,7 +154,9 @@ test('creating an approval and product saves linked records with unit prices in 
     active: true,
     billable: true,
     UOM: 'Unit',
-    availableForPartApproval: true,
+    availableForPartApproval: false,
+    partApprovalAvailable: false,
+    availableForCustomerSale: false,
     availableForPartPurchase: true,
     availableForJobs: true,
     createdAt: 'server-time',

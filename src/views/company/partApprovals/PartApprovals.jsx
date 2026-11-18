@@ -10,7 +10,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDocs,
   increment,
   onSnapshot,
   query,
@@ -23,6 +22,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import {
+  FaBoxes,
   FaCheckCircle,
   FaClock,
   FaEllipsisV,
@@ -46,7 +46,7 @@ import {
   getProductDisplayName,
   getProductSellPriceCents,
   isProductAvailableForPartApproval,
-  productCatalogCollectionRef,
+  loadProductsWithCosts,
 } from '../../../utils/productCatalog';
 import { SHOPPING_LIST_STATUS } from '../../../utils/shoppingListStatus';
 import { createAndSendShoppingItemInstallInvoice } from '../../../utils/sales/shoppingItemInvoiceAutomation';
@@ -222,7 +222,7 @@ const approvalIsInvoiced = (approval = {}) => Boolean(
 const normalizeDbItemOption = (docId, data = {}) => {
   const id = data.id || docId;
   const name = getProductDisplayName({ ...data, id });
-  const unitCostCents = Number(data.rate || data.cost || 0);
+  const unitCostCents = Number(data.rate ?? data.cost ?? 0);
   const unitPriceCents = getProductSellPriceCents(data) || Number(data.sellPrice || data.rate || data.cost || 0);
   const photoFields = itemPhotoFieldsFromSource(data, name);
   const availableForPartApproval = isProductAvailableForPartApproval(data);
@@ -1104,7 +1104,14 @@ const CompanyPartApprovals = () => {
               Customer approvals for small parts before they move into the shopping, install, and invoice workflow.
             </p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
+            <Link
+              to="/company/product-catalog"
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+            >
+              <FaBoxes aria-hidden="true" />
+              Product Lists
+            </Link>
             <Link
               to="/company/part-approvals/history"
               className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
@@ -1725,11 +1732,11 @@ const PartApprovalEditModal = ({ approval, working, onClose, onSave, onDelete })
     const loadDbItems = async () => {
       setLoadingDbItems(true);
       try {
-        const itemsSnap = await getDocs(productCatalogCollectionRef(db, recentlySelectedCompany));
+        const itemsSnap = await loadProductsWithCosts(db, recentlySelectedCompany);
         if (!active) return;
 
-        const options = itemsSnap.docs
-          .map((itemDoc) => normalizeDbItemOption(itemDoc.id, itemDoc.data()))
+        const options = itemsSnap
+          .map((item) => normalizeDbItemOption(item.id, item))
           .filter((item) => item.active !== false && item.availableForPartApproval)
           .sort((left, right) => left.name.localeCompare(right.name));
         setDbItems(options);

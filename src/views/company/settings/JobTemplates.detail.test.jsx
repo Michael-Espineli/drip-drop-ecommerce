@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { getDoc, getDocs, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import JobTemplates from './JobTemplates';
 
@@ -19,11 +19,14 @@ const mockPayrollData = {
   ],
 };
 jest.mock('../../../hooks/useServicePayrollData', () => () => mockPayrollData);
-jest.mock('../../../utils/productCatalog', () => ({ loadJobProductCatalog: async () => ({ products: [], vendorItems: [] }), getJobMaterialVendorItemId: () => '' }));
+jest.mock('../../../utils/productCatalog', () => ({
+  ...jest.requireActual('../../../utils/productCatalog'),
+  loadJobProductCatalog: async () => ({ products: [], vendorItems: [] }),
+}));
 jest.mock('../../../utils/sales/salesFirestore', () => ({ salesCatalogCollection: () => 'catalog', saveSalesCatalogItem: jest.fn() }));
 jest.mock('firebase/firestore', () => ({
   collection: (_, ...parts) => parts.join('/'), doc: (base, ...parts) => typeof base === 'string' ? [base, ...parts].join('/') : parts.join('/'),
-  query: (value) => value, orderBy: jest.fn(), getDoc: jest.fn(), getDocs: jest.fn(), setDoc: jest.fn(), updateDoc: jest.fn(),
+  query: (value) => value, orderBy: jest.fn(), getDoc: jest.fn(), getDocs: jest.fn(), setDoc: jest.fn(), updateDoc: jest.fn(), writeBatch: jest.fn(),
 }));
 const templatePath = 'companies/company/jobTemplates/template-1';
 const record = (id, data) => ({ id, exists: () => true, data: () => ({ id, ...data }) });
@@ -112,6 +115,26 @@ test('scope section navigation still edits tasks in the template collection', as
   await waitFor(() => expect(setDoc).toHaveBeenCalledWith(`${templatePath}/tasks/task-1`, expect.objectContaining({ name: 'Clean filter elements', templateId: 'template-1' }), { merge: true }));
   fireEvent.click(within(sections).getByRole('button', { name: /^Overview/ }));
   expect(await screen.findByRole('region', { name: 'Summary' })).toBeInTheDocument();
+});
+
+test('creating an inactive product from a template saves it without selecting it for the template', async () => {
+  const batch = { set: jest.fn(), commit: jest.fn().mockResolvedValue(undefined) };
+  writeBatch.mockReturnValue(batch);
+  await openTemplate();
+  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Add Product', exact: true }));
+  const form = within(screen.getByRole('form', { name: 'Add Template Product' }));
+  fireEvent.click(form.getByRole('button', { name: 'Choose Product' }));
+  fireEvent.click(screen.getByRole('button', { name: 'New Product' }));
+  fireEvent.change(screen.getByLabelText('Product Name'), { target: { value: 'Seasonal seal' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Active', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Create Product', exact: true }));
+
+  expect(await form.findByText('Database product created.')).toBeInTheDocument();
+  expect(form.getByRole('button', { name: 'Choose Product' })).toBeInTheDocument();
+  expect(batch.set).toHaveBeenCalledWith(expect.stringContaining('/genericItems/genericItems/'), expect.objectContaining({
+    name: 'Seasonal seal', active: false, availableForJobs: true,
+  }));
 });
 
 test('a new service line previews catalog service pay and task extras before saving, and only applies cost on click', async () => {

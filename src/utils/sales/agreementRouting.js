@@ -72,10 +72,10 @@ export const buildRecurringRoutingIndex = (recurringStops = []) => {
 export const agreementNeedsRecurringRouting = (agreement = {}, routingIndex = {}) => {
   if (normalizeSalesStatusKey(agreement.status) !== 'accepted') return false;
   if (getAgreementBillingType(agreement) !== AgreementBillingType.recurring) return false;
-  if (agreement.recurringServiceStopId || agreement.recurringRouteId) return false;
+  if (agreement.recurringRouteId) return false;
 
   const setupStatus = normalizeSalesStatusKey(agreement.operationsSetupStatus);
-  if (setupStatus && !['needsrecurringservicestop', 'needsrouting', 'notstarted'].includes(setupStatus)) {
+  if (['recurringservicestopandroutecreated', 'recurringroutecreated', 'recurringrouteassigned', 'ready', 'complete', 'completed'].includes(setupStatus)) {
     return false;
   }
 

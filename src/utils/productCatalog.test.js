@@ -1,4 +1,4 @@
-import { buildJobProductCatalog, getJobMaterialVendorItemId } from "./productCatalog";
+import { buildJobProductCatalog, getJobMaterialVendorItemId, getProductCostInfo, findLinkedProductForVendorItem, getVendorItemCostCents } from "./productCatalog";
 
 const vendor = { id: "vendor", name: "Old supplier name", rate: 3500, sellPrice: 9000, genericItemId: "product" };
 const product = { id: "product", name: "Current product", sellPrice: 12000, preferredVendorItemId: "vendor", taxable: true, availableForJobs: true };
@@ -30,4 +30,27 @@ test("legacy product IDs cannot become supplier IDs when editing material catalo
   expect(getJobMaterialVendorItemId({ genericItemId: "product", itemId: "product" })).toBe("");
   expect(getJobMaterialVendorItemId({ genericItemId: "product", dbItemId: "vendor", itemId: "product" })).toBe("vendor");
   expect(getJobMaterialVendorItemId({ itemId: "legacy-vendor" })).toBe("legacy-vendor");
+});
+
+test("manual cost flows into job products without using the selling price", () => {
+  const result = buildJobProductCatalog([{ id: "manual", name: "Seal", defaultCostCents: 1750, sellPrice: 4500 }], []);
+  expect(result.products[0]).toMatchObject({ rate: 1750, cost: 1750, sellPrice: 4500, dbItemId: "" });
+});
+
+test("preferred supplier cost is used rather than the first or cheapest supplier", () => {
+  const vendors = [{ id: "a", productId: "p", rate: 100 }, { id: "z", productId: "p", rate: 700 }];
+  expect(getProductCostInfo({ id: "p", preferredVendorItemId: "z", defaultCostCents: 999 }, vendors)).toMatchObject({ costCents: 700, vendorItem: { id: "z" }, source: "vendor", minVendorCostCents: 100, maxVendorCostCents: 700 });
+});
+
+test("a free supplier cost remains zero and manual cost takes over after disconnecting", () => {
+  expect(getVendorItemCostCents({ rate: 0, cost: 999 })).toBe(0);
+  expect(getProductCostInfo({ id: "p", defaultCostCents: 500 }, [{ id: "v", productId: "p", rate: 0 }])).toMatchObject({ costCents: 0, minVendorCostCents: 0, maxVendorCostCents: 0 });
+  expect(getProductCostInfo({ id: "p", defaultCostCents: 500 }, [{ id: "v", productId: "other", rate: 0 }])).toMatchObject({ costCents: 500, minVendorCostCents: null, maxVendorCostCents: null });
+});
+
+test("explicit links override obsolete reverse arrays and identical names do not create links", () => {
+  const a = { id: "a", name: "Seal", vendorItemIds: ["v"] }, b = { id: "b", name: "Other seal" };
+  expect(findLinkedProductForVendorItem({ id: "v", productId: "b", name: "Seal" }, [a, b])).toBe(b);
+  expect(findLinkedProductForVendorItem({ id: "unlinked", name: "Seal" }, [a, b])).toBeNull();
+  expect(findLinkedProductForVendorItem({ id: "v" }, [a, { ...b, vendorItemIds: ["v"] }])).toBeNull();
 });

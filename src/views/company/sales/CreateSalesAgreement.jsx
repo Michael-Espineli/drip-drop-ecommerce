@@ -490,6 +490,8 @@ const CreateSalesAgreement = () => {
     atWill: true,
   });
 
+  const usesServiceOnboarding = form.rateType === 'perMonth' && form.billingFrequency === 'monthly' && Number(form.billingFrequencyCount || 1) === 1;
+
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setCustomers([]);
@@ -1095,6 +1097,7 @@ const CreateSalesAgreement = () => {
         .map((term) => String(term.description || '').trim())
         .filter(Boolean);
       const agreement = new SalesAgreement({
+        onboardingWorkflowVersion: usesServiceOnboarding ? 1 : 0,
         companyId: recentlySelectedCompany,
         companyName: selectedCompanyName,
         customerId: form.customerId,
@@ -1132,9 +1135,9 @@ const CreateSalesAgreement = () => {
         billingFrequencyCount: Number(form.billingFrequencyCount || 1),
         paymentTerms: form.paymentTerms,
         invoiceDeliveryMethod: form.invoiceDeliveryMethod,
-        firstInvoiceSendAt: dateFromInput(form.firstInvoiceSendAt),
-        manualBillingNextInvoiceAt: dateFromInput(form.firstInvoiceSendAt),
-        manualBillingAutoSendEnabled: Boolean(form.manualBillingAutoSendEnabled),
+        firstInvoiceSendAt: usesServiceOnboarding ? null : dateFromInput(form.firstInvoiceSendAt),
+        manualBillingNextInvoiceAt: usesServiceOnboarding ? null : dateFromInput(form.firstInvoiceSendAt),
+        manualBillingAutoSendEnabled: usesServiceOnboarding ? false : Boolean(form.manualBillingAutoSendEnabled),
         ...pnlReportingFields,
         ...chemicalBillingFields,
         startDate: dateFromInput(form.startDate),
@@ -1693,6 +1696,7 @@ const CreateSalesAgreement = () => {
                   </label>
                   <input
                     id="firstInvoiceSendAt"
+                    disabled={usesServiceOnboarding}
                     type="date"
                     value={form.firstInvoiceSendAt}
                     onChange={(event) => handleFieldChange('firstInvoiceSendAt', event.target.value)}
@@ -1703,6 +1707,7 @@ const CreateSalesAgreement = () => {
                 <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 lg:self-end">
                   <input
                     type="checkbox"
+                    disabled={usesServiceOnboarding}
                     checked={form.manualBillingAutoSendEnabled}
                     onChange={(event) => handleFieldChange('manualBillingAutoSendEnabled', event.target.checked)}
                   />
@@ -1710,6 +1715,7 @@ const CreateSalesAgreement = () => {
                 </label>
               </div>
 
+              {usesServiceOnboarding && <p className="mt-4 rounded-md bg-blue-50 p-3 text-sm text-blue-900">Monthly billing starts when service signup and payment setup are complete. The full monthly price is paid in advance on the same calendar day, using month-end in shorter months. Office invoice arrangements and optional proration are reviewed on the saved agreement.</p>}
               <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <h3 className="text-sm font-bold text-slate-950">Chemical Billing</h3>

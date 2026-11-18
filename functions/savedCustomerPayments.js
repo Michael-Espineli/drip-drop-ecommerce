@@ -19,11 +19,33 @@ function setupReturnUrl(value,origin){
 }
 
 function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
- async function context(request,reader={get:ref=>ref.get()}){
-  const data=request.data || {},companyId=documentId(data.companyId,'Company'),invoiceId=documentId(data.invoiceId,'Invoice');
-  const actor=await billingActor(db,reader,companyId,request.auth?.uid);
+ async function context(request,reader={get:ref=>ref.get()},{agreementSetup=false,subscriptionId=''}={}){
+  const data=request.data || {};
+  if(agreementSetup&&data.agreementId){
+   const {agreement,company,actor}=await require('./serviceOnboarding').createServiceOnboarding(db,now).context(request,reader);
+   if(agreement.status!=='accepted'||agreement.onboardingBilling?.collectionMethod==='invoice')fail('failed-precondition','Accept the agreement before setting up online payment.');
+   const billing=agreement.onboardingBilling;
+   if(billing?.prorationEnabled&&millis(billing.reviewedStartAt)!==require('./billingCalendar').dayStart(now(),billing.timeZone||company.billingTimeZone||company.timeZone||'UTC').getTime())fail('failed-precondition','The office needs to refresh the prorated first-period preview for today.');
+   const connected=account(company),companyId=agreement.companyId,customerId=documentId(agreement.customerId,'Customer');
+   if(!connected||![company.customerBillingEnabled,company.salesBillingEnabled,company.salesBillingAutomationEnabled].includes(true))fail('failed-precondition','The company needs to finish online billing setup. Contact the office.');
+   const profileId=hash(`${companyId}:${customerId}:${connected}`),profileRef=db.collection('salesPaymentProfiles').doc(profileId);
+   return {data,actor:{...actor,company},companyId,customerId,connected,profileId,profileRef,agreement,
+    invoice:{customerName:agreement.customerName,email:agreement.onboardingBilling?.contact?.email||agreement.email,currency:agreement.currency||'usd'}};
+  }
+  const companyId=documentId(data.companyId,'Company'),invoiceId=documentId(data.invoiceId,'Invoice');
+  let actor;
+  if(subscriptionId){
+   const sub=(await reader.get(db.collection('salesBillingSubscriptions').doc(subscriptionId))).data();
+   const agreement=sub?.agreementId?(await reader.get(db.collection('salesAgreements').doc(sub.agreementId))).data():null;
+   const company=(await reader.get(db.collection('companies').doc(companyId))).data();
+   if(!company||sub?.companyId!==companyId||sub.onboardingWorkflowVersion!==1||sub.onboardingCollectionMethod!=='savedMethod'||sub.status!=='active'||
+    !sub.onboardingPaymentAuthorizedAt||sub.onboardingPaymentMethodId!==data.paymentMethodId||agreement?.status!=='accepted'||agreement.companyId!==companyId||agreement.billingSubscriptionId!==subscriptionId||agreement.onboardingBilling?.collectionMethod==='invoice'||agreement.customerId!==sub.customerId||sub.onboardingAuthorizationHash!==require('./serviceOnboarding').authorizationHash({...agreement,id:sub.agreementId}))
+    fail('failed-precondition','The current agreement does not authorize recurring collection.');
+   actor={uid:'system:onboarding',company};
+  }else actor=await billingActor(db,reader,companyId,request.auth?.uid);
   const snap=await reader.get(db.collection('salesInvoices').doc(invoiceId)),invoice=snap.data();
   if(!invoice||invoice.companyId!==companyId)fail('permission-denied','Select the company that owns this invoice.');
+  if(subscriptionId&&invoice.billingSubscriptionId!==subscriptionId)fail('permission-denied','This invoice is not part of the authorized recurring plan.');
   const customerId=documentId(invoice.customerId,'Customer'),connected=account(actor.company);
   if(!connected||![actor.company.customerBillingEnabled,actor.company.salesBillingEnabled,actor.company.salesBillingAutomationEnabled].includes(true))fail('failed-precondition','Enable customer billing and connect the company’s Stripe account.');
   const profileId=hash(`${companyId}:${customerId}:${connected}`),profileRef=db.collection('salesPaymentProfiles').doc(profileId);
@@ -31,19 +53,24 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
  }
 
  async function setup(request){
-  const ctx=await context(request),{data,actor,companyId,customerId,connected,profileId,profileRef}=ctx;
+  const ctx=await context(request,undefined,{agreementSetup:true}),{data,actor,companyId,customerId,connected,profileId,profileRef}=ctx;
   const requestId=documentId(data.requestId,'Request'),method=data.paymentMethodType;
   if(!['card','ach'].includes(method))fail('invalid-argument','Choose a card or US bank account.');
   if(method==='ach'&&(ctx.invoice.currency || 'usd').toLowerCase()!=='usd')fail('failed-precondition','ACH requires USD billing.');
   const returnTo=setupReturnUrl(data.returnUrl,request.rawRequest?.headers?.origin);
-  const consent=`By saving this payment method, you authorize ${text(actor.company.name).slice(0,150)||'your service company'} to collect invoices you authorize under your service agreement. Amounts and payment dates follow those invoices and your agreement. Contact the company to revoke this authorization. Saving a method does not pay an invoice today.`;
-  const fingerprint=hash({method,returnUrl:returnTo.toString(),consentVersion});
+  const schedule=ctx.agreement?require('./onboardingPolicy').onboardingSchedule(ctx.agreement,actor.company,now()):null;
+  const consent=ctx.agreement
+   ? `You authorize ${text(actor.company.name).slice(0,150)||'your service company'} to charge ${((schedule.initialAmountCents||0)/100).toFixed(2)} ${String(ctx.invoice.currency).toUpperCase()} when setup completes, then ${((ctx.agreement.totalAmountCents||0)/100).toFixed(2)} monthly in advance. Billing uses your signup day${ctx.agreement.onboardingBilling?.scheduleMode==='companyOverride'?' or the company-approved billing day':''}, using month-end in shorter months and returning to the original day afterward. ${schedule.prorated?'The first amount includes the office-approved calendar-day proration. ':''}Contact the company to revoke authorization.`
+   : `By saving this payment method, you authorize ${text(actor.company.name).slice(0,150)||'your service company'} to collect invoices you authorize under your service agreement. Amounts and payment dates follow those invoices and your agreement. Contact the company to revoke this authorization. Saving a method does not pay an invoice today.`;
+  const authorizationHash=ctx.agreement?require('./serviceOnboarding').authorizationHash(ctx.agreement):'';
+  const fingerprint=hash({method,returnUrl:returnTo.toString(),consentVersion,authorizationHash});
   const attemptRef=profileRef.collection('setupAttempts').doc(hash(requestId));
   const attempt=await db.runTransaction(async tx=>{
-   await context(request,tx);
+   await context(request,tx,{agreementSetup:true});
    const [profile,saved]=await Promise.all([tx.get(profileRef),tx.get(attemptRef)]);
    if(saved.exists){if(saved.data().fingerprint!==fingerprint)fail('already-exists','Retry the original payment setup request.');return saved.data();}
-   const value={fingerprint,method,consent,consentVersion,createdAt:now(),createdByUserId:request.auth.uid,status:'creating'};
+   const value={fingerprint,method,consent,consentVersion,createdAt:now(),createdByUserId:request.auth?.uid||'email-link',status:'creating',
+    ...(ctx.agreement?{onboardingAgreementId:ctx.agreement.id,onboardingRevision:Number(ctx.agreement.revisionNumber||0),authorizationHash}:{})};
    tx.set(profileRef,{companyId,customerId,stripeConnectedAccountId:connected,createdAt:profile.data()?.createdAt || now(),updatedAt:now()},{merge:true});
    tx.set(attemptRef,value);return value;
   });
@@ -61,7 +88,16 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
   // A public informational return avoids exposing or requiring a staff session.
   const success=new URL('/customer/payment-method-setup',returnTo.origin);success.searchParams.set('paymentSetup','returned');
   const canceled=new URL('/customer/payment-method-setup',returnTo.origin);canceled.searchParams.set('paymentSetup','canceled');
+  if(ctx.agreement){
+   for(const url of [success,canceled]){
+    url.pathname=`/customer/service-agreements/${encodeURIComponent(ctx.agreement.id)}`;
+    url.searchParams.set('email',ctx.agreement.email||'');
+    const token=ctx.agreement.emailDelivery?.reviewAccessToken;
+    if(token)url.searchParams.set('accessToken',token);
+   }
+  }
   const params={mode:'setup',customer:customerIdStripe,payment_method_types:[method==='ach'?'us_bank_account':'card'],...(method==='ach'?{currency:'usd'}:{}),
+   ...(ctx.agreement?{billing_address_collection:'required',customer_update:{address:'auto',name:'auto'}}:{}),
    metadata,setup_intent_data:{metadata},custom_text:{submit:{message:attempt.consent}},success_url:success.toString(),cancel_url:canceled.toString()};
   const session=attempt.sessionId?await stripe.checkout.sessions.retrieve(attempt.sessionId,{},options):await stripe.checkout.sessions.create(params,{...options,idempotencyKey:`saved_setup_${profileId}_${attemptRef.id}`});
   await attemptRef.set({sessionId:session.id,status:session.status,setupIntentId:id(session.setup_intent),updatedAt:now()},{merge:true});
@@ -80,9 +116,20 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
   if(intent.status==='succeeded'){
    const method=await stripe.paymentMethods.retrieve(id(intent.payment_method),{}, {stripeAccount:connected});
    if(id(method.customer)!==profile.stripeCustomerId||!['card','us_bank_account'].includes(method.type))fail('permission-denied','Saved method does not belong to this customer.');
+   if(method.type==='us_bank_account'){
+    const mandate=id(intent.mandate)?await stripe.mandates.retrieve(id(intent.mandate),{}, {stripeAccount:connected}):null;
+    if(mandate?.status!=='active'||id(mandate.payment_method)!==method.id)fail('failed-precondition','Complete bank verification and authorization before starting service billing.');
+   }
    const details=method[method.type],value={id:method.id,type:method.type,last4:details.last4,bankName:details.bank_name || '',brand:details.brand || '',expMonth:details.exp_month || null,expYear:details.exp_year || null,
     setupIntentId:intent.id,mandateId:id(intent.mandate),consentVersion:attempt.data().consentVersion,consentText:attempt.data().consent,authorizedAt:new Date(intent.created*1000),status:'ready',updatedAt:now()};
    await profileRef.collection('methods').doc(method.id).set(value,{merge:true});
+   if(attempt.data().onboardingAgreementId){
+    const customer=await stripe.customers.retrieve(profile.stripeCustomerId,{}, {stripeAccount:connected});
+    const address=customer.address||{};
+    await require('./serviceOnboarding').createServiceOnboarding(db,now).activatePayment({agreementId:attempt.data().onboardingAgreementId,profileId:profileRef.id,methodId:method.id,authorizedAt:value.authorizedAt,authorizationHash:attempt.data().authorizationHash,
+     contact:{name:customer.name||'',email:customer.email||'',address:{streetAddress:address.line1||'',city:address.city||'',state:address.state||'',zip:address.postal_code||'',country:address.country||'US'}}});
+    await collectOnboardingPeriod(attempt.data().onboardingAgreementId);
+   }
   }
   await attemptRef.set({setupIntentId:intent.id,status:intent.status,verificationUrl:intent.next_action?.verify_with_microdeposits?.hosted_verification_url || '',updatedAt:now()},{merge:true});
   return true;
@@ -113,14 +160,15 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
   return {methods:visible,pending};
  }
 
- async function charge(request){
+ async function charge(request,{subscriptionId=''}={}){
   const data=request.data || {},requestId=documentId(data.requestId,'Request'),methodId=documentId(data.paymentMethodId,'Payment method');
   const authorization=text(data.authorizationReference);
   if(data.authorizationConfirmed!==true||authorization.length<8||authorization.length>1000)fail('invalid-argument','Confirm customer authorization and identify the agreement or approval covering this invoice.');
-  const ctx=await context(request),commandId=hash(`${ctx.companyId}:${ctx.invoiceId}:${requestId}`),commandRef=ctx.invoiceRef.collection('officePaymentAttempts').doc(commandId);
+  const paymentContext=reader=>context(request,reader,{subscriptionId});
+  const ctx=await paymentContext(),commandId=hash(`${ctx.companyId}:${ctx.invoiceId}:${requestId}`),commandRef=ctx.invoiceRef.collection('officePaymentAttempts').doc(commandId);
   const fingerprint=hash({methodId,authorization});
   const reserved=await db.runTransaction(async tx=>{
-   const current=await context(request,tx),[command,profile,method]=await Promise.all([tx.get(commandRef),tx.get(current.profileRef),tx.get(current.profileRef.collection('methods').doc(methodId))]);
+   const current=await paymentContext(tx),[command,profile,method]=await Promise.all([tx.get(commandRef),tx.get(current.profileRef),tx.get(current.profileRef.collection('methods').doc(methodId))]);
    if(command.exists){if(command.data().fingerprint!==fingerprint)fail('already-exists','Retry the original payment instructions.');return command.data();}
    if(current.invoice.stripeInvoiceId||current.invoice.stripeSubscriptionId)fail('failed-precondition','Collect a Stripe-generated invoice through its Stripe invoice payment flow.');
    if(!open(current.invoice)||current.invoice.paymentReviewRequired||current.invoice.paymentProcessing||current.invoice.billingMutation&&millis(current.invoice.billingMutation.startedAt)+120000>now().getTime())fail('failed-precondition','This invoice is closed, under review, or already processing a payment.');
@@ -129,7 +177,7 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
    if(!profile.data()?.stripeCustomerId||!method.exists||method.data().status!=='ready')fail('failed-precondition','Complete payment setup before collecting an invoice.');
    if(method.data().type==='us_bank_account'&&(current.invoice.currency || 'usd').toLowerCase()!=='usd')fail('failed-precondition','ACH requires USD billing.');
    const attempt=current.invoice.portalPaymentAttemptId?await tx.get(current.invoiceRef.collection('portalPaymentAttempts').doc(current.invoice.portalPaymentAttemptId)):null;
-   const value={companyId:ctx.companyId,invoiceId:ctx.invoiceId,customerId:ctx.customerId,connectedAccount:ctx.connected,profileId:ctx.profileId,customer:profile.data().stripeCustomerId,methodId,methodType:method.data().type,mandateId:method.data().mandateId || '',amountCents:amount,currency:(current.invoice.currency || 'usd').toLowerCase(),fingerprint,authorizationReference:authorization,authorizationConfirmed:true,actorUserId:request.auth.uid,createdAt:now(),status:'reserved',portalAttempt:attempt?.data() || null,portalAttemptId:attempt?.id || ''};
+   const value={companyId:ctx.companyId,invoiceId:ctx.invoiceId,customerId:ctx.customerId,connectedAccount:ctx.connected,profileId:ctx.profileId,customer:profile.data().stripeCustomerId,methodId,methodType:method.data().type,mandateId:method.data().mandateId || '',amountCents:amount,currency:(current.invoice.currency || 'usd').toLowerCase(),fingerprint,authorizationReference:authorization,authorizationConfirmed:true,actorUserId:ctx.actor.uid,createdAt:now(),status:'reserved',portalAttempt:attempt?.data() || null,portalAttemptId:attempt?.id || ''};
    tx.set(commandRef,value);tx.set(current.invoiceRef,{officePaymentAttemptId:commandId,paymentProcessing:true,billingMutation:{id:commandId,startedAt:now()}},{merge:true});return value;
   });
   if(reserved.status==='complete')return reserved.result;
@@ -152,7 +200,7 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
     const params={customer:reserved.customer,payment_method:methodId,payment_method_types:[reserved.methodType],amount:reserved.amountCents,currency:reserved.currency,confirm:true,off_session:true,
      application_fee_amount:Math.round(reserved.amountCents*(reserved.methodType==='us_bank_account'?0.19:0.08)/100),
      ...(reserved.mandateId?{mandate:reserved.mandateId}:{}),metadata:{flow:'office_invoice_payment',companyId:ctx.companyId,salesInvoiceId:ctx.invoiceId,paymentAttemptId:commandId,salesPaymentProfileId:ctx.profileId}};
-    await db.runTransaction(async tx=>{await context(request,tx);const current=await tx.get(ctx.invoiceRef),command=await tx.get(commandRef);if(current.data()?.officePaymentAttemptId!==commandId||command.data()?.status==='rejected')fail('aborted','The invoice payment reservation changed.');tx.set(commandRef,{stripeParams:params,processorStartedAt:now()},{merge:true});});
+    await db.runTransaction(async tx=>{await paymentContext(tx);const current=await tx.get(ctx.invoiceRef),command=await tx.get(commandRef);if(current.data()?.officePaymentAttemptId!==commandId||command.data()?.status==='rejected')fail('aborted','The invoice payment reservation changed.');tx.set(commandRef,{stripeParams:params,processorStartedAt:now()},{merge:true});});
    }catch(error){
     // This branch has not attempted a charge. A new request may be made after correcting the issue.
     await db.runTransaction(async tx=>{const [invoice,command]=await Promise.all([tx.get(ctx.invoiceRef),tx.get(commandRef)]);if(command.data()?.stripeParams)return;tx.set(commandRef,{status:'rejected',error:error.message},{merge:true});if(invoice.data()?.officePaymentAttemptId===commandId)tx.set(ctx.invoiceRef,{paymentProcessing:false,billingMutation:null},{merge:true});});
@@ -222,7 +270,24 @@ function createSavedCustomerPayments(db,stripe,now=()=>new Date()){
   if(value.metadata?.flow==='office_invoice_payment'&&event.type.startsWith('payment_intent.'))return syncPayment(value.id,event.account);
   return false;
  }
- return {setup,list,charge,handle,syncSetup,syncPayment};
+ async function collectRecurringInvoice({subscriptionId,invoiceId}){
+  const sub=(await db.collection('salesBillingSubscriptions').doc(subscriptionId).get()).data();
+  if(!sub||sub.onboardingWorkflowVersion!==1||sub.onboardingCollectionMethod!=='savedMethod')return {skipped:true};
+  return charge({data:{companyId:sub.companyId,invoiceId,requestId:`recurring_${invoiceId}`,paymentMethodId:sub.onboardingPaymentMethodId,
+   authorizationConfirmed:true,authorizationReference:`Accepted service agreement ${sub.agreementId}; payment setup ${sub.onboardingPaymentProfileId}`}}, {subscriptionId});
+ }
+ async function collectOnboardingPeriod(agreementId){
+  const agreement=(await db.collection('salesAgreements').doc(agreementId).get()).data();
+  const subscriptionId=agreement?.billingSubscriptionId;
+  if(!subscriptionId)return;
+  const result=await require('./manualRecurringBilling').createManualRecurringBilling(db,now).generate({subscriptionId,scheduled:true});
+  if(result.invoiceId)await collectRecurringInvoice({subscriptionId,invoiceId:result.invoiceId});
+ }
+ return {setup,list,charge,handle,syncSetup,syncPayment,collectRecurringInvoice};
 }
 exports.createSavedCustomerPayments=createSavedCustomerPayments;
 for(const [name,method] of Object.entries({createSavedPaymentSetup:'setup',listSavedPaymentMethods:'list',chargeSavedInvoice:'charge'}))exports[name]=onCall({cors:true},request=>createSavedCustomerPayments(admin.firestore(),createStripeProxy())[method](request));
+exports.createServiceOnboardingCheckout=onCall({cors:true},request=>{
+ if(!request.data?.agreementId)fail('invalid-argument','Select the accepted service agreement.');
+ return createSavedCustomerPayments(admin.firestore(),createStripeProxy()).setup(request);
+});

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useMemo } from "react";
+import React, { useState, useEffect, useContext, useMemo, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   arrayUnion,
@@ -13,9 +13,10 @@ import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
 import Select from "react-select";
-import toast from "react-hot-toast";
 import { fetchCompanyVendors } from "../../../utils/vendors";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { userFacingErrorMessage } from "../../../utils/permissionErrors";
+import { workspaceButtonClass, workspaceSelectStyles } from "../../../components/workspace/workspaceStyles";
 import {
   CATEGORY_OPTIONS,
   databaseItemSelectStyles,
@@ -37,6 +38,7 @@ import {
   uploadItemPhoto,
   validateItemPhotoFile,
 } from "../../../utils/itemPhotos";
+import ProductAvailabilityFields from "../productCatalog/ProductAvailabilityFields";
 import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
 import {
   databaseEquipmentMappingPatch,
@@ -57,7 +59,7 @@ const centsFromDollarInput = (value) => {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
 };
 
-const CreateNewDataBaseItem = () => {
+const CreateNewDataBaseItem = ({ compact = false, onCreated, onCancel, onSavingChange }) => {
   const { recentlySelectedCompany } = useContext(Context);
   const { requirePermission } = useCompanyPermissions();
 
@@ -66,6 +68,16 @@ const CreateNewDataBaseItem = () => {
   const vendorItemsBasePath = location.pathname.toLowerCase().startsWith("/company/settings")
     ? "/company/settings/vendor-items"
     : "/company/items";
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const savingRef = useRef(false);
+  const mounted = useRef(true);
+  const currentCompany = useRef(recentlySelectedCompany);
+  currentCompany.current = recentlySelectedCompany;
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const [billable, setBillable] = useState(false);
 
@@ -101,6 +113,8 @@ const CreateNewDataBaseItem = () => {
   const [productLinkMode, setProductLinkMode] = useState("create");
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [productName, setProductName] = useState("");
+  const [productNameEdited, setProductNameEdited] = useState(false);
+  const [productAvailability, setProductAvailability] = useState({});
   const [productSellPrice, setProductSellPrice] = useState("0");
 
   const [uomList] = useState(UOM_OPTIONS);
@@ -161,6 +175,7 @@ const CreateNewDataBaseItem = () => {
   };
 
   useEffect(() => {
+    let active = true;
     (async () => {
       if (!recentlySelectedCompany) {
         setVenderList([]);
@@ -169,6 +184,7 @@ const CreateNewDataBaseItem = () => {
 
       try {
         const vendors = await fetchCompanyVendors(db, recentlySelectedCompany);
+        if (!active) return;
         setVenderList(vendors);
         if (vendors.length) {
           setVender((current) => current || vendors[0]);
@@ -179,9 +195,11 @@ const CreateNewDataBaseItem = () => {
         console.log("Error loading vendors", error);
       }
     })();
+    return () => { active = false; };
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
+    let active = true;
     (async () => {
       if (!recentlySelectedCompany) {
         setProducts([]);
@@ -190,14 +208,17 @@ const CreateNewDataBaseItem = () => {
 
       try {
         const productSnap = await getDocs(query(productCatalogCollectionRef(db, recentlySelectedCompany), orderBy("commonName")));
+        if (!active) return;
         setProducts(productSnap.docs.map((productDoc) => ({ id: productDoc.id, ...productDoc.data() })));
       } catch (error) {
         console.log("Error loading products", error);
       }
     })();
+    return () => { active = false; };
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
+    let active = true;
     (async () => {
       if (!recentlySelectedCompany) {
         setDosages([]);
@@ -207,11 +228,13 @@ const CreateNewDataBaseItem = () => {
 
       try {
         const dosageSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dosages", "dosages"));
+        if (!active) return;
         setDosages(sortDosageTemplates(dosageSnap.docs.map((dosageDoc) => ({ id: dosageDoc.id, ...dosageDoc.data() }))));
       } catch (error) {
         console.log("Error loading dosages", error);
       }
     })();
+    return () => { active = false; };
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
@@ -238,9 +261,8 @@ const CreateNewDataBaseItem = () => {
   );
 
   useEffect(() => {
-    if (productLinkMode !== "create") return;
-    setProductName((current) => current || itemName);
-  }, [itemName, productLinkMode]);
+    if (productLinkMode === "create" && !productNameEdited) setProductName(itemName);
+  }, [itemName, productLinkMode, productNameEdited]);
 
   useEffect(() => {
     if (productLinkMode !== "create") return;
@@ -305,14 +327,20 @@ const CreateNewDataBaseItem = () => {
 
   async function createNewItem(e) {
     e.preventDefault();
-    if (!requirePermission("852", "create vendor items")) return;
+    if (savingRef.current || !recentlySelectedCompany || !requirePermission("852", "create vendor items")) return;
+    if (!itemName.trim()) { setSaveError("Enter a vendor item name."); return; }
+    const companyId = recentlySelectedCompany;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError("");
+    onSavingChange?.(true);
 
     try {
       if (
         allowsEquipmentMapping &&
         (!equipmentMapping.type || !equipmentMapping.make || !equipmentMapping.model)
       ) {
-        toast.error("Connect this equipment item to universal equipment or enter custom type, make, and model.");
+        setSaveError("Connect this equipment item to universal equipment or enter custom type, make, and model.");
         return;
       }
 
@@ -326,7 +354,7 @@ const CreateNewDataBaseItem = () => {
       const linkedProduct = productLinkMode === "connect" ? selectedProduct?.product || null : null;
 
       if (productLinkMode === "connect" && !linkedProduct) {
-        toast.error("Choose an existing product or switch to creating a new product.");
+        setSaveError("Choose an existing product or switch to creating a new product.");
         return;
       }
 
@@ -338,12 +366,14 @@ const CreateNewDataBaseItem = () => {
       if (photoFile) {
         uploadedPhoto = await uploadItemPhoto({
           storage,
-          companyId: recentlySelectedCompany,
+          companyId,
           file: photoFile,
           itemType: "databaseItems",
           itemId: id,
         });
       }
+
+      if (!mounted.current || currentCompany.current !== companyId) return;
 
       const photoFields = itemPhotoFieldsFromUrl(
         uploadedPhoto.photoUrl,
@@ -359,7 +389,7 @@ const CreateNewDataBaseItem = () => {
         color: color,
         dateUpdated: new Date(),
         description: description,
-        name: itemName,
+        name: itemName.trim(),
         rate: rateCents,
         size: size,
         sku: sku,
@@ -383,6 +413,7 @@ const CreateNewDataBaseItem = () => {
           productId,
           vendorItem: item,
           overrides: {
+            ...productAvailability,
             name: productName || itemName,
             sellPrice: productSellPriceCents,
           },
@@ -400,9 +431,9 @@ const CreateNewDataBaseItem = () => {
 
       const batch = writeBatch(db);
       if (productLinkMode === "create" && productRecord) {
-        batch.set(productCatalogDocRef(db, recentlySelectedCompany, productRecord.id), productRecord);
+        batch.set(productCatalogDocRef(db, companyId, productRecord.id), productRecord);
       } else if (productRecord) {
-        batch.update(productCatalogDocRef(db, recentlySelectedCompany, productRecord.id), {
+        batch.update(productCatalogDocRef(db, companyId, productRecord.id), {
           storeItems: arrayUnion(item.name),
           storeItemsIds: arrayUnion(id),
           vendorItemIds: arrayUnion(id),
@@ -410,51 +441,60 @@ const CreateNewDataBaseItem = () => {
           updatedAt: now,
         });
       }
-      batch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), item);
+      batch.set(doc(db, "companies", companyId, "settings", "dataBase", "dataBase", id), item);
       queueDatabaseItemDosageLinkUpdates(batch, {
-        companyId: recentlySelectedCompany,
+        companyId,
         itemId: id,
         dosages,
         selectedDosageIds: allowsLinkedDosages ? linkedDosageIds : [],
       });
       await batch.commit();
-      navigate(`${vendorItemsBasePath}/detail/${id}`);
+      if (!mounted.current || currentCompany.current !== companyId) return;
+      if (onCreated) onCreated(item);
+      else navigate(`${vendorItemsBasePath}/detail/${id}`);
     } catch (error) {
-      console.log(error);
+      if (mounted.current && currentCompany.current === companyId) setSaveError(userFacingErrorMessage(error, "Could not create this vendor item. Please try again."));
+    } finally {
+      savingRef.current = false;
+      if (mounted.current && currentCompany.current === companyId) { setSaving(false); onSavingChange?.(false); }
     }
   }
 
+  const PhotoContainer = compact ? "details" : "div";
+  const selectStyles = compact ? workspaceSelectStyles() : databaseItemSelectStyles;
+
   return (
-    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-      <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <div className={compact ? "flex max-h-[90vh] min-h-0 flex-col text-slate-900" : "min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4"}>
+      <div className={compact ? "contents" : "w-full space-y-6"}>
+        <section className={compact ? "shrink-0 border-b border-slate-200 bg-white p-5" : "rounded-lg border border-slate-200 bg-white p-5 shadow-sm"}>
+          <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Vendor Items</p>
-              <h2 className="mt-1 text-3xl font-bold text-slate-950">Create Vendor Item</h2>
+              <h2 id="create-vendor-item-title" className={`mt-1 font-bold text-slate-950 ${compact ? "text-xl" : "text-3xl"}`}>Create Vendor Item</h2>
               <p className="mt-1 text-sm text-slate-500">Add a vendor-specific purchasable item and link it to the Product Catalog.</p>
             </div>
 
-            <Link
+            {compact ? <button type="button" disabled={saving} onClick={onCancel} aria-label="Close create vendor item" className={workspaceButtonClass({ tone: "slate" })}>Close</button> : <Link
               className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
               to={vendorItemsBasePath}
             >
               &larr; Back to Vendor Items
-            </Link>
+            </Link>}
           </div>
         </section>
 
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="px-6 py-5 border-b border-slate-200 bg-slate-50">
+        <form onSubmit={createNewItem} className={compact ? "flex min-h-0 flex-1 flex-col overflow-hidden bg-white" : "overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"}>
+          {!compact && <div className="px-6 py-5 border-b border-slate-200 bg-slate-50">
             <div className="text-sm font-semibold text-slate-700">Vendor Item Details</div>
             <div className="text-xs text-slate-500 mt-1">Fill out the supplier-specific item details and product catalog link.</div>
-          </div>
+          </div>}
 
-          <div className="p-6 space-y-4">
+          <div className={compact ? "min-h-0 overflow-y-auto" : ""}>
+          <fieldset disabled={saving} className={compact ? "grid min-w-0 gap-4 p-5 sm:grid-cols-2" : "min-w-0 space-y-4 p-6"}>
             {/* Item Name */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700">Vendor Item Name</label>
-              <input
+              <label htmlFor="vendor-item-name" className="block text-sm font-semibold text-slate-700">Vendor Item Name</label>
+              <input id="vendor-item-name" required autoFocus={compact}
                 className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setItemName(e.target.value)}
                 type="text"
@@ -463,8 +503,92 @@ const CreateNewDataBaseItem = () => {
               />
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            {/* SKU */}
+            <div>
+              <label htmlFor="vendor-item-sku" className="block text-sm font-semibold text-slate-700">SKU</label>
+              <input id="vendor-item-sku"
+                className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                onChange={(e) => setSku(e.target.value)}
+                type="text"
+                placeholder="e.g. SKU-1234"
+                value={sku}
+              />
+            </div>
+
+            {/* Selects Grid */}
+            <div className="grid grid-cols-1 gap-4 sm:col-span-2 sm:grid-cols-2">
+              <div>
+                <label htmlFor="vendor-item-vendor" className="block text-sm font-semibold text-slate-700">Vendor</label>
+                <div className="mt-2">
+                  <Select inputId="vendor-item-vendor"
+                    value={vender}
+                    options={venderList}
+                    onChange={handleVenderChange}
+                    isSearchable
+                    placeholder="Select a Vendor"
+                    styles={selectStyles}
+                    isDisabled={saving}
+                    menuPosition={compact ? "fixed" : "absolute"}
+                    theme={databaseItemSelectTheme}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="vendor-item-uom" className="block text-sm font-semibold text-slate-700">U.O.M.</label>
+                <div className="mt-2">
+                  <Select inputId="vendor-item-uom"
+                    value={uom}
+                    options={uomList}
+                    onChange={handleUOMChange}
+                    isSearchable
+                    placeholder="Select a UOM"
+                    styles={selectStyles}
+                    isDisabled={saving}
+                    menuPosition={compact ? "fixed" : "absolute"}
+                    theme={databaseItemSelectTheme}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="vendor-item-category" className="block text-sm font-semibold text-slate-700">Category</label>
+                <div className="mt-2">
+                  <Select inputId="vendor-item-category"
+                    value={category}
+                    options={categoryList}
+                    onChange={handleCategoryChange}
+                    isSearchable
+                    placeholder="Select a Category"
+                    styles={selectStyles}
+                    isDisabled={saving}
+                    menuPosition={compact ? "fixed" : "absolute"}
+                    theme={databaseItemSelectTheme}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="vendor-item-subcategory" className="block text-sm font-semibold text-slate-700">Sub-category</label>
+                <div className="mt-2">
+                  <Select inputId="vendor-item-subcategory"
+                    value={subcategory}
+                    options={subcategoryList}
+                    onChange={handleSubcategoryChange}
+                    isSearchable
+                    placeholder="Select a Sub-category"
+                    styles={selectStyles}
+                    isDisabled={saving}
+                    menuPosition={compact ? "fixed" : "absolute"}
+                    theme={databaseItemSelectTheme}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <PhotoContainer className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+              {compact && <summary className="cursor-pointer text-sm font-semibold text-slate-700">Photo (optional)</summary>}
+              <div className={`flex flex-col gap-4 sm:flex-row sm:items-start ${compact ? "mt-4" : ""}`}>
                 <div className="h-24 w-24 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-white">
                   {photoPreviewUrl || photoUrl ? (
                     <img
@@ -481,15 +605,15 @@ const CreateNewDataBaseItem = () => {
 
                 <div className="min-w-0 flex-1 space-y-3">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700">Vendor Item Photo</label>
-                    <input
+                    <label htmlFor="vendor-item-photo" className="block text-sm font-semibold text-slate-700">Vendor Item Photo</label>
+                    <input id="vendor-item-photo"
                       className="mt-2 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
                       type="file"
                       accept="image/*"
                       onChange={handlePhotoFileChange}
                     />
                     {photoFile ? (
-                    <p className="mt-1 text-xs text-slate-500">{photoFile.name} will upload when you create the product.</p>
+                    <p className="mt-1 text-xs text-slate-500">{photoFile.name} will upload when you create the vendor item.</p>
                     ) : null}
                     {photoError ? (
                       <p className="mt-1 text-xs font-semibold text-red-600">{photoError}</p>
@@ -497,8 +621,8 @@ const CreateNewDataBaseItem = () => {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700">Photo URL</label>
-                    <input
+                    <label htmlFor="vendor-item-photo-url" className="block text-sm font-semibold text-slate-700">Photo URL</label>
+                    <input id="vendor-item-photo-url"
                       className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                       type="url"
                       placeholder="https://..."
@@ -508,14 +632,14 @@ const CreateNewDataBaseItem = () => {
                   </div>
                 </div>
               </div>
-            </div>
+            </PhotoContainer>
 
             {/* Rate */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700">Rate</label>
+              <label htmlFor="vendor-item-cost" className="block text-sm font-semibold text-slate-700">Rate</label>
               <div className="mt-2 flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
                 <span className="text-sm font-semibold text-slate-500">$</span>
-                <input
+                <input id="vendor-item-cost"
                   className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
                   onChange={(e) => rateInput(e)}
                   type="text"
@@ -523,7 +647,7 @@ const CreateNewDataBaseItem = () => {
                   value={rate}
                 />
               </div>
-              <div className="text-xs text-slate-500 mt-1">Internal cost rate, stored in cents.</div>
+              <div className="text-xs text-slate-500 mt-1">Supplier unit cost.</div>
             </div>
 
             {/* Billable Toggle + Billing Rate */}
@@ -538,6 +662,7 @@ const CreateNewDataBaseItem = () => {
 
                 {billable ? (
                   <button
+                    type="button"
                     onClick={(e) => billableFalse(e)}
                     className="inline-flex items-center justify-center rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
                   >
@@ -545,6 +670,7 @@ const CreateNewDataBaseItem = () => {
                   </button>
                 ) : (
                   <button
+                    type="button"
                     onClick={(e) => billableTrue(e)}
                     className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
@@ -555,10 +681,10 @@ const CreateNewDataBaseItem = () => {
 
               {billable && (
                 <div className="mt-4">
-                  <label className="block text-sm font-semibold text-slate-700">Sell Price</label>
+                  <label htmlFor="vendor-item-sell-price" className="block text-sm font-semibold text-slate-700">Sell Price</label>
                   <div className="mt-2 flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
                     <span className="text-sm font-semibold text-slate-500">$</span>
-                    <input
+                    <input id="vendor-item-sell-price"
                       className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
                       onChange={(e) => sellPriceInput(e)}
                       type="text"
@@ -570,12 +696,12 @@ const CreateNewDataBaseItem = () => {
               )}
             </div>
 
-            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 sm:col-span-2">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                   <div className="text-sm font-semibold text-blue-950">Product Catalog Link</div>
                   <div className="mt-1 text-xs leading-5 text-blue-800">
-                    Products are the generic items used on invoices and jobs. Vendor items stay supplier-specific for receipts and audit history.
+                    Connect customer pricing for jobs and approvals while keeping supplier costs and receipt history with this vendor item.
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -602,9 +728,9 @@ const CreateNewDataBaseItem = () => {
 
               {productLinkMode === "connect" ? (
                 <div className="mt-4">
-                  <label className="block text-sm font-semibold text-blue-950">Existing Product</label>
+                  <label htmlFor="vendor-item-existing-product" className="block text-sm font-semibold text-blue-950">Existing Product</label>
                   <div className="mt-2">
-                    <Select
+                    <Select inputId="vendor-item-existing-product"
                       value={selectedProduct}
                       options={productOptions}
                       onChange={setSelectedProduct}
@@ -614,7 +740,9 @@ const CreateNewDataBaseItem = () => {
                       filterOption={(option, inputValue) =>
                         option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
                       }
-                      styles={databaseItemSelectStyles}
+                      styles={selectStyles}
+                    isDisabled={saving}
+                    menuPosition={compact ? "fixed" : "absolute"}
                       theme={databaseItemSelectTheme}
                     />
                   </div>
@@ -624,20 +752,20 @@ const CreateNewDataBaseItem = () => {
               {productLinkMode === "create" ? (
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <div>
-                    <label className="block text-sm font-semibold text-blue-950">Product Name</label>
-                    <input
+                    <label htmlFor="vendor-item-product-name" className="block text-sm font-semibold text-blue-950">Product Name</label>
+                    <input id="vendor-item-product-name"
                       className="mt-2 w-full rounded-md border border-blue-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      onChange={(e) => setProductName(e.target.value)}
+                      onChange={(e) => { setProductName(e.target.value); setProductNameEdited(true); }}
                       type="text"
                       placeholder="Generic product name"
                       value={productName}
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-blue-950">Product Sell Price</label>
+                    <label htmlFor="vendor-item-product-price" className="block text-sm font-semibold text-blue-950">Product Sell Price</label>
                     <div className="mt-2 flex items-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
                       <span className="text-sm font-semibold text-slate-500">$</span>
-                      <input
+                      <input id="vendor-item-product-price"
                         className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
                         onChange={(e) => setProductSellPrice(e.target.value.replace(/[^\d.]/g, ""))}
                         type="text"
@@ -646,90 +774,21 @@ const CreateNewDataBaseItem = () => {
                       />
                     </div>
                   </div>
+                  <ProductAvailabilityFields
+                    className="md:col-span-2"
+                    value={productAvailability}
+                    onChange={(patch) => setProductAvailability((current) => ({ ...current, ...patch }))}
+                    disabled={saving}
+                  />
                 </div>
               ) : null}
             </div>
 
-            {/* SKU */}
-            <div>
-              <label className="block text-sm font-semibold text-slate-700">SKU</label>
-              <input
-                className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                onChange={(e) => setSku(e.target.value)}
-                type="text"
-                placeholder="e.g. SKU-1234"
-                value={sku}
-              />
-            </div>
-
-            {/* Selects Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Vendor</label>
-                <div className="mt-2">
-                  <Select
-                    value={vender}
-                    options={venderList}
-                    onChange={handleVenderChange}
-                    isSearchable
-                    placeholder="Select a Vendor"
-                    styles={databaseItemSelectStyles}
-                    theme={databaseItemSelectTheme}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">U.O.M.</label>
-                <div className="mt-2">
-                  <Select
-                    value={uom}
-                    options={uomList}
-                    onChange={handleUOMChange}
-                    isSearchable
-                    placeholder="Select a UOM"
-                    styles={databaseItemSelectStyles}
-                    theme={databaseItemSelectTheme}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Category</label>
-                <div className="mt-2">
-                  <Select
-                    value={category}
-                    options={categoryList}
-                    onChange={handleCategoryChange}
-                    isSearchable
-                    placeholder="Select a Category"
-                    styles={databaseItemSelectStyles}
-                    theme={databaseItemSelectTheme}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Sub-category</label>
-                <div className="mt-2">
-                  <Select
-                    value={subcategory}
-                    options={subcategoryList}
-                    onChange={handleSubcategoryChange}
-                    isSearchable
-                    placeholder="Select a Sub-category"
-                    styles={databaseItemSelectStyles}
-                    theme={databaseItemSelectTheme}
-                  />
-                </div>
-              </div>
-            </div>
-
             {/* Color / Size / Description */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:col-span-2 sm:grid-cols-2">
               <div>
-                <label className="block text-sm font-semibold text-slate-700">Color</label>
-                <input
+                <label htmlFor="vendor-item-color" className="block text-sm font-semibold text-slate-700">Color</label>
+                <input id="vendor-item-color"
                   className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   onChange={(e) => setColor(e.target.value)}
                   type="text"
@@ -739,8 +798,8 @@ const CreateNewDataBaseItem = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-slate-700">Size</label>
-                <input
+                <label htmlFor="vendor-item-size" className="block text-sm font-semibold text-slate-700">Size</label>
+                <input id="vendor-item-size"
                   className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   onChange={(e) => setSize(e.target.value)}
                   type="text"
@@ -751,8 +810,8 @@ const CreateNewDataBaseItem = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-slate-700">Description</label>
-              <input
+              <label htmlFor="vendor-item-description" className="block text-sm font-semibold text-slate-700">Description</label>
+              <input id="vendor-item-description"
                 className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setDescription(e.target.value)}
                 type="text"
@@ -762,8 +821,8 @@ const CreateNewDataBaseItem = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-slate-700">Tracking</label>
-              <input
+              <label htmlFor="vendor-item-tracking" className="block text-sm font-semibold text-slate-700">Tracking</label>
+              <input id="vendor-item-tracking"
                 className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setTracking(e.target.value)}
                 type="text"
@@ -773,7 +832,7 @@ const CreateNewDataBaseItem = () => {
             </div>
 
             {allowsLinkedDosages && (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="text-sm font-semibold text-slate-800">Linked Dosages</div>
@@ -838,7 +897,7 @@ const CreateNewDataBaseItem = () => {
             )}
 
             {allowsEquipmentMapping && (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
                 <div className="mb-4">
                   <div className="text-sm font-semibold text-slate-800">Equipment Mapping</div>
                   <div className="mt-1 text-xs text-slate-500">
@@ -856,23 +915,20 @@ const CreateNewDataBaseItem = () => {
                 />
               </div>
             )}
+          </fieldset>
           </div>
 
           {/* Actions */}
-          <div className="px-6 py-5 border-t border-slate-200 bg-white">
-            <button
-              onClick={(e) => {
-                createNewItem(e);
-              }}
-              className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-            >
-              Create Vendor Item
-            </button>
-            <div className="text-xs text-slate-500 mt-2 text-center">
-              This will add the supplier-specific item and any selected product catalog link.
+          <div className="shrink-0 border-t border-slate-200 bg-white px-5 py-4">
+            {saveError && <p role="alert" className="mb-3 text-sm font-semibold text-red-700">{saveError}</p>}
+            <div className="flex flex-wrap justify-end gap-2">
+              {compact && <button type="button" disabled={saving} onClick={onCancel} className={workspaceButtonClass({ tone: "slate" })}>Cancel</button>}
+              <button type="submit" disabled={saving || !recentlySelectedCompany} className={workspaceButtonClass({ tone: "blue", className: compact ? "" : "w-full" })}>
+                {saving ? "Creating..." : "Create Vendor Item"}
+              </button>
             </div>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ import useServicePayrollData from "../../../hooks/useServicePayrollData";
 import { serializeServiceTasks } from "../../../utils/payroll/servicePayrollPreview";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, writeBatch } from "firebase/firestore";
+import ProductAvailabilityFields from "../productCatalog/ProductAvailabilityFields";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
@@ -1042,21 +1043,27 @@ const JobTemplates = () => {
         dateUpdated: new Date(),
       };
 
-      const sellable = buildProductFromVendorItem({ productId: `com_generic_${uuidv4()}`, vendorItem: product });
+      const sellable = buildProductFromVendorItem({
+        productId: `com_generic_${uuidv4()}`,
+        vendorItem: product,
+        overrides: databaseProductForm.productAvailability,
+      });
       const batch = writeBatch(db);
       batch.set(productCatalogDocRef(db, recentlySelectedCompany, sellable.id), sellable);
       batch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", productId), { ...product, ...buildVendorItemProductPatch(sellable) });
       await batch.commit();
-      const option = buildJobProductCatalog([sellable], [product]).products[0];
-      setDatabaseProducts((items) => (
-        [...items.filter((item) => item.id !== option.id), option]
-          .sort((left, right) => databaseProductLabel(left).localeCompare(databaseProductLabel(right)))
-      ));
-      applyDatabaseProductToForm(option.id, option);
+      const [option] = buildJobProductCatalog([sellable], [product]).products;
+      if (option) {
+        setDatabaseProducts((items) => (
+          [...items.filter((item) => item.id !== option.id), option]
+            .sort((left, right) => databaseProductLabel(left).localeCompare(databaseProductLabel(right)))
+        ));
+        applyDatabaseProductToForm(option.id, option);
+      }
       setDatabaseProductPickerOpen(false);
       setShowDatabaseProductCreator(false);
       setDatabaseProductForm(emptyDatabaseProductForm());
-      setActionMessage("Database product created and selected.");
+      setActionMessage(option ? "Database product created and selected." : "Database product created.");
     } catch (err) {
       console.error("Error creating product from job template:", err);
       setActionError(userFacingErrorMessage(err, "Could not create product."));
@@ -1886,6 +1893,15 @@ const JobTemplates = () => {
         </label>
       </div>
 
+      <ProductAvailabilityFields
+        className="mt-3"
+        value={databaseProductForm.productAvailability}
+        onChange={(patch) => setDatabaseProductForm((current) => ({
+          ...current,
+          productAvailability: { ...current.productAvailability, ...patch },
+        }))}
+        disabled={creatingDatabaseProduct}
+      />
       <div className="mt-3 flex justify-end">
         <button
           type="button"
@@ -1893,7 +1909,11 @@ const JobTemplates = () => {
           disabled={creatingDatabaseProduct}
           className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {creatingDatabaseProduct ? "Creating..." : "Create & Select"}
+          {creatingDatabaseProduct ? "Creating..." : (
+            databaseProductForm.productAvailability?.active === false || databaseProductForm.productAvailability?.availableForJobs === false
+              ? "Create Product"
+              : "Create & Select"
+          )}
         </button>
       </div>
     </div>

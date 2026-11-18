@@ -2831,6 +2831,14 @@ const ServiceStopDetails = () => {
         if (!requirePermission("244", "update service stops")) return;
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
 
+        if (!serviceStop.jobId && !/estimate|survey|inspection/i.test(serviceStop.type || serviceStop.serviceStopTypeUseCaseRawValue || '') && serviceStop.serviceLocationId) {
+            const location = await getDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceStop.serviceLocationId));
+            const gate = location.data()?.serviceOnboarding;
+            if (gate?.required && !['ready', 'active'].includes(gate.status)) {
+                toast.error('The office must complete onboarding and release the first routine service.');
+                return;
+            }
+        }
         const selectedTaskIdSet = new Set(manualFinishTaskIds);
         const tasksToFinish = unfinishedManualFinishTasks.filter((task) => selectedTaskIdSet.has(task.id));
         const linkedJobId = serviceStop.jobId?.id || serviceStop.jobId || "";
@@ -4010,6 +4018,7 @@ const ServiceStopDetails = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
+                {serviceLocation?.serviceOnboarding?.required && serviceLocation.serviceOnboarding.status === 'pending' && !serviceStop.jobId && !/estimate|survey|inspection/i.test(serviceStop.type || '') && <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">First routine service is awaiting office release. <Link to={`/company/sales/agreements/${serviceLocation.serviceOnboarding.agreementId}`} className="font-semibold underline">Review onboarding</Link></div>}
                 <WorkspaceRecordHeader title={<>Service Stop Details</>} eyebrow="Company operations"><div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <Link

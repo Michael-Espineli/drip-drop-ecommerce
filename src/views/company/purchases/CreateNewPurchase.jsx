@@ -8,8 +8,7 @@ import {
   getDocs,
   orderBy,
   query,
-  setDoc,
-  updateDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import DatePicker from "react-datepicker";
@@ -17,6 +16,7 @@ import "react-datepicker/dist/react-datepicker.css";
 import Select from "react-select";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
+import ProductAvailabilityFields from "../productCatalog/ProductAvailabilityFields";
 import { Context } from "../../../context/AuthContext";
 import { db, storage } from "../../../utils/config";
 import { fetchCompanyVendors } from "../../../utils/vendors";
@@ -24,7 +24,7 @@ import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../util
 import {
   buildProductFromVendorItem,
   buildVendorItemProductPatch,
-  findSuggestedProductForVendorItem,
+  findLinkedProductForVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
   productCatalogCollectionRef,
@@ -160,11 +160,11 @@ const vendorItemMatchesVendor = (item = {}, vendor = null) => {
 const vendorItemProductLink = (vendorItem, products = []) => {
   if (!vendorItem) return { productId: "", productName: "" };
 
-  const suggestedProduct = findSuggestedProductForVendorItem(vendorItem, products);
-  const productId = suggestedProduct?.id || vendorItem.productId || vendorItem.genericItemId || "";
+  const suggestedProduct = findLinkedProductForVendorItem(vendorItem, products);
+  const productId = suggestedProduct?.id || "";
   const productName = suggestedProduct
     ? getProductDisplayName(suggestedProduct)
-    : vendorItem.productName || vendorItem.genericItemName || "";
+    : "";
 
   return { productId, productName };
 };
@@ -216,6 +216,7 @@ const CreateNewPurchase = () => {
 
   const [loadingSelectors, setLoadingSelectors] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const receiptSaveId = useRef(null);
   const [isCreatingDatabaseItem, setIsCreatingDatabaseItem] = useState(false);
   const [showCreateItemModal, setShowCreateItemModal] = useState(false);
 
@@ -540,7 +541,8 @@ const CreateNewPurchase = () => {
     const quantityNumber = numberFromInput(quantity);
     const unitCost = dollarsFromCents(selectedVendorItem.rate) || "0.00";
     const productLink = vendorItemProductLink(selectedVendorItem, products);
-    const billingRateCents = Number(
+    const linkedProduct = findLinkedProductForVendorItem(selectedVendorItem, products);
+    const billingRateCents = linkedProduct ? getProductSellPriceCents(linkedProduct) : Number(
       selectedVendorItem.billingRate ?? selectedVendorItem.sellPrice ?? selectedVendorItem.defaultSellPrice ?? 0
     );
     const id = `comp_pi_${uuidv4()}`;
@@ -549,7 +551,7 @@ const CreateNewPurchase = () => {
       sku: selectedVendorItem.sku || "",
       itemId: selectedVendorItem.id,
       name: selectedVendorItem.name || selectedVendorItem.description || selectedVendorItem.sku || "Purchased Item",
-      billable: Boolean(selectedVendorItem.billable),
+      billable: Boolean(linkedProduct?.billable ?? selectedVendorItem.billable),
       rate: unitCost,
       quantity: quantityNumber,
       quantityString: quantity,
@@ -679,32 +681,26 @@ const CreateNewPurchase = () => {
         tracking: "",
       };
 
+      const catalogBatch = writeBatch(db);
       if (databaseItemForm.productLinkMode === "create") {
         const productId = `com_prod_${uuidv4()}`;
         linkedProduct = buildProductFromVendorItem({
           productId,
           vendorItem: item,
           overrides: {
+            ...databaseItemForm.productAvailability,
             name: databaseItemForm.productName || databaseItemForm.name,
             sellPrice: productSellPriceCents || sellPriceCents,
           },
           source: "generalReceiptVendorItemCreate",
           now,
         });
-        await setDoc(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), linkedProduct);
-        setProducts((prev) =>
-          [...prev, linkedProduct].sort((first, second) =>
-            getProductDisplayName(first).localeCompare(getProductDisplayName(second))
-          )
-        );
+        catalogBatch.set(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), linkedProduct);
       } else if (linkedProduct) {
-        await updateDoc(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), {
+        catalogBatch.update(productCatalogDocRef(db, recentlySelectedCompany, linkedProduct.id), {
           storeItems: arrayUnion(item.name),
           storeItemsIds: arrayUnion(itemId),
           vendorItemIds: arrayUnion(itemId),
-          active: true,
-          availableForPartPurchase: true,
-          partPurchaseAvailable: true,
           dateUpdated: now,
           updatedAt: now,
         });
@@ -717,7 +713,9 @@ const CreateNewPurchase = () => {
         };
       }
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId), item);
+      catalogBatch.set(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId), item);
+      await catalogBatch.commit();
+      if (linkedProduct && databaseItemForm.productLinkMode === "create") setProducts((prev) => [...prev, linkedProduct]);
 
       const productLink = vendorItemProductLink(item, linkedProduct ? [...products, linkedProduct] : products);
       const nextVendorItem = {
@@ -772,7 +770,8 @@ const CreateNewPurchase = () => {
 
     setIsSaving(true);
     try {
-      const receiptId = `com_rec_${uuidv4()}`;
+      const receiptId = receiptSaveId.current || `com_rec_${uuidv4()}`;
+      receiptSaveId.current = receiptId;
       const purchasedItemIds = [];
       const pdfUrlList = await uploadActiveSourceFile(receiptId);
       const receiptNotes = normalizeTextValue(notes);
@@ -782,12 +781,14 @@ const CreateNewPurchase = () => {
       const selectedTechId = getCompanyUserId(selectedUser);
       const selectedTechName = selectedUser?.userName || selectedUser?.label || "";
 
+      if (purchaseItemList.length > 499) throw new Error("Save at most 499 line items in one receipt.");
+      const batch = writeBatch(db);
       for (const item of purchaseItemList) {
         const price = centsFromDollarInput(item.rate);
         const billingRate = Number(item.billingRate || 0);
 
         purchasedItemIds.push(item.id);
-        await setDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", item.id), {
+        batch.set(doc(db, "companies", recentlySelectedCompany, "purchasedItems", item.id), {
           id: item.id,
           receiptId,
           invoiceNum: reference,
@@ -798,6 +799,8 @@ const CreateNewPurchase = () => {
           techId: selectedTechId,
           techName: selectedTechName,
           itemId: item.itemId,
+          dbItemId: item.itemId,
+          dataBaseItemId: item.itemId,
           name: item.name,
           category: normalizePurchaseCategory(item.category),
           subCategory: item.subCategory || "",
@@ -830,7 +833,7 @@ const CreateNewPurchase = () => {
         });
       }
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "receipts", receiptId), {
+      batch.set(doc(db, "companies", recentlySelectedCompany, "receipts", receiptId), {
         id: receiptId,
         invoiceNum: reference,
         date: purchaseDate,
@@ -849,6 +852,9 @@ const CreateNewPurchase = () => {
         source: "generalReceiptCreate",
       });
 
+      await batch.commit();
+
+      receiptSaveId.current = null;
       toast.success("Receipt created.");
 
       if (!addAnother) {
@@ -1529,6 +1535,12 @@ const CreateNewPurchase = () => {
                         placeholder="0.00"
                       />
                     </label>
+                    <ProductAvailabilityFields
+                      className="sm:col-span-2"
+                      value={databaseItemForm.productAvailability}
+                      onChange={(patch) => updateDatabaseItemForm({ productAvailability: { ...databaseItemForm.productAvailability, ...patch } })}
+                      disabled={isCreatingDatabaseItem}
+                    />
                   </div>
                 ) : null}
               </div>

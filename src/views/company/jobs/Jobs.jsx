@@ -3,7 +3,7 @@ import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { jobStatusClass } from '../../../utils/statusPresentation';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { workspaceButtonClass } from '../../../components/workspace/workspaceStyles';
-import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from "react";
 import {
     doc,
     query,
@@ -19,7 +19,7 @@ import CompanyUserSelect from "../../../components/CompanyUserSelect";
 import { Job } from "../../../utils/models/Job";
 import { format } from "date-fns";
 import { useNavigate, useParams } from "react-router-dom";
-import { FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
+import { FaRegCommentDots, FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { UPDATE_JOBS_PERMISSION_ID } from "../../../utils/companyPermissions";
@@ -41,6 +41,7 @@ import { filterRecordsByCustomerTags } from "../../../utils/customerTags";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import CreateJobFlowLauncher from "./CreateJobFlowLauncher";
+import JobCommentsDialog from "./JobCommentsDialog";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
     "Estimate Pending",
@@ -438,6 +439,8 @@ const Jobs = () => {
         finishedOutstanding: 0,
     });
     const [commentCounts, setCommentCounts] = useState({});
+    const [commentJob, setCommentJob] = useState(null);
+    const liveCommentCounts = useRef({});
     const [companyUserOptions, setCompanyUserOptions] = useState([]);
 
     const {
@@ -561,6 +564,15 @@ const Jobs = () => {
         () => getInitialJobListView(view),
         [view, getInitialJobListView]
     );
+
+    useEffect(() => {
+        setCommentJob(null);
+    }, [recentlySelectedCompany, currentJobListView]);
+
+    const handleCommentCountChange = useCallback((jobId, count) => {
+        liveCommentCounts.current[jobId] = count;
+        setCommentCounts((current) => ({ ...current, [jobId]: count }));
+    }, []);
 
     const applyJobListViewFilters = useCallback((nextView) => {
         setCustomFiltersActive(false);
@@ -833,6 +845,8 @@ const Jobs = () => {
     }, [fetchAllJobs]);
 
     useEffect(() => {
+        let cancelled = false;
+        liveCommentCounts.current = {};
         const fetchCommentCounts = async () => {
             if (!recentlySelectedCompany || visibleJobs.length === 0) {
                 setCommentCounts({});
@@ -870,13 +884,14 @@ const Jobs = () => {
                     return acc;
                 }, {});
 
-                setCommentCounts(countsMap);
+                if (!cancelled) setCommentCounts({ ...countsMap, ...liveCommentCounts.current });
             } catch (error) {
                 console.error("Error fetching comment counts: ", error);
             }
         };
 
         fetchCommentCounts();
+        return () => { cancelled = true; };
     }, [visibleJobs, recentlySelectedCompany]);
 
     const handleApplyFilters = (
@@ -1728,8 +1743,19 @@ const Jobs = () => {
                                                 </div>
                                             </td>
                                             <td className="whitespace-nowrap border-r border-slate-200 px-5 py-3 text-sm font-semibold text-slate-900">
-                                                <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        setCommentJob({ job, companyId: recentlySelectedCompany, view: currentJobListView });
+                                                    }}
+                                                    aria-label={`Comments for job ${displayReferenceValue(job.internalId, "Job")}, ${commentCounts[job.id] || 0} unresolved`}
+                                                    aria-haspopup="dialog"
+                                                    title="View, add, and resolve job comments"
+                                                    className="flex items-center gap-2 rounded-md p-0 text-blue-700 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                >
                                                     <span>{displayReferenceValue(job.internalId, "Job")}</span>
+                                                    <FaRegCommentDots className="h-4 w-4 text-slate-400" aria-hidden="true" />
 
                                                     {(commentCounts[job.id] || 0) > 0 && (
                                                         <span
@@ -1739,7 +1765,7 @@ const Jobs = () => {
                                                             {commentCounts[job.id]}
                                                         </span>
                                                     )}
-                                                </div>
+                                                </button>
                                             </td>
 
                                             <td className="whitespace-nowrap border-r border-slate-200 bg-amber-50/60 px-5 py-3 text-sm font-semibold text-slate-900">
@@ -1793,6 +1819,16 @@ const Jobs = () => {
                 <FilterModal
                     onClose={() => setShowFilterModal(false)}
                     applyFilters={handleApplyFilters}
+                />
+            )}
+
+            {commentJob && commentJob.companyId === recentlySelectedCompany && commentJob.view === currentJobListView && (
+                <JobCommentsDialog
+                    key={`${commentJob.companyId}/${commentJob.job.id}`}
+                    companyId={commentJob.companyId}
+                    job={commentJob.job}
+                    onClose={() => setCommentJob(null)}
+                    onCommentCountChange={handleCommentCountChange}
                 />
             )}
 

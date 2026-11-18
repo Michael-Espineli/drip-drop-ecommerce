@@ -254,6 +254,52 @@ beforeEach(() => {
   appPrompt.mockResolvedValue(null);
 });
 
+test("every job detail section can open and close the history pop-up", async () => {
+  await openJob();
+  expect(screen.queryByRole("button", { name: /^History\b/ })).not.toBeInTheDocument();
+
+  for (const section of ["Overview", "Create Plans", "Actual", "Billing"]) {
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${section}\\b`) }));
+    expect(screen.queryByRole("dialog", { name: "Job History" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("View job history", { selector: "button" }));
+    const history = screen.getByRole("dialog", { name: "Job History" });
+    expect(within(history).getByRole("heading", { name: "Timeline" })).toBeInTheDocument();
+    expect(within(history).getByRole("button", { name: "New Change Order" })).toBeInTheDocument();
+    fireEvent.click(within(history).getByRole("button", { name: "Close" }));
+    expect(history).not.toBeInTheDocument();
+  }
+});
+
+test("old history links open the pop-up and change-order notes can take users to Billing", async () => {
+  const readSnapshot = onSnapshot.getMockImplementation();
+  onSnapshot.mockImplementation((ref, callback, ...args) => {
+    const path = ref.path || ref;
+    if (path.endsWith("/workOrders/job-1/history")) {
+      callback({ docs: [snapshot("event-1", { title: "Scope reviewed" })] });
+      return () => {};
+    }
+    if (path.endsWith("/workOrders/job-1/changeOrders")) {
+      callback({ docs: [snapshot("order-1", {
+        title: "Replace pump",
+        customerMessage: "The new pump is included in this estimate.",
+        laborCostImpactCents: 1500,
+        materialCostImpactCents: 3500,
+      })] });
+      return () => {};
+    }
+    return readSnapshot(ref, callback, ...args);
+  });
+
+  await openJob("/company/jobs/detail/job-1/history");
+  const history = screen.getByRole("dialog", { name: "Job History" });
+  expect(within(history).getByText("Scope reviewed")).toBeInTheDocument();
+  expect(within(history).getByText("Replace pump")).toBeInTheDocument();
+  expect(within(history).getByText("Cost Impact").parentElement).toHaveTextContent("$50.00");
+  fireEvent.click(within(history).getByRole("button", { name: "Use In Estimate" }));
+  expect(history).not.toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Billing", exact: true })).toBeInTheDocument();
+});
+
 test.each(["button", "search"])("creating a payroll pay item from the %s selects it without saving or clearing the service draft", async (entry) => {
   mockPermissions.push("424");
   const picker = await openServiceCreator();
@@ -304,6 +350,7 @@ test("service editors without Manage Payroll permission can search but cannot cr
 });
 
 test("site edits are customer-scoped, save with history, and refresh the displayed address", async () => {
+  Object.assign(mockJob, { companyEquipmentIds: ["old-pump"], equipmentNames: ["Old pump"], bodyOfWaterIds: ["old-pool"], bodyOfWaterNames: ["Old pool"] });
   await openJob();
   await enterEdit();
   await chooseNewSite();
@@ -313,13 +360,90 @@ test("site edits are customer-scoped, save with history, and refresh the display
   const headerControls = screen.getByRole("button", { name: "Cancel", exact: true }).parentElement;
   fireEvent.click(within(headerControls).getByRole("button", { name: "Save", exact: true }));
   await screen.findByText("22 New Street");
-  expect(mockJob).toEqual(expect.objectContaining({ serviceLocationId: "site-2", serviceLocationName: "Spa", equipmentId: "", bodyOfWaterId: "", equipmentIds: [] }));
+  expect(mockJob).toEqual(expect.objectContaining({ serviceLocationId: "site-2", serviceLocationName: "Spa", equipmentId: "", bodyOfWaterId: "", equipmentIds: [], companyEquipmentIds: [], equipmentNames: [], bodyOfWaterIds: [], bodyOfWaterNames: [] }));
+  await waitFor(() => expect(screen.getAllByText("None selected")).toHaveLength(2));
   expect(setDoc).toHaveBeenCalledWith(expect.stringContaining("/history/"), expect.objectContaining({
     changes: expect.arrayContaining([expect.objectContaining({ field: "serviceLocationId", before: "Pool — 11 Old Street", after: "Spa — 22 New Street" })]),
   }));
   expect(getDocs).toHaveBeenCalledWith(expect.objectContaining({
     path: "companies/company-1/equipment", constraints: [["serviceLocationId", "==", "site-2"]],
   }));
+});
+
+test("the overview shows every job selection and View site opens the complete location inventory without writes", async () => {
+  mockPermissions = [];
+  Object.assign(mockJob, { bodyOfWaterIds: ["old-pool", "spa"], companyEquipmentIds: ["old-pump", "filter"] });
+  const originalGetDocs = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async (ref) => {
+    const path = ref.path || ref;
+    const records = path.endsWith("bodiesOfWater") ? [
+      { id: "old-pool", name: "Main pool", gallons: 16000, material: "Plaster", waterType: "Salt Water" },
+      { id: "spa", name: "Spa" },
+    ] : path.endsWith("equipment") ? [
+      { id: "old-pump", name: "Backwash valve", type: "Valve", make: "Pentair", model: "FullFlo", bodyOfWaterId: "old-pool", status: "Needs Repair", notes: "Leaking O-rings" },
+      { id: "filter", name: "Main filter", type: "Filter" },
+      { id: "heater", name: "Spa heater", type: "Heater" },
+    ] : null;
+    return records ? { docs: records.map((row) => snapshot(row.id, row)), empty: false } : originalGetDocs(ref);
+  });
+  await openJob();
+  const bodies = screen.getByRole("list", { name: "Selected bodies of water" });
+  expect(within(bodies).getAllByRole("link")).toHaveLength(2);
+  expect(within(bodies).getByRole("link", { name: "Main pool" })).toHaveAttribute("href", "/company/bodiesOfWater/detail/old-pool");
+  const equipment = screen.getByRole("list", { name: "Selected equipment" });
+  expect(within(equipment).getAllByRole("link")).toHaveLength(2);
+  expect(equipment).not.toHaveTextContent("Spa heater");
+
+  fireEvent.click(screen.getByRole("button", { name: "View site" }));
+  const dialog = await screen.findByRole("dialog", { name: "Site details" });
+  expect(within(dialog).getByText("Bodies of water (2)")).toBeInTheDocument();
+  expect(within(dialog).getByText("Equipment (3)")).toBeInTheDocument();
+  expect(within(dialog).getByRole("link", { name: "Spa heater" })).toBeInTheDocument();
+  expect(within(dialog).getByText("16,000 gallons · Salt Water · Plaster")).toBeInTheDocument();
+  expect(within(dialog).getByText("Needs Repair")).toBeInTheDocument();
+  expect(within(dialog).getByText("Leaking O-rings")).toBeInTheDocument();
+  expect(within(dialog).getAllByText("Selected for this job")).toHaveLength(4);
+  expect(within(dialog).getByRole("link", { name: "Open full site" })).toHaveAttribute("href", "/company/serviceLocations/detail/site-1");
+  expect(getDocs).toHaveBeenCalledWith(expect.objectContaining({ path: "companies/company-1/equipment", constraints: [["serviceLocationId", "==", "site-1"]] }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close site details" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Site details" })).not.toBeInTheDocument());
+  expect(updateDoc).not.toHaveBeenCalled();
+  expect(setDoc).not.toHaveBeenCalled();
+});
+
+test("missing site records retain the selected names and an empty site has clear messages", async () => {
+  Object.assign(mockJob, { bodyOfWaterName: "Original pool", equipmentName: "Original pump" });
+  await openJob();
+  expect(screen.getByRole("list", { name: "Selected bodies of water" })).toHaveTextContent("Original pool");
+  expect(screen.getByRole("list", { name: "Selected equipment" })).toHaveTextContent("Original pump");
+  expect(screen.queryByText("old-pump")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "View site" }));
+  const dialog = await screen.findByRole("dialog", { name: "Site details" });
+  expect(within(dialog).getByText("No bodies of water at this site.")).toBeInTheDocument();
+  expect(within(dialog).getByText("No equipment at this site.")).toBeInTheDocument();
+});
+
+test("a failed site inventory read can be retried from the popup", async () => {
+  const originalGetDocs = getDocs.getMockImplementation();
+  let failInventory = true;
+  getDocs.mockImplementation(async (ref) => {
+    if ((ref.path || ref).endsWith("equipment") && failInventory) throw new Error("Site inventory unavailable");
+    return originalGetDocs(ref);
+  });
+  const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await openJob();
+    fireEvent.click(screen.getByRole("button", { name: "View site" }));
+    const dialog = await screen.findByRole("dialog", { name: "Site details" });
+    expect(within(dialog).getByRole("alert")).toBeInTheDocument();
+    expect(within(dialog).queryByText("No equipment at this site.")).not.toBeInTheDocument();
+    failInventory = false;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
+    await within(dialog).findByText("No equipment at this site.");
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  } finally {
+    consoleError.mockRestore();
+  }
 });
 
 test("canceling Edit discards a site selection", async () => {
@@ -559,6 +683,27 @@ const openManualProductLine = async () => {
   return dialog;
 };
 
+test('an inline product can be created with Jobs disabled without entering the job picker', async () => {
+  mockPermissions.push('852');
+  await openJob();
+  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add first product', exact: true }));
+  const dialog = within(await screen.findByRole('dialog', { name: 'Add Product Line' }));
+  fireEvent.click(dialog.getByRole('button', { name: 'New Item', exact: true }));
+  fireEvent.change(dialog.getByLabelText('Item Name'), { target: { value: 'Warehouse seal' } });
+  fireEvent.click(dialog.getByRole('checkbox', { name: 'Jobs', exact: true }));
+  fireEvent.click(dialog.getByRole('button', { name: 'Create Database Item' }));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Database item created'));
+
+  expect(mockBatchWrites.find((write) => write.ref.includes('/genericItems/genericItems/'))?.data).toMatchObject({
+    name: 'Warehouse seal', active: true, availableForJobs: false, availableForJob: false, jobProductAvailable: false,
+  });
+  expect(dialog.getByRole('button', { name: 'New Item', exact: true })).toBeEnabled();
+  const chooser = dialog.getByRole('combobox', { name: 'Select purchase line item' });
+  fireEvent.keyDown(chooser, { key: 'ArrowDown', code: 'ArrowDown' });
+  expect(dialog.queryByText('Warehouse seal')).not.toBeInTheDocument();
+});
+
 test.each([
   ['Add Part', 'Adding Part...', false],
   ['Save & Add More Parts', 'Saving Part...', true],
@@ -678,7 +823,17 @@ test('Quick Finish includes stop tasks and services in the job completion reques
   const dialog = await openFinishJob();
   expect(within(dialog).getByRole('checkbox', { name: 'Repair service', exact: true })).toBeChecked();
   expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).not.toBeChecked();
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Quick Finish All Remaining Work' }));
+  const quickFinishButtons = within(dialog).getAllByRole('button', { name: 'Quick Finish All Remaining Work' });
+  expect(quickFinishButtons).toHaveLength(2);
+  const footerQuickFinish = quickFinishButtons[1];
+  expect(footerQuickFinish.previousElementSibling).toBe(within(dialog).getByRole('button', { name: 'Cancel', exact: true }));
+  expect(footerQuickFinish.nextElementSibling).toBe(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Repair service', exact: true }));
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: /^Repair pump/ }));
+  fireEvent.click(footerQuickFinish);
+  expect(within(dialog).getByRole('checkbox', { name: 'Repair service', exact: true })).toBeChecked();
+  expect(within(dialog).getByRole('checkbox', { name: /^Repair pump/ })).toBeChecked();
+  expect(mockWorkspaceCall).not.toHaveBeenCalled();
   expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).toBeChecked();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
   await waitFor(() => expect(mockWorkspaceCall).toHaveBeenCalledWith(expect.objectContaining({
@@ -720,7 +875,7 @@ test('failed finalization keeps selections, shows the server error, and reuses i
   mockWorkspaceCall.mockRejectedValueOnce(new Error('Review the remaining scheduled visits before closing the job.'));
   await openJob();
   const dialog = await openFinishJob();
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Quick Finish All Remaining Work' }));
+  fireEvent.click(within(dialog).getAllByRole('button', { name: 'Quick Finish All Remaining Work' })[0]);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
   expect(await within(dialog).findByRole('alert')).toHaveTextContent('Review the remaining scheduled visits');
   expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).toBeChecked();

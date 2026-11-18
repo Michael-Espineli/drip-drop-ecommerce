@@ -104,6 +104,12 @@ import {
   normalizeUpcomingMaintenanceWeeks,
 } from "../../../utils/equipmentMaintenance";
 import { normalizeAddress } from "../../../utils/customerLocationData";
+import { getCustomerTagOptions } from "../../../utils/customerTags";
+import {
+  equipmentMatchesRelatedFilters,
+  equipmentRssTechnicianOptions,
+  recurringStopTechnicianIds,
+} from "../../../utils/equipmentListFilters";
 
 const EMPTY_TOP_COUNTS = {
   all: 0,
@@ -647,6 +653,7 @@ const compactRecurringStop = (stop = {}, equipmentTaskCount = 0, equipmentTaskNa
   frequency: stop.frequency || "",
   day: stop.day || stop.daysOfWeek || "",
   tech: stop.tech || stop.techName || stop.technicianName || stop.workerName || "",
+  technicianIds: recurringStopTechnicianIds(stop),
   dateMillis: sortableDateMillis(stop.startDate || stop.dateCreated) || 0,
   equipmentTaskCount,
   equipmentTaskNames: [...new Set(equipmentTaskNames.filter(Boolean))],
@@ -920,12 +927,15 @@ export default function EquipmentList() {
   const [filteredEquipmentList, setFilteredEquipmentList] = useState([]);
   const [serviceLocationsById, setServiceLocationsById] = useState({});
   const [customerActiveById, setCustomerActiveById] = useState({});
+  const [customersById, setCustomersById] = useState({});
+  const [customerFilterError, setCustomerFilterError] = useState("");
   const [activeJobsByEquipmentId, setActiveJobsByEquipmentId] = useState({});
   const [activeJobsRefresh, setActiveJobsRefresh] = useState(0);
   const [jobCreationContext, setJobCreationContext] = useState(null);
   const [loadingActiveJobs, setLoadingActiveJobs] = useState(false);
   const [recurringStopsByEquipmentId, setRecurringStopsByEquipmentId] = useState({});
   const [loadingRecurringStops, setLoadingRecurringStops] = useState(false);
+  const [recurringStopsError, setRecurringStopsError] = useState("");
   const [noteDrafts, setNoteDrafts] = useState({});
   const [savingNoteIds, setSavingNoteIds] = useState({});
   const [noteErrors, setNoteErrors] = useState({});
@@ -936,6 +946,8 @@ export default function EquipmentList() {
   // ✅ NEW: routine maintenance filter (needsService)
   // "" | "true" | "false"
   const [needsServiceFilter, setNeedsServiceFilter] = useState("");
+  const [rssTechnicianFilter, setRssTechnicianFilter] = useState(null);
+  const [customerTagFilter, setCustomerTagFilter] = useState([]);
   const [upcomingMaintenanceWeeks, setUpcomingMaintenanceWeeks] = useState(DEFAULT_UPCOMING_MAINTENANCE_WEEKS);
   const [activeStatusFilter, setActiveStatusFilter] = useState(DEFAULT_ACTIVE_STATUS_FILTER);
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -956,6 +968,19 @@ export default function EquipmentList() {
   const [selectedQuickEquipment, setSelectedQuickEquipment] = useState(null);
 
   const [companyUsers, setCompanyUsers] = useState([]);
+  const rssTechnicianOptions = useMemo(() => (
+    equipmentRssTechnicianOptions(recurringStopsByEquipmentId, companyUsers)
+  ), [recurringStopsByEquipmentId, companyUsers]);
+  const customerTagOptions = useMemo(() => (
+    getCustomerTagOptions(Object.values(customersById)).map((tag) => ({ value: tag, label: tag }))
+  ), [customersById]);
+  const selectedCustomerTags = useMemo(() => customerTagFilter.map((tag) => tag.value), [customerTagFilter]);
+  const matchesRelatedFilters = useCallback((equipment) => equipmentMatchesRelatedFilters(equipment, {
+    rssTechnicianFilter,
+    customerTagFilter: selectedCustomerTags,
+    customersById,
+    recurringStopsByEquipmentId,
+  }), [rssTechnicianFilter, selectedCustomerTags, customersById, recurringStopsByEquipmentId]);
   const [jobTemplates, setJobTemplates] = useState([]);
   const [loadingJobTemplates, setLoadingJobTemplates] = useState(false);
   const [scheduleJobIntent, setScheduleJobIntent] = useState("maintenance");
@@ -1033,6 +1058,15 @@ export default function EquipmentList() {
       .sort()
       .join("|")
   ), [equipmentList]);
+
+  useEffect(() => {
+    setRssTechnicianFilter(null);
+    setCustomerTagFilter([]);
+    setCustomersById({});
+    setCustomerFilterError("");
+    setRecurringStopsByEquipmentId({});
+    setRecurringStopsError("");
+  }, [recentlySelectedCompany]);
 
   useEffect(() => {
     const nextFilter = getEquipmentFilterFromTab(tab);
@@ -1209,14 +1243,17 @@ export default function EquipmentList() {
               doc(db, "companies", recentlySelectedCompany, "customers", customerId)
             );
 
-            if (!customerSnap.exists()) return [customerId, true];
+            if (!customerSnap.exists()) return [customerId, null];
             const customerData = customerSnap.data() || {};
-            return [customerId, (customerData.active ?? customerData.isActive ?? true) !== false];
+            return [customerId, { ...customerData, id: customerId }];
           })
         );
 
         if (!cancelled) {
-          setCustomerActiveById(Object.fromEntries(customerEntries));
+          setCustomerActiveById(Object.fromEntries(customerEntries.map(([id, customer]) => (
+            [id, (customer?.active ?? customer?.isActive ?? true) !== false]
+          ))));
+          setCustomersById((current) => ({ ...current, ...Object.fromEntries(customerEntries) }));
         }
       } catch (error) {
         console.error("Error loading equipment customer active states:", error);
@@ -1382,6 +1419,7 @@ export default function EquipmentList() {
     const fetchRecurringStops = async () => {
       try {
         setLoadingRecurringStops(true);
+        setRecurringStopsError("");
 
         const stopsSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "recurringServiceStop"));
         const liveStops = stopsSnap.docs
@@ -1442,7 +1480,10 @@ export default function EquipmentList() {
         if (!cancelled) setRecurringStopsByEquipmentId(nextLookup);
       } catch (error) {
         console.error("Error loading equipment recurring stops:", error);
-        if (!cancelled) setRecurringStopsByEquipmentId({});
+        if (!cancelled) {
+          setRecurringStopsByEquipmentId({});
+          setRecurringStopsError("RSS technicians could not be loaded. Refresh the page to try again.");
+        }
       } finally {
         if (!cancelled) setLoadingRecurringStops(false);
       }
@@ -1565,11 +1606,13 @@ export default function EquipmentList() {
       try {
         setLoadingEquipment(true);
         setEquipmentError("");
+        setCustomerFilterError("");
 
         const [equipmentSnap, customersSnap] = await Promise.all([
           getDocs(collection(db, "companies", recentlySelectedCompany, "equipment")),
           getDocs(collection(db, "companies", recentlySelectedCompany, "customers")).catch((customerError) => {
             console.warn("Unable to load customers for equipment maintenance list:", customerError);
+            if (!cancelled) setCustomerFilterError("Customer tags could not be loaded. Refresh the page to try again.");
             return { docs: [] };
           }),
         ]);
@@ -1581,6 +1624,9 @@ export default function EquipmentList() {
         if (cancelled) return;
 
         setCustomerActiveById(nextCustomerActiveById);
+        setCustomersById(Object.fromEntries(customersSnap.docs.map((customerDoc) => (
+          [customerDoc.id, { ...customerDoc.data(), id: customerDoc.id }]
+        ))));
         setEquipmentList(equipmentData);
       } catch (error) {
         console.error("Equipment Data Error!:", error);
@@ -1606,7 +1652,7 @@ export default function EquipmentList() {
 
   useEffect(() => {
     const { types: uniqueTypes } = getEquipmentListMeta(equipmentList);
-    const countableEquipment = equipmentList.filter((equipment) => equipmentMatchesDetailFilters(equipment, {
+    const countableEquipment = equipmentList.filter(matchesRelatedFilters).filter((equipment) => equipmentMatchesDetailFilters(equipment, {
       activeStatusFilter,
       customerActiveById,
       typeFilter,
@@ -1630,7 +1676,7 @@ export default function EquipmentList() {
       maintenance: maintenanceBoardCount,
       upcoming: upcomingMaintenanceBoardCount,
     });
-  }, [activeStatusFilter, customerActiveById, equipmentList, needsServiceFilter, typeFilter, upcomingMaintenanceWeeks]);
+  }, [activeStatusFilter, customerActiveById, equipmentList, matchesRelatedFilters, needsServiceFilter, typeFilter, upcomingMaintenanceWeeks]);
 
   // -----------------------------
   // ✅ Unique customer count
@@ -2070,6 +2116,8 @@ export default function EquipmentList() {
       filtered = filtered.filter(isNonOperational);
     }
 
+    filtered = filtered.filter(matchesRelatedFilters);
+
     // Search
     if (searchTerm.trim()) {
       const s = searchTerm.toLowerCase();
@@ -2145,6 +2193,7 @@ export default function EquipmentList() {
     getEquipmentServiceLocation,
     getSortValue,
     maintenanceBoardEquipment,
+    matchesRelatedFilters,
     needsServiceFilter,
     searchTerm,
     sortBy,
@@ -2195,9 +2244,11 @@ export default function EquipmentList() {
   const appliedDetailFilterCount = [
     typeFilter,
     needsServiceFilter,
+    rssTechnicianFilter,
+    customerTagFilter.length,
     activeStatusFilter !== DEFAULT_ACTIVE_STATUS_FILTER ? activeStatusFilter : "",
   ].filter(Boolean).length;
-  const maintenanceTableFiltersActive = Boolean(typeFilter || needsServiceFilter || searchTerm.trim());
+  const maintenanceTableFiltersActive = Boolean(typeFilter || needsServiceFilter || rssTechnicianFilter || customerTagFilter.length || searchTerm.trim());
   const maintenanceEmptyAfterFilters =
     topFilter === "maintenance" &&
     !loadingEquipment &&
@@ -2250,6 +2301,8 @@ export default function EquipmentList() {
   const resetDetailFilters = () => {
     setTypeFilter("");
     setNeedsServiceFilter("");
+    setRssTechnicianFilter(null);
+    setCustomerTagFilter([]);
     setActiveStatusFilter(DEFAULT_ACTIVE_STATUS_FILTER);
   };
 
@@ -4100,6 +4153,8 @@ export default function EquipmentList() {
                 activeStatusFilterLabel,
                 typeFilter || "All types",
                 routineServiceFilterLabel,
+                rssTechnicianFilter ? `RSS Technician: ${rssTechnicianFilter.label}` : "",
+                selectedCustomerTags.length ? `Customer Tags: ${selectedCustomerTags.join(", ")}` : "",
               ].filter(Boolean).join(" - ")}
             </div>
           </div>
@@ -4428,6 +4483,43 @@ export default function EquipmentList() {
                   <option value="true">Yes</option>
                   <option value="false">No</option>
                 </select>
+              </Field>
+
+              <Field label="RSS Technician">
+                <CompanyUserSelect
+                  aria-label="RSS Technician"
+                  options={rssTechnicianOptions}
+                  value={rssTechnicianFilter}
+                  getOptionValue={(option) => option.value}
+                  onChange={setRssTechnicianFilter}
+                  placeholder="All RSS technicians"
+                  isClearable
+                  isLoading={loadingRecurringStops}
+                  noOptionsMessage={() => loadingRecurringStops ? "Loading RSS technicians..." : "No assigned RSS technicians found"}
+                />
+                <p className="text-xs text-slate-500">Assigned technician on an active recurring service stop linked to the equipment or its service location.</p>
+                {recurringStopsError && <p className="text-xs text-red-600" role="alert">{recurringStopsError}</p>}
+              </Field>
+
+              <Field label="Customer Tags">
+                <Select
+                  aria-label="Customer Tags"
+                  instanceId="equipment-customer-tags"
+                  classNamePrefix="react-select"
+                  options={customerTagOptions}
+                  value={customerTagFilter}
+                  onChange={(options) => setCustomerTagFilter(options || [])}
+                  placeholder="All customer tags"
+                  isMulti
+                  isClearable
+                  isSearchable
+                  menuPosition="fixed"
+                  menuPortalTarget={typeof document !== "undefined" ? document.body : null}
+                  styles={{ menuPortal: (base) => ({ ...base, zIndex: 9999 }) }}
+                  noOptionsMessage={() => "No customer tags found"}
+                />
+                <p className="text-xs text-slate-500">Match any selected tag on the customer. Combines with the RSS technician and other filters.</p>
+                {customerFilterError && <p className="text-xs text-red-600" role="alert">{customerFilterError}</p>}
               </Field>
             </div>
           </ModalShell>

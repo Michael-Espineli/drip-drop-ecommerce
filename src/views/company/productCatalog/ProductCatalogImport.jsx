@@ -1,22 +1,22 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { arrayUnion, getDocs, orderBy, query, writeBatch } from "firebase/firestore";
+import { getDocs, orderBy, query } from "firebase/firestore";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
+import { ProductAvailabilityDisclosure } from "./ProductAvailabilityFields";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import { saveVendorProductConnection } from "../../../utils/productVendorConnections";
 import {
   buildProductFromVendorItem,
-  buildVendorItemProductPatch,
   findSuggestedProductForVendorItem,
+  findLinkedProductForVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
   getVendorItemCostCents,
   getVendorItemDisplayName,
   productCatalogCollectionRef,
-  productCatalogDocRef,
-  vendorItemDocRef,
   vendorItemsCollectionRef,
 } from "../../../utils/productCatalog";
 
@@ -39,7 +39,7 @@ const centsFromDollarInput = (value) => {
 const buildImportRows = (vendorItems, products) =>
   vendorItems.map((vendorItem) => {
     const linkedProduct = findSuggestedProductForVendorItem(vendorItem, products);
-    const alreadyLinked = Boolean(vendorItem.productId || vendorItem.genericItemId);
+    const alreadyLinked = Boolean(findLinkedProductForVendorItem(vendorItem, products));
 
     return {
       id: vendorItem.id,
@@ -61,6 +61,7 @@ const ProductCatalogImport = () => {
   const [products, setProducts] = useState([]);
   const [vendorItems, setVendorItems] = useState([]);
   const [rows, setRows] = useState([]);
+  const [availabilityDefaults, setAvailabilityDefaults] = useState({});
   const [searchTerm, setSearchTerm] = useState("");
   const [showLinked, setShowLinked] = useState(false);
   const [progress, setProgress] = useState({
@@ -90,6 +91,7 @@ const ProductCatalogImport = () => {
       setProducts(nextProducts);
       setVendorItems(nextVendorItems);
       setRows(buildImportRows(nextVendorItems, nextProducts));
+      setAvailabilityDefaults({});
     } catch (error) {
       console.error("Unable to load product reconciliation:", error);
       toast.error(userFacingErrorMessage(error, "Could not load vendor items for reconciliation."));
@@ -134,7 +136,7 @@ const ProductCatalogImport = () => {
   const selectedConnectCount = selectedRows.filter((row) => row.mode === "connect").length;
   const visibleSelectedCount = visibleRows.filter((row) => row.selected).length;
   const unlinkedSelectedCount = unlinkedRows.filter((row) => row.selected).length;
-  const unlinkedCount = vendorItems.filter((item) => !(item.productId || item.genericItemId)).length;
+  const unlinkedCount = vendorItems.filter((item) => !findLinkedProductForVendorItem(item, products)).length;
 
   const updateRow = (rowId, updates) => {
     setRows((currentRows) =>
@@ -210,8 +212,6 @@ const ProductCatalogImport = () => {
       done: false,
     });
     try {
-      let batch = writeBatch(db);
-      let operationCount = 0;
       let createdProductCount = 0;
       let linkedVendorItemCount = 0;
 
@@ -233,13 +233,6 @@ const ProductCatalogImport = () => {
         });
       };
 
-      const commitIfNeeded = async () => {
-        if (operationCount < 430) return;
-        await batch.commit();
-        batch = writeBatch(db);
-        operationCount = 0;
-      };
-
       for (const [rowIndex, row] of rowsToReconcile.entries()) {
         const now = new Date();
         let product = products.find((item) => item.id === row.productId) || null;
@@ -259,40 +252,26 @@ const ProductCatalogImport = () => {
             productId,
             vendorItem: row.vendorItem,
             overrides: {
+              ...availabilityDefaults,
+              ...row.productAvailability,
               name: row.productName || getVendorItemDisplayName(row.vendorItem),
               sellPrice: centsFromDollarInput(row.sellPrice),
             },
             source: "vendorItemReconciliation",
             now,
           });
-          batch.set(productCatalogDocRef(db, recentlySelectedCompany, productId), product);
-          operationCount += 1;
           createdProductCount += 1;
           updateProgressSnapshot({
             current: rowNumber,
             currentName: vendorItemName,
             status,
           });
-        } else if (product) {
-          batch.update(productCatalogDocRef(db, recentlySelectedCompany, product.id), {
-            storeItems: arrayUnion(getVendorItemDisplayName(row.vendorItem)),
-            storeItemsIds: arrayUnion(row.vendorItem.id),
-            vendorItemIds: arrayUnion(row.vendorItem.id),
-            active: true,
-            availableForPartPurchase: true,
-            partPurchaseAvailable: true,
-            dateUpdated: now,
-            updatedAt: now,
-          });
-          operationCount += 1;
         }
 
         if (product) {
-          batch.update(
-            vendorItemDocRef(db, recentlySelectedCompany, row.vendorItem.id),
-            buildVendorItemProductPatch(product, now)
-          );
-          operationCount += 1;
+          await saveVendorProductConnection({ db, companyId: recentlySelectedCompany, vendorItemId: row.vendorItem.id,
+            productId: product.id, knownProducts: products, newProduct: row.mode === "create" ? product : null,
+            expectedProductId: row.vendorItem.productId || row.vendorItem.genericItemId || "" });
           linkedVendorItemCount += 1;
           updateProgressSnapshot({
             current: rowNumber,
@@ -301,15 +280,6 @@ const ProductCatalogImport = () => {
           });
         }
 
-        await commitIfNeeded();
-      }
-
-      if (operationCount > 0) {
-        setProgress((current) => ({
-          ...current,
-          status: "Saving final batch...",
-        }));
-        await batch.commit();
       }
 
       toast.success(
@@ -397,6 +367,14 @@ const ProductCatalogImport = () => {
                 {saving ? "Reconciling..." : `Reconcile Selected (${selectedCount})`}
               </button>
             </div>
+          </div>
+          <div className="mt-3 max-w-lg">
+            <ProductAvailabilityDisclosure
+              label="Default Availability for New Products"
+              value={availabilityDefaults}
+              onChange={(patch) => setAvailabilityDefaults((current) => ({ ...current, ...patch }))}
+              disabled={saving}
+            />
           </div>
         </section>
 
@@ -550,11 +528,21 @@ const ProductCatalogImport = () => {
                               ))}
                             </select>
                           ) : (
-                            <input
-                              value={row.productName}
-                              onChange={(event) => updateRow(row.id, { productName: event.target.value, selected: true })}
-                              className="w-72 rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            />
+                            <div className="w-72">
+                              <input
+                                value={row.productName}
+                                onChange={(event) => updateRow(row.id, { productName: event.target.value, selected: true })}
+                                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                              />
+                              <ProductAvailabilityDisclosure
+                                value={{ ...availabilityDefaults, ...row.productAvailability }}
+                                onChange={(patch) => updateRow(row.id, {
+                                  productAvailability: { ...row.productAvailability, ...patch },
+                                  selected: true,
+                                })}
+                                disabled={saving}
+                              />
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3">

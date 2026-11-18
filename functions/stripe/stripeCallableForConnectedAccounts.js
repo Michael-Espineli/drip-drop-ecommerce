@@ -1112,6 +1112,7 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     currentPeriodEnd: null,
     cancelAtPeriodEnd: false,
     canceledAt: null,
+    ...(agreement.onboardingWorkflowVersion === 1 ? {onboardingWorkflowVersion: 1, onboardingBilling: agreement.onboardingBilling || {}, manualBillingEnabled: false, manualBillingAutoSendEnabled: false, firstInvoiceSendAt: null, manualBillingNextInvoiceAt: null, currentPeriodStart: null, currentPeriodEnd: null, billingCollectionMethod: 'onboardingPending'} : {}),
     paymentMethodType: '',
     stripePaymentMethodType: '',
     paymentMethodLabel: '',
@@ -1632,6 +1633,8 @@ exports.acceptSalesServiceAgreement = legacyCallable(async (data, context) => {
     selectedSolutionId,
   } = agreementWithSelectedSolution(agreement, requestedSolutionId);
 
+  if (acceptanceAgreement.onboardingWorkflowVersion === 1 && (!String(acceptanceAgreement.terms || '').trim() && !(acceptanceAgreement.termsList || []).length || !(acceptanceAgreement.lineItems || []).length)) throw new HttpsError('failed-precondition', 'Complete the service scope and terms before accepting this agreement.');
+
   const companyDoc = await db.collection('companies').doc(acceptanceAgreement.companyId).get();
   const companyData = companyDoc.exists ? companyDoc.data() : {};
   const companyBillingEnabled = companyCustomerBillingEnabled(companyData);
@@ -1650,6 +1653,7 @@ exports.acceptSalesServiceAgreement = legacyCallable(async (data, context) => {
     createBillingSubscriptionOnAcceptance ? 'payNow' : 'requestInvoice'
   );
   const salesBillingAutomationEnabled = (
+    acceptanceAgreement.onboardingWorkflowVersion !== 1 &&
     companyBillingEnabled &&
     createBillingSubscriptionOnAcceptance &&
     agreementSupportsBillingSubscription(acceptanceAgreement)
@@ -1914,6 +1918,8 @@ exports.acceptSalesServiceAgreement = legacyCallable(async (data, context) => {
       acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
       acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
       acceptedSnapshot: {
+        onboardingWorkflowVersion: freshAgreement.onboardingWorkflowVersion || 0,
+        onboardingBilling: freshAgreement.onboardingBilling || {},
         agreementId: freshAgreement.id,
         title: freshAgreement.title || 'Service Agreement',
         totalAmountCents: Number(freshAgreement.totalAmountCents || freshAgreement.rateAmountCents || 0),
@@ -1966,6 +1972,7 @@ exports.acceptSalesServiceAgreement = legacyCallable(async (data, context) => {
       customerBillingPreferenceSelectedAt: acceptedAt,
       requestedBillingPreference: customerBillingPreference,
       ...billingAcceptanceFields,
+      ...(freshAgreement.onboardingWorkflowVersion === 1 ? {billingFlowStatus: 'onboardingPending', billingFlowNextAction: 'completeSignupBilling'} : {}),
       customerUserId: freshAgreement.customerUserId || callableAuth.uid,
       agreementHistoryGroupId: historyGroupId,
       agreementVersion: Math.max(Number(freshAgreement.agreementVersion || 1), 1),
@@ -2276,6 +2283,8 @@ exports.acceptPublicSalesServiceAgreement = legacyCallable(async (data, context)
     selectedSolutionId,
   } = agreementWithSelectedSolution(agreement, requestedSolutionId);
 
+  if (acceptanceAgreement.onboardingWorkflowVersion === 1 && (!String(acceptanceAgreement.terms || '').trim() && !(acceptanceAgreement.termsList || []).length || !(acceptanceAgreement.lineItems || []).length)) throw new HttpsError('failed-precondition', 'Complete the service scope and terms before accepting this agreement.');
+
   const companyDoc = await db.collection('companies').doc(acceptanceAgreement.companyId).get();
   const companyData = companyDoc.exists ? companyDoc.data() : {};
   const companyBillingEnabled = companyCustomerBillingEnabled(companyData);
@@ -2294,6 +2303,7 @@ exports.acceptPublicSalesServiceAgreement = legacyCallable(async (data, context)
     createBillingSubscriptionOnAcceptance ? 'payNow' : 'requestInvoice'
   );
   const salesBillingAutomationEnabled = (
+    acceptanceAgreement.onboardingWorkflowVersion !== 1 &&
     companyBillingEnabled &&
     createBillingSubscriptionOnAcceptance &&
     agreementSupportsBillingSubscription(acceptanceAgreement)
@@ -2555,6 +2565,8 @@ exports.acceptPublicSalesServiceAgreement = legacyCallable(async (data, context)
       acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
       acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
       acceptedSnapshot: {
+        onboardingWorkflowVersion: freshAgreement.onboardingWorkflowVersion || 0,
+        onboardingBilling: freshAgreement.onboardingBilling || {},
         agreementId: freshAgreement.id,
         title: freshAgreement.title || 'Service Agreement',
         totalAmountCents: Number(freshAgreement.totalAmountCents || freshAgreement.rateAmountCents || 0),
@@ -2606,6 +2618,7 @@ exports.acceptPublicSalesServiceAgreement = legacyCallable(async (data, context)
       customerBillingPreferenceSelectedAt: acceptedAt,
       requestedBillingPreference: customerBillingPreference,
       ...billingAcceptanceFields,
+      ...(freshAgreement.onboardingWorkflowVersion === 1 ? {billingFlowStatus: 'onboardingPending', billingFlowNextAction: 'completeSignupBilling'} : {}),
       customerUserId: freshAgreement.customerUserId || null,
       agreementHistoryGroupId: historyGroupId,
       agreementVersion: Math.max(Number(freshAgreement.agreementVersion || 1), 1),

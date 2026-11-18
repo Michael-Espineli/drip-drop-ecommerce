@@ -5,7 +5,6 @@ const { onCall } = require('firebase-functions/v2/https');
 const { HttpsError } = require('../appErrors');
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { getFunctions } = require("firebase-admin/functions");
-const { defineSecret } = require('firebase-functions/params');
 const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
 const { v4: uuidv4 } = require("uuid");
@@ -21,7 +20,6 @@ if (admin.apps.length === 0) {
 }
 
 const db = getFirestore();
-const mySecret = defineSecret('stripe_secret_key');
 const salesCollectionNames = {
   billingSubscriptions: "salesBillingSubscriptions",
   invoices: "salesInvoices",
