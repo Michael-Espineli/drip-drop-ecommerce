@@ -33,23 +33,23 @@ test("pay item selection fills task details, previews the range, and applies int
   expect(screen.getByLabelText("Task notes")).toHaveValue("Clean and inspect");
   expect(JSON.parse(screen.getByTestId("form").textContent)).toEqual(expect.objectContaining({ unitCost: "40.00", unitAmount: "100.00" }));
   expect(screen.getByLabelText("Task pay")).toHaveValue("none");
-  expect(screen.queryByLabelText("Tech Labor Cost")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Contracted task pay")).not.toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Task technician pay preview" })).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Task pay"), { target: { value: "additional" } });
   fireEvent.change(screen.getByLabelText("Pay calculation"), { target: { value: "custom" } });
-  fireEvent.change(screen.getByLabelText("Custom pay amount"), { target: { value: "15" } });
+  fireEvent.change(screen.getByLabelText("Fixed pay amount"), { target: { value: "15" } });
   expect(within(screen.getByRole("region", { name: "Task technician pay preview" })).getByText("$15.00 – $15.00")).toBeInTheDocument();
-  const taskCost = screen.getByRole("group", { name: "Task labor cost" });
-  expect(within(taskCost).getByLabelText("Tech Labor Cost")).toHaveValue(null);
-  fireEvent.click(within(taskCost).getByRole("button", { name: "Use high estimate for task cost" }));
-  expect(within(taskCost).getByLabelText("Tech Labor Cost")).toHaveValue(15);
+  const taskCost = screen.getByRole("group", { name: "Contracted task pay and payroll estimate" });
+  expect(within(taskCost).getByLabelText("Contracted task pay")).toHaveValue(null);
+  expect(within(taskCost).queryByRole('button', { name: 'Use high estimate for task cost' })).not.toBeInTheDocument();
+  expect(within(taskCost).getByLabelText("Contracted task pay")).toHaveValue(null);
   expect(within(serviceCost).getByLabelText("Internal Cost")).toHaveValue(40);
   fireEvent.change(screen.getByLabelText("Task pay"), { target: { value: "none" } });
-  expect(screen.queryByLabelText("Tech Labor Cost")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Contracted task pay")).not.toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Task technician pay preview" })).not.toBeInTheDocument();
-  expect(JSON.parse(screen.getByTestId("form").textContent).taskTemplates[0].laborCost).toBe("15.00");
+  expect(JSON.parse(screen.getByTestId("form").textContent).taskTemplates[0].laborCost).toBe("");
   fireEvent.change(screen.getByLabelText("Task pay"), { target: { value: "additional" } });
-  expect(screen.getByLabelText("Tech Labor Cost")).toHaveValue(15);
+  expect(screen.getByLabelText("Contracted task pay")).toHaveValue(null);
 });
 
 test("an unavailable saved service pay type remains visible for correction", () => {

@@ -119,10 +119,30 @@ test('legacy work-order references are validated and can be completed', async ()
     [stop]: { workOrderId: 'job', operationStatus: 'Not Finished', techId: 'tech' },
     [company + '/shoppingList/legacy']: { assignedJobId: 'job', status: 'Purchased' },
   });
-  await assert.rejects(call(), /product installations/);
   await call({ productIds: ['legacy'] });
   assert.equal(db.records.get(stop).operationStatus, 'Finished');
   assert.equal(db.records.get(company + '/shoppingList/legacy').status, 'Installed');
+});
+
+test('closeout installs only confirmed purchased items and leaves unpurchased materials open', async () => {
+  const purchased = company + '/shoppingList/purchased';
+  const open = company + '/shoppingList/open';
+  const { db, call } = fixture({
+    [purchased]: { jobId: 'job', status: 'Purchased', quantity: '2' },
+    [open]: { jobId: 'job', status: 'Need to Purchase', needsAction: true },
+  });
+
+  const before = new Map(db.records);
+  await assert.rejects(call({ productIds: ['purchased', 'open'] }), /Only purchased materials/);
+  assert.deepEqual(db.records, before);
+
+  const result = await call({ productIds: ['purchased'] });
+  assert.equal(result.finished, true);
+  assert.equal(result.remainingProducts, 1);
+  assert.deepEqual(result.installedProductIds, ['purchased']);
+  assert.equal(db.records.get(purchased).status, 'Installed');
+  assert.equal(db.records.get(purchased).datePurchased, undefined);
+  assert.deepEqual(db.records.get(open), before.get(open));
 });
 
 test('job serviceStopIds references include otherwise unlinked visits in validation', async () => {

@@ -27,7 +27,7 @@ jest.mock("firebase/firestore", () => ({
 }));
 
 const snapshot = (id, data, path = "") => ({ id, ref: `${path}/${id}`, exists: () => true, data: () => data });
-const template = { id: "template-1", name: "Filter service", isActive: true, defaultRateCents: 10000, defaultIssuePriorityLevel: 1 };
+const template = { id: "template-1", name: "Filter service", isActive: true, technicianCanAdd: true, defaultRateCents: 10000, defaultIssuePriorityLevel: 1 };
 const equipment = {
     id: "equipment-1", name: "Filter", type: "Filter", customerId: "customer-1", customerName: "Taylor Customer",
     serviceLocationId: "location-1", bodyOfWaterId: "pool-1", needsService: true, isActive: true,
@@ -56,7 +56,11 @@ beforeEach(() => {
     }));
     createJobAtomically.mockImplementation(async (_, { jobId }, build) => {
         const staged = new Map();
-        await build({ get: getDoc, set: (ref, data) => staged.set(ref, data), update: (ref, data) => staged.set(ref, data) });
+        await build({
+            get: getDoc,
+            set: (ref, data) => staged.set(ref, data),
+            update: (ref, data) => staged.set(ref, { ...staged.get(ref), ...data }),
+        });
         writes = staged;
         const savedJob = [...staged.entries()].find(([path]) => /\/workOrders\/[^/]+$/.test(path))?.[1];
         if (savedJob) activeJobs.push({ ...savedJob, id: jobId });
@@ -67,7 +71,7 @@ beforeEach(() => {
 const CurrentPath = () => <p data-testid="current-path">{useLocation().pathname}</p>;
 const renderFlow = (entry) => render(<MemoryRouter initialEntries={[entry]}>
     <CurrentPath />
-    <Context.Provider value={{ recentlySelectedCompany: "company-1", user: { uid: "user-1", displayName: "Alex" } }}>
+    <Context.Provider value={{ recentlySelectedCompany: "company-1", user: { uid: "office-1", displayName: "Office Admin" } }}>
         <Routes>
             <Route path="/company/equipment/:tab" element={<EquipmentList />} />
             <Route path="/company/jobs/basic-create" element={<BasicWorkOrderCreate />} />
@@ -82,6 +86,7 @@ const openUnscheduled = async (mode = "basic") => {
         state: { equipmentContext: { ...equipment, equipmentId: equipment.id, equipmentName: "Filter", jobIntent: "maintenance" }, jobIntent: "maintenance" },
     });
     if (mode === "basic") fireEvent.click(await screen.findByRole("button", { name: /^Basic Job/ }));
+    await screen.findAllByText("Pool");
     const button = await screen.findByRole("button", { name: "Create Job" });
     await waitFor(() => expect(button).toBeEnabled());
     return button;
@@ -101,21 +106,30 @@ const openEquipmentPopup = async () => {
     expect(screen.queryByRole("link", { name: "Back to Jobs" })).not.toBeInTheDocument();
 };
 
-test.each(["basic", "template"])("equipment Create Job opens a popup, preserves equipment in %s mode, and refreshes Active Jobs without navigating", async (mode) => {
+const selectTemplate = async (label = /Job Template/) => {
+    fireEvent.keyDown(await screen.findByRole("combobox", { name: label }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: template.name }));
+};
+
+test("equipment Create Job requires an explicit template and refreshes Active Jobs without navigating", async () => {
     await openEquipmentPopup();
-    if (mode === "basic") fireEvent.click(await screen.findByRole("button", { name: /^Basic Job/ }));
+    await screen.findByText("Choose an available job template...");
     const button = await screen.findByRole("button", { name: "Create Job" });
+    expect(button).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^Basic Job/ })).not.toBeInTheDocument();
+    expect(createJobAtomically).not.toHaveBeenCalled();
+    await selectTemplate();
     await waitFor(() => expect(button).toBeEnabled());
-    await act(async () => fireEvent.click(button));
+    fireEvent.click(button);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByTestId("current-path")).toHaveTextContent("/company/equipment/upcoming");
-    expect(rootJob()).toEqual(expect.objectContaining({ equipmentId: "equipment-1", jobIntent: "maintenance", createdFromEquipmentCard: true }));
+    expect(rootJob()).toEqual(expect.objectContaining({ equipmentId: "equipment-1", jobIntent: "maintenance", createdFromEquipmentCard: true, sourceTemplateId: template.id }));
     expect(await screen.findByRole("link", { name: rootJob().internalId || "Job" })).toHaveAttribute("href", `/company/jobs/detail/${rootJob().id}`);
 });
 
 test.each(["Cancel", "Close create job", "Escape"])("%s dismisses Create Job without a write or navigation and allows reopening", async (action) => {
     await openEquipmentPopup();
-    await screen.findByRole("button", { name: /^Basic Job/ });
+    await screen.findByRole("combobox", { name: /Job Template/ });
     if (action === "Escape") await act(async () => userEvent.keyboard("{Escape}"));
     else fireEvent.click(screen.getByRole("button", { name: action }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -123,12 +137,12 @@ test.each(["Cancel", "Close create job", "Escape"])("%s dismisses Create Job wit
     expect(createJobAtomically).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole("button", { name: "Open quick actions" })[0]);
     fireEvent.click(screen.getByRole("button", { name: "Create Job" }));
-    expect(await screen.findByRole("dialog", { name: "Create Job" })).toBeInTheDocument();
+    expect(await screen.findByText("Choose an available job template...")).toBeInTheDocument();
 });
 
 test("Create Job cannot be dismissed or submitted again while saving", async () => {
     await openEquipmentPopup();
-    fireEvent.click(await screen.findByRole("button", { name: /^Basic Job/ }));
+    await selectTemplate();
     const button = screen.getByRole("button", { name: "Create Job" });
     await waitFor(() => expect(button).toBeEnabled());
     const create = createJobAtomically.getMockImplementation();
@@ -205,9 +219,45 @@ test("scheduling-only users retain Schedule Maintenance without the new creation
     expect(screen.queryByRole("button", { name: "Create Job" })).not.toBeInTheDocument();
 });
 
+test.each(["Schedule Maintenance", "Schedule Repair"])("equipment quick action %s starts blank and resets when reopened", async (action) => {
+    renderFlow("/company/equipment/upcoming");
+    const openSchedule = async () => {
+        fireEvent.click((await screen.findAllByRole("button", { name: "Open quick actions" }))[0]);
+        fireEvent.click(within(screen.getByRole("menu")).getByRole("button", { name: action }));
+    };
+    await openSchedule();
+    expect(screen.getByText("Select template")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: action })).toBeDisabled();
+    expect(createJobAtomically).not.toHaveBeenCalled();
+    await selectTemplate("Template");
+    await waitFor(() => expect(screen.getByRole("button", { name: action })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await openSchedule();
+    expect(screen.getByText("Select template")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: action })).toBeDisabled();
+});
+
+test("equipment detail scheduling requires an explicit template and preserves equipment context", async () => {
+    renderFlow({
+        pathname: "/company/jobs/basic-create",
+        search: "?requireTemplate=true&customerId=customer-1&locationId=location-1&bodyOfWaterId=pool-1&equipmentId=equipment-1",
+        state: { jobIntent: "maintenance", createdFromEquipmentDetail: true },
+    });
+    await screen.findByText("Choose an available job template...");
+    const button = screen.getByRole("button", { name: "Create and Schedule" });
+    expect(button).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^Custom/ })).not.toBeInTheDocument();
+    expect(createJobAtomically).not.toHaveBeenCalled();
+    await selectTemplate();
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    await screen.findByText("Saved job details");
+    expect(rootJob()).toEqual(expect.objectContaining({ equipmentId: equipment.id, sourceTemplateId: template.id, createdFromEquipmentDetail: true }));
+});
+
 test("a failed create preserves the form and reuses its job ID on retry", async () => {
     await openEquipmentPopup();
-    fireEvent.click(await screen.findByRole("button", { name: /^Basic Job/ }));
+    await selectTemplate();
     const button = screen.getByRole("button", { name: "Create Job" });
     await waitFor(() => expect(button).toBeEnabled());
     createJobAtomically.mockRejectedValueOnce(new Error("Connection interrupted"));

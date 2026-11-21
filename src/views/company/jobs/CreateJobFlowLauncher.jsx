@@ -271,6 +271,7 @@ const CreateJobFlowLauncher = ({
 
     navigate(jobCreatePathForContext({ customerId, serviceLocationId, contextState }), {
       state: createState({
+        requireTemplate: true,
         startingTemplate: template,
         template,
         templateId: template.id,
@@ -336,7 +337,7 @@ const CreateJobFlowLauncher = ({
                     <div>
                       <p className="font-bold text-slate-900">Custom Job</p>
                       <p className="mt-1 text-sm text-slate-500">
-                        Build a job manually from scratch.
+                        Build your own plan for a customer and schedule visits when you’re ready.
                       </p>
                     </div>
                   </div>
@@ -357,7 +358,7 @@ const CreateJobFlowLauncher = ({
                     <div>
                       <p className="font-bold text-blue-900">Create and Schedule Job</p>
                       <p className="mt-1 text-sm text-blue-800">
-                        Use an available template or custom scope, assign a technician, and schedule the first visit.
+                        Choose the customer, scope, and technician. Save the job and book its first visit together.
                       </p>
                     </div>
                   </div>
@@ -378,7 +379,7 @@ const CreateJobFlowLauncher = ({
                     <div>
                       <p className="font-bold text-slate-900">From Template</p>
                       <p className="mt-1 text-sm text-slate-500">
-                        Copy planned stops, tasks, materials, and pricing into a new job.
+                        Copy services, tasks, planned visits, products, and prices. Choose the customer before saving.
                       </p>
                     </div>
                   </div>

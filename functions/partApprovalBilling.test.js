@@ -6,7 +6,7 @@ const c = 'companies/company', a = 'customerPartApprovals/approval', s = `${c}/s
 const at = new Date('2026-11-06T19:00:00Z');
 function fixture(extra = {}) {
   const db = new MemoryFirestore({
-    [c]: { ownerId: 'owner', name: 'Pool company' },
+    [c]: { customerBillingEnabled: true, ownerId: 'owner', name: 'Pool company' },
     [`${c}/customers/customer`]: { billingEmail: 'billing@example.test', customerUserId: 'homeowner' },
     [a]: { companyId: 'company', customerId: 'customer', customerName: 'Customer', approvalStatus: 'approved', status: 'approved', shoppingListItemId: 'shopping', itemName: 'Pump kit', quantity: '2', plannedUnitPriceCents: 5000, plannedTotalPriceCents: 10000, paymentPreference: 'payNow' },
     [s]: { customerId: 'customer', partApprovalRequestId: 'approval', status: 'Need to Purchase', quantity: '2', price: 10 }, ...extra,

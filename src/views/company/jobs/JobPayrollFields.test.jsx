@@ -35,17 +35,17 @@ test("custom task pay stays additional, including zero, and can be turned off", 
   render(<Form initial={{ payTypeId: "filter", payrollMode: "included" }} />);
   selectAdditional();
   fireEvent.change(screen.getByLabelText("Pay calculation"), { target: { value: "custom" } });
-  expect(screen.getByLabelText("Custom pay amount")).toBeRequired();
-  fireEvent.change(screen.getByLabelText("Custom pay amount"), { target: { value: "15" } });
+  expect(screen.getByLabelText("Fixed pay amount")).toBeRequired();
+  fireEvent.change(screen.getByLabelText("Fixed pay amount"), { target: { value: "15" } });
   expect(earnings(saved()).reduce((sum, line) => sum + line.totalAmountCents, 0)).toBe(6500);
-  fireEvent.change(screen.getByLabelText("Custom pay amount"), { target: { value: "0" } });
+  fireEvent.change(screen.getByLabelText("Fixed pay amount"), { target: { value: "0" } });
   expect(saved().manualPayOverrideCents).toBe(0);
   expect(earnings(saved()).reduce((sum, line) => sum + line.totalAmountCents, 0)).toBe(5000);
   fireEvent.change(screen.getByLabelText("Pay calculation"), { target: { value: "automatic" } });
   expect(saved().manualPayOverrideCents).toBeNull();
   fireEvent.change(screen.getByLabelText("Task pay"), { target: { value: "none" } });
   expect(saved()).toEqual(expect.objectContaining({ payrollMode: "included", manualPayOverrideCents: null, payrollStackBehavior: null }));
-  expect(screen.queryByLabelText("Custom pay amount")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Fixed pay amount")).not.toBeInTheDocument();
   expect(earnings(saved()).map((line) => line.totalAmountCents)).toEqual([5000]);
 });
 
@@ -61,7 +61,7 @@ test("saved replacement and unpaid policies are preserved until explicitly edite
   const view = render(<Form initial={initial} />);
   expect(saved()).toEqual(initial);
   expect(screen.getByLabelText("Payment alongside visit pay")).toHaveValue("replacesBase");
-  fireEvent.change(screen.getByLabelText("Custom pay amount"), { target: { value: "13" } });
+  fireEvent.change(screen.getByLabelText("Fixed pay amount"), { target: { value: "13" } });
   expect(saved().payrollStackBehavior).toBe("stackable");
   view.unmount();
   render(<Form initial={{ payrollMode: "unpaid" }} />);

@@ -3,10 +3,11 @@ import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../ut
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { Navigate, useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion, where, serverTimestamp } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import JobPayrollFields from "../jobs/JobPayrollFields";
+import { syncShoppingItemsForScheduledJobTasks } from "../../../utils/scheduledJobMaterials";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
@@ -112,93 +113,6 @@ const categoryOptionForParam = (value, hasJob = false) => {
     return hasJob ? SERVICE_STOP_CATEGORY_OPTIONS[0] : SERVICE_STOP_CATEGORY_OPTIONS[2];
 };
 
-const compactString = (value) => String(value || "").trim();
-
-const idValue = (value) => {
-    if (!value) return "";
-    if (typeof value === "string") return value.trim();
-    if (typeof value === "number") return String(value);
-    if (typeof value === "object") {
-        return compactString(value.id || value.value || value.docId || "");
-    }
-
-    return compactString(value);
-};
-
-const shoppingItemTaskIds = (item = {}) => {
-    const taskIds = [
-        item.linkedTaskId,
-        item.linkedJobTaskId,
-        item.jobTaskId,
-        item.sourceTaskId,
-        item.taskId,
-    ].map(idValue).filter(Boolean);
-
-    (Array.isArray(item.prepKeys) ? item.prepKeys : []).forEach((key) => {
-        const rawKey = compactString(key);
-        if (rawKey.startsWith("jobTask:")) {
-            taskIds.push(rawKey.replace("jobTask:", ""));
-        }
-    });
-
-    return Array.from(new Set(taskIds));
-};
-
-const shoppingItemPlanIds = (item = {}) => (
-    [
-        item.planId,
-        item.sourcePlanId,
-        item.solutionId,
-        item.sourceSolutionId,
-    ].map(idValue).filter(Boolean)
-);
-
-const buildScheduledShoppingPrepKeys = ({
-    userId = "",
-    jobId = "",
-    customerId = "",
-    serviceLocationId = "",
-    serviceStopId = "",
-    taskIds = [],
-} = {}) => Array.from(
-    new Set(
-        [
-            userId ? `user:${userId}` : "",
-            jobId ? `job:${jobId}` : "",
-            customerId ? `customer:${customerId}` : "",
-            serviceLocationId ? `serviceLocation:${serviceLocationId}` : "",
-            serviceStopId ? `serviceStop:${serviceStopId}` : "",
-            ...(taskIds || []).map((taskId) => idValue(taskId)).filter(Boolean).map((taskId) => `jobTask:${taskId}`),
-        ].filter(Boolean)
-    )
-);
-
-const itemNeedsShoppingAction = (item = {}) =>
-    !compactString(item.status).toLowerCase().includes("installed");
-
-const shoppingItemMatchesScheduledTasks = ({
-    item = {},
-    selectedTaskIds,
-    linkedShoppingItemIds,
-    selectedPlannedStopId = "",
-    selectedPlanId = "",
-} = {}) => {
-    const itemId = idValue(item.id || item.docId);
-    if (itemId && linkedShoppingItemIds.has(itemId)) return true;
-
-    const taskIds = shoppingItemTaskIds(item);
-    if (taskIds.some((taskId) => selectedTaskIds.has(taskId))) return true;
-
-    const itemPlannedStopId = idValue(item.plannedServiceStopId || item.plannedStopId || item.sourcePlannedStopId);
-    if (selectedPlannedStopId && itemPlannedStopId === selectedPlannedStopId) return true;
-
-    const hasAnyTaskContext = taskIds.length > 0;
-    const planIds = shoppingItemPlanIds(item);
-    if (selectedPlanId && !hasAnyTaskContext && planIds.includes(selectedPlanId)) return true;
-
-    return false;
-};
-
 const stopPayBucketIdForCategory = (categoryOption = {}) => (
     categoryOption.id === "jobVisit" ? "job" : categoryOption.id
 );
@@ -271,7 +185,12 @@ const addressLine = (address = {}) => [
     address.zip || address.zipCode,
 ].filter(Boolean).join(", ");
 
-const CreateNewServiceStop = () => {
+const plannedVisitSchedulingPath = (jobId, plannedStopId) => {
+    const query = new URLSearchParams({ scheduleVisit: plannedStopId });
+    return `/company/jobs/detail/${encodeURIComponent(jobId)}/create-plans?${query}`;
+};
+
+const CreateNewServiceStopForm = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
@@ -937,102 +856,6 @@ const CreateNewServiceStop = () => {
         }
     };
 
-    const syncShoppingItemsForScheduledJobTasks = async ({
-        serviceStopId,
-        internalId,
-        activeCustomer,
-        activeServiceLocation,
-    }) => {
-        if (!recentlySelectedCompany || !jobId || !selectedUser?.userId || !selectedTasks.length) return;
-
-        const selectedTaskIds = new Set(selectedTasks.map((task) => idValue(task.id)).filter(Boolean));
-        const linkedShoppingItemIds = new Set(
-            selectedTasks.flatMap((task) => [
-                idValue(task.shoppingListItemId),
-                ...(Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds.map(idValue) : []),
-            ]).filter(Boolean)
-        );
-
-        if (!selectedTaskIds.size && !linkedShoppingItemIds.size) return;
-
-        const selectedPlannedStopId = idValue(selectedPlannedStop?.id);
-        const selectedPlanId = idValue(
-            selectedPlannedStop?.planId ||
-            selectedPlannedStop?.sourcePlanId ||
-            selectedPlannedStop?.solutionId ||
-            selectedPlannedStop?.sourceSolutionId
-        );
-        const shoppingSnap = await getDocs(query(
-            collection(db, "companies", recentlySelectedCompany, "shoppingList"),
-            where("jobId", "==", jobId)
-        ));
-        const scheduledDate = Timestamp.fromDate(serviceDate);
-        const basePrepKeys = buildScheduledShoppingPrepKeys({
-            userId: selectedUser.userId,
-            jobId,
-            customerId: activeCustomer?.id || job?.customerId || "",
-            serviceLocationId: activeServiceLocation?.id || job?.serviceLocationId || "",
-            serviceStopId,
-            taskIds: Array.from(selectedTaskIds),
-        });
-        const matchedDocs = shoppingSnap.docs.filter((docSnap) => {
-            const item = { id: docSnap.id, ...(docSnap.data() || {}) };
-            return shoppingItemMatchesScheduledTasks({
-                item,
-                selectedTaskIds,
-                linkedShoppingItemIds,
-                selectedPlannedStopId,
-                selectedPlanId,
-            });
-        });
-
-        if (!matchedDocs.length) return;
-
-        await Promise.all(
-            matchedDocs.map((docSnap) => {
-                const item = { id: docSnap.id, ...(docSnap.data() || {}) };
-                const itemTaskIds = shoppingItemTaskIds(item).filter((taskId) => selectedTaskIds.has(taskId));
-                const itemPrepKeys = buildScheduledShoppingPrepKeys({
-                    userId: selectedUser.userId,
-                    jobId,
-                    customerId: activeCustomer?.id || item.customerId || job?.customerId || "",
-                    serviceLocationId: activeServiceLocation?.id || item.serviceLocationId || job?.serviceLocationId || "",
-                    serviceStopId,
-                    taskIds: itemTaskIds.length ? itemTaskIds : Array.from(selectedTaskIds),
-                });
-                const prepKeys = itemPrepKeys.length ? itemPrepKeys : basePrepKeys;
-                const updates = {
-                    serviceStopId,
-                    serviceStopInternalId: internalId,
-                    scheduledServiceStopId: serviceStopId,
-                    scheduledServiceStopInternalId: internalId,
-                    scheduledDate,
-                    actionDate: scheduledDate,
-                    needsAction: itemNeedsShoppingAction(item),
-                    updatedAt: Timestamp.now(),
-                };
-
-                if (prepKeys.length) {
-                    updates.prepKeys = arrayUnion(...prepKeys);
-                }
-
-                if (selectedUser.userId) {
-                    updates.assignedTechIds = arrayUnion(selectedUser.userId);
-                    updates.assignedTechId = selectedUser.userId;
-                    updates.assignedToUserId = selectedUser.userId;
-                }
-
-                if (selectedUser.userName) {
-                    updates.assignedTechNames = arrayUnion(selectedUser.userName);
-                    updates.assignedTechName = selectedUser.userName;
-                    updates.assignedToUserName = selectedUser.userName;
-                }
-
-                return updateDoc(docSnap.ref, updates);
-            })
-        );
-    };
-
     const createServiceStop = async () => {
         if (!requirePermission("242", "create service stops")) return;
 
@@ -1211,10 +1034,17 @@ const CreateNewServiceStop = () => {
             }
         }
         await syncShoppingItemsForScheduledJobTasks({
+            db,
+            companyId: recentlySelectedCompany,
+            jobId,
+            selectedUser,
+            selectedTasks,
+            selectedPlannedStop,
+            serviceDate,
             serviceStopId,
             internalId,
-            activeCustomer,
-            activeServiceLocation,
+            customerId: activeCustomer?.id || job?.customerId || "",
+            serviceLocationId: activeServiceLocation?.id || job?.serviceLocationId || "",
         });
         await updateDoc(serviceStopRef, { rate: rate });
 
@@ -1366,9 +1196,7 @@ const CreateNewServiceStop = () => {
                                 setDescription={setDescription}
                                 plannedServiceStops={plannedServiceStops}
                                 selectedPlannedStop={selectedPlannedStop}
-                                setSelectedPlannedStop={setSelectedPlannedStop}
-                                taskList={taskList}
-                                setSelectedTasks={setSelectedTasks}
+                                onSchedulePlannedStop={(visit) => navigate(plannedVisitSchedulingPath(jobId, visit.id))}
                                 selectedPlannedStopPayRange={selectedPlannedStopPayRange}
                                 moneyFromCents={moneyFromCents}
                                 categoryOptions={categoryOptionsForScheduler}
@@ -1536,9 +1364,7 @@ const SiteInfoTab = ({
     setDescription,
     plannedServiceStops,
     selectedPlannedStop,
-    setSelectedPlannedStop,
-    taskList,
-    setSelectedTasks,
+    onSchedulePlannedStop,
     selectedPlannedStopPayRange,
     moneyFromCents,
     categoryOptions,
@@ -1561,15 +1387,6 @@ const SiteInfoTab = ({
         value: stop.id,
         label: stop.name || stop.serviceStopTypeName || "Planned Service Stop",
     }));
-
-    const handlePlannedStopChange = (option) => {
-        setSelectedPlannedStop(option || null);
-        if (!option) return;
-
-        const taskIds = Array.isArray(option.taskIds) ? option.taskIds : [];
-        setSelectedTasks(taskIds.length ? taskList.filter((task) => taskIds.includes(task.id)) : taskList);
-        if (option.description) setDescription(option.description);
-    };
 
     const locationAddress = location?.address
         ? addressLine(location.address)
@@ -1712,7 +1529,7 @@ const SiteInfoTab = ({
                 <Select
                     options={plannedStopOptions}
                     value={selectedPlannedStop ? { ...selectedPlannedStop, value: selectedPlannedStop.id, label: selectedPlannedStop.name || selectedPlannedStop.serviceStopTypeName || "Planned Service Stop" } : null}
-                    onChange={handlePlannedStopChange}
+                    onChange={(option) => option && onSchedulePlannedStop(option)}
                     placeholder="Optional: schedule from planned stop"
                     isClearable
                     styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
@@ -2179,6 +1996,17 @@ const ReviewTab = ({
             )}
         </div>
     );
+};
+
+const CreateNewServiceStop = () => {
+    const { jobId } = useParams();
+    const { search } = useLocation();
+    const params = new URLSearchParams(search);
+    const plannedStopId = params.get("plannedStopId");
+    if (jobId && plannedStopId && categoryOptionForParam(params.get("category"), true).id === "jobVisit") {
+        return <Navigate replace to={plannedVisitSchedulingPath(jobId, plannedStopId)} />;
+    }
+    return <CreateNewServiceStopForm />;
 };
 
 export default CreateNewServiceStop;

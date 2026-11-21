@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { resolveJobCreator } from "../../../utils/jobHistory";
@@ -262,6 +263,7 @@ const plannedMaterialTotalPriceCents = (item = {}) => {
 };
 
 const scheduleTemplateDetailsEmpty = () => ({
+  templateId: "",
   tasks: [],
   plannedServiceStops: [],
   shoppingItems: [],
@@ -497,15 +499,6 @@ const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriorit
   template.solutionTier ??
   DEFAULT_ISSUE_PRIORITY
 );
-
-const templateIntentMatches = (template = {}, intent = "") => {
-  const searchable = `${template.name || ""} ${template.type || ""} ${template.jobType || ""} ${template.description || ""}`.toLowerCase();
-  if (intent === "repair") return searchable.includes("repair");
-  if (intent === "maintenance") {
-    return searchable.includes("maintenance") || searchable.includes("service");
-  }
-  return false;
-};
 
 const formatAddressLine = (address = {}) => {
   if (typeof address === "string") return address.trim();
@@ -1177,6 +1170,7 @@ export default function EquipmentList() {
         if (cancelled) return;
 
         setScheduleTemplateDetails({
+          templateId: scheduleTemplateId,
           tasks: tasksSnap.docs
             .map((taskDoc) => ({ id: taskDoc.data().id || taskDoc.id, ...taskDoc.data() }))
             .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
@@ -1986,6 +1980,7 @@ export default function EquipmentList() {
     !!scheduleDateTime &&
     !scheduleEquipmentIsMissingLocation &&
     !loadingScheduleTemplateDetails &&
+    scheduleTemplateDetails.templateId === selectedScheduleTemplate.id &&
     !schedulingJob &&
     scheduleMissingEquipmentAssignments.length === 0 &&
     (!selectedScheduleTemplateRequiresEquipment || scheduleAssignedEquipmentIds.length > 0) &&
@@ -1993,13 +1988,6 @@ export default function EquipmentList() {
 
   useEffect(() => {
     if (activeQuickModal !== SCHEDULE_JOB_MODAL) return;
-
-    if (!scheduleTemplateId && scheduleTemplateOptions.length) {
-      const preferredTemplate =
-        scheduleTemplateOptions.find((template) => templateIntentMatches(template, scheduleJobIntent)) ||
-        scheduleTemplateOptions[0];
-      setScheduleTemplateId(preferredTemplate?.id || "");
-    }
 
     if (!scheduleAdminId && scheduleAdminOptions.length) {
       setScheduleAdminId(scheduleAdminOptions[0].userId || scheduleAdminOptions[0].id || "");
@@ -2012,11 +2000,8 @@ export default function EquipmentList() {
     activeQuickModal,
     scheduleAdminId,
     scheduleAdminOptions,
-    scheduleJobIntent,
     scheduleTechnicianId,
     scheduleTechnicianOptions,
-    scheduleTemplateId,
-    scheduleTemplateOptions,
   ]);
 
   useEffect(() => {
@@ -2343,6 +2328,7 @@ export default function EquipmentList() {
       equipmentContext: buildEquipmentContext(equipment, "maintenance"),
       jobIntent: "maintenance",
       createdFromEquipmentCard: true,
+      requireTemplate: true,
     });
   };
 
@@ -2447,16 +2433,13 @@ export default function EquipmentList() {
     if (modalName === SCHEDULE_JOB_MODAL) {
       const normalizedIntent = SCHEDULE_JOB_INTENTS[jobIntent] ? jobIntent : "maintenance";
       const intentConfig = SCHEDULE_JOB_INTENTS[normalizedIntent];
-      const preferredTemplate =
-        scheduleTemplateOptions.find((template) => templateIntentMatches(template, normalizedIntent)) ||
-        scheduleTemplateOptions[0];
       const defaultAdmin = scheduleAdminOptions[0];
       const defaultTechnician = canScheduleTemplateForOthers
         ? scheduleTechnicianOptions[0]
         : currentCompanyUser || scheduleTechnicianOptions[0];
 
       setScheduleJobIntent(normalizedIntent);
-      setScheduleTemplateId(preferredTemplate?.id || "");
+      setScheduleTemplateId("");
       setScheduleAdminId(defaultAdmin?.userId || defaultAdmin?.id || "");
       setScheduleTechnicianId(defaultTechnician?.userId || defaultTechnician?.id || "");
       setScheduleDateTime(defaultScheduledAt());
@@ -3979,28 +3962,22 @@ export default function EquipmentList() {
     }
   };
 
+  const canViewSuggestions = can("60");
+  const canCreateEquipment = can("62");
+
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company assets</p>
-            <h2 className="mt-1 text-3xl font-bold text-slate-950">Equipment</h2>
-            <p className="mt-1 text-sm text-slate-500">Track assets, service schedules, and operational status.</p>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                Customers shown: {uniqueCustomerCount}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                Equipment shown: {filteredEquipmentList.length}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2 lg:justify-end">
-            {can("60") && (
+        <WorkspaceHeader
+          title="Equipment"
+          eyebrow="Company assets"
+          description="Track assets, service schedules, and operational status."
+          meta={<>
+            <span className="workspace-header-badge">Customers shown: {uniqueCustomerCount}</span>
+            <span className="workspace-header-badge">Equipment shown: {filteredEquipmentList.length}</span>
+          </>}
+          actions={(canViewSuggestions || canCreateEquipment) && <>
+            {canViewSuggestions && (
               <Link
                 to="/company/equipment/universal-suggestions"
                 className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
@@ -4009,7 +3986,7 @@ export default function EquipmentList() {
               </Link>
             )}
 
-            {can("62") && (
+            {canCreateEquipment && (
               <Link
                 to={"/company/equipment/createNew"}
                 className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
@@ -4017,9 +3994,8 @@ export default function EquipmentList() {
                 Create New
               </Link>
             )}
-          </div>
-        </div>
-        </section>
+          </>}
+        />
 
         {/* TOP FILTER BUTTONS */}
         <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -4870,9 +4846,10 @@ export default function EquipmentList() {
 
               <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
                 <div className="min-w-0 space-y-3">
-                  <Field label="Template">
+                  <Field label="Template (required)">
                     <Select
                       aria-label="Template"
+                      required
                       classNamePrefix="react-select"
                       value={selectedScheduleTemplate}
                       options={scheduleTemplateOptions}

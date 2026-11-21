@@ -7,7 +7,8 @@ import "react-datepicker/dist/react-datepicker.css";
 import { format } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { getItemPhotoUrl } from "../../../utils/itemPhotos";
-import { findLinkedProductForVendorItem, getProductDisplayName, getProductSellPriceCents, productCatalogCollectionRef, vendorItemsCollectionRef } from "../../../utils/productCatalog";
+import { findLinkedProductForVendorItem, getProductDisplayName, getProductSellPriceCents, isMergedCatalogRecord, productCatalogCollectionRef, vendorItemsCollectionRef } from "../../../utils/productCatalog";
+import { catalogDuplicatesPath } from "../productCatalog/catalogMergeRecords";
 import WorkspaceHeader from "../../../components/workspace/WorkspaceHeader";
 import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
 import { userFacingErrorMessage } from "../../../utils/permissionErrors";
@@ -96,7 +97,7 @@ const DatabaseItems = () => {
             productId: product?.id || "", productName: product ? getProductDisplayName(product) : "",
           };
         });
-        setGenericItemList(items);
+        setGenericItemList(items.filter(item => !isMergedCatalogRecord(item)));
       } catch (error) {
         if (active) setLoadError(userFacingErrorMessage(error, "Could not load vendor items."));
       } finally { if (active) setLoading(false); }
@@ -227,6 +228,7 @@ const DatabaseItems = () => {
           actions={<>
             {can("852") && <button type="button" disabled={!recentlySelectedCompany} onClick={() => setCreateOpen(true)} className={workspaceButtonClass({ tone: "blue" })}>Add new</button>}
             <Link to="/company/product-catalog/reconciliation" className={workspaceButtonClass({ tone: "blue" })}>Product Catalog Reconciliation</Link>
+            {can("854") && <Link to={`${catalogDuplicatesPath}?kind=vendorItem`} className={workspaceButtonClass({ tone: "slate" })}>Merge Duplicates</Link>}
             {can("910") && <Link to={`${vendorItemsBasePath}/bulk-upload`} className={workspaceButtonClass({ tone: "slate" })}>Upload Vendor Items</Link>}
             <Link to="/company/product-catalog" className={workspaceButtonClass({ tone: "slate" })}>Product Catalog</Link>
           </>}

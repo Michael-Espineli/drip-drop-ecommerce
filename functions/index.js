@@ -316,6 +316,7 @@ exports.setRecurringServiceStopEstimatedDuration = serviceStopDurationAverages.s
 
 const serviceStopCompletion = require('./serviceStopCompletion');
 exports.processServiceStopCompletionWork = serviceStopCompletion.processServiceStopCompletionWork;
+exports.managePayrollStopCompletion = serviceStopCompletion.managePayrollStopCompletion;
 exports.reconcileServiceStopPayroll = serviceStopCompletion.reconcileServiceStopPayroll;
 exports.reconcileServiceStopTaskPayroll = serviceStopCompletion.reconcileServiceStopTaskPayroll;
 exports.reconcileJobTaskPayroll = serviceStopCompletion.reconcileJobTaskPayroll;
@@ -513,10 +514,17 @@ exports.ensureOwnTechnicianRoute = require("./technicianWork").ensureOwnTechnici
 
 // Personal, read-only paysheet; identity comes from Firebase Auth.
 exports.getTechnicianPaysheet = onCall({ timeoutSeconds: 120 }, require("./technicianPaysheet").createTechnicianPaysheet(admin.firestore()));
+exports.mergeCatalogDuplicates = onCall(require("./catalogMerge").createCatalogMerge(admin.firestore()));
+exports.deleteCatalogProductAndVendorItems = onCall(require("./catalogMerge").createCatalogProductDeletion(admin.firestore()));
 
 // Approved-part invoices follow customer timing across web and native fulfillment.
 const partApprovalBilling = require('./partApprovalBilling');
 exports.ensurePartApprovalInvoice = partApprovalBilling.ensurePartApprovalInvoice;
+exports.rejectPartApproval = require('./partApprovalRejection').rejectPartApproval;
+exports.recordPartOfflineBilling = partApprovalBilling.recordPartOfflineBilling;
+const jobStopMaterials = require('./jobStopMaterials');
+exports.recordJobStopMaterial = jobStopMaterials.recordJobStopMaterial;
+exports.reconcileJobMaterialPurchase = jobStopMaterials.reconcileJobMaterialPurchase;
 exports.reconcilePartApprovalInvoice = partApprovalBilling.reconcilePartApprovalInvoice;
 exports.reconcileShoppingItemInvoice = partApprovalBilling.reconcileShoppingItemInvoice;
 exports.processPartInvoiceEmail = partApprovalBilling.processPartInvoiceEmail;

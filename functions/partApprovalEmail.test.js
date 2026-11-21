@@ -14,7 +14,7 @@ const {createPartApprovalBilling}=require('./partApprovalBilling');
 function fixture(extra={}){
  db.records.clear();messages.length=0;failure=false;
  const records={
-  'companies/company':{ownerId:'owner',name:'Pool company'},
+  'companies/company':{customerBillingEnabled: true, ownerId:'owner',name:'Pool company'},
   'companies/company/settings/companyWide':{partApprovalAutoSendInvoices:true},
   'companies/company/settings/emailConfiguration':{emailIsOn:true},
   'companies/company/customers/customer':{email:'customer@example.test',customerUserId:'homeowner'},

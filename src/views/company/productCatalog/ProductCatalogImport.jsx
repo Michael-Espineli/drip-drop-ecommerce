@@ -5,7 +5,10 @@ import { getDocs, orderBy, query } from "firebase/firestore";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import { ProductAvailabilityDisclosure } from "./ProductAvailabilityFields";
+import { catalogDuplicatesPath } from "./catalogMergeRecords";
 import { Context } from "../../../context/AuthContext";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
 import { db } from "../../../utils/config";
 import { saveVendorProductConnection } from "../../../utils/productVendorConnections";
 import {
@@ -16,6 +19,7 @@ import {
   getProductSellPriceCents,
   getVendorItemCostCents,
   getVendorItemDisplayName,
+  isMergedCatalogRecord,
   productCatalogCollectionRef,
   vendorItemsCollectionRef,
 } from "../../../utils/productCatalog";
@@ -55,6 +59,7 @@ const buildImportRows = (vendorItems, products) =>
 
 const ProductCatalogImport = () => {
   const { recentlySelectedCompany } = useContext(Context);
+  const { can } = useCompanyPermissions();
   const productCatalogPath = "/company/product-catalog";
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -85,8 +90,8 @@ const ProductCatalogImport = () => {
         getDocs(query(vendorItemsCollectionRef(db, recentlySelectedCompany), orderBy("name"))),
       ]);
 
-      const nextProducts = productSnap.docs.map((productDoc) => ({ id: productDoc.id, ...productDoc.data() }));
-      const nextVendorItems = vendorItemSnap.docs.map((vendorItemDoc) => ({ id: vendorItemDoc.id, ...vendorItemDoc.data() }));
+      const nextProducts = productSnap.docs.map((productDoc) => ({ ...productDoc.data(), id: productDoc.id })).filter(row => !isMergedCatalogRecord(row));
+      const nextVendorItems = vendorItemSnap.docs.map((vendorItemDoc) => ({ ...vendorItemDoc.data(), id: vendorItemDoc.id })).filter(row => !isMergedCatalogRecord(row));
 
       setProducts(nextProducts);
       setVendorItems(nextVendorItems);
@@ -350,6 +355,7 @@ const ProductCatalogImport = () => {
               </p>
             </div>
             <div className="flex flex-wrap gap-2 lg:justify-end">
+              {can("854") && <Link to={catalogDuplicatesPath} className={workspaceButtonClass({ tone: "slate" })}>Merge Duplicates</Link>}
               <button
                 type="button"
                 onClick={createProductsFromAllUnlinked}

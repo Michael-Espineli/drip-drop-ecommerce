@@ -1,5 +1,9 @@
 const { HttpsError } = require('./appErrors');
 const {createTechnicianWorkWorkflow,id,record,rows,done,key,stable}=require('./technicianWorkWorkflow');
+const purchaseRecorded = item => Boolean(item.purchasedItem || item.purchasedItemId || item.datePurchased || item.purchasedAt)
+  || ['purchased','delivered'].includes(key(item.status));
+const installed = item => Boolean(item.installedAt) || key(item.status) === 'installed';
+const closedMaterial = item => installed(item) || ['cancelled','canceled','deleted'].includes(key(item.status));
 const closedStop=stop=>done({status:stop.operationStatus || stop.status}) || Boolean(stop.finishedAt || stop.completedAt);
 function createJobCloseout(db,now=()=>new Date()) {
  const work=createTechnicianWorkWorkflow(db,now);
@@ -46,18 +50,40 @@ function createJobCloseout(db,now=()=>new Date()) {
     });
    });
    const completedTasks=tasks.map(v=>taskIds.has(v.id)?{...v,status:'Finished',workerId:v.workerId || linkedAssignments.get(v.id)?.workerId || a.uid,workerName:v.workerName || linkedAssignments.get(v.id)?.workerName || a.name,...(!id(v.serviceStopId) && linkedAssignments.has(v.id)?{serviceStopId:linkedAssignments.get(v.id).serviceStopId}:{}),completedAt:v.completedAt || at,completedByUserId:v.completedByUserId || a.uid}:v);
-   const completedProducts=products.map(v=>productIds.has(v.id)?{...v,status:'Installed',needsAction:false,installedAt:v.installedAt || at,installedByUserId:a.uid,installedQuantity:Math.max(0,Number(v.quantity) || 1)}:v);
+   const productsToInstall = products.filter(item=>productIds.has(item.id) && !installed(item));
+   if ([...productIds].some(id=>!products.some(item=>item.id===id)) ||
+       productsToInstall.some(item=>!purchaseRecorded(item) || item.returned || item.planWorkspaceOnly || item.shoppingListActive===false)) {
+    throw new HttpsError('failed-precondition','Only purchased materials on this job can be confirmed installed.');
+   }
+   const installations = new Map(productsToInstall.map(item=>[item.id,{
+    status:'Installed',fulfillmentStatus:'installed',needsAction:false,installedAt:at,
+    installedByUserId:a.uid,installedByUserName:a.name,installedQuantity:Math.max(0,Number(item.quantity ?? item.quantityString) || 1),
+    updatedAt:at,
+   }]));
+   const completedProducts=products.map(item=>({...item,...installations.get(item.id)}));
    if(!work.can(a,'24') && tasks.some(v=>taskIds.has(v.id) && v.workerId && v.workerId!==a.uid)) throw new HttpsError('permission-denied','Management must review completing another technician’s assigned work.');
-   const purchases=await Promise.all(products.filter(v=>productIds.has(v.id) && v.purchasedItemId).map(v=>t.get(c.collection('purchasedItems').doc(id(v.purchasedItemId)))));
+   const purchaseIds = new Set(productsToInstall.map(item=>id(item.purchasedItem || item.purchasedItemId)).filter(Boolean));
+   const purchases=await Promise.all([...purchaseIds].map(purchaseId=>t.get(c.collection('purchasedItems').doc(purchaseId))));
+   const approvals=await Promise.all(productsToInstall.map(async item=>{
+    const approvalId=id(item.partApprovalRequestId || item.approvalRequestId || item.customerApprovalRequestId);
+    if(!approvalId) return null;
+    const approval=await t.get(db.collection('customerPartApprovals').doc(approvalId));
+    const source=approval.data();
+    if(!source || source.companyId!==companyId || (source.shoppingListItemId || source.shoppingItemId)!==item.id ||
+        !['approved','resolved'].includes(key(source.approvalStatus || source.status))) {
+     throw new HttpsError('failed-precondition','A selected material needs a valid customer approval before installation.');
+    }
+    return approval;
+   }));
 
-   const nextServices=services.map(v=> selected.has(v.id) || (v.taskIds?.length?v.taskIds:v.laborLineTaskIds || []).length && (v.taskIds?.length?v.taskIds:v.laborLineTaskIds).every(value=>completedTasks.some(task=>task.id===id(value)&&done(task))) && !completedProducts.some(item=>(v.taskIds?.length?v.taskIds:v.laborLineTaskIds || []).map(id).includes(id(item.linkedTaskId || item.jobTaskId)) && !['installed','cancelled','canceled','deleted'].includes(key(item.status))) ? {...v,completionStatus:'Finished',completedAt:v.completedAt || at,completedByUserId:a.uid} : v);
-   const remainingTasks=completedTasks.filter(v=>!done(v)),remainingProducts=completedProducts.filter(v=>!['installed','cancelled','canceled','deleted'].includes(key(v.status))),remainingServices=nextServices.filter(v=>v.completionStatus!=='Finished');
+   const nextServices=services.map(v=> selected.has(v.id) || (v.taskIds?.length?v.taskIds:v.laborLineTaskIds || []).length && (v.taskIds?.length?v.taskIds:v.laborLineTaskIds).every(value=>completedTasks.some(task=>task.id===id(value)&&done(task))) && !completedProducts.some(item=>(v.taskIds?.length?v.taskIds:v.laborLineTaskIds || []).map(id).includes(id(item.linkedTaskId || item.jobTaskId)) && !closedMaterial(item)) ? {...v,completionStatus:'Finished',completedAt:v.completedAt || at,completedByUserId:a.uid} : v);
+   const remainingTasks=completedTasks.filter(v=>!done(v)),remainingProducts=completedProducts.filter(v=>!closedMaterial(v)),remainingServices=nextServices.filter(v=>v.completionStatus!=='Finished');
    const future=stops.filter(v=>!closedStop(v) && !selectedStopIds.has(v.id)),offers=rows(offersSnap),openOffers=offers.filter(v=>!['Rejected','Cancelled','Expired','Completed'].includes(v.status) && !(v.claims || []).some(claim=>['Accepted','Scheduled','In Progress','Completed'].includes(claim.status))),planned=rows(plannedSnap).filter(v=>!done(v) && !id(v.serviceStopId));
-   if(d.finishJob!==false && (remainingTasks.length || remainingProducts.length || remainingServices.length)) throw new HttpsError('failed-precondition','Finish the remaining tasks, services, and product installations, or keep the job open.');
+   if(d.finishJob!==false && (remainingTasks.length || remainingServices.length)) throw new HttpsError('failed-precondition','Finish the remaining tasks and services, or keep the job open.');
    if(d.finishJob!==false && (future.length || planned.length || openOffers.length) && !d.cancelRemainingVisits) throw new HttpsError('failed-precondition','Review the remaining scheduled visits before closing the job.');
    const equipmentStopTasks=stops.flatMap((stop,index)=>rows(stopTaskSnapshots[index]).map(task=>({stop,task:selectedStopIds.has(stop.id) && !closedStop(stop) && !done(task)?{...task,status:'Finished',completedAt:task.completedAt || at}:task})));
    const equipmentWrites=await equipment.plan(t,{companyId,jobId,job:{...job,...(d.finishJob?{completedAt:job.completedAt || at}:{})},tasks:completedTasks,stopTasks:equipmentStopTasks,finishJob:d.finishJob,completedAt:at});
-   if(tasks.length+products.length+purchases.length+nextServices.length+future.length+planned.length+offers.length+selectedStops.length+stopTasks.flat().length+equipmentWrites.length>400) throw new HttpsError('resource-exhausted','Close out this job in smaller groups.');
+   if(tasks.length+products.length+approvals.filter(Boolean).length+purchases.length+nextServices.length+future.length+planned.length+offers.length+selectedStops.length+stopTasks.flat().length+equipmentWrites.length>400) throw new HttpsError('resource-exhausted','Close out this job in smaller groups.');
    if(d.finishJob && d.cancelRemainingVisits) {
      const cancelled=new Set(future.map(v=>v.id));
      const dropped=new Set(openOffers.map(v=>v.id));
@@ -75,7 +101,8 @@ function createJobCloseout(db,now=()=>new Date()) {
      }
    }
    completedTasks.filter(v=>taskIds.has(v.id)).forEach(v=>t.set(ref.collection('tasks').doc(v.id),v,{merge:true}));
-   completedProducts.filter(v=>productIds.has(v.id)).forEach(v=>t.set(c.collection('shoppingList').doc(v.id),v,{merge:true}));
+   for (const [id,updates] of installations) t.set(c.collection('shoppingList').doc(id),updates,{merge:true});
+   approvals.forEach(approval=>{if(approval) t.set(approval.ref,{fulfillmentStatus:'installed',shoppingListItemStatus:'Installed',installedAt:at,installedByUserId:a.uid,updatedAt:at},{merge:true});});
    purchases.filter(v=>v.exists).forEach(v=>t.set(v.ref,{installed:true,installedAt:at,installationJobId:jobId},{merge:true}));
    nextServices.forEach(v=>t.set(ref.collection('laborLineItems').doc(v.id),v,{merge:true}));
    selectedStops.forEach((stop,index)=>{
@@ -89,7 +116,7 @@ function createJobCloseout(db,now=()=>new Date()) {
    if(d.finishJob!==false) planned.forEach(v=>t.set(ref.collection('plannedServiceStops').doc(v.id),{status:'Cancelled',cancelledAt:at,cancelledByUserId:a.uid,cancelReason:'Job finished during closeout.'},{merge:true}));
    equipment.apply(t,equipmentWrites);
    t.set(ref,{laborLineItems:nextServices,...(d.finishJob===false?{}:{operationStatus:'Finished',completedAt:job.completedAt || at,completedByUserId:a.uid}),updatedAt:at},{merge:true});
-   const result={jobId,finished:d.finishJob,remainingTasks:remainingTasks.length,remainingProducts:remainingProducts.length,remainingServices:remainingServices.length,completedServiceStopIds:selectedStops.map(stop=>stop.id)};
+   const result={jobId,finished:d.finishJob,remainingTasks:remainingTasks.length,remainingProducts:remainingProducts.length,installedProductIds:[...installations.keys()],remainingServices:remainingServices.length,completedServiceStopIds:selectedStops.map(stop=>stop.id)};
    t.set(ref.collection('history').doc(eventId),{id:eventId,companyId,jobId,type:'Updated',action:d.finishJob===false?'Work Completed':'Job Finished',title:d.finishJob===false?'Work completed':'Job finished',description:'Closeout by '+a.name,createdAt:at,date:at,userId:a.uid,userName:a.name,actorId:a.uid,actorName:a.name,serviceIds:[...selected],taskIds:[...taskIds],productIds:[...productIds],completedServiceStopIds:selectedStops.map(stop=>stop.id),cancelledVisitIds:d.finishJob!==false?future.map(v=>v.id):[],cancelledOfferIds:d.finishJob?openOffers.map(v=>v.id):[],result},{merge:true});
    return result;
   });

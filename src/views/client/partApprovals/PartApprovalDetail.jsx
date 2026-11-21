@@ -196,7 +196,7 @@ const PartApprovalDetail = () => {
   const respond = async (action) => {
     if (!approval || !isPending || responding) return;
 
-    if (action === 'approved' && paymentPreference === 'nextBill' && !nextBillSubscriptionId) { toast.error('Choose an eligible recurring service bill.'); return; }
+    if (action === 'approved' && !approval.jobId && paymentPreference === 'nextBill' && !nextBillSubscriptionId) { toast.error('Choose an eligible recurring service bill.'); return; }
     setResponding(action);
     try {
       const authPayload = await getCallableAuthPayload();
@@ -206,8 +206,8 @@ const PartApprovalDetail = () => {
         approvalId: approval.id,
         action,
         responseNote,
-        paymentPreference: action === 'approved' ? paymentPreference : 'sendInvoice',
-        ...(action === 'approved' && paymentPreference === 'nextBill' ? { nextBillSubscriptionId } : {}),
+        paymentPreference: action === 'approved' ? (approval.jobId ? 'jobInvoice' : paymentPreference) : 'sendInvoice',
+        ...(action === 'approved' && !approval.jobId && paymentPreference === 'nextBill' ? { nextBillSubscriptionId } : {}),
       });
       toast.success(action === 'approved' ? 'Part approved.' : 'Part rejected.');
     } catch (responseError) {
@@ -295,6 +295,9 @@ const PartApprovalDetail = () => {
                     className="mt-4 min-h-[120px] w-full rounded-md border border-slate-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     placeholder="Optional note"
                   />
+                  {approval.jobId ? (
+                    <p className="mt-4 text-sm font-semibold text-slate-700">Included on job invoice</p>
+                  ) : <>
                   <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
                     <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Prepare Payment</p>
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -329,6 +332,7 @@ const PartApprovalDetail = () => {
                       </select>
                     </label>
                   )}
+                  </>}
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <button
                       type="button"
@@ -361,7 +365,7 @@ const PartApprovalDetail = () => {
                     <p className="mt-2">Your invoice will be created after delivery or installation.</p>
                   ) : null}
                   {approval.responseNote && <p className="mt-2 whitespace-pre-wrap">{approval.responseNote}</p>}
-                  {approval.paymentPreference || approval.paymentCollectionPreference ? (
+                  {approval.jobId ? <p className="mt-2 font-semibold">Included on job invoice</p> : approval.paymentPreference || approval.paymentCollectionPreference ? (
                     <p className="mt-2 font-semibold">
                       Payment preference: {paymentPreferenceOptions.find((option) => option.value === (approval.paymentPreference || approval.paymentCollectionPreference))?.label || labelize(approval.paymentPreference || approval.paymentCollectionPreference)}
                     </p>

@@ -18,6 +18,7 @@ import {
   findLinkedProductForVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
+  isMergedCatalogRecord,
   productCatalogCollectionRef,
   productCatalogDocRef,
   productOptionSearchText,
@@ -498,8 +499,8 @@ const HeritageReceiptImport = () => {
         ]);
 
         const users = usersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-        const items = databaseSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-        const productItems = productSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        const items = databaseSnap.docs.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id })).filter(row => !isMergedCatalogRecord(row));
+        const productItems = productSnap.docs.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id })).filter(row => !isMergedCatalogRecord(row));
         const heritageVendor =
           vendorList.find((vendor) => normalizeKey(vendor.name).includes("heritagepoolsupply")) ||
           vendorList.find((vendor) => normalizeKey(vendor.name).includes("heritage")) ||

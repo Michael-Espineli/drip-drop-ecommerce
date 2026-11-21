@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -373,16 +374,11 @@ const ReceiptListView = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company receipts</p>
-            <h2 className="mt-1 text-3xl font-bold text-slate-950">Receipts</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Receipt headers, totals, files, and linked purchased items from {format(startViewingDate, "MM/dd/yy")} to {format(endViewingDate, "MM/dd/yy")}.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+        <WorkspaceHeader
+          title="Receipts"
+          eyebrow="Company receipts"
+          description={`Receipt headers, totals, files, and linked purchased items from ${format(startViewingDate, "MM/dd/yy")} to ${format(endViewingDate, "MM/dd/yy")}.`}
+          actions={<>
             <Link
               to="/company/purchased-items/createNew"
               className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
@@ -395,9 +391,8 @@ const ReceiptListView = () => {
             >
               Purchased Items
             </Link>
-          </div>
-          </div>
-        </section>
+          </>}
+        />
 
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-[minmax(280px,1fr)_auto] md:items-center">

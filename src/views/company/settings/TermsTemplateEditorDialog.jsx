@@ -106,7 +106,7 @@ export default function TermsTemplateEditorDialog({ companyId, template = null, 
     <Dialog open onClose={() => !busyRef.current && onClose()} className="relative z-[60]">
       <div className="fixed inset-0 bg-slate-950/60" aria-hidden="true" />
       <div className="fixed inset-0 flex items-center justify-center p-3 sm:p-6">
-        <DialogPanel className="flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+        <DialogPanel className={`flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-lg bg-white shadow-2xl ${template ? 'max-w-[max(48rem,50vw)]' : 'max-w-3xl'}`}>
           <form onSubmit={save} className="flex max-h-[92dvh] min-h-0 flex-col" aria-label="Service agreement template editor">
             <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 p-5">
               <div>

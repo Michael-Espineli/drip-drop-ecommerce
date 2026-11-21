@@ -720,6 +720,12 @@ service cloud.firestore {
           || (after.get("startTime", null) == null && after.get("endTime", null) == null && !(after.get("operationStatus", "") in ["Finished", "In Progress"]))
           || (onboardingStopReady(before) && onboardingStopReady(after));
       }
+      function recurringRouteScheduleFields() {
+        return ["routeScheduleRevision", "routeScheduleEffectiveDateKey", "routeScheduleAnchorDateKey", "routeScheduleTimeZone"];
+      }
+      function routeOccurrenceFields() {
+        return ["routeScheduleException", "recurringServiceStopDateKey", "recurringServiceStopDedupKey"];
+      }
       function preservesOnboardingRecord(name) {
         return !(name in ["customers", "serviceLocations"]) || (!request.resource.data.diff(resource.data).affectedKeys().hasAny(["serviceOnboarding", "onboardingRequired", "firstServiceCompletedAt"])
           && (resource.data.get("onboardingRequired", false) != true || !request.resource.data.diff(resource.data).affectedKeys().hasAny(["lifecycleStatus"])));
@@ -798,11 +804,51 @@ service cloud.firestore {
           || canCreateAssignedJob(job, data.get("techId", ""), jobCreationPermissions())
         );
       }
-      function validInitialJobStop(stopId, data) {
+      function canCreateServiceStop(stopId, data) {
         let jobId = data.get("jobId", "");
-        return !(jobId is string) || jobId == "" || get(jobPath(jobId)) != null || (
-          getAfter(jobPath(jobId)) != null && validNewJobStop(stopId, data, getAfter(jobPath(jobId)).data)
-        );
+        return jobId is string && jobId != "" && get(jobPath(jobId)) == null
+          ? hasCompanyAccess(companyId) && getAfter(jobPath(jobId)) != null
+            && validNewJobStop(stopId, data, getAfter(jobPath(jobId)).data)
+          : permitted("242");
+      }
+      function stopPayrollMode(data) {
+        return data.get("payrollMode", data.get("manualPayOverrideCents", null) == null ? "automatic" : "custom");
+      }
+      function sameStopPayTerms(data, source) {
+        let mode = stopPayrollMode(source);
+        return stopPayrollMode(data) == mode
+          && data.get("manualPayOverrideCents", null) == (mode == "custom" ? source.get("manualPayOverrideCents", null) : null)
+          && (data.get("manualPayOverrideNotes", null) == (mode == "custom" ? source.get("manualPayOverrideNotes", null) : null)
+            || (data.get("manualPayOverrideNotes", null) in ["", null]
+              && (mode != "custom" || source.get("manualPayOverrideNotes", null) in ["", null])))
+          && data.get("payQuantity", 1) == source.get("payQuantity", 1)
+          && data.get("payrollStackBehavior", null) == source.get("payrollStackBehavior", null);
+      }
+      function matchesTemplateStopPay(data, planned, job) {
+        let templateId = job.get("sourceTemplateId", "");
+        let sourceId = planned.get("sourceTemplatePlannedStopId", "");
+        let sourcePath = /databases/$(database)/documents/companies/$(companyId)/jobTemplates/$(templateId)/plannedServiceStops/$(sourceId);
+        return templateId is string && templateId != "" && sourceId is string && sourceId != ""
+          && get(sourcePath) != null && sameStopPayTerms(data, get(sourcePath).data);
+      }
+      function inheritsTemplateStopPay(data) {
+        let jobId = data.get("jobId", "");
+        let plannedId = data.get("plannedServiceStopId", "");
+        let planPath = /databases/$(database)/documents/companies/$(companyId)/workOrders/$(jobId)/plannedServiceStops/$(plannedId);
+        let job = getAfter(jobPath(jobId));
+        let planned = getAfter(planPath);
+        return job != null && planned != null
+          && sameStopPayTerms(data, planned.data)
+          && matchesTemplateStopPay(data, planned.data, job.data);
+      }
+      function validStopPayCreate(data) {
+        return (!data.keys().hasAny(["payrollAgreement"]) && (
+          (data.get("manualPayOverrideCents", null) == null && (data.get("plannedServiceStopId", "") in ["", null]
+            || (stopPayrollMode(data) == "automatic" && data.get("payQuantity", 1) == 1 && data.get("payrollStackBehavior", null) == null)))
+          || (data.get("jobId", "") is string && data.get("jobId", "") != ""
+            && data.get("plannedServiceStopId", "") is string && data.get("plannedServiceStopId", "") != ""
+            && inheritsTemplateStopPay(data))
+        )) || canManagePay();
       }
       function sameTemplateTaskPay(data, source) {
         return data.get("contractedRate", 0) == source.get("contractedRate", 0)
@@ -888,6 +934,15 @@ service cloud.firestore {
         allow write: if canManagePay();
       }
       match /settings/{settingsId} {
+        function catalogMergeMetadata() {
+          return ["mergedIntoProductId", "mergedIntoVendorItemId", "mergedAt", "mergedBy", "mergedSourceIds"];
+        }
+        function isCatalogSettings() {
+          return settingsId in ["genericItems", "dataBase"];
+        }
+        function isMergedCatalogSource() {
+          return resource.data.get("mergedIntoProductId", "") != "" || resource.data.get("mergedIntoVendorItemId", "") != "";
+        }
         function counterWrite() {
           return settingsId in ["workOrders", "recurringServiceStops"] && hasCompanyAccess(companyId)
             && (permitted("22") || permitted("23") || permitted("27") || permitted("29") || permitted("31") || permitted("242"))
@@ -902,9 +957,13 @@ service cloud.firestore {
         match /{nested=**} {
           allow read: if hasCompanyAccess(companyId) && settingsId != "companyWide" && (settingsId != "payStatements" || canReadPay())
             && (settingsId != "emailConfiguration" || permitted("830"));
-          allow create: if settingsId != "companyWide" && settingsMutation(settingsId, 0);
-          allow update: if settingsId != "companyWide" && settingsMutation(settingsId, 1);
-          allow delete: if settingsId != "companyWide" && settingsMutation(settingsId, 2);
+          allow create: if settingsId != "companyWide" && settingsMutation(settingsId, 0)
+            && (!isCatalogSettings() || !request.resource.data.keys().hasAny(catalogMergeMetadata()));
+          allow update: if settingsId != "companyWide" && settingsMutation(settingsId, 1)
+            && (!isCatalogSettings() || (!isMergedCatalogSource()
+              && !request.resource.data.diff(resource.data).affectedKeys().hasAny(catalogMergeMetadata())));
+          allow delete: if settingsId != "companyWide" && settingsMutation(settingsId, 2)
+            && (!isCatalogSettings() || (!isMergedCatalogSource() && resource.data.get("mergedSourceIds", []).size() == 0));
         }
         match /taskGroup/{groupId}/taskItems/{taskId} {
           // Editing a group includes adding/removing its items; deleting the group still requires 826.
@@ -984,8 +1043,10 @@ service cloud.firestore {
       }
       match /serviceStops/{stopId} {
         allow read: if permitted("240") || assignedStop(resource.data);
-        allow create: if ((request.resource.data.get("startTime", null) == null && request.resource.data.get("endTime", null) == null && request.resource.data.get("operationStatus", "") != "Finished") || onboardingStopReady(request.resource.data)) && hasCompanyAccess(companyId) && ((request.resource.data.get("jobId", "") != "" && get(jobPath(request.resource.data.jobId)) == null) || permitted("242")) && validInitialJobStop(stopId, request.resource.data) && (canManagePay() || (!request.resource.data.keys().hasAny(["payrollAgreement"]) && request.resource.data.get("manualPayOverrideCents", null) == null));
+        allow create: if !request.resource.data.keys().hasAny(routeOccurrenceFields()) && ((request.resource.data.get("startTime", null) == null && request.resource.data.get("endTime", null) == null && request.resource.data.get("operationStatus", "") != "Finished") || onboardingStopReady(request.resource.data))
+          && canCreateServiceStop(stopId, request.resource.data) && validStopPayCreate(request.resource.data);
         allow update: if ((assignedStop(resource.data) && (executionUpdate() || stopCompletionUpdate())) || permitted("244")) && (preservesPayTerms() || canManagePay())
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(routeOccurrenceFields())
           && preservesCompletionResults() && onboardingExecutionAllowed(resource.data, request.resource.data)
           && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(completionRequestFields()) || validCompletionRequest(stopId));
         allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "246");
@@ -995,7 +1056,7 @@ service cloud.firestore {
         }
         match /tasks/{taskId} {
           allow read: if permitted("240") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data);
-          allow create: if (validInitialStopTask(stopId) || ((permitted("244") || assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data)) && validTaskPayCreate()));
+          allow create: if (validInitialStopTask(stopId) || ((permitted("244") || assignedStop(getAfter(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data)) && validTaskPayCreate()));
           allow update: if hasCompanyAccess(companyId) && ((assignedStop(get(/databases/$(database)/documents/companies/$(companyId)/serviceStops/$(stopId)).data) && executionUpdate()) || permitted("244")) && (preservesPayTerms() || canManagePay());
           allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "244");
         }
@@ -1019,6 +1080,11 @@ service cloud.firestore {
           allow create: if (validInitialJobTask(jobId) || ((permitted("72") || canEditJob(get(jobPath(jobId)).data)) && validTaskPayCreate()));
           allow update: if hasCompanyAccess(companyId) && ((resource.data.get("workerId", "") == request.auth.uid && executionUpdate()) || canEditJob(get(jobPath(jobId)).data)) && (preservesPayTerms() || canManagePay());
           allow delete: if isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "24");
+        }
+        match /plannedServiceStops/{plannedId} {
+          allow create: if get(jobPath(jobId)) == null && getAfter(jobPath(jobId)) != null
+            && getAfter(jobPath(jobId)).data.get("createdByUserId", "") == request.auth.uid
+            && matchesTemplateStopPay(request.resource.data, request.resource.data, getAfter(jobPath(jobId)).data);
         }
         match /{subcollection}/{nested=**} {
           allow read: if subcollection != "tasks" && permitted("20");
@@ -1051,8 +1117,13 @@ service cloud.firestore {
       }
       match /{companyCollection}/{document=**} {
         allow read: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 0);
-        allow create: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 1) && (!(companyCollection in ["customers", "serviceLocations"]) || !request.resource.data.keys().hasAny(["serviceOnboarding", "firstServiceCompletedAt"]));
-        allow update: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 2) && preservesOnboardingRecord(companyCollection);
+        allow create: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 1) && (!(companyCollection in ["customers", "serviceLocations"]) || !request.resource.data.keys().hasAny(["serviceOnboarding", "firstServiceCompletedAt"]))
+          && (companyCollection != "recurringServiceStop" || !request.resource.data.keys().hasAny(recurringRouteScheduleFields()));
+        allow update: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 2) && preservesOnboardingRecord(companyCollection)
+          && (companyCollection != "recurringServiceStop" || (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(recurringRouteScheduleFields())
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["day", "techId"])
+          ));
         allow delete: if !(companyCollection in ["stopData", "activeRoutes", "activeRouteLogs", "activeRouteLocations", "settings", "roles", "companyUsers", "todoItems", "todoBoards", "serviceStops", "workOrders", "jobTemplates", "technicianRates", "technicianPayLineItems", "technicianPayStatements", "paySettings", "workLogs", "shifts", "workOffers", "payChangeRequests", "routeMoveRequests", "adminNotes"]) && collectionPermission(companyCollection, 3);
       }
       match /adminNotes/{noteId} { allow read, write: if isDripDropAdmin(); }

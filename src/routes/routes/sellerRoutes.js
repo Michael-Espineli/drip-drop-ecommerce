@@ -91,6 +91,7 @@ const DataBaseItems = lazy(() => import("../../views/company/databaseItems/DataB
 const DataBaseItemBulkUpload = lazy(() => import("../../views/company/databaseItems/DataBaseItemBulkUpload"))
 const ProductCatalog = lazy(() => import("../../views/company/productCatalog/ProductCatalog"))
 const ProductCatalogImport = lazy(() => import("../../views/company/productCatalog/ProductCatalogImport"))
+const CatalogDuplicates = lazy(() => import("../../views/company/productCatalog/CatalogDuplicates"))
 
 const ReceiptListView = lazy(() => import("../../views/company/purchases/ReceiptListView"))
 const ReceiptDetailView = lazy(() => import("../../views/company/purchases/ReceiptDetailView"))
@@ -535,6 +536,12 @@ export const sellerRoutes = [
         ability: ['Admin', 'Seller'],
         role: 'Company',
         permissionId: '850',
+    }, {
+        path: '/company/product-catalog/duplicates',
+        element: <CatalogDuplicates />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '854',
     }, {
         path: '/company/product-catalog/:productId',
         element: <ProductCatalog />,

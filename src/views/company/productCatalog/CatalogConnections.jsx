@@ -8,7 +8,7 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { userFacingErrorMessage } from "../../../utils/permissionErrors";
 import {
   findLinkedProductForVendorItem, getProductDisplayName, getProductSellPriceCents,
-  getVendorItemDisplayName, getVendorItemCostCents, linkedVendorItemsForProduct,
+  getVendorItemDisplayName, getVendorItemCostCents, linkedVendorItemsForProduct, isMergedCatalogRecord,
   productCatalogCollectionRef, vendorItemsCollectionRef,
 } from "../../../utils/productCatalog";
 import { saveVendorProductConnection } from "../../../utils/productVendorConnections";
@@ -49,7 +49,7 @@ export default function CatalogConnections({ productId, vendorItemId, catalog, o
   const vendor = vendorItems.find((item) => item.id === vendorItemId);
   const currentProduct = vendor ? findLinkedProductForVendorItem(vendor, products) : null;
   const linked = product ? linkedVendorItemsForProduct(product, vendorItems, products) : [];
-  const candidates = productId ? vendorItems : products;
+  const candidates = (productId ? vendorItems : products).filter(item => !isMergedCatalogRecord(item));
   const displayName = productId ? getVendorItemDisplayName : getProductDisplayName;
   const selectedVendor = productId ? vendorItems.find((item) => item.id === selectedId) : vendor;
   const previousProduct = selectedVendor ? findLinkedProductForVendorItem(selectedVendor, products) : null;

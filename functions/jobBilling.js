@@ -3,6 +3,7 @@ const admin=require('firebase-admin');
 const {billingActor}=require('./billingAccess');
 const {documentId,fail}=require('./companyActor');
 const {hash,key,money,pricing}=require('./billingMath');
+const {assertApprovedJobPartsCovered}=require('./jobMaterialInvoice');
 const {dayStart,addInterval}=require('./billingCalendar');
 
 function createJobBilling(db,now=()=>new Date()){
@@ -37,13 +38,14 @@ function createJobBilling(db,now=()=>new Date()){
       const acceptedPlan=(savedSource.planOptions||savedSource.solutionOptions||[]).find(plan=>(plan.planId||plan.id||plan.solutionId)===(savedSource.acceptedPlanId||savedSource.acceptedSolutionId));
       const source={...savedSource,...(acceptedPlan?{lineItems:acceptedPlan.lineItems,totalAmountCents:acceptedPlan.totalAmountCents}:{} )};
       if(agreement&&!['accepted','active'].includes(key(source.status)))fail('failed-precondition','Accept the estimate before creating its invoice.');
-      const savedLines=Array.isArray(source.lineItems)&&source.lineItems.length?source.lineItems:source.estimateLineItems;
+      const savedLines=Array.isArray(source.lineItems)&&source.lineItems.length?source.lineItems:source.acceptedEstimateLineItems??source.estimateLineItems;
       const lines=(Array.isArray(savedLines)&&savedLines.length?savedLines:draft.lineItems||[]).map((line,index)=>{
         const quantity=Number(line.quantity??1),total=Number(line.totalAmountCents??line.amount??line.price??line.unitAmountCents??0);
         return {...line,id:line.id||`line_${index}`,name:line.name||line.title||`Line ${index+1}`,quantity,unitAmountCents:Number(line.unitAmountCents??(quantity?Math.round(total/quantity):0)),totalAmountCents:total};
       });
-      const amount=Number(source.totalAmountCents??source.rateAmountCents??source.rate??job.rate??0);
+      const amount=Number(source.totalAmountCents??source.acceptedEstimateTotalCents??source.estimateTotalCents??source.rateAmountCents??source.rate??job.rate??0);
       const price=pricing({...source,lineItems:lines,amountCents:money(amount,'Saved job price'),currency:source.currency||'usd'});
+      await assertApprovedJobPartsCovered(tx,db,{companyId,jobId,lines:price.lines});
       const snapshotHash=hash({agreementId,contractId,revision:source.revisionNumber||0,price});
       if(revision&&current?.data().replacesInvoiceId===data.replaceClosedInvoiceId&&current.data().acceptedPricingSnapshotHash===snapshotHash){
         if(current.data().reissueReason!==String(data.reason||'').trim())fail('already-exists','This reissue already has a recorded reason.');

@@ -161,7 +161,7 @@ const AppDialogProvider = ({ children }) => {
   }, [activeDialog, closeDialog, promptValue]);
 
   const dialogElement = useMemo(() => (
-    activeDialog ? (
+    activeDialog?.type === 'custom' ? activeDialog.render(closeDialog) : activeDialog ? (
       <AppDialog
         dialog={activeDialog}
         onCancel={handleCancel}
@@ -170,7 +170,7 @@ const AppDialogProvider = ({ children }) => {
         setPromptValue={setPromptValue}
       />
     ) : null
-  ), [activeDialog, handleCancel, handleConfirm, promptValue]);
+  ), [activeDialog, closeDialog, handleCancel, handleConfirm, promptValue]);
 
   return (
     <>

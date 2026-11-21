@@ -7,6 +7,12 @@ export const taskCustomerPriceCents = (task = {}) => {
   return cents(explicit ?? task.contractedRate);
 };
 
+export const visitCustomerPriceCents = (stop = {}) => {
+  const explicit = [stop.billingLaborPriceCents, stop.customerLaborPriceCents]
+    .find((value) => value !== undefined && value !== null && value !== "");
+  return cents(explicit ?? stop.plannedLaborCostCents ?? stop.cost);
+};
+
 // Generated lines are derived again so task edits and service assignments cannot
 // leave stale charges behind. A service covering a visit also covers its tasks.
 export const completeJobLaborLines = ({ laborLineItems = [], tasks = [], plannedServiceStops = [], plannedStopCost = (stop) => cents(stop.plannedLaborCostCents), taskCost } = {}) => {
@@ -40,7 +46,7 @@ export const completeJobLaborLines = ({ laborLineItems = [], tasks = [], planned
   ));
   const extraStops = plannedServiceStops.filter((stop) => !coveredStops.has(stop.id)).map((stop) => {
     const cost = cents(plannedStopCost(stop));
-    const price = cents(stop.billingLaborPriceCents ?? stop.customerLaborPriceCents ?? stop.plannedLaborCostCents ?? 0);
+    const price = visitCustomerPriceCents(stop);
     return generated(stop, "visit", price, cost);
   });
   return [...lines, ...extraTasks, ...extraStops].filter((line) => !line.generatedFromTaskId && !line.generatedFromPlannedStopId || line.totalPriceCents || line.internalCostCents);

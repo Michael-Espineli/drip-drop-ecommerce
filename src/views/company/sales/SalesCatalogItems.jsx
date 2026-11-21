@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -1081,7 +1082,7 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                   />
                 </label>
                 <label className="block text-sm font-semibold text-slate-700">
-                  Billing Labor
+                  Customer task price
                   <input
                     type="number"
                     min="0"
@@ -1105,7 +1106,7 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
               <JobPayrollFields value={template} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={form.unitAmount}
                 inheritedPayTypeId={form.payTypeId}
                 taskCostField={<label className="block text-sm font-semibold text-slate-700">
-                  Tech Labor Cost
+                  Contracted task pay
                   <input
                     type="number"
                     min="0"
@@ -1494,55 +1495,47 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
   );
 
   const renderHeader = () => (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-950">
-              {catalogItemId && selectedCatalogItem ? selectedCatalogItem.name : 'Service Catalog'}
-            </h1>
-            <FeatureInfoButton title="How The Service Catalog Works" align="left">
-              <p>
-                Service catalog items are reusable pricing and operations building blocks owned by the pool company.
-              </p>
-              <p>
-                Products, parts, and materials live in the Database Products Catalog. Services can seed estimates,
-                service agreements, invoices, Stripe references, and job tasks.
-              </p>
-            </FeatureInfoButton>
-          </div>
-          <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Company-owned services for job estimates, service agreements, invoices, Stripe handoff, and technician task planning.
+    <WorkspaceHeader
+      title={catalogItemId && selectedCatalogItem ? selectedCatalogItem.name : 'Service Catalog'}
+      eyebrow="Company sales"
+      description="Company-owned services for job estimates, service agreements, invoices, Stripe handoff, and technician task planning."
+      titleAccessory={
+        <FeatureInfoButton title="How The Service Catalog Works" align="left">
+          <p>
+            Service catalog items are reusable pricing and operations building blocks owned by the pool company.
           </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {catalogItemId && (
-            <Link
-              to="/company/sales/catalog-items"
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              <FaArrowLeft className="text-xs" />
-              Service Catalog
-            </Link>
-          )}
+          <p>
+            Products, parts, and materials live in the Database Products Catalog. Services can seed estimates,
+            service agreements, invoices, Stripe references, and job tasks.
+          </p>
+        </FeatureInfoButton>
+      }
+      actions={<>
+        {catalogItemId && (
           <Link
-            to="/company/settings/terms-templates"
+            to="/company/sales/catalog-items"
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
-            Service Agreement Templates
+            <FaArrowLeft className="text-xs" />
+            Service Catalog
           </Link>
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-          >
-            <FaPlus className="text-xs" />
-            Create Service
-          </button>
-        </div>
-      </div>
-    </section>
+        )}
+        <Link
+          to="/company/settings/terms-templates"
+          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          Service Agreement Templates
+        </Link>
+        <button
+          type="button"
+          onClick={openCreateModal}
+          className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+        >
+          <FaPlus className="text-xs" />
+          Create Service
+        </button>
+      </>}
+    />
   );
 
   const renderCatalogList = () => (

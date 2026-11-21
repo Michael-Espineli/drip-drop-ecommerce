@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext } from "react";
@@ -1338,23 +1339,14 @@ const PurchaseDetailView = () => {
     );
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="mx-auto">
-                <div className="flex justify-between items-center mb-6">
-                    <div>
-                        <Link
-                            to="/company/purchased-items"
-                            className="app-back-link"
-                        >
-                            &larr; Back to Purchased Items
-                        </Link>
-                        <h2 className="text-3xl font-bold text-gray-800">
-                            Purchase Detail View
-                        </h2>
-                    </div>
-
-                    {!edit ? (
-                        <div className="flex flex-wrap items-center justify-end gap-2">
+                <WorkspaceHeader
+                    title="Purchase Detail View"
+                    backLink={{ to: "/company/purchased-items", label: "Back to Purchased Items" }}
+                    className="mb-6"
+                    actions={!edit ? (
+                        <div className="flex flex-wrap items-center gap-2">
                             <ShareItemButton
                                 type="purchase"
                                 recordId={purchaseId}
@@ -1373,7 +1365,7 @@ const PurchaseDetailView = () => {
                             </button>
                         </div>
                     ) : (
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                             <button
                                 onClick={saveEditChanges}
                                 disabled={updating}
@@ -1398,7 +1390,7 @@ const PurchaseDetailView = () => {
                             </button>
                         </div>
                     )}
-                </div>
+                />
 
                 <InvoiceWorkflowStatus recordPath={recentlySelectedCompany && purchaseId ? `companies/${recentlySelectedCompany}/purchasedItems/${purchaseId}` : undefined} />
 

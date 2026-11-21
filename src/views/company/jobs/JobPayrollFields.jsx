@@ -95,7 +95,7 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
           Pay calculation
           <select value={mode} onChange={(event) => selectMode(event.target.value)} className={fieldClass}>
             <option value="automatic">Assigned technician's rate</option>
-            <option value="custom">Custom amount</option>
+            <option value="custom">Fixed amount</option>
             {!isTask && <option value="included">Included in another payment</option>}
             {!isTask && <option value="unpaid">Unpaid work</option>}
           </select>
@@ -118,7 +118,7 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
         </label>}
         {mode === "custom" && <>
           <label className="min-w-0 font-semibold text-slate-700">
-            Custom pay amount
+            Fixed pay amount
             <input type="number" min="0" step="0.01" required
               value={value.manualPayOverrideCents === undefined || value.manualPayOverrideCents === null ? "" : value.manualPayOverrideCents / 100}
               onChange={(event) => {
@@ -127,21 +127,21 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
               }} className={fieldClass} />
           </label>
           <label className="min-w-0 font-semibold text-slate-700">
-            Custom pay note
+            Fixed pay note
             <input value={value.manualPayOverrideNotes || ""} onChange={(event) => onChange("manualPayOverrideNotes", event.target.value)} className={fieldClass} placeholder="Reason for this amount" />
           </label>
         </>}
       </div>
       <p className="text-xs font-normal text-slate-600">{isTask
-        ? payable ? "Additional Task pay uses a technician rate or custom amount. Service stop pay is calculated separately; task amounts do not need to add up to it."
+        ? payable ? "Additional Task pay uses a technician rate or fixed amount. Service stop pay is calculated separately; task amounts do not need to add up to it."
           : "No additional task pay is created for this task. Service stop pay is calculated separately."
-        : "Service stop pay uses the assigned technician's rate or a custom stop amount. Additional task pay is calculated separately."}</p>
+        : "Service stop pay uses the assigned technician's rate or a fixed visit amount. Additional task pay is calculated separately."}</p>
       {isTask && mode === "unpaid" && <p className="text-xs text-slate-600">This saved task is explicitly marked as unpaid work.</p>}
       {mode === "automatic" && !value.payTypeId && !inheritedPayTypeId && <p className="text-xs font-semibold text-amber-800">A pay item is needed to calculate technician pay.</p>}
-      {(!isTask || payable) && (taskCostField || previewData) && <div role="group" aria-label={isTask ? "Task labor cost" : "Service stop labor cost"}>
+      {(!isTask || payable) && (taskCostField || previewData) && <div role="group" aria-label={isTask ? "Contracted task pay and payroll estimate" : "Visit payroll estimate"}>
         {taskCostField}
         {previewData && <ServicePayrollCostPreview compact data={previewData} tasks={[value]} inheritedPayTypeId={inheritedPayTypeId}
-          priceInput={previewPrice} onUseHighCost={(cents) => onChange("laborCost", (cents / 100).toFixed(2))} />}
+          priceInput={previewPrice} />}
       </div>}
     </div>
   );

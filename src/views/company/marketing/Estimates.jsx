@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -589,28 +590,20 @@ function Estimates() {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-slate-950">Estimates</h1>
-              <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Review one-time job estimates without service agreement or recurring agreement records.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {can('622') && (
-                <Link
-                  to="/company/jobs/createNew"
-                  className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                >
-                  <FaPlus className="text-xs" />
-                  Job Estimate
-                </Link>
-              )}
-            </div>
-          </div>
-        </section>
+        <WorkspaceHeader
+          title="Estimates"
+          eyebrow="Company sales"
+          description="Review one-time job estimates without service agreement or recurring agreement records."
+          actions={can('622') && (
+            <Link
+              to="/company/jobs/createNew"
+              className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+            >
+              <FaPlus className="text-xs" />
+              Job Estimate
+            </Link>
+          )}
+        />
 
         {error && (
           <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">

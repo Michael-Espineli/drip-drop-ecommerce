@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { netPaymentCents, hasPostedPayment, monthlyRecurringCents } from '../../../utils/sales/financialMetrics';
 import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
@@ -725,33 +726,26 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <Link to="/company/sales" className="app-back-link">
-                Back to Sales Dashboard
-              </Link>
-              <div className="mt-2 flex items-center gap-2">
-                <h1 className="text-3xl font-bold text-slate-950">{pageMeta.title}</h1>
-                <FeatureInfoButton title={pageMeta.infoTitle} align="left">
-                  <p>
-                    These pages read the sales invoices, billing subscriptions, and payments collections.
-                    Manual cash/check payments update the invoice balance here.
-                  </p>
-                  <p>
-                    Stripe can later write card or ACH payments to the same payment history, which lets the dashboard
-                    separate paid through the app from payments recorded by staff.
-                  </p>
-                </FeatureInfoButton>
-              </div>
-              <p className="mt-2 text-sm text-slate-600">
-                {recentlySelectedCompanyName || 'Selected company'} · {pageMeta.helper}
+        <WorkspaceHeader
+          title={pageMeta.title}
+          eyebrow="Company finance"
+          description={`${recentlySelectedCompanyName || 'Selected company'} · ${pageMeta.helper}`}
+          backLink={{ to: "/company/sales", label: "Back to Sales Dashboard" }}
+          titleAccessory={
+            <FeatureInfoButton title={pageMeta.infoTitle} align="left">
+              <p>
+                These pages read the sales invoices, billing subscriptions, and payments collections.
+                Manual cash/check payments update the invoice balance here.
               </p>
-            </div>
-          </div>
-        </section>
+              <p>
+                Stripe can later write card or ACH payments to the same payment history, which lets the dashboard
+                separate paid through the app from payments recorded by staff.
+              </p>
+            </FeatureInfoButton>
+          }
+        />
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
           <StatTile icon={FaFileInvoiceDollar} label="Invoiced" value={formatCurrency(summary.invoicedCents)} helper="Non-draft invoice total" />

@@ -49,4 +49,13 @@ test('new tasks cannot smuggle a contracted payment, accepted terms, or self-ass
  for(const payload of [{contractedRate:999999},{payrollAgreement:{offerId:'fake'}},{workerId:'tech',status:'Finished'}])await denied(()=>setDoc(doc(tech,p+'workOrders/job/tasks/forged'),payload));
  await setDoc(doc(tech,p+'workOrders/job/tasks/draft'),{name:'Additional finding',status:'Draft',workerId:'',contractedRate:0,payTypeId:'repair'});
 });
+test('client edits cannot rewrite a reviewed occurrence or its generation revision', async()=> {
+ await seeded;
+ await db.doc(p+'recurringServiceStop/reviewed').set({ day:'Friday', techId:'tech', routeScheduleRevision:1 });
+ await denied(()=>updateDoc(doc(operator,p+'recurringServiceStop/reviewed'),{routeScheduleRevision:2}));
+ await denied(()=>updateDoc(doc(operator,p+'recurringServiceStop/reviewed'),{day:'Monday'}));
+ await denied(()=>updateDoc(doc(operator,p+'serviceStops/stop'),{recurringServiceStopDedupKey:'other|2026-11-06'}));
+ await denied(()=>updateDoc(doc(operator,p+'serviceStops/stop'),{routeScheduleException:{action:'keep'}}));
+ await updateDoc(doc(operator,p+'recurringServiceStop/reviewed'),{description:'Allowed detail edit'});
+});
 after(async()=>{for(const item of clients){await terminate(item.firestore);await deleteApp(item.app);}await admin.app().delete();});

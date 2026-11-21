@@ -75,13 +75,13 @@ test('the template summary explains future-job context and keeps job-only action
   expect(within(summary).getByText('Sample Office')).toBeInTheDocument();
   expect(within(summary).getByText('$119.00')).toBeInTheDocument();
   const sections = screen.getByRole('navigation', { name: 'Template sections' });
-  expect(within(sections).getAllByRole('button')).toHaveLength(5);
-  ['Overview', 'Create Plans', 'Actual', 'Billing', 'History'].forEach((label, index) => expect(within(sections).getAllByRole('button')[index]).toHaveAccessibleName(new RegExp(`^${label}`)));
+  expect(within(sections).getAllByRole('button')).toHaveLength(2);
+  ['Overview', 'Template Plan'].forEach((label, index) => expect(within(sections).getAllByRole('button')[index]).toHaveAccessibleName(new RegExp(`^${label}`)));
   expect(within(sections).getByRole('button', { name: /^Overview/ })).toHaveAttribute('aria-current', 'page');
-  for (const name of [/^Actual/, /^Billing/, /^History/]) expect(within(sections).getByRole('button', { name })).toBeDisabled();
   expect(screen.queryByText('Template Snapshot')).not.toBeInTheDocument();
   expect(screen.queryByText('Scheduled Date')).not.toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Create and Schedule Job' })).toHaveAttribute('href', '/company/jobs/basic-create?templateId=template-1');
+  expect(screen.getByRole('link', { name: 'Create Unscheduled Job' })).toHaveAttribute('href', '/company/jobs/basic-create?templateId=template-1&schedule=later&requireTemplate=true');
   expect(getDocs.mock.calls.every(([path]) => !path.includes('/workOrders'))).toBe(true);
   // Optional local sample capture uses the actual mounted component, never live data.
   if (process.env.JOB_TEMPLATE_LAYOUT_PREVIEW) {
@@ -103,8 +103,8 @@ test('the job-style Actions menu edits only the reusable template metadata', asy
 test('scope section navigation still edits tasks in the template collection', async () => {
   await openTemplate();
   const sections = screen.getByRole('navigation', { name: 'Template sections' });
-  fireEvent.click(within(sections).getByRole('button', { name: /^Create Plans/ }));
-  expect(within(sections).getByRole('button', { name: /^Create Plans/ })).toHaveAttribute('aria-current', 'page');
+  fireEvent.click(within(sections).getByRole('button', { name: /^Template Plan/ }));
+  expect(within(sections).getByRole('button', { name: /^Template Plan/ })).toHaveAttribute('aria-current', 'page');
   const editor = within(screen.getByRole('region', { name: 'Template plan editor' }));
   ['Template service lines', 'Template products', 'Template planned stops', 'Template tasks'].forEach((name) => expect(editor.getByRole('region', { name })).toBeInTheDocument());
   const row = within(editor.getByRole('region', { name: 'Template tasks' })).getByRole('row', { name: /Clean filter/ });
@@ -121,7 +121,7 @@ test('creating an inactive product from a template saves it without selecting it
   const batch = { set: jest.fn(), commit: jest.fn().mockResolvedValue(undefined) };
   writeBatch.mockReturnValue(batch);
   await openTemplate();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Template Plan/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Add Product', exact: true }));
   const form = within(screen.getByRole('form', { name: 'Add Template Product' }));
   fireEvent.click(form.getByRole('button', { name: 'Choose Product' }));
@@ -182,8 +182,9 @@ test('editing a line preserves the chosen pay type and manual budget until the e
   const fields = within(form);
   fireEvent.change(fields.getByLabelText('Technician pay type'), { target: { value: 'visit' } });
   expect(fields.getByLabelText('Internal cost')).toHaveValue(40);
+  fireEvent.click(fields.getByRole('checkbox', { name: /Filter service visit/ }));
   fireEvent.click(fields.getByRole('button', { name: 'Save', exact: true }));
-  await waitFor(() => expect(setDoc).toHaveBeenCalledWith(`${templatePath}/laborLineItems/service-1`, expect.objectContaining({ payTypeId: 'visit', internalCostCents: 4000 }), { merge: true }));
+  await waitFor(() => expect(setDoc).toHaveBeenCalledWith(`${templatePath}/laborLineItems/service-1`, expect.objectContaining({ payTypeId: 'visit', internalCostCents: 4000, plannedServiceStopTemplateIds: ['visit-1'] }), { merge: true }));
   await waitFor(() => expect(screen.queryByRole('heading', { name: 'Edit Template Service Line' })).not.toBeInTheDocument());
   fireEvent.click(within(screen.getByRole('row', { name: /Filter cleaning/ })).getByRole('button', { name: 'Edit', exact: true }));
   expect(screen.getByLabelText('Technician pay type')).toHaveValue('visit');
@@ -201,16 +202,16 @@ test('the template inline service creator groups costs with previews and hides c
   expect(within(serviceCost).getByRole('region', { name: 'Service technician pay preview' })).toBeInTheDocument();
   fireEvent.click(creator.getByRole('button', { name: 'Add Task', exact: true }));
   expect(creator.getByLabelText('Task pay')).toHaveValue('none');
-  expect(creator.queryByLabelText('Tech Labor Cost')).not.toBeInTheDocument();
+  expect(creator.queryByLabelText('Contracted task pay')).not.toBeInTheDocument();
   expect(creator.queryByRole('region', { name: 'Task technician pay preview' })).not.toBeInTheDocument();
   fireEvent.change(creator.getByLabelText('Task pay'), { target: { value: 'additional' } });
   fireEvent.change(creator.getByLabelText('Payroll pay item'), { target: { value: 'extra' } });
-  const taskCost = creator.getByRole('group', { name: 'Task labor cost' });
-  fireEvent.click(within(taskCost).getByRole('button', { name: 'Use high estimate for task cost' }));
-  expect(within(taskCost).getByLabelText('Tech Labor Cost')).toHaveValue(20);
+  const taskCost = creator.getByRole('group', { name: 'Contracted task pay and payroll estimate' });
+  expect(within(taskCost).queryByRole('button', { name: 'Use high estimate for task cost' })).not.toBeInTheDocument();
+  expect(within(taskCost).getByLabelText('Contracted task pay')).toHaveValue(null);
   expect(within(serviceCost).getByLabelText('Internal Cost')).toHaveValue(0);
   fireEvent.change(creator.getByLabelText('Task pay'), { target: { value: 'none' } });
-  expect(creator.queryByLabelText('Tech Labor Cost')).not.toBeInTheDocument();
+  expect(creator.queryByLabelText('Contracted task pay')).not.toBeInTheDocument();
   expect(creator.queryByRole('region', { name: 'Task technician pay preview' })).not.toBeInTheDocument();
 });
 

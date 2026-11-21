@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
@@ -50,6 +51,7 @@ import {
 } from '../../../utils/productCatalog';
 import { SHOPPING_LIST_STATUS } from '../../../utils/shoppingListStatus';
 import { createAndSendShoppingItemInstallInvoice } from '../../../utils/sales/shoppingItemInvoiceAutomation';
+import { recordPartOfflineBilling } from '../../../utils/sales/partOfflineBilling';
 import PartApprovalCreateModal from './PartApprovalCreateModal';
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
@@ -705,101 +707,17 @@ const CompanyPartApprovals = () => {
     }
   };
 
-  const markApprovalManuallyInvoiced = async (approval) => {
+  const markApprovalManuallyInvoiced = async (approval, action = 'externalInvoice') => {
     if (!recentlySelectedCompany || !approval?.id || workflowActionId) return;
-
-    const existingShoppingListItemId = approvalShoppingListItemId(approval);
-    const shoppingListItemId = existingShoppingListItemId || `comp_shop_${uuidv4()}`;
-    const now = Timestamp.fromDate(new Date());
-    const actor = userDisplayName(user);
-    const statusKey = normalizeStatus(approval.status || approval.approvalStatus || 'pending');
-    const nextStatus = ['pending', 'rejected'].includes(statusKey) ? 'approved' : (approval.status || 'approved');
-    const historyEvent = buildHistoryEvent({
-      action: 'markedInvoiced',
-      status: 'invoiced',
-      note: 'Marked invoiced without creating a sales invoice',
-      user,
-    });
-
     setWorkflowActionId(`invoiced-${approval.id}`);
-
     try {
-      const batch = writeBatch(db);
-      const approvalUpdates = {
-        status: nextStatus,
-        approvalStatus: 'approved',
-        response: 'approved',
-        responseNote: approval.responseNote || 'Approved by company',
-        respondedAt: approval.respondedAt || serverTimestamp(),
-        respondedByUserId: approval.respondedByUserId || user?.uid || '',
-        respondedByUserName: approval.respondedByUserName || actor,
-        respondedByEmail: approval.respondedByEmail || user?.email || '',
-        responseSource: approval.responseSource || 'companyWeb',
-        responseSourceLabel: approval.responseSourceLabel || 'Company web app',
-        fulfillmentStatus: approval.fulfillmentStatus || 'approvedAwaitingPurchase',
-        shoppingListItemId,
-        shoppingListPath: `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}`,
-        shoppingListGeneratedAt: approval.shoppingListGeneratedAt || serverTimestamp(),
-        invoiced: true,
-        manuallyInvoiced: true,
-        invoiceStatus: 'manual',
-        invoiceType: 'manual',
-        manualInvoiceStatus: 'invoiced',
-        manualInvoicedAt: serverTimestamp(),
-        manualInvoicedByUserId: user?.uid || '',
-        manualInvoicedByUserName: actor,
-        updatedAt: serverTimestamp(),
-        history: arrayUnion(historyEvent),
-      };
-      const shoppingPayload = existingShoppingListItemId
-        ? {}
-        : buildPartApprovalShoppingItemPayload({
-          approval: {
-            ...approval,
-            autoInvoiceOnInstall: approval.autoInvoiceOnInstall === undefined
-              ? shoppingItemInstallInvoiceAutomationEnabled === true
-              : approval.autoInvoiceOnInstall === true,
-            status: 'approved',
-            approvalStatus: 'approved',
-            shoppingListItemId,
-            respondedAt: approval.respondedAt || now,
-            respondedByUserId: approval.respondedByUserId || user?.uid || '',
-            respondedByUserName: approval.respondedByUserName || actor,
-            respondedByEmail: approval.respondedByEmail || user?.email || '',
-          },
-          shoppingListItemId,
-          now,
-          generated: true,
-          status: approvalIsInstalled(approval) ? SHOPPING_LIST_STATUS.installed : SHOPPING_LIST_STATUS.needToPurchase,
-        });
-
-      Object.assign(shoppingPayload, {
-        invoiced: true,
-        manuallyInvoiced: true,
-        invoiceStatus: 'manual',
-        invoiceType: 'manual',
-        manualInvoiceStatus: 'invoiced',
-        manualInvoicedAt: serverTimestamp(),
-        manualInvoicedByUserId: user?.uid || '',
-        manualInvoicedByUserName: actor,
-        updatedAt: serverTimestamp(),
-      });
-
-      if (approvalIsInstalled(approval)) {
-        Object.assign(shoppingPayload, {
-          status: 'Installed',
-          needsAction: false,
-          fulfillmentStatus: 'installed',
-        });
+      const result = await recordPartOfflineBilling({ companyId: recentlySelectedCompany, approvalId: approval.id, action });
+      if (result) {
+        toast.success(action === 'cashReceived' ? 'Cash receipt recorded.' : 'External invoice recorded.');
+        setDetailApproval(null);
       }
-
-      batch.set(doc(db, 'customerPartApprovals', approval.id), approvalUpdates, { merge: true });
-      batch.set(doc(db, 'companies', recentlySelectedCompany, 'shoppingList', shoppingListItemId), shoppingPayload, { merge: true });
-      await batch.commit();
-      toast.success('Part marked invoiced.');
-    } catch (invoiceError) {
-      console.error('Unable to mark part approval invoiced', invoiceError);
-      toast.error(userFacingErrorMessage(invoiceError, invoiceError.message || 'Unable to mark invoiced.'));
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, 'Unable to record offline billing.'));
     } finally {
       setWorkflowActionId('');
     }
@@ -830,6 +748,20 @@ const CompanyPartApprovals = () => {
     if (!recentlySelectedCompany || !approval?.id || workflowActionId) return;
 
     const normalizedNextStatus = normalizeStatus(nextStatus || 'pending') || 'pending';
+    if (normalizedNextStatus === 'rejected') {
+      setWorkflowActionId(`status-${approval.id}`);
+      try {
+        await httpsCallable(functions, 'rejectPartApproval')({ companyId: recentlySelectedCompany, approvalId: approval.id, note });
+        toast.success('Part approval rejected.');
+        setStatusApproval(null);
+        setDetailApproval(null);
+      } catch (error) {
+        toast.error(userFacingErrorMessage(error, 'Unable to reject this approval.'));
+      } finally {
+        setWorkflowActionId('');
+      }
+      return;
+    }
     const nowDate = new Date();
     const now = Timestamp.fromDate(nowDate);
     const actor = userDisplayName(user);
@@ -872,20 +804,6 @@ const CompanyPartApprovals = () => {
         shoppingListPath: shoppingListItemId ? `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}` : '',
         shoppingListGeneratedAt: existingShoppingListItemId ? approval.shoppingListGeneratedAt || now : serverTimestamp(),
       });
-    } else if (normalizedNextStatus === 'rejected') {
-      Object.assign(statusUpdates, {
-        response: 'rejected',
-        responseNote: note || approval.responseNote || 'Denied by company',
-        respondedAt: serverTimestamp(),
-        respondedByUserId: user?.uid || '',
-        respondedByUserName: actor,
-        respondedByEmail: user?.email || '',
-        responseSource: 'companyWeb',
-        responseSourceLabel: 'Company web app',
-        fulfillmentStatus: 'rejected',
-        shoppingListItemId: '',
-        shoppingListPath: '',
-      });
     } else if (normalizedNextStatus === 'pending') {
       Object.assign(statusUpdates, {
         fulfillmentStatus: 'awaitingCustomerApproval',
@@ -927,8 +845,6 @@ const CompanyPartApprovals = () => {
           }),
           { merge: true }
         );
-      } else if (shoppingListItemId && normalizedNextStatus === 'rejected') {
-        batch.delete(doc(db, 'companies', recentlySelectedCompany, 'shoppingList', shoppingListItemId));
       }
 
       await batch.commit();
@@ -1095,16 +1011,11 @@ const CompanyPartApprovals = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company approvals</p>
-            <h1 className="mt-1 text-3xl font-bold text-slate-950">Part Approvals</h1>
-            <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              Customer approvals for small parts before they move into the shopping, install, and invoice workflow.
-            </p>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
+        <WorkspaceHeader
+          title="Part Approvals"
+          eyebrow="Company approvals"
+          description="Customer approvals for small parts before they move into the shopping, install, and invoice workflow."
+          actions={<>
             <Link
               to="/company/product-catalog"
               className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
@@ -1127,9 +1038,8 @@ const CompanyPartApprovals = () => {
               <FaPlus />
               New Part Approval
             </button>
-          </div>
-        </div>
-        </section>
+          </>}
+        />
 
         <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatTile
@@ -1296,7 +1206,7 @@ const CompanyPartApprovals = () => {
 	        const statusKey = normalizeStatus(openActionApproval.status || openActionApproval.approvalStatus || 'pending');
 	        const approvalStatusKey = normalizeStatus(openActionApproval.approvalStatus || openActionApproval.status || 'pending');
 	        const isApproved = approvalStatusKey === 'approved' || statusKey === 'approved' || statusKey === 'resolved';
-	        const canConvertToInvoice = !invoiceId && (openActionApproval.paymentPreference || openActionApproval.paymentCollectionPreference) !== 'nextBill' && approvalTotalCents(openActionApproval) > 0;
+	        const canConvertToInvoice = !openActionApproval.jobId && !isInvoiced && !invoiceId && (openActionApproval.paymentPreference || openActionApproval.paymentCollectionPreference) !== 'nextBill' && approvalTotalCents(openActionApproval) > 0;
 	        const working = Boolean(workflowActionId);
 
 	        return (
@@ -1357,26 +1267,36 @@ const CompanyPartApprovals = () => {
 	                icon={FaTools}
 	                tone="emerald"
 	                loading={workflowActionId === `installed-${openActionApproval.id}`}
-	                disabled={working || isInstalled}
-	                title={isInstalled ? 'This part is already marked installed.' : ''}
+	                disabled={working || isInstalled || Boolean(openActionApproval.jobId)}
+	                title={openActionApproval.jobId ? 'Record installation at the job service stop.' : isInstalled ? 'This part is already marked installed.' : ''}
 	                onClick={() => {
 	                  markApprovalInstalled(openActionApproval);
 	                  closeApprovalActions();
 	                }}
 	              />
 	              <PartApprovalActionMenuItem
-	                label="Mark Invoiced"
+	                label="Invoiced externally"
 	                icon={FaFileInvoiceDollar}
 	                tone="blue"
 	                loading={workflowActionId === `invoiced-${openActionApproval.id}`}
-	                disabled={working || isInvoiced}
+	                disabled={working || isInvoiced || (invoiceId && normalizeStatus(openActionApproval.invoiceStatus) !== 'draft') || !isApproved || Boolean(openActionApproval.jobId)}
 	                title={isInvoiced ? 'This part is already marked invoiced.' : ''}
 	                onClick={() => {
 	                  markApprovalManuallyInvoiced(openActionApproval);
 	                  closeApprovalActions();
 	                }}
 	              />
-	              {invoiceId ? (
+	              <PartApprovalActionMenuItem
+                label="Cash received"
+                icon={FaFileInvoiceDollar}
+                tone="blue"
+                disabled={working || isInvoiced || (invoiceId && normalizeStatus(openActionApproval.invoiceStatus) !== 'draft') || !isApproved || Boolean(openActionApproval.jobId)}
+                onClick={() => {
+                  markApprovalManuallyInvoiced(openActionApproval, 'cashReceived');
+                  closeApprovalActions();
+                }}
+              />
+              {invoiceId ? (
 	                <Link
 	                  to={`/company/sales/invoices/${invoiceId}`}
 	                  role="menuitem"
@@ -1505,7 +1425,7 @@ const PartApprovalDetailModal = ({
   const isDatabaseItem = Boolean(catalogItemId);
   const isInstalled = approvalIsInstalled(approval);
   const isInvoiced = approvalIsInvoiced(approval);
-  const canConvertToInvoice = !invoiceId && (approval.paymentPreference || approval.paymentCollectionPreference) !== 'nextBill' && approvalTotalCents(approval) > 0;
+  const canConvertToInvoice = !approval.jobId && !isInvoiced && !invoiceId && (approval.paymentPreference || approval.paymentCollectionPreference) !== 'nextBill' && approvalTotalCents(approval) > 0;
 
   return (
     <ModalShell title={partName} eyebrow="Part approval details" onClose={onClose} maxWidth="max-w-5xl">
@@ -1525,15 +1445,18 @@ const PartApprovalDetailModal = ({
 	              <FaEdit />
 	              Edit Status
 	            </button>
-	            <button type="button" onClick={() => onMarkInstalled(approval)} disabled={Boolean(working) || isInstalled} className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60">
+	            <button type="button" onClick={() => onMarkInstalled(approval)} disabled={Boolean(working) || isInstalled || Boolean(approval.jobId)} className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60">
 	              <FaTools />
 	              {working === `installed-${approval.id}` ? 'Installing...' : 'Mark Installed'}
 	            </button>
-	            <button type="button" onClick={() => onMarkInvoiced(approval)} disabled={Boolean(working) || isInvoiced} className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60">
+	            <button type="button" onClick={() => onMarkInvoiced(approval)} disabled={Boolean(working) || isInvoiced || Boolean(approval.jobId || invoiceId && normalizeStatus(approval.invoiceStatus) !== 'draft') || !['approved', 'resolved'].includes(normalizeStatus(approval.approvalStatus || approval.status))} className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60">
 	              <FaFileInvoiceDollar />
-	              {working === `invoiced-${approval.id}` ? 'Saving...' : 'Record External Invoice'}
+	              {working === `invoiced-${approval.id}` ? 'Saving...' : 'Invoiced externally'}
 	            </button>
-	            {invoiceId ? (
+	            <button type="button" onClick={() => onMarkInvoiced(approval, 'cashReceived')} disabled={Boolean(working) || isInvoiced || Boolean(approval.jobId || invoiceId && normalizeStatus(approval.invoiceStatus) !== 'draft') || !['approved', 'resolved'].includes(normalizeStatus(approval.approvalStatus || approval.status))} className="inline-flex items-center gap-2 rounded-md border border-blue-200 px-3 py-2 text-xs font-bold text-blue-700 disabled:opacity-60">
+              Cash received
+            </button>
+            {invoiceId ? (
 	              <Link to={`/company/sales/invoices/${invoiceId}`} className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50">
 	                <FaExternalLinkAlt />
 	                Open Invoice

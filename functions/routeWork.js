@@ -7,6 +7,80 @@ const assertMovable = value => {
   if (protectedWork(value)) fail('failed-precondition', 'This work has accepted or pending coverage. Resolve or transfer that agreement before moving it.');
 };
 
+async function planStopTaskMove({ t, c, stop, worker, workerId, workerName, at, write, tasks }) {
+  tasks ??= rows(await t.get(c.collection('serviceStops').doc(stop.id).collection('tasks')));
+  for (const task of tasks) {
+    assertMovable(task);
+    const inherited = task.workerAssignmentMode !== 'task' && (!task.workerId || task.workerId===stop.techId || task.workerAssignmentMode==='stop');
+    const assignment = { workerId, workerName, workerType:worker.workerType || 'Not Assigned', workerAssignmentMode:'stop', updatedAt:at };
+    if (inherited) write(c.collection('serviceStops').doc(stop.id).collection('tasks').doc(task.id),assignment);
+    const linkedId = task.jobTaskId || task.workOrderTaskId;
+    if (linkedId && stop.jobId) {
+      const linked = c.collection('workOrders').doc(documentId(stop.jobId,'Job')).collection('tasks').doc(documentId(linkedId,'Job task'));
+      const snap = await t.get(linked);
+      if (!snap.exists) fail('failed-precondition','A linked job task is missing. Review this stop before moving it.');
+      assertMovable(snap.data());
+      const jobTask = snap.data();
+      if (inherited && jobTask.workerAssignmentMode!=='task' && (!jobTask.workerId || jobTask.workerId===stop.techId || jobTask.workerAssignmentMode==='stop')) write(linked,assignment);
+    }
+  }
+}
+
+async function planDailyRouteChanges({ t, c, companyId, zone, at, originals, moved, write }) {
+  // Query affected workers/days, not the company's lifetime of routes or
+  // every technician's visits. These compound indexes ship with the workflow.
+  // Keep every read before the first transaction write.
+  const affected = new Map();
+  for (const stop of [...originals, ...moved.values()]) {
+    if (!stop.techId) continue;
+    const dayKey = dateKey(stop.serviceDate, zone);
+    affected.set(stop.techId+'|'+dayKey, {workerId:stop.techId, workerName:stop.tech || stop.techId, dayKey});
+  }
+  const routes = new Map(), dayStops = new Map();
+  for (const scope of affected.values()) {
+    const start=calendarDate(scope.dayKey,zone,0), end=calendarDate(addCalendarDays(scope.dayKey,1),zone,0);
+    for (const [name,target] of [['serviceStops',dayStops],['activeRoutes',routes]]) {
+      const field=name==='activeRoutes'?'date':'serviceDate';
+      const snap = await t.get(c.collection(name).where('techId','==',scope.workerId).where(field,'>=',start).where(field,'<',end).limit(401));
+      if (snap.size>400) fail('resource-exhausted','This technician/day needs a larger route reconciliation. No stops were moved.');
+      rows(snap).forEach(value=>target.set(value.id,value));
+    }
+  }
+  for (const stop of originals) {
+    const snap=await t.get(c.collection('activeRoutes').where('serviceStopsIds','array-contains',stop.id).limit(401));
+    if(snap.size>400) fail('resource-exhausted','This stop needs route reconciliation. No stops were moved.');
+    rows(snap).forEach(route=>routes.set(route.id,route));
+  }
+  moved.forEach((stop,id)=>dayStops.set(id,stop));
+  const routeIds = [], handled = new Set();
+  for (const scope of affected.values()) {
+    const matches=[...routes.values()].filter(route=>route.techId===scope.workerId && dateKey(route.date,zone)===scope.dayKey);
+    matches.sort((a,b)=>Number(Boolean(a.duplicateOf))-Number(Boolean(b.duplicateOf)) || Number(Boolean(b.startTime || b.endTime))-Number(Boolean(a.startTime || a.endTime)) || a.id.localeCompare(b.id));
+    const members=[...dayStops.values()].filter(stop=>stop.techId===scope.workerId && dateKey(stop.serviceDate,zone)===scope.dayKey);
+    if (!matches.length && !members.length) continue;
+    const route=matches[0] || newActiveRoute({companyId,...scope,zone});
+    if (!matches.length) {
+      const existing = await t.get(c.collection('activeRoutes').doc(route.id));
+      if (existing.exists) fail('failed-precondition','The destination route ID conflicts with another route. Review it before moving stops.');
+    }
+    const incoming=members.some(stop=>moved.has(stop.id) && !routeStopIds(route).includes(stop.id));
+    const closed = route.endTime || route.endMilage!=null || route.endMileage!=null || ['finished','completed'].includes(String(route.status).toLowerCase());
+    if (incoming && closed) fail('failed-precondition','The destination route is closed. Reopen it before adding stops.');
+    write(c.collection('activeRoutes').doc(route.id),{...orderedRoute(route,members),...(closed ? {status:route.status || 'Finished'} : {}),updatedAt:at});
+    routeIds.push(route.id); handled.add(route.id);
+    matches.slice(1).forEach(duplicate=>{
+      write(c.collection('activeRoutes').doc(duplicate.id),{...orderedRoute(duplicate,[]),duplicateOf:route.id,updatedAt:at}); handled.add(duplicate.id);
+    });
+  }
+  // Strip stale extra membership without rewriting historical clock evidence.
+  for (const route of routes.values()) if (!handled.has(route.id) && routeStopIds(route).some(id=>moved.has(id))) {
+    const patch = { serviceStopsIds:routeStopIds(route).filter(id=>!moved.has(id)), order:(route.order || []).filter(v=>!moved.has(v.serviceStopId)).map((v,i)=>({...v,order:i+1})), updatedAt:at };
+    patch.totalStops=patch.serviceStopsIds.length;
+    write(c.collection('activeRoutes').doc(route.id),patch);
+  }
+  return routeIds;
+}
+
 function createRouteWork(db, now = () => new Date()) {
   async function command(request) {
     if (!request.auth?.uid) fail('unauthenticated', 'Sign in first.');
@@ -58,22 +132,7 @@ function createRouteWork(db, now = () => new Date()) {
       const write = (ref,patch) => updates.set(ref.path,{ref,patch:{...(updates.get(ref.path)?.patch || {}),...patch}});
       const moved = new Map();
       for (const stop of moving) {
-        const tasks = rows(await t.get(c.collection('serviceStops').doc(stop.id).collection('tasks')));
-        for (const task of tasks) {
-          assertMovable(task);
-          const inherited = task.workerAssignmentMode !== 'task' && (!task.workerId || task.workerId===stop.techId || task.workerAssignmentMode==='stop');
-          const assignment = { workerId, workerName, workerType:worker.workerType || 'Not Assigned', workerAssignmentMode:'stop', updatedAt:at };
-          if (inherited) write(c.collection('serviceStops').doc(stop.id).collection('tasks').doc(task.id),assignment);
-          const linkedId = task.jobTaskId || task.workOrderTaskId;
-          if (linkedId && stop.jobId) {
-            const linked = c.collection('workOrders').doc(documentId(stop.jobId,'Job')).collection('tasks').doc(documentId(linkedId,'Job task'));
-            const snap = await t.get(linked);
-            if (!snap.exists) fail('failed-precondition','A linked job task is missing. Review this stop before moving it.');
-            assertMovable(snap.data());
-            const jobTask = snap.data();
-            if (inherited && jobTask.workerAssignmentMode!=='task' && (!jobTask.workerId || jobTask.workerId===stop.techId || jobTask.workerAssignmentMode==='stop')) write(linked,assignment);
-          }
-        }
+        await planStopTaskMove({t,c,stop,worker,workerId,workerName,at,write});
         const patch = { techId:workerId, tech:workerName, serviceDate:destinationDate, serviceDateKey:data.serviceDateKey,
           assignmentRevision:(stop.assignmentRevision || 0)+1, updatedAt:at,
           oneTimeRouteMove:{ requestId, movedAt:at, actorId:actor.uid, originalTechId:stop.techId || '', originalServiceDate:stop.serviceDate } };
@@ -81,52 +140,7 @@ function createRouteWork(db, now = () => new Date()) {
         moved.set(stop.id,{...stop,...patch});
         before.push({id:stop.id,techId:stop.techId,serviceDateMillis:date(stop.serviceDate).getTime(),assignmentRevision:stop.assignmentRevision || 0});
       }
-      // Query affected workers/days, not the company's lifetime of routes or
-      // every technician's visits. These compound indexes ship with the workflow.
-      // Keep every read before the first transaction write.
-      const affected = new Map();
-      moving.forEach(stop=>affected.set(stop.techId+'|'+dateKey(stop.serviceDate,zone),{workerId:stop.techId,workerName:stop.tech || stop.techId,dayKey:dateKey(stop.serviceDate,zone)}));
-      affected.set(workerId+'|'+data.serviceDateKey,{workerId,workerName,dayKey:data.serviceDateKey});
-      const routes = new Map(), dayStops = new Map();
-      for (const scope of affected.values()) {
-        const start=calendarDate(scope.dayKey,zone,0), end=calendarDate(addCalendarDays(scope.dayKey,1),zone,0);
-        for (const [name,target] of [['serviceStops',dayStops],['activeRoutes',routes]]) {
-          const field=name==='activeRoutes'?'date':'serviceDate';
-          const snap = await t.get(c.collection(name).where('techId','==',scope.workerId).where(field,'>=',start).where(field,'<',end).limit(401));
-          if (snap.size>400) fail('resource-exhausted','This technician/day needs a larger route reconciliation. No stops were moved.');
-          rows(snap).forEach(value=>target.set(value.id,value));
-        }
-      }
-      for (const stop of moving) {
-        const snap=await t.get(c.collection('activeRoutes').where('serviceStopsIds','array-contains',stop.id).limit(401));
-        if(snap.size>400) fail('resource-exhausted','This stop needs route reconciliation. No stops were moved.');
-        rows(snap).forEach(route=>routes.set(route.id,route));
-      }
-      moved.forEach((stop,id)=>dayStops.set(id,stop));
-      const routeIds = [], handled = new Set();
-      for (const scope of affected.values()) {
-        const matches=[...routes.values()].filter(route=>route.techId===scope.workerId && dateKey(route.date,zone)===scope.dayKey);
-        matches.sort((a,b)=>Number(Boolean(a.duplicateOf))-Number(Boolean(b.duplicateOf)) || Number(Boolean(b.startTime || b.endTime))-Number(Boolean(a.startTime || a.endTime)) || a.id.localeCompare(b.id));
-        const route=matches[0] || newActiveRoute({companyId,...scope,zone});
-        if (!matches.length) {
-          const existing = await t.get(c.collection('activeRoutes').doc(route.id));
-          if (existing.exists) fail('failed-precondition','The destination route ID conflicts with another route. Review it before moving stops.');
-        }
-        const members=[...dayStops.values()].filter(stop=>stop.techId===scope.workerId && dateKey(stop.serviceDate,zone)===scope.dayKey);
-        const incoming=members.some(stop=>moved.has(stop.id) && !routeStopIds(route).includes(stop.id));
-        if (incoming && (route.endTime || route.endMilage!=null || route.endMileage!=null || ['finished','completed'].includes(String(route.status).toLowerCase()))) fail('failed-precondition','The destination route is closed. Reopen it before adding stops.');
-        write(c.collection('activeRoutes').doc(route.id),{...orderedRoute(route,members),updatedAt:at});
-        routeIds.push(route.id); handled.add(route.id);
-        matches.slice(1).forEach(duplicate=>{
-          write(c.collection('activeRoutes').doc(duplicate.id),{...orderedRoute(duplicate,[]),duplicateOf:route.id,updatedAt:at}); handled.add(duplicate.id);
-        });
-      }
-      // Strip stale extra membership without rewriting historical clock evidence.
-      for (const route of routes.values()) if (!handled.has(route.id) && routeStopIds(route).some(id=>moved.has(id))) {
-        const patch = { serviceStopsIds:routeStopIds(route).filter(id=>!moved.has(id)), order:(route.order || []).filter(v=>!moved.has(v.serviceStopId)).map((v,i)=>({...v,order:i+1})), updatedAt:at };
-        patch.totalStops=patch.serviceStopsIds.length;
-        write(c.collection('activeRoutes').doc(route.id),patch);
-      }
+      const routeIds = await planDailyRouteChanges({t,c,companyId,zone,at,originals:moving,moved,write});
       if (updates.size>440) fail('resource-exhausted','Split this move into fewer stops. No changes were saved.');
       const result={ status:200,companyId,requestId,movedStopIds:[...moved.keys()],unchangedStopIds:stops.filter(s=>!moved.has(s.id)).map(s=>s.id),routeIds,serviceDateKey:data.serviceDateKey,techId:workerId };
       updates.forEach(({ref,patch})=>t.set(ref,patch,{merge:true}));
@@ -137,4 +151,4 @@ function createRouteWork(db, now = () => new Date()) {
   }
   return { command };
 }
-module.exports={createRouteWork,assertMovable};
+module.exports={createRouteWork,assertMovable,protectedWork,planStopTaskMove,planDailyRouteChanges};

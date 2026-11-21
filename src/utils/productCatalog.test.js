@@ -54,3 +54,16 @@ test("explicit links override obsolete reverse arrays and identical names do not
   expect(findLinkedProductForVendorItem({ id: "unlinked", name: "Seal" }, [a, b])).toBeNull();
   expect(findLinkedProductForVendorItem({ id: "v" }, [a, { ...b, vendorItemIds: ["v"] }])).toBeNull();
 });
+test("job quotes use an active supplier or the product cost and retain the product selling price", () => {
+  const product = { id: "pump", sellPrice: 0, defaultCostCents: 22000, preferredVendorItemId: "old" };
+  const old = { id: "old", productId: "pump", rate: 12000, active: false };
+  const current = { id: "current", productId: "pump", rate: 20000, sellPrice: 45000 };
+  expect(buildJobProductCatalog([product], [old, current]).products).toMatchObject([
+    { genericItemId: "pump", dbItemId: "current", rate: 20000, sellPrice: 0 },
+  ]);
+  expect(buildJobProductCatalog([product], [old]).products).toMatchObject([
+    { genericItemId: "pump", dbItemId: "", rate: 22000, sellPrice: 0 },
+  ]);
+  expect(buildJobProductCatalog([{ ...product, availableForJobs: false }], [current]).products).toEqual([]);
+  expect(buildJobProductCatalog([{ ...product, mergedIntoProductId: "new-pump" }], [current]).products).toEqual([]);
+});

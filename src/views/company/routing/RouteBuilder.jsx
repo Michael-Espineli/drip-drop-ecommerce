@@ -1,3 +1,4 @@
+import { saveWithCurrentWeekReview } from '../../../components/CurrentWeekRouteReview';
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
@@ -500,6 +501,9 @@ const RouteBuilder = () => {
       ));
 
       futureStopsSnapshot.docs.forEach((serviceStopDoc) => {
+        const stop = serviceStopDoc.data();
+        if (stop.routeScheduleException || stop.oneTimeRouteMove || stop.startTime || stop.endTime ||
+            ['Finished', 'Skipped', 'Canceled', 'Cancelled'].includes(stop.operationStatus)) return;
         writeOperations.push({
           ref: serviceStopDoc.ref,
           data: routeLinkPatch,
@@ -666,7 +670,25 @@ const RouteBuilder = () => {
       detail: "Preparing route...",
     });
 
+    let reviewedRoute;
+    const recurringById = new Map(allRecurringStops.map(stop => [stop.id, stop]));
+    const movingIds = routeStops.map(stop => stop.recurringServiceStopId).filter(id => {
+      if (!id) return false;
+      const recurring = recurringById.get(id);
+      return !recurring || recurring.day !== selectedDay.value || recurring.techId !== selectedTechnician.value;
+    });
     try {
+      if (movingIds.length) {
+        const callable = httpsCallable(functions, "updateRecurringServiceStopsRouteAssignment");
+        reviewedRoute = await saveWithCurrentWeekReview(callable, {
+          companyId: recentlySelectedCompany,
+          recurringServiceStopIds: movingIds,
+          targetDay: selectedDay.value,
+          targetTech: { userId: selectedTechnician.value, userName: selectedTechnician.label },
+        });
+        if (!reviewedRoute) return;
+      }
+
       // -------------------------
       // UPDATE EXISTING TEMPLATE
       // -------------------------
@@ -722,7 +744,9 @@ const RouteBuilder = () => {
           where("day", "==", selectedDay.value),
           where("techId", "==", selectedTechnician.value)
         ));
-        const destinationRouteDoc = destinationRoutesSnapshot.docs.find((routeDoc) => routeDoc.id !== routeId) || null;
+        const destinationRouteDoc = destinationRoutesSnapshot.docs.find(routeDoc =>
+          reviewedRoute ? routeDoc.id === reviewedRoute.destinationRouteId : routeDoc.id !== routeId
+        ) || null;
         const destinationRouteData = destinationRouteDoc?.data() || {};
         const destinationRouteId = destinationRouteDoc?.id || routeId;
         const destinationRouteRef = destinationRouteDoc?.ref || routeRef;
@@ -762,7 +786,7 @@ const RouteBuilder = () => {
           detail: "Saving route...",
         });
         await batch.commit();
-        await syncRecurringStopRouteLinks(routeRecurringServiceStopIds, destinationRouteId);
+        await syncRecurringStopRouteLinks(routeRecurringServiceStopIds.filter(id => !movingIds.includes(id)), destinationRouteId);
 
         toast.success(destinationRouteDoc ? "Route merged successfully!" : "Route successfully updated!");
         navigate('/company/route-management');
@@ -799,7 +823,10 @@ const RouteBuilder = () => {
         where("day", "==", selectedDay.value),
         where("techId", "==", selectedTechnician.value)
       ));
-      const destinationRouteDoc = destinationRoutesSnapshot.docs[0] || null;
+      const destinationRouteDoc = (reviewedRoute
+        ? destinationRoutesSnapshot.docs.find(routeDoc => routeDoc.id === reviewedRoute.destinationRouteId)
+        : destinationRoutesSnapshot.docs[0]
+      ) || null;
       const destinationRouteData = destinationRouteDoc?.data() || {};
       const routeId = destinationRouteDoc?.id || `com_rr_${uuidv4()}`;
       const routeRef = destinationRouteDoc?.ref || doc(db, 'companies', recentlySelectedCompany, 'recurringRoutes', routeId);
@@ -840,13 +867,14 @@ const RouteBuilder = () => {
         detail: "Saving route...",
       });
       await batch.commit();
-      await syncRecurringStopRouteLinks(routeRecurringServiceStopIds, routeId);
+      await syncRecurringStopRouteLinks(routeRecurringServiceStopIds.filter(id => !movingIds.includes(id)), routeId);
 
       toast.success(destinationRouteDoc ? "Route merged successfully!" : "Route successfully created!");
       navigate('/company/route-management');
 
     } catch (error) {
       console.error("Error saving template: ", error);
+      if (reviewedRoute) toast.success("The reviewed schedule change was saved. Refresh the route before retrying the remaining edits.");
       toast.error(userFacingErrorMessage(error, `Failed to save template: ${error?.message || String(error)}`));
     } finally {
       setIsLoading(false);

@@ -1,3 +1,4 @@
+import { taskCustomerPriceCents, visitCustomerPriceCents } from "../../../utils/jobScopePricing";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import "./JobTemplateTheme.css";
 import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
@@ -100,6 +101,7 @@ const emptyShoppingForm = () => ({
   genericItemId: "",
   plannedUnitCost: "0.00",
   plannedUnitPrice: "0.00",
+  linkedTaskId: "",
   billable: false,
   sortOrder: "0",
 });
@@ -114,6 +116,7 @@ const emptyLaborLineForm = () => ({
   totalPrice: "0.00",
   internalCost: "0.00",
   taskTemplateIds: [],
+  plannedVisitIds: [],
   sortOrder: "0",
 });
 
@@ -293,12 +296,11 @@ const databaseProductCostCents = (item = {}) => cents(
   0
 );
 
-const databaseProductPriceCents = (item = {}) => cents(
+const databaseProductPriceCents = (item = {}) => item.billable === false ? 0 : cents(
   item.sellPrice ??
   item.billingRate ??
   item.unitAmountCents ??
   item.price ??
-  item.rate ??
   0
 );
 
@@ -363,13 +365,6 @@ const laborLineInternalCostCents = (line = {}) => cents(
 );
 
 const plannedStopCostCents = (stop = {}) => cents(stop.plannedLaborCostCents ?? stop.cost);
-
-const taskBillingPriceCents = (task = {}) => cents(
-  task.billingLaborPriceCents ??
-  task.customerLaborPriceCents ??
-  task.billingLaborRateCents ??
-  task.contractedRate
-);
 
 const taskInternalCostCents = (task = {}) => cents(task.contractedRate);
 
@@ -631,8 +626,8 @@ const JobTemplates = () => {
       return details.laborLineItems.reduce((total, line) => total + laborLineTotalPriceCents(line), 0);
     }
 
-    return details.tasks.reduce((total, task) => total + taskBillingPriceCents(task), 0) +
-      details.plannedServiceStops.reduce((total, stop) => total + plannedStopCostCents(stop), 0);
+    return details.tasks.reduce((total, task) => total + taskCustomerPriceCents(task), 0) +
+      details.plannedServiceStops.reduce((total, stop) => total + visitCustomerPriceCents(stop), 0);
   }, [details.laborLineItems, details.plannedServiceStops, details.tasks]);
 
   const serviceCostCents = useMemo(() => {
@@ -661,17 +656,14 @@ const JobTemplates = () => {
 
   const templateDetailSections = useMemo(() => ([
     { id: "overview", label: "Overview", helper: "Template summary and reusable plan", count: "1" },
-    { id: "create-plans", label: "Create Plans", helper: "Create estimates based on services and products", count: String(details.laborLineItems.length + details.shoppingItems.length + details.plannedServiceStops.length + details.tasks.length) },
-    { id: "actual", label: "Actual", helper: "Service stops, payroll, and purchased products live on created jobs", count: "Job only", disabled: true },
-    { id: "billing", label: "Billing", helper: "Invoices, payments, and Stripe status start after job creation", count: "Job only", disabled: true },
-    { id: "history", label: "History", helper: "Audit trail begins when this template becomes a job", count: "Job only", disabled: true },
+    { id: "create-plans", label: "Template Plan", helper: "Services, tasks, planned visits, and products", count: String(details.laborLineItems.length + details.shoppingItems.length + details.plannedServiceStops.length + details.tasks.length) },
   ]), [details.laborLineItems.length, details.plannedServiceStops.length, details.shoppingItems.length, details.tasks.length]);
 
   const templatePlanSections = [
-    { id: "laborLineItems", label: "Service Lines", helper: "Billing services with linked template tasks", region: "Template service lines" },
-    { id: "shoppingItems", label: "Products", helper: "Products needed for purchasing and billing", region: "Template products" },
-    { id: "plannedServiceStops", label: "Planned Stops", helper: "Operations visits with assigned template tasks", region: "Template planned stops" },
+    { id: "laborLineItems", label: "Services", helper: "Billing services with linked template tasks", region: "Template service lines" },
     { id: "tasks", label: "Tasks", helper: "Technician work steps included in the template", region: "Template tasks" },
+    { id: "plannedServiceStops", label: "Planned Visits", helper: "Visits and their linked tasks", region: "Template planned stops" },
+    { id: "shoppingItems", label: "Products", helper: "Products needed for purchasing and billing", region: "Template products" },
   ];
 
   const saveDefaultAdmin = async () => {
@@ -775,6 +767,7 @@ const JobTemplates = () => {
         type: canonicalJobTaskType(item.type || "Basic"),
         description: item.description || "",
         contractedRate: dollarsFromCents(item.contractedRate || 0),
+        customerPrice: dollarsFromCents(taskCustomerPriceCents(item)),
         estimatedTime: String(item.estimatedTime || 0),
         customerApproval: Boolean(item.customerApproval),
         sortOrder: String(item.sortOrder || 0),
@@ -785,7 +778,7 @@ const JobTemplates = () => {
         description: item.description || "",
         serviceStopTypeId: item.serviceStopTypeId || "",
         ...jobPayFields(item, { payTypeId: item.serviceStopTypeId }),
-        billingLaborPriceCents: item.billingLaborPriceCents ?? item.plannedLaborCostCents ?? 0,
+        customerPrice: dollarsFromCents(visitCustomerPriceCents(item)),
         serviceStopTypeName: item.serviceStopTypeName || "",
         serviceStopTypeImage: item.serviceStopTypeImage || "",
         serviceStopTypeUseCaseRawValue: item.serviceStopTypeUseCaseRawValue || "",
@@ -807,6 +800,7 @@ const JobTemplates = () => {
 	        totalPrice: dollarsFromCents(item.totalPriceCents || item.totalAmountCents || 0),
 	        internalCost: dollarsFromCents(item.internalCostCents || item.internalLaborCostCents || 0),
 	        taskTemplateIds: uniqueIdList(taskIds),
+            plannedVisitIds: uniqueIdList(item.plannedServiceStopTemplateIds?.length ? item.plannedServiceStopTemplateIds : item.plannedServiceStopIds?.length ? item.plannedServiceStopIds : item.laborLinePlannedServiceStopIds),
 	        sortOrder: String(item.sortOrder || 0),
 	      } : emptyLaborLineForm());
 	    } else {
@@ -820,7 +814,8 @@ const JobTemplates = () => {
 	        genericItemId: item.genericItemId || "",
 	        plannedUnitCost: dollarsFromCents(item.plannedUnitCostCents || 0),
 	        plannedUnitPrice: dollarsFromCents(item.plannedUnitPriceCents || 0),
-	        billable: Boolean(item.billable),
+	        billable: item.billable ?? productTotalPriceCents(item) > 0,
+            linkedTaskId: item.linkedTaskId || item.linkedTaskIds?.[0] || "",
 	        sortOrder: String(item.sortOrder || 0),
 	      } : emptyShoppingForm());
 	    }
@@ -921,7 +916,7 @@ const JobTemplates = () => {
         description: product.description || form.description || "",
         plannedUnitCost: dollarsFromCents(databaseProductCostCents(product)),
         plannedUnitPrice: dollarsFromCents(databaseProductPriceCents(product)),
-        billable: Boolean(product.billable || databaseProductPriceCents(product)),
+        billable: product.billable ?? databaseProductPriceCents(product) > 0,
       };
     });
   };
@@ -1082,6 +1077,7 @@ const JobTemplates = () => {
         type: canonicalJobTaskType(itemForm.type.trim() || "Basic"),
         description: itemForm.description.trim(),
         contractedRate: centsFromMoney(itemForm.contractedRate),
+        billingLaborPriceCents: centsFromMoney(itemForm.customerPrice),
             ...jobPayFields(itemForm),
         estimatedTime: Number(itemForm.estimatedTime || 0),
         customerApproval: Boolean(itemForm.customerApproval),
@@ -1098,7 +1094,7 @@ const JobTemplates = () => {
         description: itemForm.description.trim(),
         serviceStopTypeId: itemForm.serviceStopTypeId.trim(),
         ...jobPayFields(itemForm, { payTypeId: itemForm.serviceStopTypeId }),
-        billingLaborPriceCents: itemForm.billingLaborPriceCents ?? 0,
+        billingLaborPriceCents: centsFromMoney(itemForm.customerPrice),
         serviceStopTypeName: itemForm.serviceStopTypeName.trim(),
 	        serviceStopTypeImage: itemForm.serviceStopTypeImage.trim(),
 	        serviceStopTypeUseCaseRawValue: itemForm.serviceStopTypeUseCaseRawValue.trim(),
@@ -1141,9 +1137,9 @@ const JobTemplates = () => {
         taskTemplateIds,
         taskIds: taskTemplateIds,
         laborLineTaskIds: taskTemplateIds,
-        plannedServiceStopTemplateIds: [],
-	        plannedServiceStopIds: [],
-	        laborLinePlannedServiceStopIds: [],
+        plannedServiceStopTemplateIds: uniqueIdList(itemForm.plannedVisitIds),
+	        plannedServiceStopIds: uniqueIdList(itemForm.plannedVisitIds),
+	        laborLinePlannedServiceStopIds: uniqueIdList(itemForm.plannedVisitIds),
 	        salesItemType: selectedCatalogItem?.type || itemModal?.item?.salesItemType || SalesCatalogItemType.labor,
 	        billingBehavior: selectedCatalogItem?.billingBehavior || itemModal?.item?.billingBehavior || SalesCatalogBillingBehavior.oneTime,
 	        sourceType: usesPaySource ? (itemForm.payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual) : sourceType,
@@ -1162,7 +1158,7 @@ const JobTemplates = () => {
 	    const selectedDatabaseProduct = databaseProductId ? databaseProductById.get(databaseProductId) : null;
       const vendorItemId = selectedDatabaseProduct?.dbItemId ?? (itemForm.genericItemId ? getJobMaterialVendorItemId(itemModal?.item) : databaseProductId);
 	    const unitCostCents = centsFromMoney(itemForm.plannedUnitCost);
-	    const unitPriceCents = centsFromMoney(itemForm.plannedUnitPrice);
+	    const unitPriceCents = itemForm.billable ? centsFromMoney(itemForm.plannedUnitPrice) : 0;
 	    const quantity = Number.parseFloat(itemForm.quantity) || 0;
 
 	    return {
@@ -1178,7 +1174,10 @@ const JobTemplates = () => {
         itemId: vendorItemId || null,
 	      dbItemName: selectedDatabaseProduct ? databaseProductLabel(selectedDatabaseProduct) : itemForm.dbItemName || "",
         genericItemId: selectedDatabaseProduct?.genericItemId || itemForm.genericItemId?.trim() || null,
+        productId: selectedDatabaseProduct?.genericItemId || itemForm.genericItemId?.trim() || null,
       taxable: Boolean(selectedDatabaseProduct?.taxable ?? itemModal?.item?.taxable),
+          linkedTaskId: itemForm.linkedTaskId || "",
+          linkedTaskIds: uniqueIdList([itemForm.linkedTaskId, ...(itemModal?.item?.linkedTaskIds || []).filter((id) => id !== itemModal?.item?.linkedTaskId && id !== itemModal?.item?.linkedTaskIds?.[0])]),
 	      plannedUnitCostCents: unitCostCents,
 	      plannedUnitPriceCents: unitPriceCents,
 	      plannedTotalCostCents: unitCostCents * quantity,
@@ -2430,7 +2429,7 @@ const JobTemplates = () => {
               {rows.map((item) => {
                 const taskIds = type === "plannedServiceStops" ? normalizeIdList(item.taskTemplateIds) : getLaborLineTaskIds(item);
                 const billingSummary = type === "tasks"
-                  ? moneyFromCents(taskBillingPriceCents(item))
+                  ? moneyFromCents(taskCustomerPriceCents(item))
                   : type === "plannedServiceStops"
                     ? moneyFromCents(plannedStopCostCents(item))
                     : type === "laborLineItems"
@@ -2586,6 +2585,7 @@ const JobTemplates = () => {
                   </MenuItems>
                 </Menu>
                 <Link to={`/company/jobs/basic-create?templateId=${encodeURIComponent(detailTemplate.id)}`} className="template-primary-action rounded-md px-4 py-2 text-sm font-semibold">Create and Schedule Job</Link>
+                <Link to={`/company/jobs/basic-create?templateId=${encodeURIComponent(detailTemplate.id)}&schedule=later&requireTemplate=true`} className="template-header-action rounded-md px-4 py-2 text-sm font-semibold">Create Unscheduled Job</Link>
               </> : <>
                 <button type="button" onClick={openCreateModal} className="template-header-action rounded-md px-4 py-2 text-sm font-semibold">New Template</button>
                 <Link to="/company/jobs/basic-create" className="template-primary-action rounded-md px-4 py-2 text-sm font-semibold">Create and Schedule Job</Link>
@@ -2807,14 +2807,19 @@ const JobTemplates = () => {
                       </select>
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
-                      Rate
-                      <input type="number" min="0" step="0.01" value={itemForm.contractedRate || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, contractedRate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      Contracted task pay
+                      <input aria-describedby="template-contracted-pay-help" type="number" min="0" step="0.01" value={itemForm.contractedRate || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, contractedRate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Customer price
+                      <input type="number" min="0" step="0.01" value={itemForm.customerPrice ?? ""} onChange={(event) => setItemForm((form) => ({ ...form, customerPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
                       Minutes
                       <input type="number" min="0" value={itemForm.estimatedTime || "0"} onChange={(event) => setItemForm((form) => ({ ...form, estimatedTime: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                   </div>
+                  <p id="template-contracted-pay-help" className="text-xs text-slate-600">Payroll uses contracted task pay when the task rate source calls for it. Leave customer price blank when this task is included in a service.</p>
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
                     <input type="checkbox" checked={Boolean(itemForm.customerApproval)} onChange={(event) => setItemForm((form) => ({ ...form, customerApproval: event.target.checked }))} />
                     Customer approval required
@@ -2843,7 +2848,11 @@ const JobTemplates = () => {
                       <input type="number" min="0" value={itemForm.estimatedMinutes || "0"} onChange={(event) => setItemForm((form) => ({ ...form, estimatedMinutes: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
-                      Planned service cost
+                      Customer price
+                      <input type="number" min="0" step="0.01" value={itemForm.customerPrice ?? ""} onChange={(event) => setItemForm((form) => ({ ...form, customerPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Company labor budget
 	                      <input type="number" min="0" step="0.01" value={itemForm.plannedLaborCost || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, plannedLaborCost: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
 	                    </label>
 	                  </div>
@@ -2927,6 +2936,14 @@ const JobTemplates = () => {
 	                      emptyLabel: "Add template tasks first, or select a catalog service that seeds tasks.",
 	                      metaForItem: (task) => `${task.type || "Task"} - ${task.estimatedTime || 0} min`,
 	                    })}
+                        {renderIdCheckboxPicker({
+                          title: "Included Visits",
+                          items: details.plannedServiceStops,
+                          selectedIds: itemForm.plannedVisitIds,
+                          field: "plannedVisitIds",
+                          emptyLabel: "Add planned visits to include them in this service price.",
+                          metaForItem: (stop) => `${stop.estimatedMinutes || 0} min`,
+                        })}
 	                  </div>
 	                </>
 	              ) : (
@@ -2952,6 +2969,13 @@ const JobTemplates = () => {
 	                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
 	                    <input type="checkbox" checked={Boolean(itemForm.billable)} onChange={(event) => setItemForm((form) => ({ ...form, billable: event.target.checked }))} />
                     Billable
+                  </label>
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Linked task
+                    <select value={itemForm.linkedTaskId || ""} onChange={(event) => setItemForm((form) => ({ ...form, linkedTaskId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                      <option value="">General job product</option>
+                      {details.tasks.map((task) => <option key={task.id} value={task.id}>{task.name}</option>)}
+                    </select>
                   </label>
                 </>
               )}

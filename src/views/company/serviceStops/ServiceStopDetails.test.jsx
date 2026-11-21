@@ -69,17 +69,22 @@ beforeEach(() => {
   });
 });
 
-const openStop = async () => {
+const renderStop = () => {
   render(
     <MemoryRouter initialEntries={['/company/serviceStops/detail/visit']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Context.Provider value={{ recentlySelectedCompany: 'company', user: { uid: 'admin' } }}>
         <Routes>
           <Route path="/company/serviceStops/detail/:serviceStopId" element={<ServiceStopDetails />} />
+          <Route path="/company/serviceStops" element={<h1>Service Stops</h1>} />
           <Route path="/company/jobs/detail/:jobId/:section" element={<Destination />} />
         </Routes>
       </Context.Provider>
     </MemoryRouter>
   );
+};
+
+const openStop = async () => {
+  renderStop();
   fireEvent.click(await screen.findByRole('button', { name: 'Edit', exact: true }));
   return screen.findByRole('dialog', { name: 'Admin Edit' });
 };
@@ -88,6 +93,16 @@ const openFinishStop = async () => {
   fireEvent.click(within(admin).getByRole('button', { name: 'Finish Service Stop Manually' }));
   return screen.findByRole('dialog', { name: 'Finish Service Stop' });
 };
+
+test('places the Back link above the title and returns to Service Stops', async () => {
+  renderStop();
+  const title = await screen.findByRole('heading', { level: 1, name: 'Service Stop Details' });
+  const back = within(title.closest('.workspace-header-identity')).getByRole('link', { name: 'Back to Service Stops' });
+
+  expect(back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(back);
+  expect(await screen.findByRole('heading', { level: 1, name: 'Service Stops' })).toBeInTheDocument();
+});
 
 test('Admin Edit searches technician names and saves the user ID rather than the membership ID', async () => {
   const dialog = await openStop();

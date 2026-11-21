@@ -3,20 +3,23 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeftIcon, FunnelIcon, MagnifyingGlassIcon, PencilSquareIcon, ShoppingBagIcon } from "@heroicons/react/24/outline";
 import { getDocs, setDoc, writeBatch } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import { Context } from "../../../context/AuthContext";
-import { db } from "../../../utils/config";
+import { db, functions } from "../../../utils/config";
 import CatalogConnections from "./CatalogConnections";
-import { DetailRow, SummaryRow, AvailabilityRow } from "./CatalogDetailRows";
+import CatalogMergeDialog from "./CatalogMergeDialog";
+import { catalogDuplicatesPath } from "./catalogMergeRecords";
+import { DetailRow, SummaryRow } from "./CatalogDetailRows";
 import WorkspaceHeader from "../../../components/workspace/WorkspaceHeader";
 import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
 import ProductAvailabilityFields from "./ProductAvailabilityFields";
 import ProductBulkAvailability from "./ProductBulkAvailability";
 import ProductCatalogFilters, { DEFAULT_PRODUCT_SORT } from "./ProductCatalogFilters";
+import ProductDeleteDialog from "./ProductDeleteDialog";
 import { canBulkEditProduct, PRODUCT_BULK_EDIT_LIMIT } from "../../../utils/productAvailability";
 import { deleteCatalogProduct } from "../../../utils/productVendorConnections";
-import { appConfirm } from "../../../utils/appDialog";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
   CATEGORY_OPTIONS, DEFAULT_CATEGORY, DEFAULT_SUBCATEGORY, DEFAULT_UOM, SUBCATEGORY_OPTIONS, UOM_OPTIONS,
@@ -33,6 +36,7 @@ import {
   isProductAvailableForJobs,
   isProductAvailableForPartApproval,
   isProductAvailableForPartPurchase,
+  isMergedCatalogRecord,
   productCatalogAvailabilityFields,
   productCatalogCollectionRef,
   productCatalogDocRef,
@@ -152,6 +156,23 @@ const getProductImageUrl = (product = {}) => {
   return firstImage?.url || firstImage?.downloadURL || firstImage?.src || "";
 };
 
+const positiveAvailability = (row) => {
+  // Use the saved aliases for badges. The picker helpers default omitted flags to active.
+  const explicit = { ...row, active: false };
+  return [
+    [row.active === true, "Active", "bg-slate-100 text-slate-700"],
+    [isProductAvailableForJobs(explicit) === true, "Jobs", "bg-indigo-50 text-indigo-700"],
+    [isProductAvailableForPartApproval(explicit) === true, "Part Approval Sales", "bg-violet-50 text-violet-700"],
+    [isProductAvailableForPartPurchase(explicit) === true, "Part Purchase", "bg-blue-50 text-blue-700"],
+    [row.billable === true, "Billable", "bg-emerald-50 text-emerald-700"],
+  ].filter(([enabled]) => enabled);
+};
+
+const AvailabilityTags = ({ product }) => <div className="flex flex-wrap gap-1">
+  {product.availabilityTags.map(([, label, tone]) => <span key={label}
+    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{label}</span>)}
+</div>;
+
 const normalizeProduct = (productId, data = {}) => ({
   ...data,
   id: productId,
@@ -169,6 +190,7 @@ const normalizeProduct = (productId, data = {}) => ({
   availableForJobs: isProductAvailableForJobs(data),
   availableForPartApproval: isProductAvailableForPartApproval(data),
   availableForPartPurchase: isProductAvailableForPartPurchase(data),
+  availabilityTags: positiveAvailability(data),
   dateUpdatedMillis: valueToMillis(data.dateUpdated || data.updatedAt || data.createdAt),
 });
 
@@ -267,17 +289,20 @@ const ProductCatalog = () => {
   const [editingProduct, setEditingProduct] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState(PRODUCT_FORM_DEFAULTS);
   const [allVendorItems, setVendorItems] = useState([]);
   const [catalogError, setCatalogError] = useState("");
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [mergeCompany, setMergeCompany] = useState(null);
   const activeCompany = useRef(recentlySelectedCompany);
   activeCompany.current = recentlySelectedCompany;
   useEffect(() => {
     setSelectedIds(new Set());
     setBulkOpen(false);
   }, [recentlySelectedCompany, searchTerm, filters]);
+  useEffect(() => { setMergeCompany(null); }, [productId]);
 
   const loadGeneration = useRef(0);
   const loadCatalog = useCallback(async () => {
@@ -311,6 +336,8 @@ const ProductCatalog = () => {
   useEffect(() => {
     setEditingProduct(null);
     setIsCreateModalOpen(false);
+    setConfirmDelete(false);
+    setMergeCompany(null);
     setFiltersOpen(false);
     loadCatalog();
     return () => { loadGeneration.current += 1; };
@@ -320,6 +347,7 @@ const ProductCatalog = () => {
     () => (productId ? products.find((product) => product.id === productId) || null : null),
     [productId, products]
   );
+  const catalogProducts = useMemo(() => products.filter(product => !isMergedCatalogRecord(product)), [products]);
 
   const vendorItems = useMemo(() => detailProduct ? linkedVendorItemsForProduct(detailProduct, allVendorItems, products) : [], [detailProduct, allVendorItems, products]);
   const connectionCatalog = useMemo(() => ({ products, vendorItems: allVendorItems }), [products, allVendorItems]);
@@ -329,10 +357,8 @@ const ProductCatalog = () => {
 
   const searchMatchedProducts = useMemo(() => {
     const lowerSearch = searchTerm.trim().toLowerCase();
-    if (!lowerSearch) return products;
-
-    return products.filter((product) => productSearchText(product).includes(lowerSearch));
-  }, [products, searchTerm]);
+    return lowerSearch ? catalogProducts.filter(product => productSearchText(product).includes(lowerSearch)) : catalogProducts;
+  }, [catalogProducts, searchTerm]);
 
   const catalogFilterOptions = useMemo(() => PRODUCT_SELECT_FIELDS.map(({ field, label }) => ({
     field, label, values: getUniqueOptions(searchMatchedProducts, field),
@@ -390,7 +416,7 @@ const ProductCatalog = () => {
   const displayStart = sortedProducts.length === 0 ? 0 : startIndex + 1;
   const displayEnd = Math.min(startIndex + pageSize, sortedProducts.length);
   const resultSummaryText = `Showing ${displayStart}-${displayEnd} of ${sortedProducts.length}${
-    sortedProducts.length !== products.length ? ` filtered (${products.length} total)` : ""
+    sortedProducts.length !== catalogProducts.length ? ` filtered (${catalogProducts.length} total)` : ""
   }`;
 
   const totalLinkedVendorItemsOnPage = useMemo(
@@ -567,31 +593,30 @@ const ProductCatalog = () => {
     }
   };
 
-  const deleteProduct = async () => {
+  const deleteProduct = async (vendorItemIds) => {
     const companyId = recentlySelectedCompany;
     if (saving || deleting || !companyId || !editingProduct || !requirePermission("856", "delete products")) return;
 
-    const generation = loadGeneration.current;
     setDeleting(true);
     try {
-      const confirmed = await appConfirm({
-        title: "Delete Product",
-        message: `Permanently delete ${getProductDisplayName(editingProduct)} from the catalog? This disconnects its vendor items.`,
-        confirmLabel: "Delete Product",
-        variant: "danger",
-      });
-      if (!confirmed || activeCompany.current !== companyId || generation !== loadGeneration.current) return;
-
-      await deleteCatalogProduct({ db, companyId, productId: editingProduct.id });
-      toast.success("Product deleted.");
+      const productId = editingProduct.id;
+      if (vendorItemIds.length) {
+        await httpsCallable(functions, "deleteCatalogProductAndVendorItems")({ companyId, productId, vendorItemIds });
+      } else {
+        await deleteCatalogProduct({ db, companyId, productId });
+      }
+      toast.success(vendorItemIds.length ? "Product and selected vendor items deleted." : "Product deleted.");
       if (activeCompany.current !== companyId) return;
 
-      setEditingProduct(null);
-      setSelection([editingProduct.id], false);
+      setSelection([productId], false);
       if (detailMode) navigate(productCatalogBasePath, { replace: true });
+      setConfirmDelete(false);
+      setEditingProduct(null);
       await loadCatalog();
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Could not delete this product."));
+      const detail = error.code === "functions/failed-precondition" ? error.message : "Could not delete this product.";
+      toast.error(userFacingErrorMessage(error, detail));
+      if (activeCompany.current === companyId) setConfirmDelete(false);
     } finally {
       setDeleting(false);
     }
@@ -601,8 +626,10 @@ const ProductCatalog = () => {
     const editing = Boolean(editingProduct);
     if (!isCreateModalOpen && !editing) return null;
     const busy = saving || deleting;
+    const currentCost = editing ? costInfo(editingProduct) : null;
 
     return (
+      <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6">
         <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl">
           <form onSubmit={editing ? saveProduct : createProduct}>
@@ -692,6 +719,11 @@ const ProductCatalog = () => {
                 </label>
               </div>
 
+              {currentCost?.vendorItem && <label className="block text-sm font-semibold text-slate-700">
+                Current Unit Cost
+                <input readOnly value={money(currentCost.costCents)} className="mt-2 w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" />
+                <span className="mt-1 block text-xs font-normal text-slate-500">From {getVendorItemDisplayName(currentCost.vendorItem)}</span>
+              </label>}
               <label className="block text-sm font-semibold text-slate-700">
                 Manual Unit Cost
                 <input type="number" min="0" step="0.01" value={form.defaultCost} onChange={(event) => updateForm({ defaultCost: event.target.value })} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="0.00" />
@@ -715,10 +747,10 @@ const ProductCatalog = () => {
             </div>
 
             <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
-              {editing && can("856") && (
+              {editing && can("856") && !editingProduct?.mergedSourceIds?.length && (
                 <button
                   type="button"
-                  onClick={deleteProduct}
+                  onClick={() => setConfirmDelete(true)}
                   disabled={busy}
                   className={workspaceButtonClass({ tone: "rose", className: "mr-auto" })}
                 >
@@ -744,6 +776,9 @@ const ProductCatalog = () => {
           </form>
         </div>
       </div>
+      {confirmDelete && editing && <ProductDeleteDialog product={editingProduct} vendorItems={currentCost?.linkedVendorItems || []}
+        busy={deleting} onClose={() => setConfirmDelete(false)} onDelete={deleteProduct} />}
+      </>
     );
   };
 
@@ -779,7 +814,7 @@ const ProductCatalog = () => {
             <>
               <WorkspaceHeader
                 title={productTitle}
-                eyebrow="Product Catalog Item"
+                eyebrow={detailProduct.mergedIntoProductId ? "Merged Product" : "Product Catalog Item"}
                 description={productDescription || "Manage product details, availability, and vendor connections."}
                 meta={<>
                   <span className="workspace-header-badge">{categoryTrail}</span>
@@ -791,7 +826,12 @@ const ProductCatalog = () => {
                 actions={<div className="flex w-full flex-wrap items-center justify-between gap-3">
                   <Link to={productCatalogBasePath} className={workspaceButtonClass({ tone: "slate" })}><ArrowLeftIcon className="h-4 w-4" />Back to Products</Link>
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" disabled={!can("854")} onClick={() => openEditModal(detailProduct)} className={workspaceButtonClass({ tone: "blue" })}><PencilSquareIcon className="h-4 w-4" />Edit</button>
+                    {detailProduct.mergedIntoProductId
+                      ? <Link to={`${productCatalogBasePath}/${detailProduct.mergedIntoProductId}`} className={workspaceButtonClass({ tone: "blue" })}>View kept product</Link>
+                      : <>
+                        <button type="button" disabled={!can("854")} onClick={() => openEditModal(detailProduct)} className={workspaceButtonClass({ tone: "blue" })}><PencilSquareIcon className="h-4 w-4" />Edit</button>
+                        {can("854") && !detailProduct.archived && <button type="button" onClick={() => setMergeCompany(recentlySelectedCompany)} className={workspaceButtonClass({ tone: "slate" })}>Merge duplicate</button>}
+                      </>}
                     <Link to={vendorItemsPath} className={workspaceButtonClass({ tone: "slate" })}><ShoppingBagIcon className="h-4 w-4" />Vendor Items</Link>
                   </div>
                 </div>}
@@ -820,30 +860,10 @@ const ProductCatalog = () => {
                 </article>
 
                 <aside className="space-y-6">
-                  <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  {detailProduct.availabilityTags.length > 0 && <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <h2 className="text-lg font-bold text-slate-950">Availability</h2>
-                    <p className="mt-1 text-sm text-slate-500">Where this product can be selected.</p>
-                    <ul className="mt-3 divide-y divide-slate-100">
-                      <AvailabilityRow
-                        label="Jobs"
-                        description="Selectable for job materials and work orders."
-                        available={isProductAvailableForJobs(detailProduct)}
-                        tone="indigo"
-                      />
-                      <AvailabilityRow
-                        label="Part Approval Sales"
-                        description="Can be sold directly through customer approvals."
-                        available={isProductAvailableForPartApproval(detailProduct)}
-                        tone="emerald"
-                      />
-                      <AvailabilityRow
-                        label="Part Purchase"
-                        description="Available for purchasing workflows."
-                        available={isProductAvailableForPartPurchase(detailProduct)}
-                        tone="blue"
-                      />
-                    </ul>
-                  </section>
+                    <div className="mt-3"><AvailabilityTags product={detailProduct} /></div>
+                  </section>}
 
                   <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <h2 className="text-lg font-bold text-slate-950">Catalog Summary</h2>
@@ -863,7 +883,7 @@ const ProductCatalog = () => {
                 </aside>
               </section>
 
-              <CatalogConnections productId={detailProduct.id} catalog={connectionCatalog} onChange={loadCatalog} />
+              {!detailProduct.mergedIntoProductId && <CatalogConnections productId={detailProduct.id} catalog={connectionCatalog} onChange={loadCatalog} />}
             </>
           ) : (
             <section className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
@@ -876,6 +896,15 @@ const ProductCatalog = () => {
           )}
         </div>
         {renderProductModal()}
+        {mergeCompany && mergeCompany === recentlySelectedCompany && detailProduct && <CatalogMergeDialog
+          kind="product" companyId={mergeCompany} initialKeepId={detailProduct.id}
+          onClose={() => setMergeCompany(null)} onMerged={keepId => {
+            if (activeCompany.current !== mergeCompany) return;
+            setMergeCompany(null);
+            navigate(`${productCatalogBasePath}/${keepId}`, { replace: true });
+            loadCatalog();
+            toast.success("Product duplicate merged.");
+          }} />}
       </div>
     );
   }
@@ -888,6 +917,7 @@ const ProductCatalog = () => {
             <button type="button" disabled={!can("852")} onClick={openCreateModal} className={workspaceButtonClass({ tone: "blue" })}>Add new</button>
             {can("854") && <button type="button" disabled={!selectedIds.size} onClick={() => setBulkOpen(true)} className={workspaceButtonClass({ tone: "blue" })}>Bulk Edit Availability</button>}
             <Link to={productCatalogReconciliationPath} className={workspaceButtonClass({ tone: "blue" })}>Product Catalog Reconciliation</Link>
+            {can("854") && <Link to={catalogDuplicatesPath} className={workspaceButtonClass({ tone: "slate" })}>Merge Duplicates</Link>}
             <Link to={vendorItemsPath} className={workspaceButtonClass({ tone: "slate" })}>Vendor Items</Link>
           </>}
         />
@@ -895,7 +925,7 @@ const ProductCatalog = () => {
         <section className="grid gap-3 md:grid-cols-3">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Products</p>
-            <p className="mt-2 text-2xl font-bold text-slate-950">{products.length}</p>
+            <p className="mt-2 text-2xl font-bold text-slate-950">{catalogProducts.length}</p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Visible Results</p>
@@ -985,21 +1015,7 @@ const ProductCatalog = () => {
                       <td className="px-5 py-3 text-sm text-slate-700">{product.subCategory || "--"}</td>
                       <td className="px-5 py-3 text-sm text-slate-700">{product.UOM || "--"}</td>
                       <td className="px-5 py-3 text-sm text-slate-700">
-                        <div className="flex flex-wrap gap-1">
-                          {!product.active && <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">Inactive</span>}
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.billable ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                            {product.billable ? "Billable" : "Not Billable"}
-                          </span>
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.availableForJobs ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"}`}>
-                            {product.availableForJobs ? "Jobs" : "No Jobs"}
-                          </span>
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.availableForPartApproval ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                            {product.availableForPartApproval ? "Part Approvals" : "Job Only"}
-                          </span>
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${product.availableForPartPurchase ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
-                            {product.availableForPartPurchase ? "Part Purchase" : "Unavailable"}
-                          </span>
-                        </div>
+                        <AvailabilityTags product={product} />
                       </td>
                       <td className="px-5 py-3 text-sm font-semibold text-slate-900">
                         {money(costInfo(product).costCents)}

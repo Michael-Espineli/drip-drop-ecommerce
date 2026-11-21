@@ -356,9 +356,9 @@ const PublicServiceAgreementLanding = () => {
       <div className="mx-auto max-w-6xl">
         <section className="mb-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-bold uppercase tracking-wide text-blue-700">Private {documentLabel} Link</p>
-              <h1 className="mt-2 text-3xl font-bold text-slate-950">{agreement.title || documentLabel}</h1>
+              <h1 className="mt-2 break-words text-2xl font-bold leading-tight text-slate-950">{agreement.title || documentLabel}</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
                 {agreement.companyName || 'Your pool company'} sent this {documentLabelLower} to {agreement.email || emailParam || 'this email address'}.
                 This link is only intended for the recipient of the email.

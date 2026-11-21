@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { getDoc, getDocs, writeBatch } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
@@ -19,6 +19,18 @@ beforeEach(() => {
   batch = { update: jest.fn(), commit: jest.fn().mockResolvedValue(undefined) }; writeBatch.mockReturnValue(batch);
 });
 const open = (allowed = true) => render(<Context.Provider value={{ recentlySelectedCompany: 'company', companyRoleLoaded: true, companyRoleLoading: false, hasCompanyPermission: () => allowed }}><MemoryRouter initialEntries={['/company/items/detail/vendor']}><Routes><Route path='/company/items/detail/:id' element={<DataBaseItemDetailView />} /></Routes></MemoryRouter></Context.Provider>);
+
+test("vendor detail opens the shared merge dialog with the current vendor item selected", async () => {
+  getDocs.mockImplementation(async path => ({ docs: path.includes('dataBase') ? [
+    { id: 'vendor', data: () => ({ name: 'Supplier seal' }) },
+    { id: 'other', data: () => ({ name: 'Seal duplicate' }) },
+  ] : [] }));
+  open();
+  fireEvent.click(await screen.findByRole('button', { name: 'Merge duplicate' }));
+  const dialog = within(await screen.findByRole('dialog', { name: 'Merge vendor items' }));
+  await waitFor(() => expect(dialog.getByRole('combobox', { name: 'Record to keep' })).toHaveValue('vendor'));
+  expect(within(dialog.getByRole('combobox', { name: 'Duplicate to archive' })).getByRole('option', { name: /Seal duplicate/ })).toHaveValue('other');
+});
 
 test("the vendor sheet preserves edit/save behavior and zero cost and price values", async () => {
   open(); await screen.findByRole('heading', { name: 'Supplier seal', level: 1 });

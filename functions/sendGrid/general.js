@@ -2000,6 +2000,13 @@ const sendSalesInvoiceEmailCore = async ({
     }
 
     const companyData = companyDoc.data() || {};
+    if (invoice.billingScope === "approvedPart") {
+        const settings = await companyRef.collection("settings").doc("companyWide").get();
+        if (!require("../partBillingSettings").customerBillingEnabled(companyData, settings.data())) {
+            throw new HttpsError("failed-precondition", "Customer billing is turned off. Record offline billing for this part.");
+        }
+    }
+
     const emailConfigDoc = await companyRef.collection("settings").doc("emailConfiguration").get();
     const emailConfig = emailConfigDoc.exists ? emailConfigDoc.data() : {};
 

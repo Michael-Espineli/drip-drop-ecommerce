@@ -40,7 +40,9 @@ const completeJobLaborLines = ({ laborLineItems = [], tasks = [], plannedService
   ));
   const extraStops = plannedServiceStops.filter((stop) => !coveredStops.has(stop.id)).map((stop) => {
     const cost = cents(plannedStopCost(stop));
-    const price = cents(stop.billingLaborPriceCents ?? stop.customerLaborPriceCents ?? stop.plannedLaborCostCents ?? 0);
+    const explicit = [stop.billingLaborPriceCents, stop.customerLaborPriceCents]
+      .find((value) => value !== undefined && value !== null && value !== "");
+    const price = cents(explicit ?? stop.plannedLaborCostCents ?? stop.cost);
     return generated(stop, "visit", price, cost);
   });
   return [...lines, ...extraTasks, ...extraStops].filter((line) => !line.generatedFromTaskId && !line.generatedFromPlannedStopId || line.totalPriceCents || line.internalCostCents);

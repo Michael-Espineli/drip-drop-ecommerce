@@ -60,3 +60,12 @@ test("assigned technician costs refresh service margins without changing prices 
   input.laborLineItems[0].internalCostMode = "fixed";
   expect(jobLaborTotals({ ...input, taskCost: () => 8000, plannedStopCost: () => 9000 }).costCents).toBe(2000);
 });
+
+test("a visit's explicit customer price, including zero, takes priority over its labor budget", () => {
+  const stops = [
+    { id: "included", plannedLaborCostCents: 3500, billingLaborPriceCents: 0 },
+    { id: "quoted", plannedLaborCostCents: 4500, customerLaborPriceCents: 7500 },
+    { id: "legacy", plannedLaborCostCents: 2000 },
+  ];
+  expect(jobLaborTotals({ plannedServiceStops: stops })).toEqual({ priceCents: 9500, costCents: 10000 });
+});

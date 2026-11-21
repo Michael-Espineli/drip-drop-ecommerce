@@ -404,7 +404,8 @@ const ClientInvoiceDetail = () => {
         </WorkspaceRecordHeader>
 
       <section className="mb-5 rounded-xl border border-blue-200 bg-white p-5">
-        <p className="text-sm text-slate-500">Amount due</p><p className="mt-1 text-3xl font-bold">{formatCurrency(balanceCents)}</p>
+        <p className="text-sm text-slate-500">Amount due</p>
+        <p className="mt-1 break-words text-2xl font-bold leading-tight">{formatCurrency(balanceCents)}</p>
         <ClientInvoicePayment invoice={invoice} balanceCents={balanceCents} accessToken={accessToken} user={user}/>
         {(queryParams.get('invoiceCheckout')==='returned' || invoice.paymentProcessing) && balanceCents>0 && <p role="status" className="mt-3 text-sm text-slate-600">Payment confirmation may take a moment. Your balance updates when the payment is recorded.</p>}
         <button type="button" onClick={()=>setRefreshTick(value=>value+1)} className="mt-2 min-h-[44px] text-sm font-semibold text-blue-700">Refresh payment status</button>

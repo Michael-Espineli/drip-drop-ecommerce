@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import NamedRecordPicker from '../../../components/NamedRecordPicker';
 import InvoiceWorkflowStatus from "../../../components/billing/InvoiceWorkflowStatus";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
@@ -10,6 +11,8 @@ import { db, functions, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import { linkedReferenceText } from "../../../utils/displayReferences";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { recordPartOfflineBilling } from "../../../utils/sales/partOfflineBilling";
 import { appConfirm } from "../../../utils/appDialog";
 import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import {
@@ -28,6 +31,7 @@ import {
     SHOPPING_LIST_STATUS,
     SHOPPING_LIST_STATUS_OPTIONS,
     canonicalShoppingListStatus,
+    shoppingBillingIsRecordedSeparately,
 } from "../../../utils/shoppingListStatus";
 import {
     createAndSendShoppingItemInstallInvoice,
@@ -103,6 +107,7 @@ const ShoppingListDetailView = () => {
         user,
     } = useContext(Context);
     const { shoppingItemId } = useParams();
+    const { can } = useCompanyPermissions();
     const navigate = useNavigate();
 
     const [isLoading, setIsLoading] = useState(true);
@@ -361,6 +366,7 @@ const ShoppingListDetailView = () => {
                     purchasedItem: data.purchasedItem || "",
                     invoiced: !!data.invoiced,
                     invoiceStatus: data.invoiceStatus || "",
+                    offlineBillingStatus: data.offlineBillingStatus || "",
                     manualInvoiceNote: data.manualInvoiceNote || data.invoiceNote || "",
                     autoInvoiceOnInstall: data.autoInvoiceOnInstall === undefined
                         ? shoppingItemInstallInvoiceAutomationEnabled === true
@@ -685,6 +691,22 @@ const ShoppingListDetailView = () => {
         setEdit(false);
     };
 
+    const saveOfflineBilling = async (action) => {
+        if (updating) return;
+        setUpdating(true);
+        try {
+            const result = await recordPartOfflineBilling({ companyId: recentlySelectedCompany, shoppingItemId: item.id, action });
+            if (result) {
+                setItem((current) => ({ ...current, invoiced: true, offlineBillingStatus: result.status }));
+                toast.success(action === "cashReceived" ? "Cash receipt recorded." : "External invoice recorded.");
+            }
+        } catch (error) {
+            toast.error(userFacingErrorMessage(error, "Could not record offline billing."));
+        } finally {
+            setUpdating(false);
+        }
+    };
+
     const saveQuickStatus = async (event) => {
         event.preventDefault();
         if (!recentlySelectedCompany || !item.id || isLoading || updating || edit ||
@@ -694,13 +716,17 @@ const ShoppingListDetailView = () => {
 
         try {
             setUpdating(true);
-            const nextInvoiced = quickStatus === SHOPPING_LIST_INVOICED_STATUS;
+            const billingLinked = shoppingBillingIsRecordedSeparately(item);
+            if (billingLinked && quickStatus === SHOPPING_LIST_INVOICED_STATUS) return;
+            const nextInvoiced = billingLinked ? Boolean(item.invoiced) : quickStatus === SHOPPING_LIST_INVOICED_STATUS;
             const payload = {
                 status: quickStatus,
-                invoiced: nextInvoiced,
-                invoiceStatus: nextInvoiced ? "Invoiced" : "",
-                manualInvoiceNote: nextInvoiced ? item.manualInvoiceNote || "" : "",
-                autoInvoiceOnInstall: nextInvoiced ? false : item.autoInvoiceOnInstall === true,
+                ...(billingLinked ? {} : {
+                    invoiced: nextInvoiced,
+                    invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                    manualInvoiceNote: nextInvoiced ? item.manualInvoiceNote || "" : "",
+                    autoInvoiceOnInstall: nextInvoiced ? false : item.autoInvoiceOnInstall === true,
+                }),
                 needsAction: shoppingItemNeedsAction(quickStatus),
                 updatedAt: Timestamp.now(),
             };
@@ -730,14 +756,14 @@ const ShoppingListDetailView = () => {
                 setEditForm(updatedItem);
             }
 
-            if (nextInvoiced) {
+            if (!billingLinked && nextInvoiced) {
                 await updateLinkedPartApprovalForManualShoppingInvoice({
                     db,
                     shoppingItem: updatedItem,
                     note: updatedItem.manualInvoiceNote,
                     user,
                 });
-            } else if (updatedItem.status === SHOPPING_LIST_STATUS.installed && updatedItem.autoInvoiceOnInstall) {
+            } else if (!updatedItem.jobId && !nextInvoiced && updatedItem.status === SHOPPING_LIST_STATUS.installed && updatedItem.autoInvoiceOnInstall) {
                 const invoiceResult = await createAndSendShoppingItemInstallInvoice({
                     db,
                     functions,
@@ -818,8 +844,10 @@ const ShoppingListDetailView = () => {
             const photoFields = photoFile
                 ? itemPhotoFieldsFromUrl(uploadedPhoto.photoUrl, editForm.name || item.name || "Shopping item photo", uploadedPhoto.storagePath)
                 : itemPhotoFieldsFromUrl(editForm.photoUrl, editForm.name || item.name || "Shopping item photo");
-            const nextInvoiced = editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editForm.invoiced;
-            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : canonicalShoppingListStatus(editForm.status);
+            const billingLinked = isJobItem || shoppingBillingIsRecordedSeparately(item);
+            const nextInvoiced = billingLinked ? Boolean(item.invoiced) : editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editForm.invoiced;
+            const nextStatus = !billingLinked && nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS :
+                canonicalShoppingListStatus(billingLinked && editForm.status === SHOPPING_LIST_INVOICED_STATUS ? item.status : editForm.status);
             const payload = {
                 category: editForm.category || "",
                 subCategory: editForm.subCategory || "",
@@ -848,10 +876,12 @@ const ShoppingListDetailView = () => {
                 itemType: editForm.subCategory || "",
                 ...photoFields,
                 purchasedItem: editForm.purchasedItem || "",
-                invoiced: nextInvoiced,
-                invoiceStatus: nextInvoiced ? "Invoiced" : "",
-                manualInvoiceNote: nextInvoiced ? editForm.manualInvoiceNote || "" : "",
-                autoInvoiceOnInstall: nextInvoiced ? false : editForm.autoInvoiceOnInstall === true,
+                ...(billingLinked ? {} : {
+                    invoiced: nextInvoiced,
+                    invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                    manualInvoiceNote: nextInvoiced ? editForm.manualInvoiceNote || "" : "",
+                    autoInvoiceOnInstall: nextInvoiced ? false : editForm.autoInvoiceOnInstall === true,
+                }),
                 serviceLocationId: isJobItem ? item.serviceLocationId || "" : editForm.serviceLocationId || "",
                 serviceLocationName: isJobItem ? item.serviceLocationName || "" : editForm.serviceLocationName || "",
                 plannedUnitCostCents: editForm.plannedUnitCostCents ?? null,
@@ -876,7 +906,7 @@ const ShoppingListDetailView = () => {
             };
             let automationPayload = {};
 
-            if (nextInvoiced) {
+            if (!billingLinked && nextInvoiced) {
                 await updateLinkedPartApprovalForManualShoppingInvoice({
                     db,
                     shoppingItem: {
@@ -887,7 +917,7 @@ const ShoppingListDetailView = () => {
                     note: editForm.manualInvoiceNote,
                     user,
                 });
-            } else if (nextStatus === SHOPPING_LIST_STATUS.installed && editForm.autoInvoiceOnInstall) {
+            } else if (!isJobItem && !nextInvoiced && nextStatus === SHOPPING_LIST_STATUS.installed && editForm.autoInvoiceOnInstall) {
                 const invoiceResult = await createAndSendShoppingItemInstallInvoice({
                     db,
                     functions,
@@ -928,8 +958,8 @@ const ShoppingListDetailView = () => {
                 serviceLocationName: syncedPayload.serviceLocationName,
                 ...photoFields,
                 status: automationPayload.status || syncedPayload.status,
-                invoiced: !!(automationPayload.invoiced ?? syncedPayload.invoiced),
-                invoiceStatus: automationPayload.invoiceStatus || syncedPayload.invoiceStatus,
+                invoiced: !!(automationPayload.invoiced ?? syncedPayload.invoiced ?? item.invoiced),
+                invoiceStatus: automationPayload.invoiceStatus ?? syncedPayload.invoiceStatus ?? item.invoiceStatus,
             });
             setPhotoFile(null);
             setPhotoPreviewUrl("");
@@ -1082,20 +1112,12 @@ const ShoppingListDetailView = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <div className="flex justify-between items-center">
-                    <div>
-                        <Link
-                            to="/company/shopping-list"
-                            className="app-back-link"
-                        >
-                            &larr; Back to Shopping List
-                        </Link>
-                        <h2 className="text-3xl font-bold text-gray-800">Shopping Item Detail</h2>
-                        <p className="text-sm text-gray-500">{item.status || "Shopping item"}</p>
-                    </div>
-
-                    {!edit ? (
-                        <div className="flex flex-wrap items-center justify-end gap-2">
+                <WorkspaceHeader
+                    title="Shopping Item Detail"
+                    description={item.status || "Shopping item"}
+                    backLink={{ to: "/company/shopping-list", label: "Back to Shopping List" }}
+                    actions={!edit ? (
+                        <div className="flex flex-wrap items-center gap-2">
                             <ShareItemButton
                                 type="shoppingListItem"
                                 recordId={shoppingItemId}
@@ -1122,7 +1144,7 @@ const ShoppingListDetailView = () => {
                             </button>
                         </div>
                     ) : (
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                             <button
                                 onClick={saveEditChanges}
                                 className="rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition hover:bg-blue-700"
@@ -1143,7 +1165,7 @@ const ShoppingListDetailView = () => {
                             </button>
                         </div>
                     )}
-                </div>
+                />
 
                 <InvoiceWorkflowStatus recordPath={recentlySelectedCompany && item.id ? `companies/${recentlySelectedCompany}/${sourceCollection}/${item.id}` : undefined} />
 
@@ -1288,7 +1310,8 @@ const ShoppingListDetailView = () => {
                                             onChange={(e) => handleEditFieldChange("status", e.target.value)}
                                             className="w-full rounded-md border border-slate-300 bg-white p-3"
                                         >
-                                            {statusOptions.map((value) => (
+                                            {statusOptions.filter((value) => value !== SHOPPING_LIST_INVOICED_STATUS ||
+                                                !shoppingBillingIsRecordedSeparately(item)).map((value) => (
                                                 <option key={value} value={value}>
                                                     {value}
                                                 </option>
@@ -1514,7 +1537,14 @@ const ShoppingListDetailView = () => {
                                             <span>Marked as invoiced</span>
                                         </label>
                                     ) : (
-                                        <p>{item.invoiced ? "Yes" : "No"}</p>
+                                        <p>{item.offlineBillingStatus === "cashReceived" ? "Cash received" : item.offlineBillingStatus === "externalInvoice" ? "Invoiced externally" : item.invoiced ? "Yes" : "No"}</p>
+                                    )}
+                                    {!edit && can("404") && sourceCollection === "shoppingList" && !item.jobId && item.customerId &&
+                                        !item.invoiced && ((!item.salesInvoiceId && !item.invoiceId) || item.invoiceStatus?.toLowerCase() === "draft") && (
+                                        <div className="mt-2 flex flex-wrap gap-3">
+                                            <button type="button" className="text-sm font-semibold text-blue-700" disabled={updating} onClick={() => saveOfflineBilling("externalInvoice")}>Invoiced externally</button>
+                                            <button type="button" className="text-sm font-semibold text-blue-700" disabled={updating} onClick={() => saveOfflineBilling("cashReceived")}>Cash received</button>
+                                        </div>
                                     )}
                                 </div>
                             </div>
@@ -1712,7 +1742,8 @@ const ShoppingListDetailView = () => {
                                             className="w-full rounded-md border border-slate-300 bg-white p-3 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             <option value="" disabled>Select status</option>
-                                            {statusOptions.map((status) => (
+                                            {statusOptions.filter((status) => status !== SHOPPING_LIST_INVOICED_STATUS ||
+                                                !(item.jobId || item.salesInvoiceId || item.invoiceId || item.offlineBillingStatus)).map((status) => (
                                                 <option key={status} value={status}>{status}</option>
                                             ))}
                                         </select>

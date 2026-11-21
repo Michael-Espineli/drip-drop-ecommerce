@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
 import React, { useState, useEffect, useContext, useMemo } from "react";
@@ -385,49 +386,47 @@ const CompanyUsers = () => {
     };
 
     return (
-        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+        <div className='min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4'>
             <div className="mx-auto">
-                <header className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                        <h1 className="text-3xl font-bold text-gray-800">Users</h1>
-                        <p className="text-gray-600 mt-1">Manage company users, roles, payroll, and recent activity.</p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 lg:justify-end">
-                        <ActionLink to="/company/invites/pending" icon={MdMailOutline}>
-                            Pending Invites
+                <WorkspaceHeader
+                  title="Users"
+                  description="Manage company users, roles, payroll, and recent activity."
+                  className="mb-8"
+                  actions={<>
+                    <ActionLink to="/company/invites/pending" icon={MdMailOutline}>
+                        Pending Invites
+                    </ActionLink>
+                    <ActionLink to="/company/workLogs" icon={MdHistory}>
+                        Work Logs
+                    </ActionLink>
+                    <ActionLink to="/Company/Roles" icon={MdManageAccounts}>
+                        Roles
+                    </ActionLink>
+                    <ActionLink to="/company/settings" icon={MdSettings}>
+                        Settings
+                    </ActionLink>
+                    <ActionLink to="/company/settings/onboarding-checklist" icon={MdChecklist}>
+                        User Onboarding Checklist
+                    </ActionLink>
+                    <ActionLink to="/company/payroll" icon={MdPayment}>
+                        Payroll
+                    </ActionLink>
+                    {can("264") && (
+                        <ActionButton onClick={openPerformanceNoteModal} icon={MdNoteAdd} variant="primary">
+                            Add Performance Note
+                        </ActionButton>
+                    )}
+                    {can("262") && (
+                        <ActionLink
+                            to="/company/companyUsers/createNew"
+                            icon={MdAdd}
+                            variant="primary"
+                        >
+                            Create New User
                         </ActionLink>
-                        <ActionLink to="/company/workLogs" icon={MdHistory}>
-                            Work Logs
-                        </ActionLink>
-                        <ActionLink to="/Company/Roles" icon={MdManageAccounts}>
-                            Roles
-                        </ActionLink>
-                        <ActionLink to="/company/settings" icon={MdSettings}>
-                            Settings
-                        </ActionLink>
-                        <ActionLink to="/company/settings/onboarding-checklist" icon={MdChecklist}>
-                            User Onboarding Checklist
-                        </ActionLink>
-                        <ActionLink to="/company/payroll" icon={MdPayment}>
-                            Payroll
-                        </ActionLink>
-                        {can("264") && (
-                            <ActionButton onClick={openPerformanceNoteModal} icon={MdNoteAdd} variant="primary">
-                                Add Performance Note
-                            </ActionButton>
-                        )}
-                        {can("262") && (
-                            <ActionLink
-                                to="/company/companyUsers/createNew"
-                                icon={MdAdd}
-                                variant="primary"
-                            >
-                                Create New User
-                            </ActionLink>
-                        )}
-                    </div>
-                </header>
+                    )}
+                  </>}
+                />
 
                 {isPerformanceNoteModalOpen && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">

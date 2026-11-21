@@ -15,7 +15,8 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { Context } from "../../../context/AuthContext";
-import { db } from "../../../utils/config";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "../../../utils/config";
 import { appAlert } from "../../../utils/appDialog";
 import { syncLinkedShoppingPurchase } from "../../../utils/shoppingPurchaseSync";
 
@@ -803,16 +804,17 @@ const ShoppingPurchaseReconciliation = () => {
         shoppingItems.find((item) => item.purchasedItemId === purchase.id)?.id ||
         "";
 
-      await syncLinkedShoppingPurchase({
-        db,
-        companyId: recentlySelectedCompany,
-        shoppingItemId: shopping.id,
-        purchasedItemId: purchase.id,
-        shoppingItemData: shopping,
-        purchasedItemData: purchase,
-        previousShoppingItemId: previousShoppingId,
-        previousPurchasedItemId: previousPurchaseId,
-      });
+      if (shopping.jobId) {
+        await httpsCallable(functions, "reconcileJobMaterialPurchase")({
+          companyId: recentlySelectedCompany, shoppingItemId: shopping.id, purchasedItemId: purchase.id,
+        });
+      } else {
+        await syncLinkedShoppingPurchase({
+          db, companyId: recentlySelectedCompany, shoppingItemId: shopping.id, purchasedItemId: purchase.id,
+          shoppingItemData: shopping, purchasedItemData: purchase,
+          previousShoppingItemId: previousShoppingId, previousPurchasedItemId: previousPurchaseId,
+        });
+      }
 
       await loadData();
       setSelection(null);

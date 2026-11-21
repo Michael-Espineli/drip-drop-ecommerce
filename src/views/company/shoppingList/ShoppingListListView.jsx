@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { collection, doc, getDoc, getDocs, orderBy, query, runTransaction, serverTimestamp, Timestamp, updateDoc } from "firebase/firestore";
@@ -34,6 +35,7 @@ import {
     SHOPPING_LIST_STATUS,
     SHOPPING_LIST_STATUS_OPTIONS,
     canonicalShoppingListStatus,
+    shoppingBillingIsRecordedSeparately,
     normalizeShoppingListStatus,
     shoppingItemIsReadyToPurchase,
     shoppingListStatusMatches,
@@ -87,7 +89,7 @@ const areStatusSetsEqual = (left = [], right = []) => (
 
 const compactString = (value) => String(value || "").trim();
 
-const canMarkItemPurchased = (item) => !item.invoiced && !item.returned &&
+const canMarkItemPurchased = (item) => (!item.invoiced || shoppingBillingIsRecordedSeparately(item)) && !item.returned &&
     canonicalShoppingListStatus(item.invoiceStatus) !== SHOPPING_LIST_INVOICED_STATUS &&
     !["cancelled", "canceled", "returned"].includes(normalizeShoppingListStatus(item.status)) &&
     shoppingItemIsReadyToPurchase(item);
@@ -389,6 +391,9 @@ const ShoppingListListView = () => {
                     purchasedItem: data.purchasedItem || "",
                     invoiced: !!data.invoiced,
                     invoiceStatus: data.invoiceStatus || "",
+                    invoiceId: data.invoiceId || "",
+                    salesInvoiceId: data.salesInvoiceId || "",
+                    offlineBillingStatus: data.offlineBillingStatus || "",
                     returned: data.returned,
                     manualInvoiceNote: data.manualInvoiceNote || data.invoiceNote || "",
                     autoInvoiceOnInstall: data.autoInvoiceOnInstall === undefined
@@ -936,14 +941,18 @@ const ShoppingListListView = () => {
 
         try {
             setSavingStatusUpdate(true);
-            const nextInvoiced = statusUpdateValue === SHOPPING_LIST_INVOICED_STATUS || !!statusUpdateItem.invoiced;
-            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : canonicalShoppingListStatus(statusUpdateValue);
+            const billingLinked = shoppingBillingIsRecordedSeparately(statusUpdateItem);
+            const nextInvoiced = statusUpdateValue === SHOPPING_LIST_INVOICED_STATUS || Boolean(statusUpdateItem.invoiced);
+            const nextStatus = !billingLinked && nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS :
+                canonicalShoppingListStatus(billingLinked && statusUpdateValue === SHOPPING_LIST_INVOICED_STATUS ? statusUpdateItem.status : statusUpdateValue);
             const payload = {
                 status: nextStatus,
-                invoiced: nextInvoiced,
-                invoiceStatus: nextInvoiced ? "Invoiced" : "",
-                manualInvoiceNote: nextInvoiced ? statusUpdateInvoiceNote || "" : "",
-                autoInvoiceOnInstall: nextInvoiced ? false : statusUpdateAutoInvoiceOnInstall === true,
+                ...(billingLinked ? {} : {
+                    invoiced: nextInvoiced,
+                    invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                    manualInvoiceNote: nextInvoiced ? statusUpdateInvoiceNote || "" : "",
+                    autoInvoiceOnInstall: nextInvoiced ? false : statusUpdateAutoInvoiceOnInstall === true,
+                }),
                 needsAction: shoppingItemNeedsAction(nextStatus),
                 updatedAt: Timestamp.now(),
             };
@@ -964,7 +973,7 @@ const ShoppingListListView = () => {
                         ...statusUpdateItem,
                         ...payload,
                     },
-                    invoiced: nextInvoiced,
+                    invoiced: billingLinked ? undefined : nextInvoiced,
                 });
                 syncedShoppingPayload = shoppingPayload || {};
             }
@@ -977,7 +986,7 @@ const ShoppingListListView = () => {
                 id: statusUpdateItem.id,
             };
 
-            if (nextInvoiced) {
+            if (!billingLinked && nextInvoiced) {
                 await updateLinkedPartApprovalForManualShoppingInvoice({
                     db,
                     shoppingItem: itemForAutomation,
@@ -1073,8 +1082,10 @@ const ShoppingListListView = () => {
                 editForm.name || editingItem.name || "Shopping item photo",
                 uploadedPhoto.storagePath
             );
-            const nextInvoiced = editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editingItem.invoiced;
-            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : canonicalShoppingListStatus(editForm.status);
+            const billingLinked = shoppingBillingIsRecordedSeparately(editingItem);
+            const nextInvoiced = editForm.status === SHOPPING_LIST_INVOICED_STATUS || Boolean(editingItem.invoiced);
+            const nextStatus = !billingLinked && nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS :
+                canonicalShoppingListStatus(billingLinked && editForm.status === SHOPPING_LIST_INVOICED_STATUS ? editingItem.status : editForm.status);
             const purchasedDate = editForm.datePurchasedInput
                 ? new Date(`${editForm.datePurchasedInput}T00:00:00`)
                 : null;
@@ -1086,10 +1097,12 @@ const ShoppingListListView = () => {
                 datePurchased: purchasedDate ? Timestamp.fromDate(purchasedDate) : null,
                 purchaserId: editForm.purchaserId || "",
                 purchaserName: editForm.purchaserName || "",
-                invoiced: nextInvoiced,
-                invoiceStatus: nextInvoiced ? "Invoiced" : "",
-                manualInvoiceNote: nextInvoiced ? editForm.manualInvoiceNote || "" : "",
-                autoInvoiceOnInstall: nextInvoiced ? false : editForm.autoInvoiceOnInstall === true,
+                ...(billingLinked ? {} : {
+                    invoiced: nextInvoiced,
+                    invoiceStatus: nextInvoiced ? "Invoiced" : "",
+                    manualInvoiceNote: nextInvoiced ? editForm.manualInvoiceNote || "" : "",
+                    autoInvoiceOnInstall: nextInvoiced ? false : editForm.autoInvoiceOnInstall === true,
+                }),
                 needsAction: shoppingItemNeedsAction(nextStatus),
                 updatedAt: Timestamp.now(),
                 ...photoFields,
@@ -1111,7 +1124,7 @@ const ShoppingListListView = () => {
                         ...editingItem,
                         ...payload,
                     },
-                    invoiced: nextInvoiced,
+                    invoiced: billingLinked ? undefined : nextInvoiced,
                 });
                 syncedShoppingPayload = shoppingPayload || {};
             }
@@ -1124,7 +1137,7 @@ const ShoppingListListView = () => {
                 id: editingItem.id,
             };
 
-            if (nextInvoiced) {
+            if (!billingLinked && nextInvoiced) {
                 await updateLinkedPartApprovalForManualShoppingInvoice({
                     db,
                     shoppingItem: itemForAutomation,
@@ -1257,41 +1270,34 @@ const ShoppingListListView = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                        <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company operations</p>
-                        <h2 className="mt-1 text-3xl font-bold text-slate-950">Shopping List</h2>
-                        <p className="mt-1 text-sm text-slate-500">
-                            Manage shopping items by purchaser, customer, job, and status
-                        </p>
-                    </div>
+                <WorkspaceHeader
+                  title="Shopping List"
+                  eyebrow="Company operations"
+                  description="Manage shopping items by purchaser, customer, job, and status"
+                  actions={<>
+                    <Link
+                        to="/company/purchased-items?filter=all&days=30&sort=recent"
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-700 shadow-sm transition hover:bg-emerald-100"
+                    >
+                        <ShoppingCartIcon className="h-4 w-4" />
+                        Recently Purchased
+                    </Link>
+                    <Link
+                        to="/company/shopping-purchase-reconciliation"
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm transition hover:bg-blue-100"
+                    >
+                        <ArrowsRightLeftIcon className="h-4 w-4" />
+                        Reconcile
+                    </Link>
 
-                    <div className="flex flex-wrap justify-end gap-2">
-                        <Link
-                            to="/company/purchased-items?filter=all&days=30&sort=recent"
-                            className="inline-flex items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-700 shadow-sm transition hover:bg-emerald-100"
-                        >
-                            <ShoppingCartIcon className="h-4 w-4" />
-                            Recently Purchased
-                        </Link>
-                        <Link
-                            to="/company/shopping-purchase-reconciliation"
-                            className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm transition hover:bg-blue-100"
-                        >
-                            <ArrowsRightLeftIcon className="h-4 w-4" />
-                            Reconcile
-                        </Link>
-
-                        <Link
-                            to="/company/shopping-list/create"
-                            className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-                        >
-                            New Item
-                        </Link>
-                    </div>
-                    </div>
-                </section>
+                    <Link
+                        to="/company/shopping-list/create"
+                        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+                    >
+                        New Item
+                    </Link>
+                  </>}
+                />
 
                 <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
                     <div className="grid grid-cols-1 gap-3 border-b border-slate-200 p-5 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-center">

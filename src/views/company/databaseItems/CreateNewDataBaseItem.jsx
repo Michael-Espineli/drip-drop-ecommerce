@@ -50,6 +50,7 @@ import {
   buildVendorItemProductPatch,
   getProductDisplayName,
   productCatalogCollectionRef,
+  isMergedCatalogRecord,
   productCatalogDocRef,
   productOptionSearchText,
 } from "../../../utils/productCatalog";
@@ -209,7 +210,7 @@ const CreateNewDataBaseItem = ({ compact = false, onCreated, onCancel, onSavingC
       try {
         const productSnap = await getDocs(query(productCatalogCollectionRef(db, recentlySelectedCompany), orderBy("commonName")));
         if (!active) return;
-        setProducts(productSnap.docs.map((productDoc) => ({ id: productDoc.id, ...productDoc.data() })));
+        setProducts(productSnap.docs.map((productDoc) => ({ ...productDoc.data(), id: productDoc.id })).filter(row => !isMergedCatalogRecord(row)));
       } catch (error) {
         console.log("Error loading products", error);
       }

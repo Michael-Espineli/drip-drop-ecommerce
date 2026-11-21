@@ -1,3 +1,4 @@
+import { saveWithCurrentWeekReview } from '../../../components/CurrentWeekRouteReview';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
@@ -1976,7 +1977,7 @@ const RouteDashboard = () => {
         try {
             if (moveMode === MOVE_MODE_PERMANENT) {
                 const updateServiceStopDayPermanently = httpsCallable(functions, 'updateServiceStopDayPermanently');
-                const response = await updateServiceStopDayPermanently({
+                const response = await saveWithCurrentWeekReview(updateServiceStopDayPermanently, {
                     companyId: recentlySelectedCompany,
                     serviceStopList: selectedStopsForMove.map(stop => ({ id: stop.id })),
                     newTech: {
@@ -1986,11 +1987,8 @@ const RouteDashboard = () => {
                     newDay: moveDay,
                 });
 
-                if (response?.data?.status === 500) {
-                    throw new Error(response.data.error || 'Permanent move failed.');
-                }
-
-                toast.success('Permanent move submitted.');
+                if (!response) return;
+                toast.success('Recurring schedule updated and this week’s visits confirmed.');
             } else {
                 await moveRouteStops({
                     companyId: recentlySelectedCompany,

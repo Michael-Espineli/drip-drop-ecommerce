@@ -25,8 +25,22 @@
     text-transform: uppercase;
 }
 
+.workspace-header-navigation { display: flex; align-items: center; flex-wrap: wrap; column-gap: .75rem; margin-bottom: .5rem; }
+.workspace-header-navigation .workspace-header-eyebrow { margin-bottom: 0; }
+.workspace-header-back {
+    display: inline-flex;
+    align-items: center;
+    gap: .375rem;
+    color: #dbeafe;
+    font-size: .875rem;
+    font-weight: 600;
+    line-height: 1.25rem;
+}
+.workspace-header-back:hover { color: #fff; text-decoration: underline; }
+.workspace-header-back:focus-visible { outline: 2px solid #bfdbfe; outline-offset: 3px; }
+
 .workspace-header-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
-.workspace-header-title { color: #fff; font-size: 2rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.workspace-header-title { min-width: 0; color: #fff; font-size: 2rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
 .workspace-header-description { max-width: 64rem; margin-top: .5rem; color: #dbeafe; font-size: .875rem; line-height: 1.5; }
 .workspace-header-meta { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 .workspace-header-badge { padding: .35rem .7rem; border: 1px solid #ffffff30; border-radius: .375rem; background: #ffffff12; color: #dbeafe; font-size: .75rem; font-weight: 600; }
@@ -103,11 +117,17 @@
 .theme-dark .workspace-data-table td[class~="bg-blue-50/60"] { background-color: color-mix(in srgb, var(--workspace-blue-bg) 60%, var(--color-surface)); }
 .theme-dark .workspace-data-table td[class~="bg-cyan-50/60"] { background-color: color-mix(in srgb, var(--workspace-cyan-bg) 60%, var(--color-surface)); }
 
+@media (max-width: 900px) {
+    .workspace-header-title-row { position: relative; }
+    .workspace-header-title-row > details { position: static; }
+    .workspace-header-title-row > details > div { top: 100%; left: 0; right: auto; width: min(20rem, 100%); }
+}
+
 @media (max-width: 600px) {
     .workspace-header-identity, .workspace-header-actions, .workspace-section-header { padding: 1rem; }
     .workspace-header-title { font-size: 1.5rem; }
     .workspace-header-actions { justify-content: flex-start; }
-    .workspace-button, .workspace-header-actions :is(button, [role="button"], a[class~="inline-flex"]) { min-height: 44px; }
+    .workspace-button, .workspace-header-back, .workspace-header-actions :is(button, [role="button"], a[class~="inline-flex"]) { min-height: 44px; }
     .workspace-screen :is(input, select):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([role="combobox"]) { min-height: 44px; }
 }
 

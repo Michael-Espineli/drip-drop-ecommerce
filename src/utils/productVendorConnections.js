@@ -1,6 +1,6 @@
 import { getDocsFromServer, or, query, runTransaction, where } from "firebase/firestore";
 import {
-  getProductDisplayName, getVendorItemDisplayName, productVendorItemIds,
+  getProductDisplayName, getVendorItemDisplayName, productVendorItemIds, isMergedCatalogRecord,
   productCatalogDocRef, vendorItemDocRef, vendorItemsCollectionRef,
 } from "./productCatalog";
 
@@ -13,6 +13,7 @@ export const saveVendorProductConnection = async ({
   const vendorSnap = await transaction.get(vendorRef);
   if (!vendorSnap.exists()) throw new Error("This vendor item no longer exists. Refresh and try again.");
   const vendor = { ...vendorSnap.data(), id: vendorSnap.id };
+  if (isMergedCatalogRecord(vendor)) throw new Error("This vendor item has been merged. Use the kept vendor item.");
   const actualProductId = vendor.productId || vendor.genericItemId || "";
   if (expectedProductId !== undefined && actualProductId !== expectedProductId) {
     throw new Error("This vendor item's product connection changed. Refresh before saving again.");
@@ -24,8 +25,10 @@ export const saveVendorProductConnection = async ({
   if (newProduct && !records.some((record) => record.id === newProduct.id)) records.push(newProduct);
   const target = records.find((record) => record.id === productId);
   if (productId && !target) throw new Error("This product no longer exists. Refresh and choose another product.");
+  if (target && isMergedCatalogRecord(target)) throw new Error("This product has been merged. Use the kept product.");
   const now = new Date();
   for (const product of records) {
+    if (isMergedCatalogRecord(product)) continue;
     const previousIds = productVendorItemIds(product);
     const nextIds = previousIds.filter((id) => id !== vendorItemId);
     const connecting = product.id === productId;
@@ -60,6 +63,9 @@ export const deleteCatalogProduct = async ({ db, companyId, productId }) => {
 
   await runTransaction(db, async (transaction) => {
     const product = await transaction.get(productRef);
+    if (isMergedCatalogRecord(product.data()) || product.data()?.mergedSourceIds?.length) {
+      throw new Error("Products in a merge are kept for catalog history.");
+    }
     const vendorIds = new Set([
       ...linkedVendors.docs.map((vendor) => vendor.id),
       ...productVendorItemIds(product.data()).filter((id) => typeof id === "string" && !id.includes("/")),
@@ -70,6 +76,7 @@ export const deleteCatalogProduct = async ({ db, companyId, productId }) => {
     vendors.forEach((vendor, index) => {
       if (!vendor.exists()) return;
       const current = vendor.data();
+      if (isMergedCatalogRecord(current)) return;
       if (current.productId !== productId && current.genericItemId !== productId) return;
 
       const nextProductId = current.productId === productId ? "" : current.productId || "";

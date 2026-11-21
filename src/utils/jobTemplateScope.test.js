@@ -34,11 +34,16 @@ test("a template's fallback price becomes an additive billable service", () => {
 });
 
 test("add preserves existing scope, appends in order, and keeps legacy task prices alongside service lines", () => {
-  const existing = { ...empty(), tasks: [{ id: "old-task", billingLaborPriceCents: 1200, sortOrder: 8 }] };
+  const existing = {
+    ...empty(),
+    tasks: [{ id: "old-task", billingLaborPriceCents: 1200, sortOrder: 8 }],
+    plannedServiceStops: [{ id: "old-visit", billingLaborPriceCents: 0, plannedLaborCostCents: 3500 }],
+  };
   const incoming = { ...empty(), tasks: [{ id: "new-task" }], laborLineItems: [{ id: "new-line", totalPriceCents: 2000 }] };
   const combined = combineJobTemplateScope(existing, incoming, "add");
   expect(combined.tasks.map((task) => task.id)).toEqual(["old-task", "new-task"]);
   expect(combined.tasks[1].sortOrder).toBe(9);
+  expect(combined.laborLineItems[0]).toMatchObject({ internalCostCents: 3500, totalPriceCents: 1200 });
   expect(combined.laborLineItems.reduce((sum, line) => sum + line.totalPriceCents, 0)).toBe(3200);
 });
 

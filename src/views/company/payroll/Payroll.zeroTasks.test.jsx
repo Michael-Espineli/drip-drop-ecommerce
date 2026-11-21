@@ -2,7 +2,7 @@ import React, { act } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
-import { getDocs, getDoc, getCountFromServer, writeBatch, updateDoc } from "firebase/firestore";
+import { getDocs, getDoc, getDocFromServer, getCountFromServer, writeBatch, updateDoc, runTransaction } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
 import { appConfirm } from "../../../utils/appDialog";
@@ -20,7 +20,8 @@ jest.mock("../../../hooks/useCompanyPermissions", () => () => ({ can: mockCan, p
 jest.mock("firebase/firestore", () => ({
   collection: (_, ...parts) => parts.join("/"), doc: (_, ...parts) => parts.join("/"), query: ref => ref,
   where: jest.fn(), orderBy: jest.fn(), startAfter: jest.fn(), limit: jest.fn(), documentId: jest.fn(),
-  getDocs: jest.fn(), getDoc: jest.fn(), getCountFromServer: jest.fn(), writeBatch: jest.fn(), updateDoc: jest.fn(), setDoc: jest.fn(), runTransaction: jest.fn(),
+  getDocs: jest.fn(), getDoc: jest.fn(), getDocFromServer: jest.fn(), getCountFromServer: jest.fn(), writeBatch: jest.fn(),
+  updateDoc: jest.fn(), setDoc: jest.fn(), runTransaction: jest.fn(),
 }));
 
 const line = (id, extra = {}) => ({ id, source: "serviceStopTask", totalAmountCents: 0, calculationStatus: "calculated",
@@ -187,6 +188,116 @@ test("payroll readers cannot invoke zero task cleanup", async () => {
   expect(technicianWorkflow).not.toHaveBeenCalled();
 });
 
+const inspectLine = async name => {
+  const row = screen.getByRole("row", { name });
+  fireEvent.click(within(row).getByRole("button", { name: "Inspect" }));
+  return screen.findByRole("dialog", { name: "Payroll Line Detail" });
+};
+
+test("inspection shows the review reason and saves a note without exposing the stored record", async () => {
+  const item = mockLines.find(line => line.id === "missing-setup");
+  Object.assign(item, { serviceStopId: "internal-stop-id", customerName: "Oak residence",
+    calculationNotes: "No active technician rate matches this pay item.", adminReviewNotes: "Original note",
+    internalDebugField: "raw-value-that-should-stay-hidden" });
+  const update = jest.fn();
+  runTransaction.mockImplementationOnce((_, action) => action({
+    get: async () => ({ data: () => ({ ...item, adminReviewNotes: "Original note\nAnother manager's note" }) }), update,
+  }));
+
+  await openPayroll();
+  const dialog = within(await inspectLine(/missing-setup/));
+  expect(dialog.getByText(item.calculationNotes)).toBeVisible();
+  expect(dialog.getByText("Oak residence")).toBeVisible();
+  expect(dialog.getByRole("link", { name: "Open service stop" })).toHaveAttribute("href", "/company/serviceStops/detail/internal-stop-id");
+  expect(dialog.queryByText(/raw firestore data|copy json|raw-value-that-should-stay-hidden/i)).toBeNull();
+
+  fireEvent.change(dialog.getByLabelText("Add a review note"), { target: { value: "  Checking the rate for this visit.  " } });
+  fireEvent.click(dialog.getByRole("button", { name: "Save review note" }));
+  expect(await dialog.findByRole("status")).toHaveTextContent("Review note saved.");
+  expect(update).toHaveBeenCalledWith("companies/company/technicianPayLineItems/missing-setup", {
+    adminReviewNotes: "Original note\nAnother manager's note\nChecking the rate for this visit.",
+  });
+  expect(dialog.getByText(/Checking the rate for this visit/)).toBeVisible();
+});
+
+test("inspection retains the draft when another reviewer has already resolved the line", async () => {
+  const item = mockLines.find(line => line.id === "missing-setup");
+  const update = jest.fn();
+  runTransaction.mockImplementationOnce((_, action) => action({
+    get: async () => ({ data: () => ({ ...item, calculationStatus: "voided" }) }), update,
+  }));
+
+  await openPayroll();
+  const dialog = within(await inspectLine(/missing-setup/));
+  const note = dialog.getByLabelText("Add a review note");
+  fireEvent.change(note, { target: { value: "Check task pay." } });
+  fireEvent.click(dialog.getByRole("button", { name: "Save review note" }));
+  expect(await dialog.findByRole("alert")).toHaveTextContent("This line changed while you were reviewing it.");
+  expect(note).toHaveValue("Check task pay.");
+  expect(update).not.toHaveBeenCalled();
+});
+
+test("inspection recalculates stop pay and shows the confirmed amount when review resolves", async () => {
+  const item = mockLines.find(line => line.id === "missing-setup");
+  item.serviceStopId = "stop";
+  const recalculated = { ...item, totalAmountCents: 4250, rateAmountCents: 4250, rateType: "flatPerTask", calculationStatus: "calculated" };
+  getDocFromServer.mockResolvedValueOnce({ data: () => item }).mockResolvedValueOnce({ data: () => recalculated });
+  technicianWorkflow.mockImplementationOnce(async () => {
+    mockLines = mockLines.map(line => line.id === item.id ? recalculated : line);
+    return { needsReviewCount: 0 };
+  });
+
+  await openPayroll();
+  const dialog = within(await inspectLine(/missing-setup/));
+  fireEvent.click(dialog.getByRole("button", { name: "Recalculate stop pay" }));
+  expect(await dialog.findByRole("status")).toHaveTextContent("Payroll line updated.");
+  expect(technicianWorkflow).toHaveBeenCalledWith("refreshServiceStopPayroll", { companyId: "company", serviceStopId: "stop" });
+  expect(dialog.getByText("Calculated")).toBeVisible();
+  expect(dialog.getAllByText("$42.50")).toHaveLength(2);
+  expect(dialog.getByRole("button", { name: "Approve" })).toBeEnabled();
+});
+
+test("approval from inspection checks the current pay amount before writing", async () => {
+  const item = mockLines.find(line => line.id === "payable");
+  const update = jest.fn();
+  runTransaction.mockImplementationOnce((_, action) => action({
+    get: async () => ({ data: () => ({ ...item, totalAmountCents: 5500 }) }), update,
+  }));
+  const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await openPayroll();
+    const dialog = within(await inspectLine(/payable/));
+    fireEvent.click(dialog.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(/This line changed while you were reviewing it/)).toBeInTheDocument();
+    expect(update).not.toHaveBeenCalled();
+    expect(dialog.getByText("Calculated")).toBeVisible();
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
+test("inspection confirms zero task clearance in place and shows the voided status", async () => {
+  await openPayroll();
+  const dialog = within(await inspectLine(/missing-setup/));
+  fireEvent.click(dialog.getByRole("button", { name: "Clear $0" }));
+  expect(technicianWorkflow).not.toHaveBeenCalled();
+  fireEvent.click(dialog.getByRole("button", { name: "Confirm clear $0" }));
+  expect(await dialog.findByRole("status")).toHaveTextContent("Task cleared.");
+  expect(dialog.getByText("Voided")).toBeVisible();
+  expect(technicianWorkflow).toHaveBeenCalledWith("clearZeroDollarPayrollTasks", { companyId: "company", lineItemIds: ["missing-setup"] });
+});
+
+test("inspection lets payroll readers review a line without changing it", async () => {
+  mockCan.mockImplementation(permission => permission === "420");
+  const item = mockLines.find(line => line.id === "missing-setup");
+  item.serviceStopId = "stop";
+  await openPayroll();
+  const dialog = within(await inspectLine(/missing-setup/));
+  expect(dialog.getByRole("button", { name: "Refresh line" })).toBeEnabled();
+  expect(dialog.queryByLabelText("Add a review note")).toBeNull();
+  expect(dialog.queryByRole("button", { name: /clear|approve|mark paid|recalculate/i })).toBeNull();
+});
+
 test.each([
   ["company owner", { companyOwnerId: "owner" }],
   ["owner role", { companyUserAccess: { roleName: "Owner" } }],
@@ -246,96 +357,84 @@ test("interrupted range approval closes progress, retains completed updates, and
   } finally { consoleError.mockRestore(); }
 });
 
-test('bulk Finish Stops leaves payroll to automatic processing without a per-stop payroll read', async () => {
-  const initial = getDocs.getMockImplementation();
-  getDocs.mockImplementation(async ref => {
-    if (ref.endsWith('/serviceStops')) return { docs: ['one', 'two'].map(id => ({ id, data: () => ({
-      operationStatus: 'Scheduled', techId: 'tech', serviceDate: new Date(), estimatedDuration: 30,
-    }) })) };
-    if (ref.endsWith('/tasks')) return { docs: [
-      { id: 'task', data: () => ({ status: 'Scheduled' }) },
-      { id: 'assigned-task', data: () => ({ status: 'Scheduled', workerId: 'different-tech', workerName: 'Sam', contractedRate: 25 }) },
-      { id: 'finished-task', data: () => ({ status: 'Finished', completedAt: new Date('2026-11-01') }) },
-    ] };
-    return initial(ref);
+const backfillCompany = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
+const payableStop = {
+  stopId: "one", title: "Pool visit", serviceDate: "2026-11-05", technicianName: "Alex", customerName: "Oak house",
+  version: "preview-version", blockedReason: "", selectedTaskIds: [],
+  tasks: [{ id: "clean", title: "Clean filter", reason: "" }, { id: "open", title: "Brush", reason: "" }],
+  pay: { lineItems: [{ id: "visit-pay", totalAmountCents: 5000, title: "Visit pay" }], conflictLineItemIds: [] },
+};
+const recorded = { ...payableStop, finishedTaskCount: 1, status: "recorded", errorMessages: [],
+  pay: { ...payableStop.pay, lineItems: [{ id: "recorded-pay", totalAmountCents: 6200, title: "Recorded payroll line" }] } };
+
+test("stop payroll previews, confirms only selected work, then reloads actual payroll results", async () => {
+  sessionStorage.clear();
+  technicianWorkflow.mockImplementation(async (name, options) => {
+    if (options.action === "preview") {
+      const selection = options.stops.find(row => row.stopId === payableStop.stopId)?.taskIds || [];
+      return { maxStops: 40, items: [{ ...payableStop, selectedTaskIds: selection },
+        { ...payableStop, stopId: "blocked", customerName: "Pine yard", blockedReason: "A service photo is required." }] };
+    }
+    if (options.action === "finish") return { runId: options.runId, pending: true, items: [] };
+    if (options.action === "status") return { runId: options.runId, pending: false, items: [recorded] };
+    throw new Error("Unexpected workflow call");
   });
-  await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
-  const payrollReads = getDocs.mock.calls.filter(([ref]) => ref.endsWith('/technicianPayLineItems')).length;
-  fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
-  expect(await screen.findByText(/Finished 2 service stop\(s\) and 4 task\(s\)\. Payroll is updating/)).toBeInTheDocument();
-  expect(mockCommit).toHaveBeenCalledTimes(2);
-  expect(mockUpdate.mock.calls.filter(([path]) => path.endsWith('/tasks/task'))).toHaveLength(2);
-  expect(mockUpdate.mock.calls.every(([, payload]) => payload.manualFinishSource === 'payroll_setup_bulk_finish')).toBe(true);
-  const taskUpdates = mockUpdate.mock.calls.filter(([path]) => path.includes('/tasks/'));
-  expect(taskUpdates).toHaveLength(4);
-  expect(taskUpdates.every(([path, payload]) => !path.endsWith('/finished-task') &&
-    !Object.hasOwn(payload, 'workerId') && !Object.hasOwn(payload, 'workerName') && !Object.hasOwn(payload, 'contractedRate'))).toBe(true);
-  expect(mockUpdate.mock.calls.filter(([path]) => !path.includes('/tasks/')).every(([, payload]) => payload.completedWithoutCustomerEmail)).toBe(true);
-  expect(getDocs.mock.calls.filter(([ref]) => ref.endsWith('/technicianPayLineItems'))).toHaveLength(payrollReads);
-  expect(technicianWorkflow).not.toHaveBeenCalled();
+  await openPayroll({ recentlySelectedCompany: backfillCompany });
+  fireEvent.click(screen.getByRole("button", { name: "Preview Payroll" }));
+  await screen.findByText("A service photo is required.");
+  expect(screen.getByRole("checkbox", { name: "Confirm stop Pine yard" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Finish Confirmed Stops" })).toBeDisabled();
+  expect(mockCommit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Confirm stop Oak house" }));
+  fireEvent.click(screen.getAllByText("Confirm tasks performed on this stop")[0]);
+  fireEvent.click(screen.getAllByLabelText("Clean filter")[0]);
+  expect(screen.getByRole("button", { name: "Finish Confirmed Stops" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Update Preview" }));
+  const finish = screen.getByRole("button", { name: "Finish Confirmed Stops" });
+  await waitFor(() => expect(finish).toBeEnabled());
+  const reads = getDocs.mock.calls.filter(([ref]) => ref.endsWith("technicianPayLineItems")).length;
+  fireEvent.click(finish);
+  await screen.findByText(/Recorded payroll line/);
+  expect(screen.getByText("$62.00 recorded across 1 confirmed stop(s)")).toBeInTheDocument();
+  expect(technicianWorkflow).toHaveBeenCalledWith("managePayrollStopCompletion", expect.objectContaining({
+    action: "finish", stops: [{ stopId: "one", version: "preview-version", taskIds: ["clean"] }],
+  }));
+  await waitFor(() => expect(getDocs.mock.calls.filter(([ref]) => ref.endsWith("technicianPayLineItems"))).toHaveLength(reads + 1));
+  expect(mockCommit).not.toHaveBeenCalled();
+  sessionStorage.clear();
 });
 
 test.each([
-  ['loading permissions', false, [], 'Service stop permissions are still loading. Please wait.'],
-  ['missing stop viewing', true, ['244', '420', '424'], 'You need View Service Stops and Edit Service Stops access to finish stops for payroll.'],
-  ['missing stop editing', true, ['240', '420', '424'], 'You need View Service Stops and Edit Service Stops access to finish stops for payroll.'],
-  ['payroll-only access', true, ['420', '424'], 'You need View Service Stops and Edit Service Stops access to finish stops for payroll.'],
-])('bulk Finish Stops is disabled with %s', async (_, ready, permissions, reason) => {
+  [false, [], "Loading service stop permissions…", true],
+  [true, ["244", "420"], "You need View Payroll and View Service Stops access to preview payroll.", true],
+  [true, ["240", "420"], "You need Edit Service Stops access to confirm stops or retry payroll.", false],
+  [true, ["420", "424"], "You need View Payroll and View Service Stops access to preview payroll.", true],
+])("stop payroll checks preview and edit permissions independently", async (ready, permissions, notice, disabled) => {
   mockPermissionsReady = ready;
   mockCan.mockImplementation(id => permissions.includes(id));
-  await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
-  const button = screen.getByRole('button', { name: 'Finish Stops' });
-  expect(button).toBeDisabled();
-  expect(button).toHaveAccessibleDescription(reason);
-  fireEvent.click(button);
-  expect(getDocs.mock.calls.filter(([ref]) => ref.endsWith('/serviceStops'))).toHaveLength(0);
-  expect(mockCommit).not.toHaveBeenCalled();
+  await openPayroll({ recentlySelectedCompany: backfillCompany });
+  expect(screen.getByText(notice)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Preview Payroll" }).disabled).toBe(disabled);
 });
 
-test('bulk Finish Stops reports the Firebase source when the initial stop query is denied', async () => {
-  const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
-  const initial = getDocs.getMockImplementation();
-  getDocs.mockImplementation(async ref => {
-    if (ref.endsWith('/serviceStops')) throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
-    return initial(ref);
+test("a saved stop payroll run can recover and retry a failed payroll step", async () => {
+  sessionStorage.setItem(`payroll-stop-completion:${backfillCompany}`, "saved-run");
+  let retried = false;
+  technicianWorkflow.mockImplementation(async (_name, { action }) => {
+    if (action === "retry") {
+      retried = true;
+      return { runId: "saved-run", pending: true, items: [] };
+    }
+    return { runId: "saved-run", pending: false, items: [retried ? recorded : {
+      ...recorded, pay: null, status: "failed", errorMessages: ["payroll: transient failure"],
+    }] };
   });
-  try {
-    await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
-    fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
-    expect(await screen.findByText(/Could not finish stops while finding unfinished service stops\. Firebase Firestore permission denied/)).toBeInTheDocument();
-    expect(mockCommit).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Finish Stops' })).toBeEnabled();
-  } finally { consoleError.mockRestore(); }
-});
-
-test('bulk Finish Stops retains confirmed progress after a denied batch and retries remaining stops', async () => {
-  const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
-  const initial = getDocs.getMockImplementation();
-  let remaining = ['one', 'two'];
-  getDocs.mockImplementation(async ref => {
-    if (ref.endsWith('/serviceStops')) return { docs: remaining.map(id => ({ id, data: () => ({
-      operationStatus: 'Scheduled', techId: 'tech', serviceDate: new Date(), estimatedDuration: 30,
-    }) })) };
-    if (ref.endsWith('/tasks')) return { docs: [{ id: 'task', data: () => ({ status: 'Scheduled' }) }] };
-    return initial(ref);
+  await openPayroll({ recentlySelectedCompany: backfillCompany });
+  expect(await screen.findByText("payroll: transient failure")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry Payroll" }));
+  expect(await screen.findByText(/Recorded payroll line/)).toBeInTheDocument();
+  expect(technicianWorkflow).toHaveBeenCalledWith("managePayrollStopCompletion", {
+    companyId: backfillCompany, action: "retry", runId: "saved-run", stopId: "one",
   });
-  let commits = 0;
-  mockCommit.mockImplementation(async () => {
-    commits += 1;
-    if (commits === 2) throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
-    remaining.shift();
-  });
-  try {
-    await openPayroll({ recentlySelectedCompany: 'com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e' });
-    fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
-    expect(await screen.findByText(/Finished 1 service stop\(s\) and 1 task\(s\) before the error/)).toHaveTextContent('Completed changes are kept; retry the same range');
-    expect(consoleError).toHaveBeenCalledWith('Error finishing service stops for payroll:', expect.any(Error), expect.objectContaining({
-      serviceStopId: 'two', phase: 'saving a service stop and its tasks', finishedStops: 1, finishedTasks: 1,
-    }));
-    const writesBeforeRetry = mockUpdate.mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: 'Finish Stops' }));
-    expect(await screen.findByText(/Finished 1 service stop\(s\) and 1 task\(s\)\. Payroll is updating/)).toBeInTheDocument();
-    expect(mockUpdate.mock.calls.slice(writesBeforeRetry).every(([path]) => path.includes('/serviceStops/two'))).toBe(true);
-    expect(mockCommit).toHaveBeenCalledTimes(3);
-  } finally { consoleError.mockRestore(); }
+  sessionStorage.clear();
 });

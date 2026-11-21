@@ -1,5 +1,6 @@
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
+const { FieldValue, Timestamp } = require("firebase-admin/firestore");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -8,10 +9,10 @@ if (admin.apps.length === 0) {
 const { sendServiceReportOnFinishCore } = require("./sendGrid/general");
 
 const db = admin.firestore();
-const FieldValue = admin.firestore.FieldValue;
-const Timestamp = admin.firestore.Timestamp;
 const payrollApproval = require("./payrollApproval").createPayrollApproval(db);
 const payrollStatements = require("./payrollStatements").createPayrollStatements(db);
+const { createPayrollStopCompletion, SOURCE: PAYROLL_COMPLETION_SOURCE } = require("./payrollStopCompletion");
+const { assertServiceOnboardingReady } = require("./serviceOnboardingGate");
 
 const SERVICE_STOP_FINISHED = "Finished";
 const ACTIVE_ROUTE_FINISHED = "Finished";
@@ -140,7 +141,11 @@ function resolvedServiceStopCategory(serviceStop = {}) {
 
 const { createPayrollWorkflow } = require("./payrollWorkflow");
 const payroll = createPayrollWorkflow(db);
-const generatePayForFinishedStop = ({ companyId, serviceStop }) => payroll.reconcileStop(companyId, serviceStop.id);
+const workOfferProgress = require("./workOfferProgress").createWorkOfferProgress(db);
+const requirePhoto = (config, stop) => {
+  const category = resolvedServiceStopCategory(stop);
+  return (config.serviceStopCategorySettings?.[category]?.requirePhotoOnFinish ?? config.requirePhoto) === true;
+};
 
 function routeStatus({ route, totalStops, finishedStops }) {
   if (totalStops > 0 && totalStops === finishedStops) {
@@ -204,20 +209,47 @@ async function syncActiveRouteCounters({ companyId, serviceStopId }) {
 async function claimCompletionWork(workRef, requestId) {
   return db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(workRef);
-    if (!snapshot.exists) return false;
+    if (!snapshot.exists) return null;
 
     const fresh = snapshot.data() || {};
-    if (fresh.status !== "queued") return false;
-    if (requestId && fresh.requestId !== requestId) return false;
+    if (fresh.status !== "queued" || fresh.requestId !== requestId) return null;
+    const attempt = (Number(fresh.attempts) || 0) + 1;
 
     transaction.set(workRef, {
       status: "processing",
-      attempts: FieldValue.increment(1),
+      attempts: attempt,
       startedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    return true;
+    return { work: fresh, attempt };
+  });
+}
+
+async function finishCompletionWork(workRef, stopRef, requestId, attempt, workPatch, stopPatch, pay) {
+  await db.runTransaction(async transaction => {
+    const [work, stop] = await Promise.all([transaction.get(workRef), transaction.get(stopRef)]);
+    const current = work.data();
+    if (current?.requestId !== requestId || current?.attempts !== attempt || current?.status !== "processing") return;
+    const visit = stop.data();
+    if (visit && visit.completionWorkRequestId !== requestId) {
+      transaction.update(workRef, {
+        status: "skipped", skippedReason: "Stale completion request.", finishedAt: FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+    if (workPatch.status.startsWith("completed") && (!visit || !isFinishedServiceStop(visit))) {
+      const reason = "The service stop was reopened or removed during completion.";
+      transaction.update(workRef, { status: "skipped", skippedReason: reason, finishedAt: FieldValue.serverTimestamp() });
+      if (visit) transaction.update(stopRef, { completionWorkStatus: "skipped", completionWorkErrorMessages: [reason] });
+      return;
+    }
+    transaction.update(workRef, { ...workPatch, finishedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+    if (stop.exists) transaction.update(stopRef, { ...stopPatch, completionWorkProcessedAt: FieldValue.serverTimestamp() });
+    if (pay) {
+      const receipt = stopRef.parent.parent.collection("payrollStopCompletionRuns").doc(requestId).collection("results").doc(stopRef.id);
+      transaction.set(receipt, { attempt, pay });
+    }
   });
 }
 
@@ -237,77 +269,55 @@ async function runCompletionStep(name, work) {
 }
 
 exports.processServiceStopCompletionWork = onDocumentWritten(
-  "companies/{companyId}/serviceStopCompletionWork/{workId}",
+  { document: "companies/{companyId}/serviceStopCompletionWork/{workId}", timeoutSeconds: 120 },
   async (event) => {
     if (!event.data?.after?.exists) return null;
 
     const workRef = event.data.after.ref;
-    const work = event.data.after.data() || {};
-    if (work.status !== "queued") return null;
+    const queued = event.data.after.data() || {};
+    if (queued.status !== "queued") return null;
 
-    const requestId = cleanString(work.requestId);
+    const requestId = cleanString(queued.requestId);
     const claimed = await claimCompletionWork(workRef, requestId);
     if (!claimed) return null;
+    const { work, attempt } = claimed;
 
     const companyId = cleanString(event.params.companyId || work.companyId);
     const serviceStopId = cleanString(work.serviceStopId || event.params.workId);
     const serviceStopRef = db.collection("companies").doc(companyId).collection("serviceStops").doc(serviceStopId);
+    const finishWork = (workPatch, stopPatch, pay) => finishCompletionWork(workRef, serviceStopRef, requestId, attempt, workPatch, stopPatch, pay);
 
     try {
       const serviceStopDoc = await serviceStopRef.get();
       if (!serviceStopDoc.exists) {
-        await workRef.set({
-          status: "error",
-          errorMessages: ["Service stop not found."],
-          finishedAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
+        await finishWork({ status: "error", errorMessages: ["Service stop not found."] });
         return null;
       }
 
       const serviceStop = {
         ...serviceStopDoc.data(),
-        id: cleanString(serviceStopDoc.data()?.id) || serviceStopDoc.id,
+        id: serviceStopDoc.id,
         companyId,
       };
 
-      await require("./serviceOnboardingGate").assertServiceOnboardingReady({get: ref => ref.get()}, db, companyId, serviceStop);
-
-      if (
-        requestId &&
-        cleanString(serviceStop.completionWorkRequestId) &&
-        cleanString(serviceStop.completionWorkRequestId) !== requestId
-      ) {
-        await workRef.set({
-          status: "skipped",
-          skippedReason: "Stale completion request.",
-          finishedAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
+      if (serviceStop.completionWorkRequestId !== requestId || !isFinishedServiceStop(serviceStop)) {
+        const reason = "This completion request is stale or the service stop was reopened.";
+        await finishWork({ status: "skipped", skippedReason: reason }, {
+          completionWorkStatus: "skipped", completionWorkErrorMessages: [reason],
+        });
         return null;
       }
 
-      if (!isFinishedServiceStop(serviceStop)) {
-        await Promise.all([
-          workRef.set({
-            status: "skipped",
-            skippedReason: "Service stop is no longer finished.",
-            finishedAt: FieldValue.serverTimestamp(),
-            updatedAt: FieldValue.serverTimestamp(),
-          }, { merge: true }),
-          serviceStopRef.set({
-            completionWorkStatus: "skipped",
-            completionWorkProcessedAt: FieldValue.serverTimestamp(),
-            completionWorkErrorMessages: ["Service stop is no longer finished."],
-          }, { merge: true }),
-        ]);
-        return null;
-      }
+      await assertServiceOnboardingReady({ get: ref => ref.get() }, db, companyId, serviceStop);
 
-      const shouldSendServiceReport = work.sendServiceReport !== false;
+      const fromPayroll = work.source === PAYROLL_COMPLETION_SOURCE;
+      const shouldSendServiceReport = !fromPayroll && work.sendServiceReport !== false;
       const steps = [
         runCompletionStep("activeRoute", () => syncActiveRouteCounters({ companyId, serviceStopId })),
-        runCompletionStep("payroll", () => generatePayForFinishedStop({ companyId, serviceStop })),
+        runCompletionStep("payroll", async () => {
+          if (fromPayroll) await workOfferProgress.reconcile(companyId, serviceStop.workOfferId || serviceStop.payrollAgreement?.offerId);
+          return payroll.reconcileStop(companyId, serviceStopId, { includeLineItems: fromPayroll });
+        }),
       ];
 
       if (shouldSendServiceReport) {
@@ -324,48 +334,38 @@ exports.processServiceStopCompletionWork = onDocumentWritten(
         .map((step) => `${step.name}: ${step.error.message}`);
       const stepResultMap = Object.fromEntries(stepResults.map((step) => [step.name, step.result || step.error]));
       const status = errors.length > 0 ? "completedWithErrors" : "completed";
+      const pay = fromPayroll && stepResultMap.payroll?.lineItems ? stepResultMap.payroll : null;
+      if (pay) {
+        const { lineItems, ...totals } = pay;
+        stepResultMap.payroll = totals;
+      }
 
-      await Promise.all([
-        serviceStopRef.set({
-          completionWorkStatus: status,
-          completionWorkProcessedAt: FieldValue.serverTimestamp(),
-          completionWorkErrorMessages: errors,
-          serviceReportLastResult: stepResultMap.serviceReportEmail || null,
-          payrollLastProcessedAt: FieldValue.serverTimestamp(),
-          payrollLastResult: stepResultMap.payroll || null,
-          activeRouteLastSyncResult: stepResultMap.activeRoute || null,
-        }, { merge: true }),
-        workRef.set({
-          status,
-          result: stepResultMap,
-          errorMessages: errors,
-          finishedAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true }),
-      ]);
+      await finishWork({ status, result: stepResultMap, errorMessages: errors }, {
+        completionWorkStatus: status,
+        completionWorkErrorMessages: errors,
+        serviceReportLastResult: stepResultMap.serviceReportEmail || null,
+        payrollLastProcessedAt: FieldValue.serverTimestamp(),
+        payrollLastResult: stepResultMap.payroll || null,
+        activeRouteLastSyncResult: stepResultMap.activeRoute || null,
+      }, pay);
 
       return null;
     } catch (error) {
       console.error("[serviceStopCompletion][processServiceStopCompletionWork]", error);
 
       const message = error.message || String(error);
-      await Promise.all([
-        workRef.set({
-          status: "error",
-          errorMessages: [message],
-          finishedAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true }),
-        serviceStopRef.set({
-          completionWorkStatus: "error",
-          completionWorkProcessedAt: FieldValue.serverTimestamp(),
-          completionWorkErrorMessages: [message],
-        }, { merge: true }),
-      ]);
+      await finishWork({ status: "error", errorMessages: [message] }, {
+        completionWorkStatus: "error",
+        completionWorkErrorMessages: [message],
+      });
 
       return null;
     }
   }
+);
+
+exports.managePayrollStopCompletion = require("firebase-functions/v2/https").onCall(
+  { timeoutSeconds: 120 }, createPayrollStopCompletion(db, { payroll, requirePhoto, serverTimestamp: FieldValue.serverTimestamp })
 );
 
 exports.reconcileServiceStopPayroll = onDocumentWritten({ document: "companies/{companyId}/serviceStops/{serviceStopId}", timeoutSeconds: 540, retry: true }, payroll.onStopWrite);

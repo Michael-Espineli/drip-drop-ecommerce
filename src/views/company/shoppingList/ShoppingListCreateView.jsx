@@ -36,6 +36,7 @@ import {
     getProductDisplayName,
     getProductSellPriceCents,
     isProductAvailableForPartPurchase,
+    isMergedCatalogRecord,
     productCatalogCollectionRef,
 } from "../../../utils/productCatalog";
 
@@ -286,7 +287,7 @@ const ShoppingListCreateView = () => {
             setCompanyUserList(companyUsers);
             setCustomerList(customers);
             setJobList(jobs);
-            setDbItemList(items);
+            setDbItemList(items.filter(item => !isMergedCatalogRecord(item)));
         } catch (error) {
             console.log("Error loading selector data");
             console.log(error);

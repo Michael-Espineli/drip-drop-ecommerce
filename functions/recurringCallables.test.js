@@ -125,3 +125,163 @@ test('actual recurring creation reads setup-era plural defaults without moving s
   assert.equal(tasks.length, 1); assert.equal(tasks[0][1].taskGroupTaskId, 'brush');
   assert.equal(memory.records.has(c + '/settings/taskGroup/taskGroup/com_set_tg_recurring_service_stops'), false);
 });
+
+const { calendarDate, dateKey } = require('./routeState');
+const routeZone = 'America/Los_Angeles';
+const routeDate = key => calendarDate(key, routeZone);
+const routeRecord = (collection, id) => memory.records.get(`${c}/${collection}/${id}`);
+
+function currentWeekFixture(context, opts = {}) {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date(opts.now || '2026-11-05T20:00:00Z') });
+  fixture();
+  memory.set(c, { ownerId: 'owner', timeZone: routeZone });
+  memory.set(c + '/companyUsers/other', { userId: 'other', userName: 'Other Tech', status: 'Active' });
+  memory.set(c + '/recurringServiceStop/rss', {
+    ...rss, day: 'Friday', daysOfWeek: 'Friday', startDate: routeDate(opts.start || '2026-10-02'),
+    lastCreated: routeDate('2026-11-13'), tech: 'Tech', frequency: opts.frequency || 'Weekly',
+  });
+  const stop = (date, fields = {}) => ({
+    serviceDate: routeDate(date), techId: 'tech', tech: 'Tech', recurringServiceStopId: 'rss',
+    operationStatus: 'Not Finished', ...fields,
+  });
+  memory.set(c + '/serviceStops/current', stop('2026-11-06', opts.current));
+  memory.set(c + '/serviceStops/future', stop('2026-11-13'));
+  memory.set(c + '/serviceStops/current/tasks/task', { workerId: 'tech', status: 'Scheduled', contractedRate: 500 });
+  memory.set(c + '/activeRoutes/friday', {
+    date: routeDate('2026-11-06'), techId: 'tech', serviceStopsIds: ['current'],
+    order: [{ serviceStopId: 'current', order: 1 }], totalStops: 1, finishedStops: 0, status: 'Did Not Start',
+  });
+  memory.set(c + '/recurringRoutes/route', {
+    day: 'Friday', techId: 'tech', rssIds: ['rss'], order: [{ recurringServiceStopId: 'rss', order: 1 }],
+  });
+  return { stop };
+}
+
+const routeRequests = {
+  permanentMove: ['updateServiceStopDayPermanently', {
+    serviceStopList: [{ id: 'current' }], newDay: 'Monday', newTech: { userId: 'other' },
+  }],
+  assignment: ['updateRecurringServiceStopsRouteAssignment', {
+    recurringServiceStopIds: ['rss'], targetDay: 'Monday', targetTechId: 'other',
+  }],
+  update: ['updateRecurringServiceStop', { recurringServiceStop: {
+    id: 'rss', day: 'Monday', daysOfWeek: 'Monday', techId: 'other',
+  } }],
+};
+function routeCall(path, currentWeekReview) {
+  const [name, payload] = routeRequests[path];
+  return general[name].run(request({ ...payload, ...(currentWeekReview && { currentWeekReview }) }, 'owner'));
+}
+const routePreview = path => routeCall(path, { action: 'preview' });
+const routeCommit = (path, preview, choices, requestId = 'schedule-change') =>
+  routeCall(path, { action: 'commit', previewId: preview.previewId, requestId, choices });
+
+for (const path of Object.keys(routeRequests)) {
+  test(`${path} requires review and keeps Friday while starting Monday of the immediately following week`, async context => {
+    currentWeekFixture(context);
+    const before = [...memory.records];
+    await assert.rejects(routeCall(path), { code: 'failed-precondition' });
+    const preview = await routePreview(path);
+    assert.deepEqual([...memory.records], before);
+    assert.equal(preview.weekStart, '2026-11-01');
+    assert.deepEqual(preview.schedules[0].nextDates, ['2026-11-09', '2026-11-16', '2026-11-23']);
+    assert.deepEqual(preview.schedules[0].visits.map(row => row.id), ['current']);
+    await assert.rejects(routeCommit(path, preview, []), { code: 'failed-precondition' });
+    assert.deepEqual([...memory.records], before);
+    const result = await routeCommit(path, preview, [{ stopId: 'current', action: 'keep' }]);
+    assert.equal(result.success, true);
+    assert.equal(dateKey(routeRecord('serviceStops', 'current').serviceDate, routeZone), '2026-11-06');
+    assert.equal(routeRecord('serviceStops', 'current').techId, 'tech');
+    assert.deepEqual(routeRecord('activeRoutes', 'friday').serviceStopsIds, ['current']);
+    assert.equal(dateKey(routeRecord('serviceStops', 'future').serviceDate, routeZone), '2026-11-09');
+    assert.equal(routeRecord('serviceStops', 'future').techId, 'other');
+    assert.deepEqual(routeRecord('activeRoutes', 'com_ar_20261109_other').serviceStopsIds, ['future']);
+    assert.equal(routeRecord('recurringServiceStop', 'rss').day, 'Monday');
+    const again = await routeCommit(path, preview, [{ stopId: 'current', action: 'keep' }]);
+    assert.equal(again.alreadyApplied, true);
+    assert.equal(routeRecord('serviceStops', 'future').assignmentRevision, 1);
+  });
+}
+
+test('Move uses the requested day and separate technician, keeping the visit, tasks, and correct route counters', async context => {
+  currentWeekFixture(context);
+  const preview = await routePreview('permanentMove');
+  await assert.rejects(routeCommit('permanentMove', preview, [{ stopId: 'current', action: 'move', dateKey: '2026-11-09', techId: 'other' }]), { code: 'invalid-argument' });
+  await routeCommit('permanentMove', preview, [{ stopId: 'current', action: 'move', dateKey: '2026-11-05', techId: 'other' }]);
+  const current = routeRecord('serviceStops', 'current');
+  assert.equal(dateKey(current.serviceDate, routeZone), '2026-11-05');
+  assert.equal(current.recurringServiceStopDateKey, '2026-11-06');
+  assert.equal(current.techId, 'other');
+  assert.equal(routeRecord('serviceStops', 'current/tasks/task').workerId, 'other');
+  assert.equal(routeRecord('serviceStops', 'current/tasks/task').contractedRate, 500);
+  assert.equal(routeRecord('activeRoutes', 'friday').totalStops, 0);
+  assert.deepEqual(routeRecord('activeRoutes', 'com_ar_20261105_other').serviceStopsIds, ['current']);
+});
+
+test('overdue work appears and completed visits do not require a choice or create a replacement', async context => {
+  const { stop } = currentWeekFixture(context, { current: { operationStatus: 'Finished' } });
+  memory.set(c + '/serviceStops/overdue', stop('2026-11-03'));
+  const preview = await routePreview('assignment');
+  assert.deepEqual(preview.schedules[0].visits.map(row => [row.id, row.state]), [['current', 'history'], ['overdue', 'open']]);
+  await routeCommit('assignment', preview, [{ stopId: 'overdue', action: 'keep' }]);
+  assert.equal(routeRecord('serviceStops', 'current').operationStatus, 'Finished');
+  assert.equal(dateKey(routeRecord('serviceStops', 'overdue').serviceDate, routeZone), '2026-11-03');
+});
+
+test('a stale preview cannot overwrite a concurrent completion, and a closed destination leaves no partial save', async context => {
+  currentWeekFixture(context);
+  const preview = await routePreview('assignment');
+  memory.set(c + '/serviceStops/current', { operationStatus: 'In Progress' }, { merge: true });
+  await assert.rejects(routeCommit('assignment', preview, [{ stopId: 'current', action: 'keep' }]), /Refresh the review/i);
+  const retry = await routePreview('assignment');
+  memory.set(c + '/activeRoutes/closed', { date: routeDate('2026-11-09'), techId: 'other', status: 'Finished', endTime: routeDate('2026-11-09') });
+  const before = [...memory.records];
+  await assert.rejects(routeCommit('assignment', retry, []), /destination route is closed/i);
+  assert.deepEqual([...memory.records], before);
+});
+
+test('the rolling worker honors a reviewed biweekly off week and does not recreate past service or reset its tasks', async context => {
+  currentWeekFixture(context, { frequency: 'Bi-Weekly', start: '2026-10-02' });
+  memory.records.delete(c + '/serviceStops/current');
+  memory.records.delete(c + '/serviceStops/current/tasks/task');
+  const preview = await routePreview('assignment');
+  assert.deepEqual(preview.schedules[0].visits, []);
+  assert.deepEqual(preview.schedules[0].nextDates, ['2026-11-09', '2026-11-23', '2026-12-07']);
+  await routeCommit('assignment', preview, []);
+  const payload = { data: { companyId: 'company', recurringServiceStopId: 'rss' } };
+  await timed.processRecurringServiceStopTask.run(payload);
+  await timed.processRecurringServiceStopTask.run(payload);
+  const dates = [...memory.records].filter(([path, stop]) => path.startsWith(c + '/serviceStops/') && stop.recurringServiceStopId === 'rss')
+    .map(([, stop]) => dateKey(stop.serviceDate, routeZone)).sort();
+  assert.deepEqual(dates, ['2026-11-09', '2026-11-23']);
+});
+
+test('a missing expected visit blocks a route change instead of pretending there is no visit due', async context => {
+  currentWeekFixture(context);
+  memory.records.delete(c + '/serviceStops/current');
+  const preview = await routePreview('assignment');
+  assert.match(preview.schedules[0].conflict, /missing/i);
+  await assert.rejects(routeCommit('assignment', preview, []), /resolve the missing or duplicate visit/i);
+  assert.equal(routeRecord('recurringServiceStop', 'rss').day, 'Friday');
+});
+
+test('an in-flight generator using the old schedule cannot create a stale visit or advance the new cursor', async context => {
+  currentWeekFixture(context);
+  memory.records.delete(c + '/serviceStops/future');
+  memory.set(c + '/recurringServiceStop/rss', {
+    lastCreated: routeDate('2026-11-06'), routeScheduleRevision: 1,
+    type: 'Weekly Service', typeId: 'weekly', typeImage: 'figure.pool.swim', category: 'Route',
+  }, { merge: true });
+  memory.beforeCommit = () => memory.set(c + '/recurringServiceStop/rss', {
+    routeScheduleRevision: 2, day: 'Monday',
+    routeScheduleAnchorDateKey: '2026-11-09', routeScheduleEffectiveDateKey: '2026-11-08',
+    routeScheduleTimeZone: routeZone, lastCreated: null,
+  }, { merge: true });
+  const payload = { data: { companyId: 'company', recurringServiceStopId: 'rss' } };
+  await timed.processRecurringServiceStopTask.run(payload);
+  assert.equal(routeRecord('recurringServiceStop', 'rss').lastCreated, null);
+  assert.equal([...memory.records.values()].filter(stop => stop.recurringServiceStopId === 'rss').length, 1);
+  await timed.processRecurringServiceStopTask.run(payload);
+  const dates = [...memory.records.values()].filter(stop => stop.recurringServiceStopId === 'rss').map(stop => dateKey(stop.serviceDate, routeZone)).sort();
+  assert.deepEqual(dates, ['2026-11-06', '2026-11-09', '2026-11-16', '2026-11-23', '2026-11-30']);
+});

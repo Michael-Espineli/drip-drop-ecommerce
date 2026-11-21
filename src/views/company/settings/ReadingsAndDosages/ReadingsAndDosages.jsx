@@ -18,6 +18,7 @@ import {
 import { Context } from '../../../../context/AuthContext';
 import { toast } from 'react-hot-toast';
 import { appConfirm } from '../../../../utils/appDialog';
+import { isMergedCatalogRecord } from '../../../../utils/productCatalog';
 
 const emptyReadingForm = {
     name: '',
@@ -565,7 +566,7 @@ const ReadingsAndDosages = () => {
                 orderBy('name')
             ));
             setDatabaseItems(
-                snapshot.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+                snapshot.docs.map((itemDoc) => ({ ...itemDoc.data(), id: itemDoc.id })).filter(item => !isMergedCatalogRecord(item))
             );
             setDatabaseItemsLoaded(true);
         } catch (error) {

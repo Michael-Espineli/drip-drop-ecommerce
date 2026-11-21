@@ -6,6 +6,7 @@ import {
   isShoppingListStatusClosed,
   normalizeShoppingListStatus,
   shoppingItemNeedsAction,
+  shoppingBillingIsRecordedSeparately,
 } from "./shoppingListStatus";
 
 export {
@@ -44,14 +45,6 @@ const linkedJobIdFrom = (shoppingItem = {}, purchasedItem = {}, preferPurchasedC
   preferPurchasedContext
     ? firstString(purchasedItem.jobId, purchasedItem.workOrderId, purchasedItem.assignedJobId, shoppingItem.jobId, shoppingItem.workOrderId)
     : firstString(shoppingItem.jobId, shoppingItem.workOrderId, purchasedItem.jobId, purchasedItem.workOrderId, purchasedItem.assignedJobId);
-
-const jobBillingIsInvoiced = (jobData = {}) =>
-  truthyBoolean(
-    jobData.invoiced,
-    isInvoicedValue(jobData.billingStatus),
-    isInvoicedValue(jobData.invoiceStatus),
-    isInvoicedValue(jobData.status)
-  );
 
 const firestoreDocRef = (db, companyId, collectionName, itemId) =>
   doc(db, "companies", companyId, collectionName, itemId);
@@ -105,26 +98,13 @@ export const buildShoppingPurchaseSyncPayloads = ({
   preferPurchasedContext = false,
   jobData = {},
 } = {}) => {
-  const linkedJobIsInvoiced = jobBillingIsInvoiced(jobData);
-  const nextInvoiced =
-    linkedJobIsInvoiced
-      ? true
-      : invoiced === undefined
-      ? truthyBoolean(
-          purchasedItem.invoiced,
-          purchasedItem.jobInvoiced,
-          shoppingItem.invoiced,
-          isInvoicedValue(purchasedItem.invoiceStatus),
-          isInvoicedValue(purchasedItem.jobBillingStatus),
-          isInvoicedValue(shoppingItem.invoiceStatus),
-          isInvoicedValue(shoppingItem.status),
-          isInvoicedValue(jobData.billingStatus),
-          isInvoicedValue(jobData.invoiceStatus),
-          isInvoicedValue(jobData.status)
-        )
-      : Boolean(invoiced);
-
   const jobId = firstString(linkedJobIdFrom(shoppingItem, purchasedItem, preferPurchasedContext), jobData.id);
+  const offlineSource = shoppingItem.offlineBillingStatus ? shoppingItem : purchasedItem.offlineBillingStatus ? purchasedItem : null;
+  const nextInvoiced = !shoppingItem.materialUsageOnly && (Boolean(offlineSource) || (jobId
+    ? truthyBoolean(shoppingItem.invoiced, purchasedItem.invoiced, isInvoicedValue(shoppingItem.status))
+    : invoiced ?? truthyBoolean(purchasedItem.invoiced, shoppingItem.invoiced,
+      isInvoicedValue(purchasedItem.invoiceStatus), isInvoicedValue(shoppingItem.invoiceStatus), isInvoicedValue(shoppingItem.status))));
+  const invoiceStatus = offlineSource?.invoiceStatus || (nextInvoiced ? "Invoiced" : "");
   const jobName = preferPurchasedContext
     ? firstString(purchasedItem.jobName, purchasedItem.jobInternalId, shoppingItem.jobName, shoppingItem.jobInternalId, jobData.jobName, jobData.internalId)
     : firstString(shoppingItem.jobName, shoppingItem.jobInternalId, purchasedItem.jobName, purchasedItem.jobInternalId, jobData.jobName, jobData.internalId);
@@ -186,7 +166,8 @@ export const buildShoppingPurchaseSyncPayloads = ({
   const existingShoppingStatus = shoppingItem.status || "";
   const existingShoppingStatusIsInvoiced = isInvoicedValue(existingShoppingStatus);
   const linkedShoppingStatus =
-    nextInvoiced
+    shoppingItem.installedAt ? "Installed"
+      : nextInvoiced && !jobId && !shoppingBillingIsRecordedSeparately(shoppingItem)
       ? SHOPPING_LIST_INVOICED_STATUS
       : existingShoppingStatusIsInvoiced
         ? purchasedItemId ? "Purchased" : ""
@@ -199,9 +180,15 @@ export const buildShoppingPurchaseSyncPayloads = ({
   const purchasePayload = {
     shoppingListItemId: shoppingItemId,
     invoiced: nextInvoiced,
-    invoiceStatus: nextInvoiced ? "Invoiced" : "",
+    invoiceStatus,
     status: nextInvoiced ? "Invoiced" : jobId ? "Connected to Job" : purchasedItem.status || "",
   };
+
+  if (offlineSource) {
+    for (const field of ["offlineBillingStatus", "offlineCashAmountCents", "cashReceivedAt", "externalInvoiceReference", "offlineBillingRecordedAt", "offlineBillingRecordedByUserId"]) {
+      if (offlineSource[field] !== undefined) purchasePayload[field] = offlineSource[field];
+    }
+  }
 
   if (jobId) {
     purchasePayload.jobId = jobId;
@@ -211,7 +198,8 @@ export const buildShoppingPurchaseSyncPayloads = ({
     purchasePayload.assignmentStatus = "assignedToJob";
     purchasePayload.billingOwner = "job";
     purchasePayload.jobBillingStatus = nextInvoiced ? "invoiced" : nonInvoicedJobBillingStatus;
-    purchasePayload.jobBillable = Boolean(purchasedItem.jobBillable ?? purchasedItem.billable);
+    purchasePayload.jobBillable = !shoppingItem.materialUsageOnly && Boolean(purchasedItem.jobBillable ?? purchasedItem.billable);
+    if (shoppingItem.materialUsageOnly) purchasePayload.materialUsageOnly = true;
     purchasePayload.jobBillingRate = purchasedItem.jobBillingRate || purchasedItem.billingRate || purchasedItem.price || 0;
   } else if (purchasePayload.billingOwner !== "job") {
     purchasePayload.billingOwner = purchasedItem.billingOwner || "purchasedItem";
@@ -235,7 +223,7 @@ export const buildShoppingPurchaseSyncPayloads = ({
   if (productName && !purchasedItem.productName) purchasePayload.productName = productName;
   if (databaseItemId && !purchasedItem.itemId) purchasePayload.itemId = databaseItemId;
 
-  if (nextInvoiced) {
+  if (nextInvoiced && invoiceId) {
     purchasePayload.invoiceId = invoiceId;
     purchasePayload.invoiceRef = invoiceId;
     purchasePayload.invoiceType = invoiceType || "job";
@@ -244,7 +232,7 @@ export const buildShoppingPurchaseSyncPayloads = ({
   const shoppingPayload = {
     purchasedItem: purchasedItemId,
     invoiced: nextInvoiced,
-    invoiceStatus: nextInvoiced ? "Invoiced" : "",
+    invoiceStatus,
     status: linkedShoppingStatus,
     needsAction: shoppingItemNeedsAction(linkedShoppingStatus),
   };
@@ -275,7 +263,7 @@ export const buildShoppingPurchaseSyncPayloads = ({
   if (!productId && databaseItemName && !shoppingItem.dbItemName) shoppingPayload.dbItemName = databaseItemName;
   if (!shoppingItem.name && (productName || purchasedItem.name)) shoppingPayload.name = productName || purchasedItem.name;
 
-  if (nextInvoiced) {
+  if (nextInvoiced && invoiceId) {
     shoppingPayload.invoiceId = invoiceId;
     shoppingPayload.invoiceRef = invoiceId;
     shoppingPayload.invoiceType = invoiceType || "job";
@@ -328,7 +316,12 @@ export const syncLinkedShoppingPurchase = async ({
   const now = Timestamp.now();
   const linkedJobId = linkedJobIdFrom(shoppingItem || {}, purchasedItem || {}, preferPurchasedContext);
   const linkedJob = linkedJobId ? await safeGetDocData(jobDocRef(db, companyId, linkedJobId)) : null;
-  const effectiveInvoiced = jobBillingIsInvoiced(linkedJob || {}) ? true : invoiced;
+  const effectiveInvoiced = linkedJobId ? undefined : invoiced;
+
+  if (linkedJobId && ((shoppingItem?.jobId && purchasedItem?.jobId && shoppingItem.jobId !== purchasedItem.jobId) ||
+    (purchasedItem?.returned || purchasedItem?.personalPurchase))) {
+    throw new Error("Review the purchase assignment before matching this job material.");
+  }
 
   if (previousPurchasedItemId && previousPurchasedItemId !== resolvedPurchasedItemId) {
     const previousPurchaseRef = purchaseDocRef(db, companyId, previousPurchasedItemId);

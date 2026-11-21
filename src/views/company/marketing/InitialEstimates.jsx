@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { displayRecordReference } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
@@ -418,23 +419,22 @@ const InitialEstimates = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-5">
-        <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <Link to="/company/leads" className="app-back-link">&larr; Back to Leads</Link>
-            <h1 className="mt-3 text-3xl font-bold text-slate-950">Initial Estimates</h1>
-            <p className="mt-2 max-w-3xl text-sm text-slate-600">
-              Initial surveys and estimate visits, including ones that still need to be connected or converted into a service agreement.
-            </p>
-          </div>
-          <Link
-            to="/company/leads"
-            className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-          >
-            View Leads
-          </Link>
-        </header>
+        <WorkspaceHeader
+          title="Initial Estimates"
+          eyebrow="Company sales"
+          description="Initial surveys and estimate visits, including ones that still need to be connected or converted into a service agreement."
+          backLink={{ to: "/company/leads", label: "Back to Leads" }}
+          actions={
+            <Link
+              to="/company/leads"
+              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+            >
+              View Leads
+            </Link>
+          }
+        />
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard icon={FaClipboardCheck} label="Awaiting Agreement" value={awaitingAgreementCount} helper="Unconverted initial surveys" tone={awaitingAgreementCount ? 'amber' : 'emerald'} />

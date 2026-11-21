@@ -3,6 +3,8 @@ const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { onCall } = require('firebase-functions/v2/https');
 const { companyActor, documentId, fail } = require('./companyActor');
 const { billingActor } = require('./billingAccess');
+const { syncJobMaterialInvoice } = require('./jobMaterialInvoice');
+const { customerBillingEnabled } = require('./partBillingSettings');
 const { hash, key, money } = require('./billingMath');
 
 const AUTO_SEND_FIELD = 'partApprovalAutoSendInvoices';
@@ -58,7 +60,7 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
       if (approvalSnap && itemSnap?.exists && (approvalIdFor(item) !== approvalId || item.customerId && item.customerId !== approval.customerId)) {
         fail('failed-precondition', 'Approval and shopping customer links must agree before billing.');
       }
-      if (!approvalSnap && (!itemSnap?.exists || item.autoInvoiceOnInstall !== true || key(item.status) !== 'installed')) {
+      if (item.materialUsageOnly === true || (!approvalSnap && (!itemSnap?.exists || item.autoInvoiceOnInstall !== true || key(item.status) !== 'installed'))) {
         return { status: 'skipped', reason: 'not_eligible' };
       }
       const source = approvalSnap ? approval : item;
@@ -76,9 +78,16 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
         if (invoices.some(snap => !snap.exists || snap.data().billingScope === 'approvedPart' || snap.data().companyId !== companyId || snap.data().jobId !== jobId || snap.data().customerId !== source.customerId) || links.length > 1) {
           return needsReview('This job material has separate billing. Review it in Sales and include the remaining products and services on one job invoice.');
         }
+        if (invoices.length && invoices.some(snap => issued(snap.data()))) return { status: 'existing', reason: 'job_invoice', invoiceId: links[0] };
         const fields = { billingAutomationStatus: 'awaitingJobInvoice', billingAutomationError: '' };
         for (const snap of targets) patch(tx, snap, fields);
         return { status: 'waiting', reason: 'job_invoice', shoppingPayload: fields };
+      }
+      if (targets.some(snap => snap.data().offlineBillingStatus)) return { status: 'skipped', reason: 'handled_offline' };
+      if (!customerBillingEnabled(companySnap.data(), settingsSnap.data())) {
+        const fields = { billingAutomationStatus: 'awaitingExternalBilling', billingAutomationError: '' };
+        for (const snap of targets) patch(tx, snap, fields);
+        return { status: 'waiting', reason: 'billing_disabled', shoppingPayload: fields };
       }
       if (source.manuallyInvoiced || source.invoiceType === 'manual' || source.invoiced && !invoiceIdFor(source)) {
         return needsReview('Previously marked invoiced without a sales invoice. Review existing billing before creating another invoice.');
@@ -181,6 +190,88 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
     return result;
   }
 
+  async function recordOffline({ companyId, approvalId = '', shoppingItemId = '', action, reference, amountCents, auth }) {
+    documentId(companyId, 'Company');
+    if (!['externalInvoice', 'cashReceived'].includes(action)) fail('invalid-argument', 'Choose an offline billing action.');
+    const cash = action === 'cashReceived';
+    const invoiceReference = text(reference).slice(0, 200);
+    if (cash && (!Number.isSafeInteger(amountCents) || amountCents <= 0 || amountCents > 999999999999)) {
+      fail('invalid-argument', 'Enter the cash amount received.');
+    }
+    if (!cash && !invoiceReference) fail('invalid-argument', 'Enter the external invoice reference.');
+    return db.runTransaction(async tx => {
+      const actor = await billingActor(db, tx, companyId, auth?.uid);
+      let item = shoppingItemId ? await tx.get(shoppingRef(companyId, documentId(shoppingItemId, 'Shopping item'))) : null;
+      if (item && !item.exists) fail('not-found', 'Shopping item not found.');
+      const linkedApprovalId = approvalIdFor(item?.data() || {});
+      if (approvalId && linkedApprovalId && approvalId !== linkedApprovalId) fail('failed-precondition', 'This item belongs to a different approval.');
+      const id = approvalId || linkedApprovalId;
+      const approval = id ? await tx.get(db.collection('customerPartApprovals').doc(documentId(id, 'Approval'))) : null;
+      const source = approval?.data() || item?.data();
+      if (!source || approval && (source.companyId !== companyId || !approved(source))) {
+        fail('failed-precondition', 'Choose an approved part or a standalone shopping item.');
+      }
+      if (approval) {
+        const linkedId = text(source.shoppingListItemId || source.shoppingItemId);
+        if (item && item.id !== linkedId) fail('failed-precondition', 'The approval and shopping item links disagree.');
+        if (!item && linkedId) item = await tx.get(shoppingRef(companyId, documentId(linkedId, 'Shopping item')));
+        if (item?.exists && approvalIdFor(item.data()) !== approval.id) fail('failed-precondition', 'The approval and shopping item links disagree.');
+      }
+      const shopping = item?.data() || {};
+      if (!source.customerId || [source, shopping].some(row => jobIdFor(row) || row.materialUsageOnly || row.returned || row.personalPurchase)) {
+        fail('failed-precondition', 'Record offline billing here for a standalone customer part.');
+      }
+      const purchase = shopping.purchasedItem
+        ? await tx.get(companyRef(companyId).collection('purchasedItems').doc(documentId(shopping.purchasedItem, 'Purchase'))) : null;
+      if (purchase?.exists && (purchase.data().shoppingListItemId && purchase.data().shoppingListItemId !== item.id ||
+          jobIdFor(purchase.data()) || purchase.data().returned || purchase.data().personalPurchase)) {
+        fail('failed-precondition', 'Review the linked purchase before recording billing.');
+      }
+
+      const targets = [approval, item, purchase].filter(snap => snap?.exists);
+      const alreadyRecorded = source.offlineBillingStatus;
+      if (alreadyRecorded === action && (cash ? source.offlineCashAmountCents === amountCents : source.externalInvoiceReference === invoiceReference)) return { status: action };
+      const linkedInvoiceIds = [...new Set(targets.map(snap => invoiceIdFor(snap.data())).filter(Boolean))];
+      if (alreadyRecorded || linkedInvoiceIds.length > 1 || targets.some(snap => {
+        const row = snap.data();
+        return row.invoiced || row.offlineBillingStatus || row.recurringPartChargeId;
+      })) fail('failed-precondition', 'Review the existing billing record in Sales before recording an offline transaction.');
+
+      const timestamp = now();
+      if (linkedInvoiceIds.length) {
+        const invoiceId = documentId(linkedInvoiceIds[0], 'Invoice');
+        const [invoiceSnap, queue] = await Promise.all([
+          tx.get(db.collection('salesInvoices').doc(invoiceId)),
+          tx.get(db.collection('billingEmailQueue').doc(`part_${hash(invoiceId)}`)),
+        ]);
+        const invoice = invoiceSnap.data();
+        if (!invoice || invoice.companyId !== companyId || invoice.billingScope !== 'approvedPart' ||
+            (approval ? invoice.partApprovalRequestId !== approval.id : invoice.shoppingListItemId !== item?.id) ||
+            invoice.status !== 'draft' || issued(invoice) || invoice.amountPaidCents || invoice.stripeInvoiceId || invoice.stripePaymentIntentId ||
+            invoice.billingMutation || invoice.paymentProcessing || invoice.automationEmailStatus === 'sending' || queue.data()?.status === 'sending') {
+          fail('failed-precondition', 'Review the existing invoice in Sales before recording this part offline.');
+        }
+        tx.set(invoiceSnap.ref, {
+          status: 'void', amountDueCents: 0, autoSendSuppressed: true, voidedAt: timestamp, voidedByUserId: actor.uid,
+          voidReason: cash ? 'Payment recorded in cash' : 'Invoiced externally', updatedAt: timestamp,
+        }, { merge: true });
+        if (queue.exists) tx.set(queue.ref, { status: 'cancelled', updatedAt: timestamp }, { merge: true });
+        tx.set(db.collection('salesInvoiceEvents').doc(`part_offline_${hash(invoiceId)}`), {
+          companyId, invoiceId, action: 'voidForOfflinePartBilling', actorUserId: actor.uid, createdAt: timestamp,
+        });
+      }
+      for (const snap of targets) patch(tx, snap, {
+        offlineBillingStatus: action, billingAutomationStatus: action, billingAutomationError: '',
+        autoInvoiceOnInstall: false, invoiced: true, invoiceStatus: cash ? 'paid' : 'external',
+        invoiceType: 'manual',
+        ...(linkedInvoiceIds.length ? { invoiceId: '', salesInvoiceId: '', invoiceRef: '', offlinePreviousDraftId: linkedInvoiceIds[0] } : {}),
+        offlineBillingRecordedAt: timestamp, offlineBillingRecordedByUserId: actor.uid,
+        ...(cash ? { offlineCashAmountCents: amountCents, cashReceivedAt: timestamp } : { externalInvoiceReference: invoiceReference }),
+      });
+      return { status: action };
+    });
+  }
+
   async function processEmail(queueId) {
     const ref = db.collection('billingEmailQueue').doc(documentId(queueId, 'Delivery'));
     const reserved = await db.runTransaction(async tx => {
@@ -188,7 +279,10 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
       if (!queue.exists || data.source !== 'partApproval' || data.status !== 'pending') return null;
       const invoiceRef = db.collection('salesInvoices').doc(documentId(data.invoiceId, 'Invoice'));
       const invoiceSnap = await tx.get(invoiceRef), invoice = invoiceSnap.data();
-      const settings = await tx.get(companyRef(data.companyId).collection('settings').doc('companyWide'));
+      const [company, settings] = await Promise.all([
+        tx.get(companyRef(data.companyId)),
+        tx.get(companyRef(data.companyId).collection('settings').doc('companyWide')),
+      ]);
       const approvalSnap = invoice?.partApprovalRequestId ? await tx.get(db.collection('customerPartApprovals').doc(invoice.partApprovalRequestId)) : null;
       const itemSnap = invoice?.shoppingListItemId ? await tx.get(shoppingRef(data.companyId, invoice.shoppingListItemId, invoice.shoppingCollectionName || 'shoppingList')) : null;
       const item = itemSnap?.data() || {};
@@ -198,7 +292,9 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
         if (invoiceSnap.exists) tx.set(invoiceRef, { automationEmailStatus: 'needsReview', automationEmailError: 'Fulfillment changed before sending. Review this invoice in Sales.', updatedAt: now() }, { merge: true });
         return null;
       }
-      if (!invoiceSnap.exists || invoice.companyId !== data.companyId || settings.data()?.[AUTO_SEND_FIELD] !== true || invoice.autoSendSuppressed || invoice.billingMutation || invoice.paymentProcessing || closed(invoice) || issued(invoice)) {
+      if (!invoiceSnap.exists || invoice.companyId !== data.companyId ||
+          !customerBillingEnabled(company.data(), settings.data()) ||
+          [approvalSnap?.data(), item, purchaseSnap?.data()].some(source => source?.offlineBillingStatus) || settings.data()?.[AUTO_SEND_FIELD] !== true || invoice.autoSendSuppressed || invoice.billingMutation || invoice.paymentProcessing || closed(invoice) || issued(invoice)) {
         tx.set(ref, { status: issued(invoice || {}) ? 'complete' : 'cancelled', updatedAt: now() }, { merge: true }); return null;
       }
       tx.set(ref, { status: 'sending', startedAt: now() }, { merge: true });
@@ -224,7 +320,12 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
     return db.runTransaction(async tx => {
       const invoiceSnap = await tx.get(db.collection('salesInvoices').doc(id));
       const invoice = invoiceSnap.data();
-      if (!invoiceSnap.exists || invoice.billingScope !== 'approvedPart') return;
+      if (!invoiceSnap.exists) return;
+      if (invoice.billingScope === 'job') {
+        await syncJobMaterialInvoice(tx, db, { ...invoice, id }, now);
+        return;
+      }
+      if (invoice.billingScope !== 'approvedPart') return;
       const targets = [];
       if (invoice.partApprovalRequestId) targets.push(await tx.get(db.collection('customerPartApprovals').doc(invoice.partApprovalRequestId)));
       let itemSnap;
@@ -232,7 +333,7 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
       const purchaseId = text(itemSnap?.data()?.purchasedItem);
       if (purchaseId) targets.push(await tx.get(companyRef(invoice.companyId).collection('purchasedItems').doc(documentId(purchaseId, 'Purchase'))));
       for (const snap of targets.filter(snap => snap.exists)) {
-        if (invoiceIdFor(snap.data()) && invoiceIdFor(snap.data()) !== id) continue;
+        if (snap.data().offlineBillingStatus || invoiceIdFor(snap.data()) && invoiceIdFor(snap.data()) !== id) continue;
         if (snap.data().companyId && snap.data().companyId !== invoice.companyId || snap.data().customerId && snap.data().customerId !== invoice.customerId) continue;
         patch(tx, snap, { invoiceId: id, salesInvoiceId: id, invoiceRef: id, invoiceType: 'salesInvoice', invoiceStatus: invoice.status,
           invoiced: issued(invoice), billingAutomationStatus: invoice.automationEmailStatus === 'needsReview' ? 'emailNeedsReview' : issued(invoice) ? 'invoiced' : 'draft', billingAutomationError: invoice.automationEmailError || '' });
@@ -240,7 +341,7 @@ function createPartApprovalBilling(db, { now = () => new Date(), sendInvoice } =
     });
   }
 
-  return { ensure, processEmail, syncInvoice };
+  return { ensure, recordOffline, processEmail, syncInvoice };
 }
 
 const service = () => createPartApprovalBilling(admin.firestore(), { sendInvoice: payload => require('./sendGrid/general').sendSalesInvoiceEmailForAutomation(payload) });
@@ -259,6 +360,7 @@ const reconcileEvent = async (event, options) => {
   }
 };
 exports.createPartApprovalBilling = createPartApprovalBilling;
+exports.recordPartOfflineBilling = onCall({ cors: true }, request => service().recordOffline({ ...request.data, auth: request.auth }));
 exports.ensurePartApprovalInvoice = onCall({ cors: true }, request => service().ensure({ ...request.data, auth: request.auth || { uid: '' }, manualDraft: request.data?.manualDraft === true }));
 exports.reconcilePartApprovalInvoice = onDocumentWritten({ document: 'customerPartApprovals/{approvalId}', retry: true }, event => {
   const data = event.data?.after?.data();

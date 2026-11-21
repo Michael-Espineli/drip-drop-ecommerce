@@ -7,6 +7,7 @@ import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { appConfirm, appPrompt } from "../../../utils/appDialog";
 import JobDetailView from "./JobDetailView";
+import CreateNewServiceStop from "../serviceStops/CreateNewServiceStop";
 import { runWorkCompletionEffects } from "../../../utils/workCompletionEffects";
 
 let mockJob;
@@ -37,24 +38,32 @@ jest.mock("../../components/share/ShareItemButton", () => () => null);
 jest.mock("../../../utils/workCompletionEffects", () => ({ runWorkCompletionEffects: jest.fn(async () => ({})) }));
 jest.mock("firebase/firestore", () => {
   const ref = (first, ...parts) => [typeof first === "string" ? first : "", ...parts].filter(Boolean).join("/");
+  const makeWriter = () => ({
+    update: (ref, data) => mockBatchWrites.push({ type: "update", ref, data }),
+    set: (ref, data) => mockBatchWrites.push({ type: "set", ref, data }),
+    delete: (ref) => mockBatchWrites.push({ type: "delete", ref }),
+    commit: async () => {
+      if (mockBatchError) throw mockBatchError;
+      if (mockBatchCommit) await mockBatchCommit(mockBatchWrites);
+      mockBatchWrites.filter((write) => write.ref.endsWith("workOrders/job-1")).forEach((write) => Object.assign(mockJob, write.data));
+    },
+  });
+  const getDoc = jest.fn();
   return {
     collection: ref, doc: ref,
     query: (path, ...constraints) => ({ path: path.path || path, constraints: [...(path.constraints || []), ...constraints] }),
     where: (...args) => args, orderBy: jest.fn(),
-    getDoc: jest.fn(), getDocs: jest.fn(), updateDoc: jest.fn(), setDoc: jest.fn(), deleteDoc: jest.fn(),
+    getDoc, getDocs: jest.fn(), updateDoc: jest.fn(), setDoc: jest.fn(), deleteDoc: jest.fn(),
     onSnapshot: jest.fn(),
-    serverTimestamp: () => "server-time", Timestamp: { fromDate: (date) => date },
+    serverTimestamp: () => "server-time", Timestamp: { fromDate: (date) => date, now: () => new Date() },
     arrayUnion: jest.fn(), arrayRemove: jest.fn(),
-    writeBatch: () => ({
-      update: (ref, data) => mockBatchWrites.push({ type: "update", ref, data }),
-      set: (ref, data) => mockBatchWrites.push({ type: "set", ref, data }),
-      delete: (ref) => mockBatchWrites.push({ type: "delete", ref }),
-      commit: async () => {
-        if (mockBatchError) throw mockBatchError;
-        if (mockBatchCommit) await mockBatchCommit(mockBatchWrites);
-        mockBatchWrites.filter((write) => write.ref.endsWith("workOrders/job-1")).forEach((write) => Object.assign(mockJob, write.data));
-      },
-    }),
+    writeBatch: makeWriter,
+    runTransaction: async (_db, callback) => {
+      const writer = makeWriter();
+      const result = await callback({ ...writer, get: getDoc });
+      await writer.commit();
+      return result;
+    },
   };
 });
 
@@ -63,12 +72,16 @@ const openJob = async (initialEntry = "/company/jobs/detail/job-1/overview") => 
   await act(async () => { render(
     <MemoryRouter initialEntries={[initialEntry]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Context.Provider value={{ recentlySelectedCompany: "company-1", user: { uid: "user-1" } }}>
-        <Routes><Route path="/company/jobs/detail/:jobId/:section?" element={<JobDetailView />} /></Routes>
+        <Routes>
+          <Route path="/company/jobs/detail/:jobId/:section?" element={<JobDetailView />} />
+          <Route path="/company/serviceStops/createNew/:jobId" element={<CreateNewServiceStop />} />
+        </Routes>
       </Context.Provider>
     </MemoryRouter>
   ); });
-  if (typeof initialEntry === 'string' || initialEntry.pathname.endsWith('/overview')) await screen.findByText("11 Old Street");
-  else await screen.findByRole('button', { name: 'Actions', exact: true });
+  const pathname = typeof initialEntry === "string" ? initialEntry.split("?")[0] : initialEntry.pathname;
+  if (pathname.endsWith("/overview")) await screen.findByText("11 Old Street");
+  else if (!pathname.startsWith("/company/serviceStops/createNew/")) await screen.findByRole("button", { name: "Actions", exact: true });
 };
 const openActions = () => fireEvent.click(screen.getByRole("button", { name: "Actions", exact: true }));
 const openWorkOffer = async ({ canIncentivize = true, services = [] } = {}) => {
@@ -204,7 +217,7 @@ test("different service visit pay items require a clear choice and follow the se
 
 const openServiceCreator = async () => {
   await openJob();
-  fireEvent.click(screen.getByRole("button", { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Job Plan/ }));
   fireEvent.click((await screen.findAllByRole("button", { name: "Service", exact: true }))[0]);
   fireEvent.click(await screen.findByRole("button", { name: "Create Service", exact: true }));
   return screen.findByRole("combobox", { name: "Default payroll pay item" });
@@ -258,7 +271,7 @@ test("every job detail section can open and close the history pop-up", async () 
   await openJob();
   expect(screen.queryByRole("button", { name: /^History\b/ })).not.toBeInTheDocument();
 
-  for (const section of ["Overview", "Create Plans", "Actual", "Billing"]) {
+  for (const section of ["Overview", "Job Plan", "Schedule & Work", "Billing"]) {
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${section}\\b`) }));
     expect(screen.queryByRole("dialog", { name: "Job History" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("View job history", { selector: "button" }));
@@ -268,6 +281,130 @@ test("every job detail section can open and close the history pop-up", async () 
     fireEvent.click(within(history).getByRole("button", { name: "Close" }));
     expect(history).not.toBeInTheDocument();
   }
+});
+
+const mockPlannedVisit = ({ status, linkedStopId, includeFollowUp = false } = {}) => {
+  mockPermissions.push("242");
+  const visit = {
+    name: "Install", taskIds: ["install"], description: "Prime the pump", estimatedMinutes: 45,
+    includeReadings: false, payrollMode: "custom", manualPayOverrideCents: 3500,
+    manualPayOverrideNotes: "Approved visit amount",
+    ...(status ? { status } : {}),
+    ...(linkedStopId ? { scheduledServiceStopId: linkedStopId } : {}),
+  };
+  const task = { name: "Install pump", status: "Draft", payrollMode: "included" };
+  const previousGetDocs = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async (ref) => {
+    const path = ref.path || ref;
+    if (path.endsWith("/plannedServiceStops")) return { docs: [
+      snapshot("planned-visit", visit),
+      ...(includeFollowUp ? [snapshot("follow-up", { name: "Follow-up", taskIds: [], payrollMode: "custom", manualPayOverrideCents: 0 })] : []),
+    ] };
+    if (path.endsWith("/workOrders/job-1/tasks")) return { docs: [snapshot("install", task)] };
+    if (path.endsWith("/companyUsers")) return { docs: [snapshot("tech", { userId: "tech", userName: "Alex Technician" })] };
+    return previousGetDocs(ref);
+  });
+  const previousGetDoc = getDoc.getMockImplementation();
+  getDoc.mockImplementation(async (path) => {
+    if (path.endsWith("/plannedServiceStops/planned-visit")) return snapshot("planned-visit", visit);
+    if (path.endsWith("/tasks/install")) return snapshot("install", task);
+    return previousGetDoc(path);
+  });
+  return visit;
+};
+
+test("Operations Plan schedules a prefilled visit in place and immediately shows its saved appointment", async () => {
+  mockPlannedVisit({ includeFollowUp: true });
+  const previousGetDocs = getDocs.getMockImplementation();
+  let finishRouteRefresh;
+  const routeRefresh = new Promise((resolve) => { finishRouteRefresh = resolve; });
+  getDocs.mockImplementation((ref) => (ref.path || ref).endsWith("/activeRoutes") ? routeRefresh : previousGetDocs(ref));
+  await openJob("/company/jobs/detail/job-1/create-plans");
+  const card = await screen.findByRole("article", { name: "Install" });
+  expect(within(card).getByText("Unscheduled")).toBeInTheDocument();
+  fireEvent.click(await within(card).findByRole("button", { name: "Schedule" }));
+  const dialog = await screen.findByRole("dialog", { name: "Schedule Install" });
+  const controls = within(dialog);
+  expect(controls.getByText(/Fixed service stop pay of \$35\.00 from the plan/)).toBeInTheDocument();
+  expect(controls.queryByLabelText("Planned Operations Stop")).not.toBeInTheDocument();
+  const advanced = controls.getByText("Advanced").parentElement;
+  expect(advanced).not.toHaveAttribute("open");
+  expect(controls.getByLabelText("Estimated Duration (Min)")).toHaveValue(45);
+  expect(controls.getByLabelText("Readings")).not.toBeChecked();
+  expect(controls.getByDisplayValue("Prime the pump")).toBeInTheDocument();
+  fireEvent.keyDown(controls.getByRole("combobox", { name: "Assign Technician" }), { key: "ArrowDown" });
+  fireEvent.click(await controls.findByText("Alex Technician"));
+  fireEvent.change(controls.getByLabelText("Service Date"), { target: { value: "2026-11-23" } });
+  fireEvent.click(controls.getByRole("button", { name: "Schedule Visit" }));
+  await waitFor(() => expect(dialog).not.toBeInTheDocument());
+
+  const scheduled = mockBatchWrites.find(({ ref }) => /\/serviceStops\/[^/]+$/.test(ref));
+  expect(scheduled.data).toMatchObject({
+    plannedServiceStopId: "planned-visit", payrollMode: "custom", manualPayOverrideCents: 3500,
+    manualPayOverrideNotes: "Approved visit amount", estimatedPayCents: 3500, tech: "Alex Technician",
+    estimatedDuration: 45, description: "Prime the pump", includeReadings: false,
+  });
+  expect(mockBatchWrites).toEqual(expect.arrayContaining([
+    expect.objectContaining({ ref: expect.stringMatching(/plannedServiceStops\/planned-visit$/), data: expect.objectContaining({ scheduledServiceStopId: scheduled.data.id }) }),
+  ]));
+  expect(within(card).getByText("Scheduled")).toBeInTheDocument();
+  expect(within(card).getByText("Nov 23, 2026 · Alex Technician")).toBeInTheDocument();
+  expect(within(card).getByRole("link", { name: /^Visit/ })).toHaveAttribute("href", `/company/serviceStops/detail/${scheduled.data.id}`);
+  expect(within(card).queryByRole("button", { name: "Schedule" })).not.toBeInTheDocument();
+  expect(screen.getByText("1 of 2 scheduled")).toBeInTheDocument();
+  const nextSchedule = within(screen.getByRole("article", { name: "Follow-up" })).getByRole("button", { name: "Schedule" });
+  expect(nextSchedule).toBeDisabled();
+  await act(async () => finishRouteRefresh({ docs: [] }));
+  await waitFor(() => expect(nextSchedule).toBeEnabled());
+});
+
+test("the old planned-stop scheduling link opens the same compact dialog on the job plan", async () => {
+  mockPlannedVisit();
+  await openJob("/company/serviceStops/createNew/job-1?plannedStopId=planned-visit&category=jobVisit");
+  const dialog = await screen.findByRole("dialog", { name: "Schedule Install" });
+  expect(within(dialog).getByText("Advanced").parentElement).not.toHaveAttribute("open");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(await screen.findByRole("article", { name: "Install" })).toBeInTheDocument();
+  expect(mockBatchWrites).toHaveLength(0);
+});
+
+test("a service stop scheduled elsewhere updates the current Operations Plan through the live visit listener", async () => {
+  mockPlannedVisit();
+  const previousSnapshot = onSnapshot.getMockImplementation();
+  let publishStops;
+  onSnapshot.mockImplementation((ref, callback, ...args) => {
+    if (ref.path?.endsWith("/serviceStops") && ref.constraints?.some(([field]) => field === "jobId")) {
+      publishStops = callback;
+    }
+    return previousSnapshot(ref, callback, ...args);
+  });
+  await openJob("/company/jobs/detail/job-1/create-plans");
+  const card = await screen.findByRole("article", { name: "Install" });
+  expect(within(card).getByText("Unscheduled")).toBeInTheDocument();
+  const actual = { plannedServiceStopId: "planned-visit", operationStatus: "Not Finished", tech: "Remote technician", internalId: "SS42" };
+  await act(async () => publishStops({ docChanges: () => [{ type: "added", doc: snapshot("remote-visit", actual) }] }));
+  expect(within(card).getByText("Scheduled")).toBeInTheDocument();
+  expect(within(card).getByText("Remote technician")).toBeInTheDocument();
+  await act(async () => publishStops({ docChanges: () => [{ type: "modified", doc: snapshot("remote-visit", { ...actual, operationStatus: "Finished" }) }] }));
+  expect(within(card).getByText("Completed")).toBeInTheDocument();
+});
+
+test("the planned visit transaction rejects an appointment saved by another scheduler", async () => {
+  const visit = mockPlannedVisit();
+  await openJob("/company/jobs/detail/job-1/create-plans");
+  fireEvent.click(within(await screen.findByRole("article", { name: "Install" })).getByRole("button", { name: "Schedule" }));
+  const dialog = await screen.findByRole("dialog", { name: "Schedule Install" });
+  const controls = within(dialog);
+  fireEvent.keyDown(controls.getByRole("combobox", { name: "Assign Technician" }), { key: "ArrowDown" });
+  fireEvent.click(await controls.findByText("Alex Technician"));
+  const previousGetDoc = getDoc.getMockImplementation();
+  getDoc.mockImplementation(async (path) => path.endsWith("/serviceStops/remote-visit")
+    ? snapshot("remote-visit", { operationStatus: "Not Finished" })
+    : previousGetDoc(path));
+  visit.scheduledServiceStopId = "remote-visit";
+  fireEvent.click(controls.getByRole("button", { name: "Schedule Visit" }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith("This planned visit already has a scheduled service stop."));
+  expect(mockBatchWrites).toHaveLength(0);
 });
 
 test("old history links open the pop-up and change-order notes can take users to Billing", async () => {
@@ -523,7 +660,7 @@ const installTemplateFixtures = () => {
 };
 
 const chooseJobTemplate = async () => {
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   const button = await screen.findByRole('button', { name: 'Use Template', exact: true });
   await waitFor(() => expect(button).toBeEnabled());
   fireEvent.click(button);
@@ -600,7 +737,7 @@ test('applying a template to an accepted plan creates a draft and retains the ac
 test('Use Template is hidden without permission to build job plans', async () => {
   mockPermissions = [];
   await openJob();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   expect(screen.queryByRole('button', { name: 'Use Template', exact: true })).not.toBeInTheDocument();
 });
 
@@ -625,7 +762,7 @@ test('loading a saved plan uses the protected server workflow and refreshes its 
     return { data: { planId: 'plan-B' } };
   });
   await openJob();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   const selector = await screen.findByRole('combobox', { name: 'Editing plan' });
   await waitFor(() => expect(selector).toBeEnabled());
   fireEvent.change(selector, { target: { value: 'plan-B' } });
@@ -645,7 +782,7 @@ test('a scope conflict keeps the current plan and shows the server explanation w
   const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
   try {
     await openJob();
-    fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
     const selector = await screen.findByRole('combobox', { name: 'Editing plan' });
     await waitFor(() => expect(selector).toBeEnabled());
     fireEvent.change(selector, { target: { value: 'plan-B' } });
@@ -675,7 +812,7 @@ test('staff plan acceptance sends the accept action through the same server work
 
 const openManualProductLine = async () => {
   await openJob();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   fireEvent.click(await screen.findByRole('button', { name: 'Add first product', exact: true }));
   const dialog = await screen.findByRole('dialog', { name: 'Add Product Line' });
   fireEvent.change(within(dialog).getByRole('combobox', { name: 'Type', exact: true }), { target: { value: 'Part' } });
@@ -686,7 +823,7 @@ const openManualProductLine = async () => {
 test('an inline product can be created with Jobs disabled without entering the job picker', async () => {
   mockPermissions.push('852');
   await openJob();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   fireEvent.click(await screen.findByRole('button', { name: 'Add first product', exact: true }));
   const dialog = within(await screen.findByRole('dialog', { name: 'Add Product Line' }));
   fireEvent.click(dialog.getByRole('button', { name: 'New Item', exact: true }));
@@ -779,7 +916,7 @@ test('overview includes the next-visit assignment snapshot inside the job summar
   expect(within(assignment).getByRole('link', { name: 'View visit' })).toHaveAttribute('href', '/company/serviceStops/detail/next-visit');
 });
 
-const installCloseoutFixtures = () => {
+const installCloseoutFixtures = (materials = []) => {
   Object.assign(mockJob, { operationStatus: 'In Progress', equipmentId: '', equipmentIds: [], laborLineItems: [
     { id: 'service', name: 'Repair service', quantity: 1, unitPriceCents: 1000 },
   ] });
@@ -793,7 +930,7 @@ const installCloseoutFixtures = () => {
         : path.endsWith('/serviceStops/visit/tasks') ? [
           snapshot('repair-copy', { jobTaskId: 'repair', name: 'Repair pump copy', type: 'Basic', status: 'Not Finished' }),
           snapshot('cleanup', { name: 'Clean up site', type: 'Basic', status: 'Not Finished' }),
-        ] : null;
+        ] : path.endsWith('/shoppingList') ? materials : null;
     return data ? { docs: data, empty: !data.length, size: data.length } : originalGetDocs(ref);
   });
 };
@@ -817,12 +954,19 @@ test('the Finished operations dropdown opens work review instead of bypassing cl
   expect(mockWorkspaceCall).not.toHaveBeenCalled();
 });
 
-test('Quick Finish includes stop tasks and services in the job completion request', async () => {
-  installCloseoutFixtures();
-  await openJob();
+test('Quick Finish selects installable materials, stop tasks, and services for job closeout', async () => {
+  installCloseoutFixtures([
+    snapshot('seal', { id: 'legacy-seal-id', name: 'Pump seal', jobId: 'job-1', status: 'Purchased' }),
+    snapshot('gasket', { name: 'Lid gasket', jobId: 'job-1', status: 'Delivered' }),
+    snapshot('request', { name: 'Open purchase request', jobId: 'job-1', status: 'Need to Purchase' }),
+    snapshot('draft', { name: 'Plan-only material', jobId: 'job-1', status: 'Purchased', planWorkspaceOnly: true }),
+    snapshot('installed', { name: 'Existing installation', jobId: 'job-1', status: 'Installed' }),
+  ]);
+  await openJob({ pathname: '/company/jobs/detail/job-1/create-plans' });
   const dialog = await openFinishJob();
   expect(within(dialog).getByRole('checkbox', { name: 'Repair service', exact: true })).toBeChecked();
   expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).not.toBeChecked();
+  expect(within(dialog).getByText('0 confirmed, 4 left open')).toBeInTheDocument();
   const quickFinishButtons = within(dialog).getAllByRole('button', { name: 'Quick Finish All Remaining Work' });
   expect(quickFinishButtons).toHaveLength(2);
   const footerQuickFinish = quickFinishButtons[1];
@@ -833,11 +977,19 @@ test('Quick Finish includes stop tasks and services in the job completion reques
   fireEvent.click(footerQuickFinish);
   expect(within(dialog).getByRole('checkbox', { name: 'Repair service', exact: true })).toBeChecked();
   expect(within(dialog).getByRole('checkbox', { name: /^Repair pump/ })).toBeChecked();
+  expect(within(dialog).getByText('2 confirmed, 2 left open')).toBeInTheDocument();
+  const selectedMaterials = within(dialog).getAllByRole('button', { name: 'Installed', pressed: true });
+  expect(selectedMaterials).toHaveLength(2);
+  fireEvent.click(within(selectedMaterials[0].parentElement).getByRole('button', { name: 'Leave open' }));
+  expect(within(dialog).getByText('1 confirmed, 3 left open')).toBeInTheDocument();
+  fireEvent.click(quickFinishButtons[0]);
+  expect(within(dialog).getByText('2 confirmed, 2 left open')).toBeInTheDocument();
   expect(mockWorkspaceCall).not.toHaveBeenCalled();
   expect(within(dialog).getByRole('checkbox', { name: /^Visit 42/ })).toBeChecked();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Finish Work and Job' }));
   await waitFor(() => expect(mockWorkspaceCall).toHaveBeenCalledWith(expect.objectContaining({
     finishJob: true, serviceIds: ['service'], taskIds: ['repair'], serviceStopIds: ['visit'],
+    productIds: ['seal', 'gasket'],
     serviceStopTaskIds: { visit: ['repair-copy', 'cleanup'] }, cancelRemainingVisits: true,
   })));
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -945,7 +1097,7 @@ const installProductLinkFixtures = ({ withProduct = true, withInstallTask = fals
 test.each([true, false])('adding an install service links or creates its plan product without duplicate billing (existing product: %s)', async (withProduct) => {
   const { materials, tasks } = installProductLinkFixtures({ withProduct });
   await openJob();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   const productsHeading = await screen.findByRole('heading', { name: 'Products', exact: true });
   const servicesHeading = screen.getByRole('heading', { name: 'Services', exact: true });
   expect(productsHeading.compareDocumentPosition(servicesHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -965,7 +1117,7 @@ test.each([true, false])('adding an install service links or creates its plan pr
 test('adding a product first connects an unambiguous install task and its database item', async () => {
   const { materials, tasks } = installProductLinkFixtures({ withProduct: false, withInstallTask: true });
   await openJob();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   fireEvent.click(await screen.findByRole('button', { name: 'Add first product', exact: true }));
   const dialog = await screen.findByRole('dialog', { name: 'Add Product Line' });
   const chooser = within(dialog).getByRole('combobox', { name: 'Select purchase line item' });
@@ -999,7 +1151,7 @@ const installEditablePlan = () => {
 };
 const openPlanEditor = async () => {
   await openJob();
-  fireEvent.click(screen.getByRole('button', { name: /^Create Plans/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Job Plan/ }));
   const name = await screen.findByRole('textbox', { name: 'Plan Name', exact: true });
   await waitFor(() => expect(name).toHaveValue('Saved plan A'));
   return name;
@@ -1030,7 +1182,7 @@ test('task actions float outside the services table and saving a task updates th
   fireEvent.click(within(menu).getByRole('menuitem', { name: 'Edit', exact: true }));
   const dialog = await screen.findByRole('dialog', { name: 'Edit Task' });
   fireEvent.change(within(dialog).getByRole('textbox', { name: 'Description', exact: true }), { target: { value: 'Inspect and test pump' } });
-  fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'Tech Labor Cost', exact: true }), { target: { value: '30' } });
+  fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'Contracted task pay', exact: true }), { target: { value: '30' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save Task', exact: true }));
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit Task' })).not.toBeInTheDocument());
   await waitFor(() => expect(savedPlanWrites().some((write) => write.data.tasks[0]?.name === 'Inspect and test pump')).toBe(true));

@@ -1,3 +1,4 @@
+import { saveWithCurrentWeekReview } from '../../../components/CurrentWeekRouteReview';
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
@@ -808,7 +809,7 @@ const RouteManagement = () => {
     setSavingAssignment(true);
     try {
       const callable = httpsCallable(functions, "updateRecurringServiceStopsRouteAssignment");
-      const result = await callable({
+      const result = await saveWithCurrentWeekReview(callable, {
         companyId: recentlySelectedCompany,
         recurringServiceStopIds: loadedStops.map((stop) => stop.id),
         targetDay,
@@ -820,9 +821,7 @@ const RouteManagement = () => {
         futureServiceStopsStartAt: localStartOfTodayMs(),
       });
 
-      if (result.data?.success === false || (result.data?.status && Number(result.data.status) >= 400)) {
-        throw new Error(result.data?.error || "Recurring service stops failed to update.");
-      }
+      if (!result) return;
 
       const countLabel = `${loadedStops.length} RSS record${loadedStops.length === 1 ? "" : "s"}`;
       toast.success(assignmentModal.mode === "merge" ? `Merged ${countLabel}` : `Assigned ${countLabel}`);

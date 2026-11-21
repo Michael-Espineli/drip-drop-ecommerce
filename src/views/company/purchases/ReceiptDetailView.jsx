@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useState, useEffect, useContext, useMemo, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
@@ -592,92 +593,72 @@ const ReceiptDetailView = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <Link
-                                    to="/company/receipts"
-                                    className="app-back-link"
-                                >
-                                    &larr; Back to Receipts
-                                </Link>
-                                {allItemsReturned ? (
-                                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-emerald-700">
-                                        Returned
-                                    </span>
-                                ) : null}
-                            </div>
-                            <h1 className="mt-3 text-3xl font-bold text-slate-950">
-                                {receipt.storeName || receipt.invoiceNum || "Receipt"}
-                            </h1>
-                            <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                                {[receipt.invoiceNum ? `Invoice ${receipt.invoiceNum}` : "", receipt.date, receipt.techName].filter(Boolean).join(" - ") || "Review receipt totals, files, and linked purchased items."}
-                            </p>
+                <WorkspaceHeader
+                    title={receipt.storeName || receipt.invoiceNum || "Receipt"}
+                    description={[receipt.invoiceNum ? `Invoice ${receipt.invoiceNum}` : "", receipt.date, receipt.techName].filter(Boolean).join(" - ") || "Review receipt totals, files, and linked purchased items."}
+                    meta={allItemsReturned && <span className="workspace-status workspace-status-emerald">Returned</span>}
+                    backLink={{ to: "/company/receipts", label: "Back to Receipts" }}
+                    actions={!edit ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                            <ShareItemButton
+                                type="receipt"
+                                recordId={receiptId}
+                                title={receipt.storeName || receipt.vendorName || receipt.invoiceNum || "Receipt"}
+                                subtitle={[receipt.techName, receipt.invoiceNum].filter(Boolean).join(" - ")}
+                                companyId={recentlySelectedCompany}
+                                collectionPath={`companies/${recentlySelectedCompany}/receipts`}
+                                webPath={`/company/receipts/detail/${receiptId}`}
+                            />
+                            <button
+                                type="button"
+                                onClick={markReceiptItemsReturned}
+                                disabled={updating || purchaseList.length === 0 || allItemsReturned}
+                                className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <FaUndo className="text-xs" />
+                                {allItemsReturned ? "Returned" : "Mark as Returned"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={editJob}
+                                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                            >
+                                <FaEdit className="text-xs" />
+                                Edit
+                            </button>
                         </div>
-
-                        {!edit ? (
-                            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                                <ShareItemButton
-                                    type="receipt"
-                                    recordId={receiptId}
-                                    title={receipt.storeName || receipt.vendorName || receipt.invoiceNum || "Receipt"}
-                                    subtitle={[receipt.techName, receipt.invoiceNum].filter(Boolean).join(" - ")}
-                                    companyId={recentlySelectedCompany}
-                                    collectionPath={`companies/${recentlySelectedCompany}/receipts`}
-                                    webPath={`/company/receipts/detail/${receiptId}`}
-                                />
-                                <button
-                                    type="button"
-                                    onClick={markReceiptItemsReturned}
-                                    disabled={updating || purchaseList.length === 0 || allItemsReturned}
-                                    className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                    <FaUndo className="text-xs" />
-                                    {allItemsReturned ? "Returned" : "Mark as Returned"}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={editJob}
-                                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                                >
-                                    <FaEdit className="text-xs" />
-                                    Edit
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="flex flex-wrap gap-2 lg:justify-end">
-                                <button
-                                    type="button"
-                                    onClick={saveEditChanges}
-                                    disabled={updating}
-                                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50"
-                                >
-                                    <FaSave className="text-xs" />
-                                    Save
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={cancelEditJob}
-                                    disabled={updating}
-                                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                                >
-                                    <FaTimes className="text-xs" />
-                                    Cancel
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={deleteJob}
-                                    disabled={updating}
-                                    className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
-                                >
-                                    <FaTrash className="text-xs" />
-                                    Delete
-                                </button>
-                            </div>
-                        )}
-                    </div>
-                </section>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={saveEditChanges}
+                                disabled={updating}
+                                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50"
+                            >
+                                <FaSave className="text-xs" />
+                                Save
+                            </button>
+                            <button
+                                type="button"
+                                onClick={cancelEditJob}
+                                disabled={updating}
+                                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                <FaTimes className="text-xs" />
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={deleteJob}
+                                disabled={updating}
+                                className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                            >
+                                <FaTrash className="text-xs" />
+                                Delete
+                            </button>
+                        </div>
+                    )}
+                />
 
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
                     <div className="space-y-6 lg:col-span-3">

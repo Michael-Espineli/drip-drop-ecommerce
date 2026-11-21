@@ -1,3 +1,4 @@
+import { saveWithCurrentWeekReview } from '../../../components/CurrentWeekRouteReview';
 import { displayReferenceValue, linkedReferenceText } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
@@ -58,6 +59,7 @@ import {
   hasDatabaseEquipmentMapping,
   isEquipmentDatabaseItem,
 } from "../../../utils/databaseEquipmentItems";
+import { isMergedCatalogRecord } from "../../../utils/productCatalog";
 import {
   applyTaskGroupToRecurringServiceStop,
   fetchRecurringTaskGroupOptions,
@@ -635,6 +637,7 @@ const RecurringServiceStopDetails = () => {
         if (cancelled) return;
         setEquipmentDatabaseItems(
           itemsSnap.docs
+            .filter(itemDoc => !isMergedCatalogRecord(itemDoc.data()))
             .map((itemDoc) => buildEquipmentDatabaseItemOption(itemDoc.data(), itemDoc.id))
             .filter(isEquipmentDatabaseItem)
         );
@@ -795,15 +798,13 @@ const RecurringServiceStopDetails = () => {
         companyServiceStopTypes,
       });
       const callable = httpsCallable(functions, "updateRecurringServiceStop");
-      const result = await callable({
+      const result = await saveWithCurrentWeekReview(callable, {
         companyId: recentlySelectedCompany,
         recurringServiceStop: recurringServiceStopPayload,
         syncRoute: true,
       });
 
-      if (result.data?.success === false || (result.data?.status && Number(result.data.status) >= 400)) {
-        throw new Error(result.data?.error || "Recurring service stop update failed.");
-      }
+      if (!result) return;
 
       setRecurringServiceStop((prev) => ({
         ...prev,

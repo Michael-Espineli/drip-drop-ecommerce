@@ -6,6 +6,9 @@ export const PRODUCT_CATALOG_COLLECTION = "genericItems";
 export const VENDOR_ITEM_SETTINGS_DOC = "dataBase";
 export const VENDOR_ITEM_COLLECTION = "dataBase";
 
+export const isMergedCatalogRecord = (row) => Boolean(row?.mergedIntoProductId || row?.mergedIntoVendorItemId);
+const isSelectableCatalogRecord = (row) => row.active !== false && !row.archived && !isMergedCatalogRecord(row);
+
 export const productCatalogCollectionRef = (db, companyId) =>
   collection(db, "companies", companyId, "settings", PRODUCT_CATALOG_SETTINGS_DOC, PRODUCT_CATALOG_COLLECTION);
 
@@ -44,9 +47,10 @@ export const productVendorItemIds = (product = {}) => [...new Set([
 // Explicit supplier links take precedence over stale product-side arrays.
 // Names are suggestions only: two suppliers can sell different items with the same name.
 export const findLinkedProductForVendorItem = (vendorItem = {}, products = []) => {
+  if (isMergedCatalogRecord(vendorItem)) return null;
   const explicitId = vendorItem.productId || vendorItem.genericItemId;
-  if (explicitId) return products.find((product) => product.id === explicitId) || null;
-  const matches = products.filter((product) => productVendorItemIds(product).includes(vendorItem.id));
+  if (explicitId) return products.find((product) => product.id === explicitId && !isMergedCatalogRecord(product)) || null;
+  const matches = products.filter((product) => !isMergedCatalogRecord(product) && productVendorItemIds(product).includes(vendorItem.id));
   return matches.length === 1 ? matches[0] : null;
 };
 
@@ -58,9 +62,10 @@ export const getProductDefaultCostCents = (product = {}) =>
 
 export const getProductCostInfo = (product = {}, vendorItems = [], products = [product]) => {
   const linked = linkedVendorItemsForProduct(product, vendorItems, products);
-  const vendor = linked.find((item) => item.id === product.preferredVendorItemId)
-    || [...linked].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
-  const vendorCosts = linked.map(getVendorItemCostCents).filter(Number.isFinite);
+  const available = linked.filter(isSelectableCatalogRecord);
+  const vendor = available.find((item) => item.id === product.preferredVendorItemId)
+    || available.sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+  const vendorCosts = available.map(getVendorItemCostCents).filter(Number.isFinite);
   return {
     costCents: vendor ? getVendorItemCostCents(vendor) : getProductDefaultCostCents(product),
     vendorItem: vendor || null,
@@ -74,16 +79,17 @@ export const getProductCostInfo = (product = {}, vendorItems = [], products = [p
 export const buildProductCostIndex = (products = [], vendorItems = []) => {
   const byId = new Map(products.map((product) => [product.id, product]));
   const reverse = new Map();
-  for (const product of products) for (const id of productVendorItemIds(product)) {
+  for (const product of products) for (const id of isMergedCatalogRecord(product) ? [] : productVendorItemIds(product)) {
     if (!reverse.has(id)) reverse.set(id, new Set());
     reverse.get(id).add(product.id);
   }
   const vendors = new Map(products.map((product) => [product.id, []]));
   for (const vendor of vendorItems) {
+    if (isMergedCatalogRecord(vendor)) continue;
     const explicit = vendor.productId || vendor.genericItemId;
     const owners = reverse.get(vendor.id);
     const owner = explicit || (owners?.size === 1 ? [...owners][0] : "");
-    if (byId.has(owner)) vendors.get(owner).push(vendor);
+    if (byId.has(owner) && !isMergedCatalogRecord(byId.get(owner))) vendors.get(owner).push(vendor);
   }
   return new Map(products.map((product) => [product.id, getProductCostInfo(product, vendors.get(product.id))]));
 };
@@ -247,7 +253,8 @@ export const buildJobProductCatalog = (products = [], vendorItems = []) => {
     const product = productForVendor(vendor);
     return product ? { ...vendor, genericItemId: product.id, sellPrice: getProductSellPriceCents(product), billingRate: getProductSellPriceCents(product), taxable: Boolean(product.taxable), billable: product.billable ?? true } : vendor;
   });
-  const options = products.filter((product) => product.active !== false && !product.archived && isProductAvailableForJobs(product)).map((product) => {
+  const availableForJobs = (product) => isSelectableCatalogRecord(product) && isProductAvailableForJobs(product);
+  const options = products.filter(availableForJobs).map((product) => {
     const { vendorItem: vendor, costCents } = costs.get(product.id);
     return {
       ...vendor, ...product, name: getProductDisplayName(product), genericItemId: product.id,
@@ -259,10 +266,12 @@ export const buildJobProductCatalog = (products = [], vendorItems = []) => {
       billable: product.billable ?? true, catalogSource: "product",
     };
   });
-  const legacy = linkedVendors.filter((vendor) => !productForVendor(vendor) && vendor.active !== false && !vendor.archived).map((vendor) => ({ ...vendor, dbItemId: vendor.id, catalogSource: "legacyVendor" }));
+  const legacy = linkedVendors.filter((vendor) => isSelectableCatalogRecord(vendor) &&
+    !productForVendor(vendor) && !vendor.productId && !vendor.genericItemId)
+    .map((vendor) => ({ ...vendor, dbItemId: vendor.id, catalogSource: "legacyVendor" }));
   return { products: [...options, ...legacy], vendorItems: linkedVendors.filter((vendor) => {
     const product = productForVendor(vendor);
-    return vendor.active !== false && !vendor.archived && (!product || (product.active !== false && !product.archived && isProductAvailableForJobs(product)));
+    return isSelectableCatalogRecord(vendor) && (product ? availableForJobs(product) : !vendor.productId && !vendor.genericItemId);
   }) };
 };
 
@@ -281,5 +290,5 @@ export const loadProductsWithCosts = async (db, companyId) => {
   const products = productSnap.docs.map((entry) => ({ ...entry.data(), id: entry.id }));
   const vendors = vendorSnap.docs.map((entry) => ({ ...entry.data(), id: entry.id }));
   const costs = buildProductCostIndex(products, vendors);
-  return products.map((product) => ({ ...product, rate: costs.get(product.id).costCents, cost: costs.get(product.id).costCents }));
+  return products.filter(product => !isMergedCatalogRecord(product)).map((product) => ({ ...product, rate: costs.get(product.id).costCents, cost: costs.get(product.id).costCents }));
 };

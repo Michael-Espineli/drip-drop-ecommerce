@@ -1,3 +1,4 @@
+import { saveWithCurrentWeekReview } from '../../../components/CurrentWeekRouteReview';
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 
@@ -566,6 +567,7 @@ const RecurringServiceStopList = () => {
     const saveBulkRecurringStopEdit = async (event) => {
         event.preventDefault();
         if (!bulkEditForm || !selectedStops.length) return;
+        const savedIds = [];
 
         try {
             if (!bulkFormHasChanges()) {
@@ -589,15 +591,20 @@ const RecurringServiceStopList = () => {
                     form: buildFormForBulkStop(stop, bulkEditForm),
                     companyServiceStopTypes,
                 });
-                const result = await callable({
+                const result = await saveWithCurrentWeekReview(callable, {
                     companyId: recentlySelectedCompany,
                     recurringServiceStop: recurringServiceStopPayload,
                     syncRoute: true,
                 });
 
-                if (result.data?.success === false || (result.data?.status && Number(result.data.status) >= 400)) {
-                    throw new Error(result.data?.error || `Recurring service stop ${stop.internalId || stop.id} failed to update.`);
+                if (!result) {
+                    if (savedIds.length) {
+                        setSelectedStopIds(ids => ids.filter(id => !savedIds.includes(id)));
+                        toast.success(`Updated ${savedIds.length} recurring service stops before canceling.`);
+                    }
+                    return;
                 }
+                savedIds.push(stop.id);
             }
 
             toast.success(`Updated ${selectedStops.length} recurring service stops`);
@@ -606,6 +613,10 @@ const RecurringServiceStopList = () => {
             setSelectedStopIds([]);
             setBulkEditFields([]);
         } catch (error) {
+            if (savedIds.length) {
+                setSelectedStopIds(ids => ids.filter(id => !savedIds.includes(id)));
+                toast.success(`Updated ${savedIds.length} recurring service stops. The remaining stops are still selected.`);
+            }
             console.error("Error bulk updating recurring service stops:", error);
             reportAppError(error, {
                 context: errorContext,
@@ -685,15 +696,13 @@ const RecurringServiceStopList = () => {
                 companyServiceStopTypes,
             });
             const callable = httpsCallable(functions, "updateRecurringServiceStop");
-            const result = await callable({
+            const result = await saveWithCurrentWeekReview(callable, {
                 companyId: recentlySelectedCompany,
                 recurringServiceStop: recurringServiceStopPayload,
                 syncRoute: true,
             });
 
-            if (result.data?.success === false || (result.data?.status && Number(result.data.status) >= 400)) {
-                throw new Error(result.data?.error || "Recurring service stop update failed.");
-            }
+            if (!result) return;
 
             toast.success("Recurring service stop updated");
             setEditingStop(null);

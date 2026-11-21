@@ -4,14 +4,21 @@ import { jobScopeItemRequiresBodyOfWater, jobScopeItemRequiresEquipment } from "
 import { itemPhotoFieldsFromSource } from "./itemPhotos";
 import { canonicalShoppingListStatus, SHOPPING_LIST_STATUS } from "./shoppingListStatus";
 import { jobPayFields } from "./payroll/payCalculation";
+import { taskCustomerPriceCents, visitCustomerPriceCents } from "./jobScopePricing";
+import { getJobMaterialVendorItemId } from "./productCatalog";
 
 const idValue = (value) => typeof value === "object" ? value?.id || value?.value || "" : String(value || "");
 const ids = (value) => (Array.isArray(value) ? value : value ? [value] : []).map(idValue).filter(Boolean);
 const remap = (value, mapping) => ids(value).map((id) => mapping.get(id)).filter(Boolean);
 const number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
-const taskPrice = (task) => number(task.billingLaborPriceCents ?? task.customerLaborPriceCents ?? task.billingLaborRateCents ?? task.laborBillingRateCents ?? task.billableLaborCents ?? task.contractedRate);
 const fields = (source, keys) => Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
 const ordered = (items = []) => [...items].sort((a, b) => number(a.sortOrder) - number(b.sortOrder));
+
+export const remapTemplateMaterialTasks = (item, taskIds) => {
+  const primary = item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.taskId;
+  const linkedTaskIds = [...new Set(remap([primary, ...ids(item.linkedTaskIds)], taskIds))];
+  return { linkedTaskId: linkedTaskIds[0] || "", linkedTaskIds };
+};
 
 export function copyJobTemplateScope({ template, scope, job, companyId, planId, userId = "", userName = "", newId = (prefix) => `${prefix}_${uuidv4()}` }) {
   scope = Object.fromEntries(Object.entries(scope).map(([key, items]) => [key, items.map((item, index) => ({ ...item, id: item.id || `template_${key}_${index}` }))]));
@@ -28,15 +35,18 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     bodyOfWaterId: jobScopeItemRequiresBodyOfWater(item) || jobScopeItemRequiresBodyOfWater(template) ? job.bodyOfWaterId || "" : "",
   });
   const shoppingItems = ordered(scope.shoppingItems).map((item, index) => {
-    const linkedTaskId = remap(item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.taskId, taskIds)[0] || "";
+    const { linkedTaskId, linkedTaskIds } = remapTemplateMaterialTasks(item, taskIds);
+    const productId = item.productId || item.genericItemId || "";
+    const supplierId = getJobMaterialVendorItemId(item);
     return {
-      ...fields(item, ["name", "description", "subCategory", "dbItemId", "genericItemId", "plannedUnitCostCents", "plannedUnitPriceCents", "plannedTotalCostCents", "plannedTotalPriceCents", "cost", "price", "taxable", "billable", "customerApprovalRequired"]),
+      ...fields(item, ["name", "description", "subCategory", "plannedUnitCostCents", "plannedUnitPriceCents", "plannedTotalCostCents", "plannedTotalPriceCents", "cost", "price", "taxable", "billable", "customerApprovalRequired"]),
       ...itemPhotoFieldsFromSource(item, item.name || "Shopping item photo"), ...base, ...context(item),
       id: materialIds.get(item.id), sourceTemplateShoppingItemId: item.id,
+      productId, genericItemId: productId, dbItemId: supplierId, itemId: supplierId,
       quantity: String(item.quantity ?? "1"), category: "Job", status: SHOPPING_LIST_STATUS.needToPurchase,
       purchaserId: userId, purchaserName: userName, invoiced: false, purchasedItem: "", datePurchased: null,
       planId, solutionId: planId, planWorkspaceOnly: true, needsAction: false, estimateAccepted: false,
-      linkedTaskId, linkedTaskIds: [...new Set([linkedTaskId, ...remap(item.linkedTaskIds, taskIds)].filter(Boolean))], sortOrder: index,
+      linkedTaskId, linkedTaskIds, sortOrder: index,
       prepKeys: [`job:${job.id}`, job.customerId && `customer:${job.customerId}`, job.serviceLocationId && `serviceLocation:${job.serviceLocationId}`, linkedTaskId && `jobTask:${linkedTaskId}`].filter(Boolean),
     };
   });
@@ -51,7 +61,7 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
       ...jobPayFields(task),
       ...base, ...context(task), id, sourceTemplateTaskId: task.id,
       name: task.name || task.description || "Task", type: canonicalJobTaskType(task.type || ""),
-      billingLaborPriceCents: taskPrice(task),
+      billingLaborPriceCents: taskCustomerPriceCents(task),
       status: "Draft", actualTime: 0, workerId: "", workerName: "", workerType: "Not Assigned",
       laborContractId: "", serviceStopId: { id: "", internalId: "" },
       shoppingListItemId: shoppingListItemIds[0] || "", shoppingListItemIds, sortOrder: index,
@@ -61,6 +71,7 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     ...fields(stop, ["name", "description", "serviceStopTypeId", "serviceStopTypeName", "serviceStopTypeImage", "serviceStopTypeUseCaseRawValue", "estimatedMinutes", "plannedLaborCostCents", "billingLaborPriceCents", "plannedLaborNotes", "requiresEquipment", "requiresBodyOfWater"]),
     ...jobPayFields(stop, { payTypeId: stop.serviceStopTypeId, payTypeName: stop.serviceStopTypeName }),
     ...base, ...context(stop), id: stopIds.get(stop.id), sourceTemplatePlannedStopId: stop.id,
+    billingLaborPriceCents: visitCustomerPriceCents(stop),
     taskIds: remap(stop.taskTemplateIds?.length ? stop.taskTemplateIds : stop.taskIds, taskIds), sortOrder: index,
   }));
   const laborLineItems = ordered(scope.laborLineItems).map((line, index) => {
@@ -81,8 +92,8 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     };
   });
   const explicitPrice = laborLineItems.reduce((sum, line) => sum + line.totalPriceCents, 0)
-    + tasks.reduce((sum, task) => sum + taskPrice(task), 0)
-    + plannedServiceStops.reduce((sum, stop) => sum + number(stop.plannedLaborCostCents), 0)
+    + tasks.reduce((sum, task) => sum + taskCustomerPriceCents(task), 0)
+    + plannedServiceStops.reduce((sum, stop) => sum + visitCustomerPriceCents(stop), 0)
     + shoppingItems.reduce((sum, item) => sum + number(item.plannedTotalPriceCents ?? number(item.plannedUnitPriceCents ?? item.price) * number(item.quantity)), 0);
   if (!laborLineItems.length && !explicitPrice && number(template.defaultRateCents) > 0) {
     const id = newId("comp_job_labor_line");
@@ -141,8 +152,8 @@ export function combineJobTemplateScope(existing, incoming, mode) {
   // The plan invoice uses explicit service lines when present. Keep legacy task/visit pricing visible when combining scopes.
   const withServiceLines = (scope, name) => {
     if (scope.laborLineItems.length) return scope;
-    const price = scope.tasks.reduce((sum, task) => sum + taskPrice(task), 0)
-      + scope.plannedServiceStops.reduce((sum, stop) => sum + number(stop.plannedLaborCostCents), 0);
+    const price = scope.tasks.reduce((sum, task) => sum + taskCustomerPriceCents(task), 0)
+      + scope.plannedServiceStops.reduce((sum, stop) => sum + visitCustomerPriceCents(stop), 0);
     if (!price) return scope;
     const id = `comp_job_labor_line_${uuidv4()}`;
     const taskIds = scope.tasks.map((task) => task.id);

@@ -1768,13 +1768,13 @@ const EquipmentDetail = () => {
   });
 
   const createEquipmentJob = (jobIntent) => {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ requireTemplate: "true" });
     if (equipment?.customerId) params.set("customerId", equipment.customerId);
     if (equipment?.serviceLocationId) params.set("locationId", equipment.serviceLocationId);
     if (equipment?.bodyOfWaterId) params.set("bodyOfWaterId", equipment.bodyOfWaterId);
     if (equipment?.id || equipmentId) params.set("equipmentId", equipment?.id || equipmentId);
 
-    navigate(`/company/jobs/basic-create${params.toString() ? `?${params.toString()}` : ""}`, {
+    navigate(`/company/jobs/basic-create?${params.toString()}`, {
       state: {
         equipmentContext: buildEquipmentContext(jobIntent),
         createdFromEquipmentDetail: true,
@@ -1858,14 +1858,12 @@ const EquipmentDetail = () => {
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto space-y-6">
         {/* Header */}
-        <WorkspaceRecordHeader title={getEquipmentDisplayName()} eyebrow="Equipment details"><div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <WorkspaceRecordHeader
+          title={getEquipmentDisplayName()}
+          eyebrow="Equipment details"
+          backLink={{ to: "/company/equipment", label: "Back to Equipment List" }}
+        ><div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-
-            <Link
-              to="/company/equipment"
-              className="app-back-link"
-            >&larr; Back to Equipment List</Link>
-
             <p className="text-gray-600 mt-1">
               <span className="font-semibold text-gray-800">{equipment?.name || "—"}</span>{" "}
               <Link
@@ -2006,7 +2004,8 @@ const EquipmentDetail = () => {
               </Menu>
             )}
           </div>
-        </div></WorkspaceRecordHeader>
+        </div>
+        </WorkspaceRecordHeader>
 
         {readyCatalogSuggestion && (
           <div className="rounded-xl border border-purple-200 bg-purple-50 p-5 shadow-sm">

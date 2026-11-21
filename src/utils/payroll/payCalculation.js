@@ -84,7 +84,7 @@ export const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, 
       settings = { ...settings, payMode: "productionOnly", routePaySource: (visitAgreement.taskIds || []).length ? "completedTasks" : "serviceStop", taskPaySource: (visitAgreement.taskIds || []).length ? "technicianRate" : "none" };
     }
   }
-  const stopFinished = mode === "preview" || finished(serviceStop);
+  const stopFinished = mode === "preview" || finished({ status: serviceStop.operationStatus || serviceStop.status });
   const types = new Map(workTypes.map((type) => [type.id, type]));
   const workersById = new Map(workers.map((worker) => [worker.userId || worker.id, worker]));
   const routeSource = settings.routePaySource || "serviceStopAndCompletedTasks";

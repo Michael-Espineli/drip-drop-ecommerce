@@ -1,10 +1,11 @@
+import { remapTemplateMaterialTasks } from "../../../utils/jobTemplateScope";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { workspaceButtonClass, workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
 import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
-import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
+import { completeJobLaborLines, jobLaborTotals, visitCustomerPriceCents } from "../../../utils/jobScopePricing";
 import { canUseJobTemplate } from "../../../utils/jobTemplateAvailability";
 import { createJobAtomically } from "../../../utils/createJobAtomically";
 import React, { useContext, useEffect, useMemo, useState, useRef } from "react";
@@ -161,15 +162,6 @@ const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriorit
     DEFAULT_ISSUE_PRIORITY
 );
 
-const templateIntentMatches = (template = {}, intent = "") => {
-    const searchable = `${template.name || ""} ${template.type || ""} ${template.jobType || ""} ${template.description || ""}`.toLowerCase();
-    if (intent === "repair") return searchable.includes("repair");
-    if (intent === "maintenance") {
-        return searchable.includes("maintenance") || searchable.includes("service");
-    }
-    return false;
-};
-
 const getTaskBillingLaborPriceCents = (task = {}) => {
     const explicitBillingValue =
         task.billingLaborPriceCents ??
@@ -319,6 +311,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
     const searchParams = useMemo(() => embedded ? new URLSearchParams() : routeSearchParams, [embedded, routeSearchParams]);
     const creationContext = initialContext || location.state;
     const scheduleLater = embedded || searchParams.get("schedule") === "later";
+    const templateRequired = creationContext?.requireTemplate === true || searchParams.get("requireTemplate") === "true";
     const equipmentContext = creationContext?.equipmentContext || null;
     const customerContext = creationContext?.customerContext || null;
     const repairRequest = creationContext?.repairRequest || null;
@@ -359,7 +352,8 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
     const [loadedTemplateDetailsId, setLoadedTemplateDetailsId] = useState("");
     const [loadingLocationAssets, setLoadingLocationAssets] = useState(false);
 
-    const [mode, setMode] = useState("template");
+    const [selectedMode, setMode] = useState("template");
+    const mode = templateRequired ? "template" : selectedMode;
     const [templateSelection, setSelectedTemplate] = useState(null);
     const selectedTemplate = scheduleLater && mode !== "template" ? null : templateSelection;
     const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -386,7 +380,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
     const canCustomSelf = canUseFullCreate || can(CREATE_CUSTOM_WORK_ORDERS_FOR_SELF_PERMISSION_ID);
     const canCustomOthers = canUseFullCreate || can(CREATE_CUSTOM_WORK_ORDERS_FOR_OTHERS_PERMISSION_ID);
     const canUseTemplate = scheduleLater ? canUseFullCreate : canTemplateSelf || canTemplateOthers;
-    const canUseCustom = scheduleLater ? canUseFullCreate : canCustomSelf || canCustomOthers;
+    const canUseCustom = !templateRequired && (scheduleLater ? canUseFullCreate : canCustomSelf || canCustomOthers);
     const canAssignForSelectedMode = mode === "template" ? canTemplateOthers : canCustomOthers;
     const hasAnyBasicPermission = canUseTemplate || canUseCustom;
 
@@ -849,12 +843,10 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
 
     useEffect(() => {
         const templateId = searchParams.get("templateId");
-        if (mode !== "template" || (!templateId && !jobIntent) || !templateOptions.length || selectedTemplate) return;
-        const matchedTemplate = templateId
-            ? templateOptions.find((template) => template.id === templateId)
-            : templateOptions.find((template) => templateIntentMatches(template, jobIntent)) || templateOptions[0];
+        if (mode !== "template" || !templateId || selectedTemplate) return;
+        const matchedTemplate = templateOptions.find((template) => template.id === templateId);
         if (matchedTemplate) setSelectedTemplate(matchedTemplate);
-    }, [jobIntent, mode, searchParams, selectedTemplate, templateOptions]);
+    }, [mode, searchParams, selectedTemplate, templateOptions]);
 
     useEffect(() => {
         const customerId =
@@ -1066,7 +1058,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                         .map((taskDoc) => ({ id: taskDoc.data().id || taskDoc.id, ...taskDoc.data() }))
                         .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
                     plannedServiceStops: stopsSnap.docs
-                        .map((stopDoc) => ({ id: stopDoc.data().id || stopDoc.id, ...stopDoc.data() }))
+                        .map((stopDoc) => ({ ...stopDoc.data(), id: stopDoc.data().id || stopDoc.id, sourceTemplatePlannedStopId: stopDoc.id }))
                         .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)),
                     shoppingItems: shoppingSnap.docs
                         .map((itemDoc) => ({ id: itemDoc.data().id || itemDoc.id, ...itemDoc.data() }))
@@ -1182,13 +1174,15 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                     sourcePlanId: planId,
                     sourceSolutionId: planId,
                     sourceTemplateId: selectedTemplate?.id || "",
-                    sourceTemplatePlannedStopId: stop.id || "",
+                    sourceTemplatePlannedStopId: stop.sourceTemplatePlannedStopId || stop.id || "",
                     name: stop.name || stop.serviceStopTypeName || selectedTemplate?.name || "Planned Stop",
                     description: stop.description || "",
                     serviceStopTypeId: stop.serviceStopTypeId || "",
                     serviceStopTypeName: stop.serviceStopTypeName || "",
                     serviceStopTypeImage: stop.serviceStopTypeImage || "",
                     serviceStopTypeUseCaseRawValue: stop.serviceStopTypeUseCaseRawValue || "",
+                    ...jobPayFields(stop, { payTypeId: stop.serviceStopTypeId, payTypeName: stop.serviceStopTypeName }),
+                    billingLaborPriceCents: visitCustomerPriceCents(stop),
                     estimatedMinutes: Number(stop.estimatedMinutes || 0),
                     sortOrder: Number(stop.sortOrder ?? index),
                     taskIds,
@@ -1294,7 +1288,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         };
     };
 
-    const normalizeShoppingItemForJob = (item, jobId, planId, customerName) => {
+    const normalizeShoppingItemForJob = (item, jobId, planId, customerName, taskIds) => {
         const quantity = item.quantity !== undefined && item.quantity !== null ? String(item.quantity) : "1";
 
         return {
@@ -1309,12 +1303,15 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             sourceSolutionId: planId,
             sourceTemplateId: selectedTemplate?.id || "",
             sourceTemplateShoppingItemId: item.id || "",
+            ...remapTemplateMaterialTasks(item, taskIds),
             category: "Job",
             subCategory: item.subCategory || "Custom",
             status: "Need to Purchase",
             purchaserId: createdByUserId || "",
             purchaserName: createdByUserName || "",
-            genericItemId: item.genericItemId || "",
+            genericItemId: item.genericItemId || item.productId || "",
+            productId: item.productId || item.genericItemId || "",
+            billable: item.billable ?? true,
             taxable: Boolean(item.taxable),
             name: item.name || "",
             description: item.description || "",
@@ -1379,7 +1376,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             })
             : [
                 ...normalizedPlannedStops.map((stop) => {
-                    const amount = Number(stop.plannedLaborCostCents || 0);
+                    const amount = visitCustomerPriceCents(stop);
                     return {
                         id: `${planId}_${stop.id}`,
                         sourceType: "serviceStopType",
@@ -1483,7 +1480,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         const plannedLaborPriceCents = normalizedLaborLineItems.length
             ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.totalPriceCents || 0), 0)
             : normalizedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0)
-                + normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+                + normalizedPlannedStops.reduce((total, stop) => total + visitCustomerPriceCents(stop), 0);
         const materialCostCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalCostCents(item), 0);
         const materialPriceCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalPriceCents(item), 0);
         const internalCostCents = plannedLaborCostCents + materialCostCents;
@@ -1690,6 +1687,10 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             || 60;
         const payTypeId = selectedPlannedStop?.payTypeId || selectedPlannedStop?.serviceStopTypeId || "system_job_service_stop";
         const payTypeName = selectedPlannedStop?.payTypeName || selectedPlannedStop?.serviceStopTypeName || "Job Visit";
+        const pay = jobPayFields(selectedPlannedStop || {}, { payTypeId, payTypeName });
+        if (pay.payrollMode === "custom" && (pay.manualPayOverrideCents ?? -1) < 0) {
+            throw new Error("Set the planned visit’s custom pay amount before scheduling.");
+        }
 
         await writer.set(counterRef, { increment: nextCount }, { merge: true });
 
@@ -1730,12 +1731,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             startTime: null,
             includeDosages: true,
             includeReadings: true,
-            estimatedPayCents: 0,
-            estimatedPayLines: [],
-            payTypeId,
-            payTypeName,
-            manualPayOverrideCents: null,
-            manualPayOverrideNotes: "",
+            ...pay,
             plannedServiceStopId: selectedPlannedStop?.id || "",
             rate: scheduledTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0),
             recurringServiceStopId: "",
@@ -1824,7 +1820,12 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             return;
         }
 
-        if (mode === "template" && selectedTemplate?.id && !templateDetailsReady) {
+        if (mode === "template" && !selectedTemplate?.id) {
+            await appAlert("Choose a job template before creating the job.");
+            return;
+        }
+
+        if (!templateDetailsReady) {
             await appAlert("Template details are still loading. Please wait for the template scope to finish loading before creating the job.");
             return;
         }
@@ -1906,20 +1907,31 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                     ...map,
                     [stop.sourceTemplatePlannedStopId || stop.id]: stop.id,
                 }), {});
+                if (mode === "template") {
+                    templateDetails.plannedServiceStops.forEach((stop, index) => {
+                        plannedStopIdMap[stop.id] = normalizedPlannedStops[index].id;
+                    });
+                }
                 let normalizedLaborLineItems = mode === "template"
                     ? templateDetails.laborLineItems.map((line, index) => (
                         normalizeTemplateLaborLineForJob(line, jobId, planId, taskIdMap, plannedStopIdMap, index, normalizedTaskById)
                     ))
                     : [];
                 normalizedLaborLineItems = completeJobLaborLines({ laborLineItems: normalizedLaborLineItems, tasks: normalizedTasks, plannedServiceStops: normalizedPlannedStops });
+                const materialTaskIdMap = new Map(Object.entries(taskIdMap));
                 const normalizedShoppingItems = mode === "template"
                     ? templateDetails.shoppingItems.map((item) => ({
-                        ...normalizeShoppingItemForJob(item, jobId, planId, customerName),
+                        ...normalizeShoppingItemForJob(item, jobId, planId, customerName, materialTaskIdMap),
                         equipmentId: item.equipmentId || selectedEquipmentId,
                         serviceLocationId: item.serviceLocationId || selectedServiceLocation.id || "",
                         bodyOfWaterId: item.bodyOfWaterId || resolvedJobBodyOfWaterId,
                     }))
                     : [];
+                for (const task of normalizedTasks) {
+                    const materialIds = normalizedShoppingItems.filter((item) => item.linkedTaskIds.includes(task.id)).map((item) => item.id);
+                    task.shoppingListItemId = materialIds[0] || "";
+                    task.shoppingListItemIds = materialIds;
+                }
                 const createdEquipmentIds = getJobScopeEquipmentIds({
                     primaryEquipmentId: selectedEquipmentId,
                     tasks: normalizedTasks,
@@ -2181,6 +2193,10 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         }
     };
 
+    const firstTemplateVisit = !scheduleLater && mode === "template" && templateDetailsReady
+        ? templateDetails.plannedServiceStops[0] : null;
+    const firstVisitPay = firstTemplateVisit ? jobPayFields(firstTemplateVisit) : null;
+
     const renderForm = () => {
     if (!permissionsReady || loading) {
         return (
@@ -2197,7 +2213,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             <div className={`mx-auto flex ${embedded ? "min-h-64" : "min-h-screen"} max-w-xl flex-col items-center justify-center bg-slate-50 px-4 text-center`}>
                 <h1 className="text-2xl font-bold text-slate-950">Permission Required</h1>
                 <p className="mt-2 text-sm text-slate-600">
-                    {scheduleLater ? "Your role needs Create Jobs permission to create work before scheduling." : "Your role needs a basic template or custom basic-job permission before you can use this form."}
+                    {scheduleLater ? "Your role needs Create Jobs permission to create work before scheduling." : templateRequired ? "Your role needs permission to create and schedule jobs from a template." : "Your role needs a basic template or custom basic-job permission before you can use this form."}
                 </p>
                 {!embedded && <Link to="/company/jobs" className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
                     Back to Jobs
@@ -2216,7 +2232,9 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                         </Link>
 
                         <p className="mt-1 text-sm text-slate-500">
-                            {scheduleLater ? "Create a job from a template or a basic job. Track customer approval now and schedule the first visit when ready." : "Choose a template or custom scope, assign a technician, and schedule the first visit."}
+                            {scheduleLater ? "Track customer approval now and schedule the first visit when ready."
+                                : templateRequired ? "Choose a template, assign a technician, and schedule the first visit."
+                                : "Choose a template or custom scope, assign a technician, and schedule the first visit."}
                         </p>
                     </div>
 
@@ -2231,7 +2249,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                 </p>}
                 <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
                     <div className="space-y-5">
-                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                        {!templateRequired && <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div>
                                 <h2 className="text-base font-semibold text-slate-950">Job Setup</h2>
                                 <p className="mt-1 text-sm text-slate-500">{scheduleLater ? "Choose a template or basic job. The job will be saved as Unscheduled." : "Choose a template or custom scope, then schedule the first visit."}</p>
@@ -2267,14 +2285,16 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                     <p className="mt-1 text-sm">{scheduleLater ? "Create one simple job item with a basic price." : "Create one simple job item with a basic price and scheduled visit."}</p>
                                 </button>
                             </div>
-                        </section>
+                        </section>}
 
                         {mode === "template" ? (
                             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                                <label className="block">
-                                    <span className="text-sm font-semibold text-slate-700">Job Template</span>
+                                <label className="block" htmlFor="basic-work-order-template">
+                                    <span className="text-sm font-semibold text-slate-700">Job Template (required)</span>
                                     <div className="mt-2">
                                         <Select
+                                            inputId="basic-work-order-template"
+                                            required
                                             value={selectedTemplate}
                                             options={templateOptions}
                                             onChange={setSelectedTemplate}
@@ -2616,6 +2636,10 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                     <Detail label="Body Of Water" value={resolvedJobBodyOfWaterName || (selectedTemplateRequiresBodyOfWater ? "Required" : "Not selected")} />
                                     <Detail label="Equipment" value={assignedEquipmentSummary.equipmentNames?.join(", ") || selectedEquipmentName || (selectedTemplateRequiresEquipment ? "Required" : "Not selected")} />
 	                                <Detail label="Price" value={moneyFromCents(generatedPriceCents)} />
+                                    {firstVisitPay?.payrollMode === "custom" && (
+                                        <Detail label="First visit fixed pay" value={(firstVisitPay.manualPayOverrideCents ?? -1) < 0
+                                            ? "Custom pay amount required" : moneyFromCents(firstVisitPay.manualPayOverrideCents)} />
+                                    )}
 	                            </div>
 	                            {!embedded && <><button
 	                                type="button"
@@ -2649,7 +2673,9 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                     <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-5">
                         <div>
                             <DialogTitle className="text-xl font-bold text-slate-950">Create Job</DialogTitle>
-                            <p className="mt-1 text-sm text-slate-500">Create a job from a template or a basic job. Schedule the first visit when ready.</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                                {templateRequired ? "Choose a template and schedule the first visit when ready." : "Create a job from a template or a basic job. Schedule the first visit when ready."}
+                            </p>
                         </div>
                         <button type="button" aria-label="Close create job" onClick={onCancel} disabled={creating}
                             className={workspaceButtonClass({ tone: "slate", className: "shrink-0" })}>

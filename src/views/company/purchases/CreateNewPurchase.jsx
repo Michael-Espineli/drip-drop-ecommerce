@@ -27,6 +27,7 @@ import {
   findLinkedProductForVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
+  isMergedCatalogRecord,
   productCatalogCollectionRef,
   productCatalogDocRef,
   productOptionSearchText,
@@ -329,7 +330,7 @@ const CreateNewPurchase = () => {
             };
           })
         );
-        const productItems = productSnap.docs.map((productDoc) => ({ id: productDoc.id, ...productDoc.data() }));
+        const productItems = productSnap.docs.map((productDoc) => ({ ...productDoc.data(), id: productDoc.id })).filter(row => !isMergedCatalogRecord(row));
         const vendorItems = vendorItemSnap.docs.map((docSnap) => {
           const itemData = docSnap.data();
           const item = {
@@ -371,7 +372,7 @@ const CreateNewPurchase = () => {
         });
 
         setCompanyUserList(users);
-        setVendorItemList(vendorItems);
+        setVendorItemList(vendorItems.filter(row => !isMergedCatalogRecord(row)));
         setProducts(productItems);
         setVendorList(vendors);
         setSelectedVendor((current) => current || vendors[0] || null);

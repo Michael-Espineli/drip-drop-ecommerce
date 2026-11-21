@@ -16,7 +16,8 @@ function client(uid) {
   users[uid] = { app, db };
   return db;
 }
-const permissions = { full: ['22'], self: ['23'], others: ['29'], custom: ['27'], customOthers: ['31'], stopOnly: ['252'], editor: ['920'], none: [], owner: [], 'someone-else': [] };
+const permissions = { full: ['22'], self: ['23'], others: ['29'], custom: ['27'], customOthers: ['31'], stopOnly: ['252'], editor: ['920'], scheduler: ['242'], payrollScheduler: ['242', '424'], none: [], owner: [], 'someone-else': [] };
+const visitPay = { payrollMode: 'custom', manualPayOverrideCents: 3500, manualPayOverrideNotes: 'Approved visit amount', payQuantity: 1 };
 Object.keys(permissions).forEach(client);
 const seeded = (async () => {
   const batch = store.batch();
@@ -29,18 +30,21 @@ const seeded = (async () => {
     batch.set(store.doc(p + `jobTemplates/${id}`), { id, ...values });
     batch.set(store.doc(p + `jobTemplates/${id}/tasks/source`), { name: 'Approved task', contractedRate: 2000, payTypeId: 'repair', payrollMode: 'automatic' });
     batch.set(store.doc(p + `jobTemplates/${id}/tasks/zero`), { name: 'Approved zero override', contractedRate: 0, manualPayOverrideCents: 0, payrollMode: 'custom' });
+    batch.set(store.doc(p + `jobTemplates/${id}/plannedServiceStops/fixed`), visitPay);
+    batch.set(store.doc(p + `jobTemplates/${id}/plannedServiceStops/zero`), { manualPayOverrideCents: 0 });
     for (let index = 0; index < 6; index++) batch.set(store.doc(p + `jobTemplates/${id}/tasks/source-${index}`), { name: `Task ${index}`, contractedRate: 2000, payTypeId: 'repair', payrollMode: 'automatic' });
   }
   await batch.commit();
 })();
 let sequence = 0;
-async function create(uid, { template = 'field', worker = uid, visit = true, task = false, taskCount = 1, rate = 2000, taskSource = 'source', taskPay = {}, extraWorker, jobId = `new-${++sequence}` } = {}) {
+async function create(uid, { template = 'field', worker = uid, visit = true, task = false, taskCount = 1, rate = 2000, taskSource = 'source', taskPay = {}, extraWorker, plannedPay, scheduledPay, jobId = `new-${++sequence}` } = {}) {
   await seeded;
   const db = users[uid].db, batch = writeBatch(db), stopId = `visit-${jobId}`;
   const job = { id: jobId, sourceTemplateId: template, customerId: 'customer', serviceLocationId: 'site', createdByUserId: uid, operationStatus: 'Scheduled', billingStatus: 'Draft', serviceStopIds: visit ? [stopId] : [], ...(visit ? { scheduledServiceStopId: stopId } : {}) };
   batch.set(doc(db, p + `workOrders/${jobId}`), job);
   const stop = { jobId, techId: worker, customerId: 'customer', serviceLocationId: 'site', serviceDate: Timestamp.fromDate(new Date()), operationStatus: 'Not Finished' };
-  if (visit) batch.set(doc(db, p + `serviceStops/${stopId}`), stop);
+  if (plannedPay) batch.set(doc(db, p + `workOrders/${jobId}/plannedServiceStops/planned`), plannedPay);
+  if (visit) batch.set(doc(db, p + `serviceStops/${stopId}`), { ...stop, ...scheduledPay });
   if (extraWorker) batch.set(doc(db, p + `serviceStops/extra-${jobId}`), { ...stop, techId: extraWorker });
   if (task) {
     for (let index = 0; index < taskCount; index++) {
@@ -81,6 +85,37 @@ test('approved template overrides including zero survive copying without allowin
   await denied(() => create('self', { task: true, taskSource: 'zero', rate: 0, taskPay: { payTypeId: '', payrollMode: 'custom', manualPayOverrideCents: 5000 } }));
   await denied(() => create('self', { task: true, taskPay: { payrollAgreement: { offerId: 'forged' } } }));
 });
+test('initial scheduling accepts copied fixed visit pay and a legacy explicit zero', async () => {
+  for (const [sourceTemplatePlannedStopId, pay] of [['fixed', visitPay], ['zero', { payrollMode: 'custom', manualPayOverrideCents: 0 }]]) {
+    const id = await create('self', {
+      plannedPay: { ...pay, sourceTemplatePlannedStopId },
+      scheduledPay: { ...pay, plannedServiceStopId: 'planned' },
+    });
+    assert.equal((await store.doc(p + `serviceStops/visit-${id}`).get()).data().manualPayOverrideCents, pay.manualPayOverrideCents);
+  }
+});
+test('planned visit references cannot authorize a forged amount or an accepted offer agreement', async () => {
+  const plannedPay = { ...visitPay, sourceTemplatePlannedStopId: 'fixed' };
+  const scheduledPay = { ...visitPay, plannedServiceStopId: 'planned' };
+  await denied(() => create('self', { plannedPay, scheduledPay: { ...scheduledPay, manualPayOverrideCents: 9000 } }));
+  await denied(() => create('self', {
+    plannedPay: { ...plannedPay, manualPayOverrideCents: 9000 },
+    scheduledPay: { ...scheduledPay, manualPayOverrideCents: 9000 },
+  }));
+  await denied(() => create('self', { plannedPay, scheduledPay: { ...scheduledPay, payrollAgreement: { offerId: 'forged' } } }));
+});
+test('an existing job scheduler inherits authorized visit pay from the linked job only', async () => {
+  await seeded;
+  const uid = 'scheduler', jobId = 'existing-visit-pay';
+  await store.doc(p + `workOrders/${jobId}`).set({ sourceTemplateId: 'field' });
+  await store.doc(p + `workOrders/${jobId}/plannedServiceStops/planned`).set({ ...visitPay, sourceTemplatePlannedStopId: 'fixed' });
+  const stop = { jobId, techId: uid, operationStatus: 'Not Finished', plannedServiceStopId: 'planned', ...visitPay };
+  await setDoc(doc(users[uid].db, p + 'serviceStops/existing-fixed'), stop);
+  await denied(() => setDoc(doc(users[uid].db, p + 'serviceStops/existing-forged'), { ...stop, plannedServiceStopId: 'other-job-plan' }));
+  await setDoc(doc(users.payrollScheduler.db, p + 'serviceStops/existing-payroll-manager'), {
+    ...stop, techId: 'payrollScheduler', manualPayOverrideCents: 5000,
+  });
+});
 test('custom self/others permissions work without granting template creation', async () => {
   await create('custom', { template: '', task: true, rate: 0 });
   await denied(() => create('custom', { template: '', worker: 'someone-else' }));
@@ -118,7 +153,11 @@ test('limited creators cannot relabel the template or reassign a created job dir
   await updateDoc(doc(users.self.db, p + `workOrders/${id}`), { operationStatus: 'In Progress' });
 });
 test('a template with several distinct paid tasks stays within the rule evaluation budget', async () => {
-  await create('others', { worker: 'someone-else', task: true, taskCount: 6 });
+  await create('others', {
+    worker: 'someone-else', task: true, taskCount: 6,
+    plannedPay: { ...visitPay, sourceTemplatePlannedStopId: 'fixed' },
+    scheduledPay: { ...visitPay, plannedServiceStopId: 'planned' },
+  });
 });
 test('template managers can reactivate a legacy template by updating both availability fields', async () => {
   await seeded;

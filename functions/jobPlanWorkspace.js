@@ -26,6 +26,7 @@ const hasPurchasedMaterial = (item) => Boolean(
 
 // Snapshot prices/descriptions may change. Execution and fulfillment belong to the live records.
 const runtimeFields = new Set([
+  'materialUsageOnly',
   'status', 'operationStatus', 'completionStatus', 'actualTime', 'laborContractId', 'serviceStopId', 'serviceStopIdString',
   'convertedServiceStopId', 'shoppingListItemId', 'shoppingListItemIds', 'datePurchased', 'dateCompleted', 'dateFinished',
   'replacementEquipmentId', 'newEquipmentId', 'equipmentId', 'equipmentName', 'serviceLocationId', 'bodyOfWaterId',
@@ -195,7 +196,11 @@ async function prepareJobPlanWorkspace({
   for (const items of [tasks, plannedServiceStops, laborLineItems, shoppingItems]) {
     if (new Set(items.map((item) => item.id)).size !== items.length) throw new HttpsError('failed-precondition', 'This plan contains duplicate scope IDs. Save a corrected plan before continuing.');
   }
-  const scope = reconcileJobPlanScope(current, { tasks, plannedServiceStops, laborLineItems, shoppingItems });
+  const actualOnly = current.shoppingItems.filter(item => item.materialUsageOnly === true);
+  const scope = reconcileJobPlanScope(
+    { ...current, shoppingItems: current.shoppingItems.filter(item => item.materialUsageOnly !== true) },
+    { tasks, plannedServiceStops, laborLineItems, shoppingItems: shoppingItems.filter(item => !actualOnly.some(actual => actual.id === item.id)) },
+  );
   if (accepted) {
     scope.shoppingItems = scope.shoppingItems.map((item) => ({
       ...item, estimateAccepted: true, estimateAcceptedAt: item.estimateAcceptedAt || timestamp,
@@ -203,6 +208,7 @@ async function prepareJobPlanWorkspace({
       needsAction: !['installed', 'invoiced', 'paid'].includes(key(item.status)),
     }));
   }
+  scope.shoppingItems.push(...actualOnly);
   // Keep both sides of task/material links when restoring older plan snapshots.
   scope.tasks = scope.tasks.map((task) => {
     const shoppingListItemIds = [...new Set([
@@ -226,7 +232,7 @@ async function prepareJobPlanWorkspace({
     updatedAt: timestamp, updatedAtMillis: Date.now(),
   };
   if (accepted) {
-    const materialPrice = scope.shoppingItems.reduce((sum, item) => sum + amount(item.plannedTotalPriceCents ?? Number(item.plannedUnitPriceCents ?? item.price ?? 0) * Number(item.quantity ?? 1)), 0);
+    const materialPrice = scope.shoppingItems.filter(item => !item.materialUsageOnly).reduce((sum, item) => sum + amount(item.plannedTotalPriceCents ?? Number(item.plannedUnitPriceCents ?? item.price ?? 0) * Number(item.quantity ?? 1)), 0);
     const { priceCents: laborPrice, costCents: laborCost } = jobLaborTotals(scope);
     const totalPrice = amount(plan.totalAmountCents ?? plan.rateAmountCents ?? selectedOption?.totalAmountCents ?? selectedOption?.rateAmountCents ?? (laborPrice + materialPrice));
     Object.assign(jobUpdates, {
@@ -239,6 +245,8 @@ async function prepareJobPlanWorkspace({
       estimateLineItems: list(plan.estimateLineItems ?? plan.lineItems ?? selectedOption?.lineItems),
       estimateSubtotalCents: amount(plan.subtotalAmountCents ?? totalPrice),
       estimateTotalCents: totalPrice,
+      acceptedEstimateTotalCents: totalPrice,
+      acceptedEstimateLineItems: list(plan.estimateLineItems ?? plan.lineItems ?? selectedOption?.lineItems),
       acceptedPlanCostSummary: plan.costSummary || {}, acceptedPlanBillingSummary: plan.billingSummary || {},
     });
     if (updateBillingStatus) {

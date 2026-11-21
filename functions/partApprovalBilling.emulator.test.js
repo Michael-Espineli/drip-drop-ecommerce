@@ -10,7 +10,7 @@ after(() => admin.app().delete());
 const req = (approvalId, preference='payNow', uid='homeowner') => ({ data: { approvalId, action:'approved', paymentPreference:preference }, auth: { uid, token: { email:'homeowner@example.test', email_verified:true } }, rawRequest:{} });
 async function seed(id, paymentPreference='payNow') {
   const companyId=`company-${id}`, approvalId=`approval-${id}`;
-  await db.doc(`companies/${companyId}`).set({ownerId:'owner',name:'Pool Company'});
+  await db.doc(`companies/${companyId}`).set({customerBillingEnabled: true, ownerId:'owner',name:'Pool Company'});
   await db.doc(`companies/${companyId}/customers/customer`).set({email:'homeowner@example.test',customerUserId:'homeowner'});
   await db.doc(`customerPartApprovals/${approvalId}`).set({companyId,customerId:'customer',customerUserId:'homeowner',status:'pending',itemName:'Seal kit',quantity:'2',plannedUnitPriceCents:2250,plannedTotalPriceCents:4500,paymentPreference});
   return {companyId,approvalId};

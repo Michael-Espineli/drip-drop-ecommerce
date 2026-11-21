@@ -1,26 +1,30 @@
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
+import { workspaceButtonClass } from '../../../components/workspace/workspaceStyles';
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
 import { buildCompanyPayType, defaultStopPayCategories, emptyWorkTypeForm, rateTypeOptions, resolveStopPayCategories, stackBehaviorOptions, workCategoryOptions } from "../../../utils/payroll/payTypeSetup";
 import PayRequestsPanel from './PayRequestsPanel';
 import PayStatementDailySummary from "./PayStatementDailySummary";
+import PayrollStopCompletion from "./PayrollStopCompletion";
 import { buildStatementCandidateGroups, statementPreviewSummary, statementPreviewSummaryState } from "../../../utils/payroll/statementCandidates";
 import { canClearZeroTask } from "../../../utils/payroll/payCalculation";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import usePayrollNotifications from "../../../hooks/usePayrollNotifications";
-import React, { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Dialog, DialogPanel, DialogTitle, Description } from "@headlessui/react";
 import {
   collection,
   doc,
   documentId,
   getDoc,
+  getDocFromServer,
   getDocs,
   getCountFromServer,
   limit as firestoreLimit,
   orderBy,
   query,
+  runTransaction,
   setDoc,
   startAfter,
   updateDoc,
@@ -146,18 +150,6 @@ const isoDateTime = (value) => {
 
 const debugDateTime = (value) => isoDateTime(value) || "-";
 const readableDateTime = value => dateFromValue(value)?.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) || "No date recorded";
-
-const serializeForDebug = (value) => {
-  if (value?.toDate) return value.toDate().toISOString();
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(serializeForDebug);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, nestedValue]) => [key, serializeForDebug(nestedValue)])
-    );
-  }
-  return value;
-};
 
 const statusLabel = (value) =>
   String(value || "unknown")
@@ -837,23 +829,6 @@ const isServiceStopFinished = (stop) =>
   isFinishedStatus(stop?.operationStatus) ||
   Boolean(dateFromValue(stop?.endTime) || dateFromValue(stop?.finishedAt) || dateFromValue(stop?.completedAt));
 
-const dateAtStartOfDay = (value) => {
-  const date = value instanceof Date ? value : new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-const dateAtEndOfDay = (value) => {
-  const date = value instanceof Date ? value : new Date(`${value}T23:59:59`);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-const minutesBetween = (start, end) => {
-  const startValue = dateFromValue(start);
-  const endValue = dateFromValue(end);
-  if (!startValue || !endValue) return 0;
-  return Math.max(0, Math.round((endValue.getTime() - startValue.getTime()) / 60000));
-};
-
 const serviceStopStreetAddress = (stop = {}) =>
   stop?.address?.streetAddress ||
   stop?.address?.address01 ||
@@ -877,6 +852,208 @@ const PayrollActionButton = ({ disabledReason = "", className = "", ...props }) 
         className={`${className} w-full${disabled ? " pointer-events-none" : ""}`} />
       {disabled ? <span id={reasonId} className="sr-only">{disabledReason}</span> : null}
     </span>
+  );
+};
+
+const payrollLineNeedsReview = item => item.calculationStatus === "needsReview" &&
+  !isLineItemVoided(item) && !isLineItemApproved(item) && !item.payStatementId && !item.exportBatchId;
+
+const payrollLineReviewReason = item => item.calculationNotes || item.notes;
+const payrollLineStatus = item => isLineItemVoided(item) ? "voided" : isLineItemPaid(item) ? "paid" : item.calculationStatus;
+const payrollDetailButton = (tone = "slate") => workspaceButtonClass({
+  tone, className: "justify-center disabled:cursor-not-allowed disabled:opacity-50",
+});
+
+const PayrollDetailSection = ({ title, details }) => {
+  const headingId = useId();
+  const rows = details.filter(([, value]) => value != null && value !== "");
+  if (!rows.length) return null;
+
+  return (
+    <section aria-labelledby={headingId} className="rounded-lg border border-slate-200 bg-white">
+      <h3 id={headingId} className="px-4 pb-2 pt-3 text-base font-bold text-slate-900">{title}</h3>
+      <dl className="divide-y divide-slate-200 px-4">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex flex-col gap-x-4 gap-y-1 py-2.5 sm:flex-row">
+            <dt className="text-sm font-medium text-slate-600 sm:w-36 sm:shrink-0">{label}</dt>
+            <dd className="min-w-0 whitespace-pre-line break-words text-sm text-slate-900">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+};
+
+const PayrollLineDetailDialog = ({
+  item, canManage, saving, onClose, onSaveNote, onRefresh, onClear, onApprove, onMarkPaid,
+  approvalDisabledReason, paymentDisabledReason,
+}) => {
+  const [note, setNote] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const closeButton = useRef(null);
+  const status = payrollLineStatus(item);
+  const needsReview = status === "needsReview";
+  const canReview = canManage && payrollLineNeedsReview(item);
+  const canClear = canManage && canClearZeroTask(item);
+  const isLocked = Boolean(item.payStatementId || item.exportBatchId);
+  const canRecalculate = canReview && Boolean(item.serviceStopId);
+  const calculationNote = payrollLineReviewReason(item);
+  const workLink = item.serviceStopId
+    ? { label: "Open service stop", to: `/company/serviceStops/detail/${encodeURIComponent(item.serviceStopId)}` }
+    : item.jobId ? { label: "Open job", to: `/company/jobs/detail/${encodeURIComponent(item.jobId)}/actual` } : null;
+  const technician = displayReferenceValue(item.technicianName || (item.technicianId ? "Assigned technician" : "Technician unassigned"), "Assigned technician");
+  const rateLabel = rateTypeLabel(item);
+  const hasRate = rateLabel !== "Missing Rate";
+  const rateAmount = hasRate && item.rateAmountCents != null && Number.isFinite(Number(item.rateAmountCents))
+    ? item.rateType === "percentage" ? `${Number(item.rateAmountCents) / 100}%` : moneyFromCents(item.rateAmountCents)
+    : null;
+
+  const submitNote = async event => {
+    event.preventDefault();
+    if (!canReview || saving || !note.trim()) return;
+    setError("");
+    setMessage("");
+    try {
+      await onSaveNote(note.trim());
+      setNote("");
+      setMessage("Review note saved.");
+    } catch (err) {
+      setError(userFacingErrorMessage(err, err.message || "Could not save the review note."));
+    }
+  };
+
+  const runReviewAction = async action => {
+    setError("");
+    setMessage("");
+    try {
+      setMessage(await action());
+      setConfirmClear(false);
+    } catch (err) {
+      setError(userFacingErrorMessage(err, err.message || "Could not update the payroll line."));
+    }
+  };
+
+  return (
+    <Dialog open onClose={saving ? () => {} : onClose} initialFocus={closeButton} className="relative z-50">
+      <div aria-hidden="true" className="fixed inset-0 bg-slate-950/60" />
+      <div className="fixed inset-0 flex items-center justify-center p-3 sm:p-6">
+        <DialogPanel className="company-theme flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl sm:max-h-[calc(100dvh-3rem)]">
+          <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-6">
+            <div className="min-w-0">
+              <DialogTitle className="text-xl font-bold text-slate-900">Payroll Line Detail</DialogTitle>
+              <Description className="mt-1 break-words text-sm text-slate-600">{displayWorkTitle(item)}</Description>
+            </div>
+            <button ref={closeButton} type="button" onClick={onClose} disabled={Boolean(saving)} className={payrollDetailButton()}>Close</button>
+          </header>
+
+          <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain bg-slate-50 p-4 [scrollbar-color:var(--color-border-strong)_transparent] [scrollbar-width:thin] sm:px-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                {needsReview ? <span className="workspace-status workspace-status-amber">Needs Review</span> : <StatusPill status={status} />}
+                <p className="mt-2 break-words font-bold text-slate-900">{technician}</p>
+                {item.completedDate && <p className="mt-0.5 text-sm text-slate-600">{readableDateTime(item.completedDate)}</p>}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-600">{needsReview ? "Recorded amount" : "Total pay"}</p>
+                <p className="text-2xl font-bold tabular-nums text-slate-900">{moneyFromCents(item.totalAmountCents)}</p>
+              </div>
+            </div>
+
+            {needsReview && (
+              <section aria-label="Payroll review" className="space-y-3 rounded-lg border border-[var(--workspace-amber-border)] bg-white p-4">
+                <div className="flex items-start gap-2">
+                  <IoWarningOutline aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-[var(--workspace-amber-text)]" />
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-slate-900">Why this line needs review</h3>
+                    <p className="mt-1 whitespace-pre-line break-words text-sm text-slate-700">{calculationNote || "Check the work record and payroll setup for missing information."}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {workLink && <Link to={workLink.to} className={payrollDetailButton("blue")}>{workLink.label}</Link>}
+                  <Link to="/company/settings/payroll-setup?tab=rates" className={payrollDetailButton("blue")}>Open payroll setup</Link>
+                  <button type="button" disabled={Boolean(saving)} className={payrollDetailButton()}
+                    onClick={() => runReviewAction(() => onRefresh(canRecalculate))}>
+                    {saving === "refresh-line-detail" ? "Checking payroll…" : canRecalculate ? "Recalculate stop pay" : "Refresh line"}
+                  </button>
+                </div>
+                {canReview && (
+                  <form onSubmit={submitNote} className="border-t border-slate-200 pt-3">
+                    <label className="block text-sm font-semibold text-slate-800">
+                      Add a review note
+                      <textarea className="theme-field mt-1 block w-full rounded-md border px-3 py-2 text-sm"
+                        rows={2} maxLength={1000} value={note} onChange={event => setNote(event.target.value)}
+                        disabled={Boolean(saving)} />
+                    </label>
+                    <button type="submit" disabled={Boolean(saving) || !note.trim()} className={`${payrollDetailButton("blue")} mt-2`}>
+                      {saving === "save-line-review-note" ? "Saving…" : "Save review note"}
+                    </button>
+                  </form>
+                )}
+              </section>
+            )}
+
+            {error && <p role="alert" className="break-words rounded-lg border border-rose-200 bg-white p-3 text-sm text-rose-700">{error}</p>}
+            {message && <p role="status" className="break-words rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">{message}</p>}
+
+            <PayrollDetailSection title="Pay breakdown" details={[
+              ["Pay type", item.payTypeName || item.workTypeName],
+              ["Pay basis", item.payBasis && statusLabel(item.payBasis)],
+              ["Rate", item.rateType || !hasRate ? rateLabel : ""],
+              ["Rate amount", rateAmount],
+              ["Quantity", item.quantity != null && Number.isFinite(Number(item.quantity)) ? `${Number(item.quantity)} ${item.quantityUnit === "bodyOfWater" ? "bodies of water" : item.quantityUnit === "serviceLocation" ? "locations" : item.quantityUnit || ""}`.trim() : null],
+            ]} />
+            <PayrollDetailSection title="Work details" details={[
+              ["Customer", item.customerName],
+              ["Location", item.serviceLocationAddress],
+              ["Worker type", item.workerType && statusLabel(item.workerType)],
+              ["Source", (item.payrollSource || item.source) && statusLabel(item.payrollSource || item.source)],
+              ["Service stop", item.serviceStopInternalId && displayReferenceValue(item.serviceStopInternalId, "Service stop")],
+              ["Job", item.jobInternalId && displayReferenceValue(item.jobInternalId, "Job")],
+            ]} />
+            <PayrollDetailSection title="Notes and payment" details={[
+              ["Calculation note", !needsReview && calculationNote ? calculationNote : null],
+              ["Review notes", item.adminReviewNotes],
+              ["Void reason", item.voidReason && statusLabel(item.voidReason)],
+              ["Approved", item.approvedAt && readableDateTime(item.approvedAt)],
+              ["Paid", item.paidAt && readableDateTime(item.paidAt)],
+              ["Pay statement", item.payStatementReference
+                ? displayReferenceValue(item.payStatementReference, "Linked to a pay statement")
+                : item.payStatementId ? "Linked to a pay statement" : ""],
+              ["Payment reference", (item.paymentReference || item.externalReferenceId) && displayReferenceValue(item.paymentReference || item.externalReferenceId, "Payment recorded")],
+              ["Payment notes", item.paidNotes],
+            ]} />
+            {isLocked && <p className="text-sm text-slate-600">This line is part of a pay statement or payroll export.</p>}
+          </div>
+
+          {canManage && (canClear || !needsReview && (!approvalDisabledReason || !paymentDisabledReason) && !isLocked) && (
+            <footer className="shrink-0 border-t border-slate-200 px-4 py-3 sm:px-6">
+              {confirmClear && canClear ? (
+                <div className="space-y-2">
+                  <p className="text-sm text-slate-700">Clear this task only if no additional pay is owed.</p>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button type="button" disabled={Boolean(saving)} onClick={() => setConfirmClear(false)} className={payrollDetailButton()}>Cancel</button>
+                    <button type="button" disabled={Boolean(saving)} onClick={() => runReviewAction(onClear)} className={payrollDetailButton("amber")}>Confirm clear $0</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap justify-end gap-2">
+                  {canClear ? (
+                    <button type="button" disabled={Boolean(saving)} onClick={() => setConfirmClear(true)} className={payrollDetailButton("amber")}>Clear $0</button>
+                  ) : (
+                    <>
+                      {!approvalDisabledReason && <button type="button" onClick={onApprove} className={payrollDetailButton("blue")}>Approve</button>}
+                      {!paymentDisabledReason && <button type="button" onClick={onMarkPaid} className={payrollDetailButton("emerald")}>Mark Paid</button>}
+                    </>
+                  )}
+                </div>
+              )}
+            </footer>
+          )}
+        </DialogPanel>
+      </div>
+    </Dialog>
   );
 };
 
@@ -923,7 +1100,6 @@ const Payroll = ({ mode = "payroll" }) => {
   const [statementGenerationInfo, setStatementGenerationInfo] = useState({});
   const [previewProgress, setPreviewProgress] = useState(0);
   const statementActionRef = useRef(false);
-  const serviceStopBackfillActionRef = useRef(false);
   const payrollCatalogCache = useRef(new Map());
   const appliedCatalogKey = useRef(null);
   const [statementFilters, setStatementFilters] = useState(defaultStatementFilters);
@@ -958,6 +1134,7 @@ const Payroll = ({ mode = "payroll" }) => {
   const statementCandidateGroups = activeStatementPreview?.groups || [];
   const [loading, setLoading] = useState(false);
   const [payrollReloadVersion, setPayrollReloadVersion] = useState(0);
+  const reloadProcessedPayroll = useCallback(() => setPayrollReloadVersion(version => version + 1), []);
   const [error, setError] = useState("");
   const [savingAction, setSavingAction] = useState("");
   const [approvalProgress, setApprovalProgress] = useState(null);
@@ -977,10 +1154,9 @@ const Payroll = ({ mode = "payroll" }) => {
   const [paymentModal, setPaymentModal] = useState(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
   const [detailLineItem, setDetailLineItem] = useState(null);
+  const lineReviewActionRef = useRef(false);
   const [detailStatement, setDetailStatement] = useState(null);
   const [showZeroAmountStatementLines, setShowZeroAmountStatementLines] = useState(false);
-  const [backfillResult, setBackfillResult] = useState(null);
-  const [backfillProgress, setBackfillProgress] = useState(null);
   const [stopPayModal, setStopPayModal] = useState(null);
   const [rateMatrixEditMode, setRateMatrixEditMode] = useState(false);
   const [rateMatrixDrafts, setRateMatrixDrafts] = useState({});
@@ -1037,6 +1213,14 @@ const Payroll = ({ mode = "payroll" }) => {
   }, [previewScopeKey]);
 
   useEffect(() => {
+    setDetailLineItem(null);
+  }, [recentlySelectedCompany, activeTab]);
+
+  useEffect(() => {
+    setPaymentModal(null);
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
     setActiveTab(() => {
       const setupTabs = ["overview", "stopPay", "rates", "settings"];
       const payrollTabs = ["statements", "lineItems", "requests"];
@@ -1087,8 +1271,6 @@ const Payroll = ({ mode = "payroll" }) => {
       setEditingRateId("");
       setDetailStatement(null);
       setShowZeroAmountStatementLines(false);
-      setBackfillResult(null);
-      setBackfillProgress(null);
       setRateMatrixEditMode(false);
       setRateMatrixDrafts({});
       setRateMatrixFiltersOpen(false);
@@ -1323,6 +1505,7 @@ const Payroll = ({ mode = "payroll" }) => {
     const patch = item => clearedIds.has(item.id) ? { ...item, calculationStatus: "voided", ...updates.get(item.id) } : item;
     setLineItems(current => current.map(patch));
     setDetailLineItem(current => current ? patch(current) : current);
+    setStatementPreview(null);
     setLineItemCountVersion(version => version + 1);
     return clearedIds.size;
   };
@@ -1483,6 +1666,22 @@ const Payroll = ({ mode = "payroll" }) => {
     setStatementPreview(null);
     setLineItemCountVersion(version => version + 1);
     setLineItems((items) => items.map((item) => (item.id === id ? { ...item, ...payload } : item)));
+    setDetailLineItem(current => current?.id === id ? { ...current, ...payload } : current);
+  };
+
+  const updatePayrollLine = (item, buildChanges) => {
+    const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
+    return runTransaction(db, async transaction => {
+      const current = (await transaction.get(lineRef)).data();
+      if (!current || (current.companyId && current.companyId !== recentlySelectedCompany) ||
+          (current.technicianId || "") !== (item.technicianId || "") ||
+          Number(current.totalAmountCents || 0) !== Number(item.totalAmountCents || 0)) {
+        throw new Error("This line changed while you were reviewing it. Refresh payroll and check the current technician and amount.");
+      }
+      const changes = buildChanges(current);
+      transaction.update(lineRef, changes);
+      return changes;
+    });
   };
 
   const updateLocalStatement = (id, payload) => {
@@ -2405,12 +2604,8 @@ const Payroll = ({ mode = "payroll" }) => {
     };
   };
 
-  const showServiceStopBackfill = recentlySelectedCompany === SERVICE_STOP_BACKFILL_COMPANY_ID;
-  const showServiceStopBackfillPanel = showServiceStopBackfill && (isSetupMode || activeTab === "lineItems");
-  const finishStopsDisabledReason = savingAction ? "Wait for the current payroll action to finish."
-    : !permissionsReady ? "Service stop permissions are still loading. Please wait."
-    : !can("240") || !can("244") ? "You need View Service Stops and Edit Service Stops access to finish stops for payroll."
-    : !startDate || !endDate || endDate < startDate ? "Choose a valid service stop date range first." : "";
+  const showServiceStopBackfillPanel = recentlySelectedCompany === SERVICE_STOP_BACKFILL_COMPANY_ID &&
+    (isSetupMode || activeTab === "lineItems");
 
   const serviceStopTypeForStop = (stop = {}) => {
     const typeId = stop.typeId || stop.serviceStopTypeId || "";
@@ -2425,145 +2620,6 @@ const Payroll = ({ mode = "payroll" }) => {
         defaultWorkTypeIds: stop.defaultWorkTypeIds || stop.serviceStopDefaultWorkTypeIds || [],
       }
     );
-  };
-
-  const finishUnfinishedServiceStopsForRange = async () => {
-    if (!showServiceStopBackfill || !recentlySelectedCompany || serviceStopBackfillActionRef.current || finishStopsDisabledReason) return;
-
-    const start = dateAtStartOfDay(startDate);
-    const end = dateAtEndOfDay(endDate);
-    if (!start || !end || start > end) {
-      setActionFailure("Choose a valid service stop date range first.");
-      return;
-    }
-
-    const actionKey = "finish-service-stop-range";
-    serviceStopBackfillActionRef.current = true;
-    setSavingAction(actionKey);
-    setActionNotice();
-    setBackfillResult(null);
-    setBackfillProgress({
-      action: "Finishing Stops",
-      current: 0,
-      total: 0,
-      detail: "Finding unfinished service stops...",
-    });
-
-    let finishedStops = 0;
-    let finishedTasks = 0;
-    let activeStopId = "";
-    let phase = "finding unfinished service stops";
-    try {
-      const stopsSnap = await getDocs(
-        query(
-          collection(db, "companies", recentlySelectedCompany, "serviceStops"),
-          where("serviceDate", ">=", start),
-          where("serviceDate", "<=", end)
-        )
-      );
-      const unfinishedStops = stopsSnap.docs
-        .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-        .filter((stop) => !isServiceStopFinished(stop))
-        .sort((a, b) => (dateFromValue(a.serviceDate)?.getTime() || 0) - (dateFromValue(b.serviceDate)?.getTime() || 0));
-
-      if (unfinishedStops.length === 0) {
-        setBackfillResult({ finishedStops: 0, finishedTasks: 0 });
-        setBackfillProgress(null);
-        setActionNotice("No unfinished service stops were found in that date range.");
-        return;
-      }
-
-      const totalUnfinishedStops = unfinishedStops.length;
-      setBackfillProgress({
-        action: "Finishing Stops",
-        current: 0,
-        total: totalUnfinishedStops,
-        detail: `0/${totalUnfinishedStops} service stops ready`,
-      });
-
-      for (let index = 0; index < unfinishedStops.length; index += 1) {
-        const stop = unfinishedStops[index];
-        activeStopId = stop.id;
-        phase = "reading service stop tasks";
-        setBackfillProgress({
-          action: "Finishing Stops",
-          current: index + 1,
-          total: totalUnfinishedStops,
-          detail: `${index + 1}/${totalUnfinishedStops} service stops being worked on`,
-        });
-        const tasksSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks"));
-        const rawTasks = tasksSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-        const serviceDate = dateFromValue(stop.serviceDate) || new Date();
-        const completedAt = dateFromValue(stop.endTime) || dateFromValue(stop.completedAt) || dateFromValue(stop.finishedAt) || new Date(serviceDate);
-        if (completedAt.getHours() === 0 && completedAt.getMinutes() === 0 && completedAt.getSeconds() === 0) {
-          completedAt.setHours(17, 0, 0, 0);
-        }
-        const fallbackDuration = Number(stop.estimatedDuration || stop.duration || 0);
-        const startAt = dateFromValue(stop.startTime) || new Date(completedAt.getTime() - fallbackDuration * 60000);
-        const duration = minutesBetween(startAt, completedAt) || fallbackDuration;
-        // Payroll inherits the stop's technician when workerId is empty. Filling
-        // worker fields here changes protected pay terms and can deny the batch.
-        const newlyFinishedTasks = rawTasks.filter((task) => !isFinishedStatus(task.status));
-
-        const batch = writeBatch(db);
-
-        batch.update(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id), {
-          operationStatus: "Finished",
-          startTime: startAt,
-          endTime: completedAt,
-          finishedAt: completedAt,
-          completedAt,
-          completedDate: completedAt,
-          duration,
-          manuallyFinished: true,
-          manualFinishSource: "payroll_setup_bulk_finish",
-          completedWithoutCustomerEmail: true,
-          updatedAt: completedAt,
-        });
-
-        newlyFinishedTasks.forEach((task) => {
-          batch.update(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks", task.id), {
-            status: "Finished",
-            manualFinishSource: "payroll_setup_bulk_finish",
-            completedAt,
-            updatedAt: completedAt,
-          });
-        });
-
-        phase = "saving a service stop and its tasks";
-        await batch.commit();
-        finishedStops += 1;
-        finishedTasks += newlyFinishedTasks.length;
-      }
-
-      const result = {
-        finishedStops,
-        finishedTasks,
-      };
-      setBackfillProgress({
-        action: "Finishing Stops",
-        current: totalUnfinishedStops,
-        total: totalUnfinishedStops,
-        detail: "Service stops finished. Payroll is updating...",
-      });
-      setBackfillResult(result);
-      setActionNotice(
-        `Finished ${result.finishedStops} service stop(s) and ${result.finishedTasks} task(s). Payroll is updating; reload this page shortly to review it.`
-      );
-    } catch (err) {
-      console.error("Error finishing service stops for payroll:", err, {
-        companyId: recentlySelectedCompany, serviceStopId: activeStopId, phase, finishedStops, finishedTasks,
-      });
-      if (finishedStops) setBackfillResult({ finishedStops, finishedTasks });
-      const progress = finishedStops
-        ? `Finished ${finishedStops} service stop(s) and ${finishedTasks} task(s) before the error. Completed changes are kept; retry the same range to finish the remaining stops. `
-        : "";
-      setActionFailure(`${progress}Could not finish stops while ${phase}. ${userFacingErrorMessage(err, err.message || "Please try again.")}`);
-    } finally {
-      serviceStopBackfillActionRef.current = false;
-      setSavingAction("");
-      setBackfillProgress(null);
-    }
   };
 
   const statementGenerationDisabledReason = savingAction ? "Wait for the current payroll action to finish."
@@ -2745,22 +2801,25 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const approveLineItem = async (item) => {
+    if (!recentlySelectedCompany || !item?.id || savingAction || !canManagePayroll) return;
     if (canClearZeroTask(item)) return clearZeroTasks([item]);
-    if (item?.calculationStatus === "needsReview") return setActionFailure("Resolve the missing payroll setup before approving this line.");
-    if (!recentlySelectedCompany || !item?.id) return;
+    if (disabledLineActions(item).approvalDisabledReason) return;
     const actionKey = `approve-line-${item.id}`;
+    const scope = previewScopeKey;
     setSavingAction(actionKey);
     setActionNotice();
 
     try {
-      const payload = { ...buildApprovalPayload(), calculationStatus: "approved" };
-      const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
-      await updateDoc(lineRef, payload);
-      updateLocalLineItem(item.id, payload);
+      const payload = await updatePayrollLine(item, current => {
+        const reason = disabledLineActions(current).approvalDisabledReason;
+        if (reason || canClearZeroTask(current)) throw new Error(reason || "Use Clear $0 for a task with no additional pay.");
+        return { ...buildApprovalPayload(), calculationStatus: "approved" };
+      });
+      if (previewScopeRef.current === scope) updateLocalLineItem(item.id, payload);
       setActionNotice("Line item approved.");
     } catch (err) {
       console.error("Error approving payroll line item:", err);
-      setActionFailure("Could not approve that payroll line item.");
+      setActionFailure(userFacingErrorMessage(err, err.message || "Could not approve that payroll line item."));
     } finally {
       setSavingAction("");
     }
@@ -2810,6 +2869,7 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const openPaymentModal = (targetType, target) => {
+    if (targetType === "lineItem" && disabledLineActions(target).paymentDisabledReason) return;
     setPaymentForm({
       ...emptyPaymentForm(),
       paymentReference: target?.paymentReference || "",
@@ -2826,28 +2886,29 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const markLineItemPaid = async (item) => {
-    if (item?.calculationStatus === "needsReview") return setActionFailure("Resolve the missing payroll setup before marking this line paid.");
-    if (!recentlySelectedCompany || !item?.id) return;
+    if (!recentlySelectedCompany || !item?.id || disabledLineActions(item).paymentDisabledReason) return;
     const actionKey = `pay-line-${item.id}`;
+    const scope = previewScopeKey;
     setSavingAction(actionKey);
     setActionNotice();
 
     try {
       const paymentPayload = buildPaymentPayload();
-      const approvalPayload = item.approvedAt ? {} : buildApprovalPayload();
-      const payload = {
-        ...approvalPayload,
-        ...paymentPayload,
-        calculationStatus: "paid",
-      };
-      const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
-      await updateDoc(lineRef, payload);
-      updateLocalLineItem(item.id, payload);
+      const payload = await updatePayrollLine(item, current => {
+        const reason = disabledLineActions(current).paymentDisabledReason;
+        if (reason) throw new Error(reason);
+        return {
+          ...(current.approvedAt ? {} : buildApprovalPayload()),
+          ...paymentPayload,
+          calculationStatus: "paid",
+        };
+      });
+      if (previewScopeRef.current === scope) updateLocalLineItem(item.id, payload);
       setPaymentModal(null);
       setActionNotice("Line item marked paid.");
     } catch (err) {
       console.error("Error marking payroll line item paid:", err);
-      setActionFailure("Could not mark that payroll line item paid.");
+      setActionFailure(userFacingErrorMessage(err, err.message || "Could not mark that payroll line item paid."));
     } finally {
       setSavingAction("");
     }
@@ -2927,6 +2988,93 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const closeDetailModal = () => {
     setDetailLineItem(null);
+  };
+
+  const runLineReviewAction = async (actionKey, action) => {
+    if (savingAction || lineReviewActionRef.current) throw new Error("Wait for the current payroll action to finish.");
+    lineReviewActionRef.current = true;
+    setSavingAction(actionKey);
+    try {
+      return await action();
+    } finally {
+      lineReviewActionRef.current = false;
+      setSavingAction("");
+    }
+  };
+
+  const saveLineReviewNote = note => runLineReviewAction("save-line-review-note", async () => {
+    if (!canManagePayroll || !detailLineItem || !payrollLineNeedsReview(detailLineItem)) {
+      throw new Error("Manage Payroll access and an open review are required to add a review note.");
+    }
+    const { id } = detailLineItem;
+    const scope = previewScopeKey;
+    const { adminReviewNotes } = await updatePayrollLine(detailLineItem, line => {
+      if (!payrollLineNeedsReview(line)) {
+        throw new Error("This line changed while you were reviewing it. Refresh the line and check its current status.");
+      }
+      return { adminReviewNotes: [line.adminReviewNotes, note].filter(Boolean).join("\n") };
+    });
+    if (previewScopeRef.current === scope) {
+      setLineItems(items => items.map(item => item.id === id ? { ...item, adminReviewNotes } : item));
+      setDetailLineItem(item => item?.id === id ? { ...item, adminReviewNotes } : item);
+    }
+  });
+
+  const refreshLineDetail = recalculate => runLineReviewAction("refresh-line-detail", async () => {
+    const { id } = detailLineItem;
+    const scope = previewScopeKey;
+    const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", id);
+    const readLine = async () => {
+      const snapshot = await getDocFromServer(lineRef);
+      const item = snapshot.data();
+      if (!item || (item.companyId && item.companyId !== recentlySelectedCompany)) {
+        throw new Error("This payroll line is no longer available. Close the detail and reload the payroll list.");
+      }
+      return { ...item, id };
+    };
+    let current = await readLine();
+    let result;
+    if (recalculate && canManagePayroll && current.serviceStopId && payrollLineNeedsReview(current)) {
+      result = await technicianWorkflow("refreshServiceStopPayroll", {
+        companyId: recentlySelectedCompany, serviceStopId: current.serviceStopId,
+      });
+      current = await readLine();
+    }
+    if (previewScopeRef.current === scope) {
+      setDetailLineItem(item => item?.id === id ? current : item);
+      setStatementPreview(null);
+      reloadProcessedPayroll();
+    }
+    if (result?.payrollDisabled) return "Payroll is disabled for this company. Open payroll setup to review the setting.";
+    if (isLineItemVoided(current)) return "This line was voided. Check the payroll list for any replacement.";
+    return payrollLineNeedsReview(current) ? "This line still needs review. See the reason above." : "Payroll line updated.";
+  });
+
+  const clearLineFromDetail = () => runLineReviewAction("clear-line-detail", async () => {
+    if (!canManagePayroll || !canClearZeroTask(detailLineItem)) throw new Error("This line is no longer eligible for $0 task clearance.");
+    await clearZeroTaskLines([detailLineItem]);
+    return "Task cleared. No additional pay is due.";
+  });
+
+  const disabledLineActions = item => {
+    const canClear = canClearZeroTask(item);
+    const reviewReason = payrollLineReviewReason(item);
+    const reviewDetail = reviewReason ? ` ${reviewReason}` : "";
+    const lockReason = item.payStatementId ? "Manage this line through its pay statement."
+      : item.exportBatchId ? "This payroll line has already been exported." : "";
+    const unavailable = savingAction ? "Wait for the current payroll action to finish."
+      : !permissionsReady ? "Payroll permissions are still loading. Please wait."
+      : !canManagePayroll ? "You need Manage Payroll access to update this line item." : "";
+    const approval = unavailable || (canClear ? zeroTaskPermissionReason
+      : isLineItemPaid(item) ? "This line item has already been paid."
+      : isLineItemVoided(item) ? "This line item has been voided and cannot be approved."
+      : isLineItemApproved(item) ? "This line item has already been approved."
+      : lockReason || (item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before approving it.${reviewDetail}` : ""));
+    const payment = unavailable || (isLineItemPaid(item) ? "This line item has already been paid."
+      : isLineItemVoided(item) ? "This line item has been voided and cannot be marked paid."
+      : canClear ? "$0 tasks do not require payment. Use Clear $0 to remove this task from the queue."
+      : lockReason || (item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before marking it paid.${reviewDetail}` : ""));
+    return { approvalDisabledReason: approval, paymentDisabledReason: payment };
   };
 
   const openCandidateStatementDetail = (group) => {
@@ -3125,22 +3273,8 @@ const Payroll = ({ mode = "payroll" }) => {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {visibleLineItems.map((item) => {
-                  const isPaid = Boolean(item.paidAt) || item.calculationStatus === "paid";
-                  const isApproved = Boolean(item.approvedAt) || item.calculationStatus === "approved" || isPaid;
-                  const isVoided = isLineItemVoided(item);
                   const canClear = canClearZeroTask(item);
-                  const reviewReason = item.notes ? ` ${item.notes}` : "";
-                  const approvalDisabledReason = savingAction ? "Wait for the current payroll action to finish."
-                    : canClear ? zeroTaskPermissionReason
-                    : isPaid ? "This line item has already been paid."
-                    : isVoided ? "This line item has been voided and cannot be approved."
-                    : isApproved ? "This line item has already been approved."
-                    : item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before approving it.${reviewReason}` : "";
-                  const paymentDisabledReason = savingAction ? "Wait for the current payroll action to finish."
-                    : isPaid ? "This line item has already been paid."
-                    : isVoided ? "This line item has been voided and cannot be marked paid."
-                    : canClear ? "$0 tasks do not require payment. Use Clear $0 to remove this task from the queue."
-                    : item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before marking it paid.${reviewReason}` : "";
+                  const { approvalDisabledReason, paymentDisabledReason } = disabledLineActions(item);
 
                   return (
                     <tr key={item.id}>
@@ -3152,7 +3286,7 @@ const Payroll = ({ mode = "payroll" }) => {
                         {item.paymentReference ? <div className="mt-1 text-xs text-slate-500">Ref: {item.paymentReference}</div> : null}
                       </td>
                       <td className="px-4 py-3 text-slate-600">{item.customerName || item.serviceLocationAddress || "-"}</td>
-                      <td className="whitespace-nowrap px-4 py-3"><StatusPill status={isPaid ? "paid" : item.calculationStatus} /></td>
+                      <td className="whitespace-nowrap px-4 py-3"><StatusPill status={payrollLineStatus(item)} /></td>
                       <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</td>
                       <td className="whitespace-nowrap px-4 py-3">
                         <div className="flex justify-end gap-2">
@@ -4602,10 +4736,6 @@ const Payroll = ({ mode = "payroll" }) => {
       ["requests", "Pay Requests", "Rate changes, counteroffers, and pay questions"],
     ];
 
-  const backfillProgressPercent = backfillProgress?.total
-    ? Math.max(5, Math.round((backfillProgress.current / backfillProgress.total) * 100))
-    : 8;
-
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
@@ -4671,54 +4801,21 @@ const Payroll = ({ mode = "payroll" }) => {
             )}
         />
 
-        {showServiceStopBackfillPanel ? (
-          <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Company Service Stop Backfill</p>
-                <h2 className="mt-1 text-base font-bold text-slate-950">Finish Unfinished Stops and Generate Payroll</h2>
-                <p className="mt-1 max-w-3xl text-sm text-slate-700">
-                  Murdock pool service only. Uses the selected service date range, skips customer emails, marks unfinished stops complete, and creates technician pay line items.
-                </p>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(event) => {
-                    resetLineItemPaging();
-                    setStartDate(event.target.value);
-                  }}
-                  className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm"
-                />
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(event) => {
-                    resetLineItemPaging();
-                    setEndDate(event.target.value);
-                  }}
-                  className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm"
-                />
-                <PayrollActionButton
-                  type="button"
-                  onClick={finishUnfinishedServiceStopsForRange}
-                  disabledReason={finishStopsDisabledReason}
-                  className="rounded-md bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {savingAction === "finish-service-stop-range" ? "Finishing" : "Finish Stops"}
-                </PayrollActionButton>
-              </div>
-            </div>
-            {backfillResult ? (
-              <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-amber-800">
-                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.finishedStops} stop(s)</span>
-                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.finishedTasks} task(s)</span>
-                <span className="rounded-full bg-white px-2.5 py-1">Payroll updates automatically</span>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
+        {showServiceStopBackfillPanel && (
+          <PayrollStopCompletion
+            key={recentlySelectedCompany}
+            companyId={recentlySelectedCompany}
+            startDate={startDate}
+            endDate={endDate}
+            onStartDateChange={value => { resetLineItemPaging(); setStartDate(value); }}
+            onEndDateChange={value => { resetLineItemPaging(); setEndDate(value); }}
+            permissionsReady={permissionsReady}
+            canPreview={can("240") && can("420")}
+            canFinish={can("240") && can("244") && can("420")}
+            otherAction={savingAction}
+            onPayrollProcessed={reloadProcessedPayroll}
+          />
+        )}
 
         {!isSetupMode && activeTab === "lineItems" ? (
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -4759,24 +4856,6 @@ const Payroll = ({ mode = "payroll" }) => {
       {renderStopPayEditorModal()}
       {renderStatementDetailModal()}
       <PayrollProgressDialog progress={payrollActionProgress} />
-      {backfillProgress ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 px-4">
-          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-2xl">
-            <p className="text-sm font-semibold uppercase tracking-wide text-amber-600">{backfillProgress.action}</p>
-            <p className="mt-2 text-2xl font-bold text-slate-900">
-              {backfillProgress.total ? `${backfillProgress.current}/${backfillProgress.total}` : "Finding stops"}
-            </p>
-            <p className="mt-1 text-sm text-slate-600">{backfillProgress.detail}</p>
-            <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-amber-700">Murdock pool service only</p>
-            <div className="mt-5 h-3 overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full bg-amber-600 transition-all duration-300"
-                style={{ width: `${backfillProgressPercent}%` }}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
       {paymentModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
           <form onSubmit={submitPayment} className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
@@ -4843,88 +4922,22 @@ const Payroll = ({ mode = "payroll" }) => {
         </div>
       ) : null}
       {detailLineItem ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white shadow-xl">
-            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">Payroll Line Detail</h2>
-                <p className="mt-1 text-sm text-slate-500">{detailLineItem.displayTitle || detailLineItem.workTypeName || "Payroll line"}</p>
-              </div>
-              <button
-                type="button"
-                onClick={closeDetailModal}
-                className="rounded-md px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="p-5">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <DetailField label="Status" value={detailLineItem.calculationStatus} accent />
-                <DetailField label="Total" value={moneyFromCents(detailLineItem.totalAmountCents)} accent />
-                <DetailField label="Completed" value={debugDateTime(detailLineItem.completedDate)} />
-                <DetailField label="Source" value={detailLineItem.source} />
-                <DetailField label="Technician" value={displayReferenceValue(detailLineItem.technicianName || (detailLineItem.technicianId ? "Assigned technician" : ""), "Technician")} accent />
-                <DetailField label="Worker Type" value={detailLineItem.workerType} />
-                <DetailField label="Company" value={displayReferenceValue(detailLineItem.companyName || (detailLineItem.companyId || recentlySelectedCompany ? "Selected company" : ""), "Company")} />
-                <DetailField label="Service Stop" value={displayReferenceValue(detailLineItem.serviceStopInternalId || (detailLineItem.serviceStopId ? "Service stop" : ""), "Service Stop")} accent />
-                <DetailField label="Stop Pay Type" value={detailLineItem.payTypeName || detailLineItem.serviceStopTypeName} />
-                <DetailField label="Job" value={displayReferenceValue(detailLineItem.jobInternalId || (detailLineItem.jobId ? "Job" : ""), "Job")} />
-                <DetailField label="Task" value={displayReferenceValue(detailLineItem.displayTitle || detailLineItem.workTypeName || (detailLineItem.serviceStopTaskId || detailLineItem.taskId ? "Task" : ""), "Task")} />
-                <DetailField label="Pay Type" value={displayReferenceValue(detailLineItem.payTypeName || detailLineItem.workTypeName || (detailLineItem.payTypeId || detailLineItem.workTypeId ? "General" : ""), "Pay Type")} accent />
-                <DetailField label="Pay Basis" value={detailLineItem.payBasis} accent />
-                <DetailField label="Rate Type" value={rateTypeLabel(detailLineItem)} />
-                <DetailField label="Rate Amount" value={moneyFromCents(detailLineItem.rateAmountCents)} />
-                <DetailField label="Quantity" value={`${Number(detailLineItem.quantity || 0)} ${detailLineItem.quantityUnit || ""}`.trim()} />
-                <DetailField label="Rate" value={displayReferenceValue(rateTypeLabel(detailLineItem) || (detailLineItem.rateId || detailLineItem.technicianRateId ? "Rate" : ""), "Rate")} />
-                <DetailField label="Pay Statement" value={displayReferenceValue(detailLineItem.payStatementReference || "Pay statement", "Pay statement")} />
-                <DetailField label="Payment Ref" value={displayReferenceValue(detailLineItem.paymentReference || detailLineItem.externalReferenceId, "Payment Ref")} />
-              </div>
-
-              <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                <div className="rounded-lg border border-slate-200 bg-white p-4">
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600">Context</h3>
-                  <div className="mt-3 space-y-2 text-sm text-slate-700">
-                    <p><span className="font-semibold">Title:</span> {detailLineItem.displayTitle || detailLineItem.workTypeName || "-"}</p>
-                    <p><span className="font-semibold">Customer:</span> {detailLineItem.customerName || "-"}</p>
-                    <p><span className="font-semibold">Address:</span> {detailLineItem.serviceLocationAddress || "-"}</p>
-                    <p><span className="font-semibold">Created:</span> {debugDateTime(detailLineItem.createdAt)}</p>
-                    <p><span className="font-semibold">Updated:</span> {debugDateTime(detailLineItem.updatedAt)}</p>
-                    <p><span className="font-semibold">Approved:</span> {debugDateTime(detailLineItem.approvedAt)}</p>
-                    <p><span className="font-semibold">Paid:</span> {debugDateTime(detailLineItem.paidAt)}</p>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-slate-200 bg-white p-4">
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600">Debug Notes</h3>
-                  <div className="mt-3 space-y-2 text-sm text-slate-700">
-                    <p><span className="font-semibold">Calculation notes:</span> {detailLineItem.calculationNotes || detailLineItem.notes || "-"}</p>
-                    <p><span className="font-semibold">Void reason:</span> {detailLineItem.voidReason || "-"}</p>
-                    <p><span className="font-semibold">Payment notes:</span> {detailLineItem.paidNotes || "-"}</p>
-                    <p><span className="font-semibold">Raw status:</span> {detailLineItem.status || "-"}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 rounded-lg border border-slate-200 bg-slate-950 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-200">Raw Firestore Data</h3>
-                  <button
-                    type="button"
-                    onClick={() => navigator.clipboard?.writeText(JSON.stringify(serializeForDebug(detailLineItem), null, 2))}
-                    className="rounded-md bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
-                  >
-                    Copy JSON
-                  </button>
-                </div>
-                <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-slate-100">
-                  {JSON.stringify(serializeForDebug(detailLineItem), null, 2)}
-                </pre>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PayrollLineDetailDialog
+          key={detailLineItem.id}
+          item={detailLineItem}
+          canManage={canManagePayroll}
+          saving={savingAction}
+          onClose={closeDetailModal}
+          onSaveNote={saveLineReviewNote}
+          onRefresh={refreshLineDetail}
+          onClear={clearLineFromDetail}
+          onApprove={() => approveLineItem(detailLineItem)}
+          onMarkPaid={() => {
+            closeDetailModal();
+            openPaymentModal("lineItem", detailLineItem);
+          }}
+          {...disabledLineActions(detailLineItem)}
+        />
       ) : null}
     </div>
   );

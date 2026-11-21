@@ -1,5 +1,5 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext, useRef } from "react";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   collection,
@@ -16,6 +16,7 @@ import { Context } from "../../../context/AuthContext";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import CatalogConnections from "../productCatalog/CatalogConnections";
 import CatalogPurchaseHistory from "../productCatalog/CatalogPurchaseHistory";
+import CatalogMergeDialog from "../productCatalog/CatalogMergeDialog";
 import { DetailRow, SummaryRow, AvailabilityRow } from "../productCatalog/CatalogDetailRows";
 import WorkspaceHeader from "../../../components/workspace/WorkspaceHeader";
 import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
@@ -78,6 +79,9 @@ const DataBaseItemDetailView = () => {
   const [loadError, setLoadError] = useState("");
   const [reload, setReload] = useState(0);
   const [edit, setEdit] = useState(false);
+  const [mergeCompany, setMergeCompany] = useState(null);
+  const activeCompany = useRef(recentlySelectedCompany);
+  activeCompany.current = recentlySelectedCompany;
   const [rate, setRate] = useState("");
   const [uom, setUom] = useState("");
   const [category, setCategory] = useState("");
@@ -103,6 +107,7 @@ const DataBaseItemDetailView = () => {
     let active = true;
     setPurchase({});
     setEdit(false);
+    setMergeCompany(null);
     setLoading(true);
     setLoadError("");
     (async () => {
@@ -242,6 +247,7 @@ const DataBaseItemDetailView = () => {
   async function deleteItem(e) {
     e.preventDefault();
     if (!requirePermission("856", "delete vendor items")) return;
+    if (purchase.mergedIntoVendorItemId || purchase.mergedSourceIds?.length) return;
 
     try {
       const batch = writeBatch(db);
@@ -428,13 +434,29 @@ const DataBaseItemDetailView = () => {
             <div className="flex flex-wrap gap-2">
               <Link to="/company/product-catalog" className={workspaceButtonClass({ tone: "slate" })}>Products</Link>
               {edit ? <>
-                {can("856") && <button type="button" onClick={deleteItem} className={workspaceButtonClass({ tone: "rose" })}>Delete</button>}
+                {can("856") && !purchase.mergedSourceIds?.length && <button type="button" onClick={deleteItem} className={workspaceButtonClass({ tone: "rose" })}>Delete</button>}
                 <button type="button" onClick={cancelEdit} className={workspaceButtonClass({ tone: "slate" })}>Cancel</button>
                 <button type="button" onClick={saveEdit} className={workspaceButtonClass({ tone: "blue" })}>Save</button>
-              </> : can("854") && <button type="button" onClick={editItem} className={workspaceButtonClass({ tone: "blue" })}>Edit</button>}
+              </> : can("854") && !purchase.mergedIntoVendorItemId && <>
+                {!purchase.archived && <button type="button" onClick={() => setMergeCompany(recentlySelectedCompany)} className={workspaceButtonClass({ tone: "slate" })}>Merge duplicate</button>}
+                <button type="button" onClick={editItem} className={workspaceButtonClass({ tone: "blue" })}>Edit</button>
+              </>}
             </div>
           </div>}
         />
+        {purchase.mergedIntoVendorItemId && <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4">
+          <p>This vendor item was archived as a duplicate.</p>
+          <Link to={`${vendorItemsBasePath}/detail/${purchase.mergedIntoVendorItemId}`} className={workspaceButtonClass({ tone: "blue" })}>View kept vendor item</Link>
+        </section>}
+        {mergeCompany && mergeCompany === recentlySelectedCompany && <CatalogMergeDialog
+          kind="vendorItem" companyId={mergeCompany} initialKeepId={id}
+          onClose={() => setMergeCompany(null)} onMerged={keepId => {
+            if (activeCompany.current !== mergeCompany) return;
+            setMergeCompany(null);
+            navigate(`${vendorItemsBasePath}/detail/${keepId}`, { replace: true });
+            setReload(value => value + 1);
+            toast.success("Vendor item duplicate merged.");
+          }} />}
 
         {edit ? (
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -751,8 +773,8 @@ const DataBaseItemDetailView = () => {
             </aside>
           </section>
         )}
-        {!edit && <CatalogConnections vendorItemId={id} revision={`${recentlySelectedCompany}:${purchase.rate}`} />}
-        {!edit && <CatalogPurchaseHistory vendorItemId={id} />}
+        {!edit && !purchase.mergedIntoVendorItemId && <CatalogConnections vendorItemId={id} revision={`${recentlySelectedCompany}:${purchase.rate}`} />}
+        {!edit && <CatalogPurchaseHistory vendorItemId={id} mergedSourceIds={purchase.mergedSourceIds} />}
       </div>
     </div>
   );

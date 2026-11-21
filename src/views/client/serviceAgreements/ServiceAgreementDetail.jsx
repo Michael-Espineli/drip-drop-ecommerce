@@ -1067,12 +1067,12 @@ const ServiceAgreementDetail = () => {
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+        <div className="min-w-0">
           <Link to={reviewBackPath} className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
             <ArrowLeftIcon className="h-4 w-4" />
             {reviewBackLabel}
           </Link>
-          <h1 className="text-3xl font-bold text-slate-950">{agreement.title || recordLabel}</h1>
+          <h1 className="break-words text-2xl font-bold leading-tight text-slate-950">{agreement.title || recordLabel}</h1>
           <p className="mt-1 text-sm text-slate-500">
             {agreement.companyName || 'Pool company'} sent this {recordLabel.toLowerCase()} to {agreement.email || user?.email || 'your account'}.
           </p>
@@ -1148,7 +1148,7 @@ const ServiceAgreementDetail = () => {
                 <StatusBadge status={agreement.status || SalesAgreementStatus.draft} />
               </div>
 
-              <h2 className="mt-5 text-2xl font-bold uppercase tracking-wide text-slate-950">
+              <h2 className="mt-5 break-words text-lg font-bold uppercase tracking-wide text-slate-950">
                 {agreement.title || `Professional ${recordLabel}`}
               </h2>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">

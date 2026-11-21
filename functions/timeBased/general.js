@@ -10,6 +10,7 @@ const sgMail = require("@sendgrid/mail");
 const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 const { jobPayFields } = require("../payrollCalculation");
+const { addCalendarDays, calendarDate, dateKey, finished, started } = require("../routeState");
 const { weeklyServiceDates } = require("../recurringSchedule");
 const { DEFAULT_RECURRING_TASK_GROUP_ID, loadTaskGroupItems } = require("../taskGroupStorage");
 const { sendSalesInvoiceEmailForAutomation } = require("../sendGrid/general");
@@ -711,13 +712,15 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
     };
   }
 
-  const startDate = normalizeToNoon(parseDate(rssData.startDate) || now);
+  const zone = rssData.routeScheduleTimeZone;
+  const noon = value => zone ? calendarDate(dateKey(value, zone), zone) : normalizeToNoon(value);
+  const startDate = noon(parseDate(rssData.startDate) || now);
   const endDate = parseDate(rssData.endDate);
   const noEndDate = Boolean(rssData.noEndDate);
-  let effectiveHorizon = normalizeToNoon(horizon);
+  let effectiveHorizon = zone ? calendarDate(addCalendarDays(dateKey(now, zone), 28), zone) : normalizeToNoon(horizon);
 
   if (!noEndDate && endDate) {
-    const normalizedEndDate = normalizeToNoon(endDate);
+    const normalizedEndDate = noon(endDate);
     if (normalizedEndDate < startDate) {
       return makeRssOutcome("skipped", "end_date_before_start_date", {
         startDate: dateToLog(startDate),
@@ -750,7 +753,7 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
     });
   } else {
     // Stop early if already ahead
-    if (normalizeToNoon(lastCreated) >= effectiveHorizon) {
+    if (noon(lastCreated) >= effectiveHorizon) {
       return makeRssOutcome("skipped", "last_created_on_or_after_horizon", {
         lastCreated: dateToLog(lastCreated),
         effectiveHorizon: dateToLog(effectiveHorizon),
@@ -901,27 +904,6 @@ function normalizeServiceStopTypeFields(source, contextLabel) {
   return fields;
 }
 
-// Fetch counter once, write once, but still safe under concurrency via transaction.
-async function allocateInternalIds(db, companyId, countNeeded) {
-  const settingsRef = db.collection(`companies/${companyId}/settings`).doc("serviceStops");
-
-  return await db.runTransaction(async (tx) => {
-    const snap = await tx.get(settingsRef);
-    const current = snap.exists ? Number(snap.data()?.increment ?? 0) : 0;
-
-    // iOS looks like it uses current increment as the number; your other function uses +1 style.
-    // We'll follow your existing backend pattern of allocating sequential IDs starting at current+1.
-    const start = current + 1;
-    const end = current + countNeeded;
-
-    tx.set(settingsRef, { increment: end, category: "serviceStops" }, { merge: true });
-
-    const ids = [];
-    for (let n = start; n <= end; n++) ids.push("S" + String(n));
-    return ids;
-  });
-}
-
 function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, internalId }) {
   const serviceStopTypeFields = normalizeServiceStopTypeFields(
     rssData,
@@ -1016,20 +998,8 @@ function buildServiceDateKey(serviceDate) {
   return normalizeToNoon(serviceDate).toISOString().slice(0, 10);
 }
 
-function buildServiceStopIdForRssDate(companyId, rssId, serviceDate) {
-  return `com_ss_rss_${hashString(`${companyId}|${rssId}|${buildServiceDateKey(serviceDate)}`, 32)}`;
-}
-
 function buildServiceStopTaskId(serviceStopId, task) {
   return `com_ss_tas_${hashString(`${serviceStopId}|${task.id || task.taskGroupTaskId || task.name || ""}`, 32)}`;
-}
-
-function isAlreadyExistsFirestoreError(error) {
-  return (
-    error?.code === 6 ||
-    error?.code === "already-exists" ||
-    /already exists/i.test(String(error?.message || ""))
-  );
 }
 
 function buildServiceStopFromExistingSnapshot(serviceStopId, data = {}, rssData = {}) {
@@ -1041,47 +1011,29 @@ function buildServiceStopFromExistingSnapshot(serviceStopId, data = {}, rssData 
   };
 }
 
-async function findExistingServiceStopForRssDate({ db, companyId, rssData, serviceDate }) {
-  const serviceStopsCol = `companies/${companyId}/serviceStops`;
-  const deterministicServiceStopId = buildServiceStopIdForRssDate(companyId, rssData.id, serviceDate);
-  const deterministicRef = db.collection(serviceStopsCol).doc(deterministicServiceStopId);
-  const deterministicSnap = await deterministicRef.get();
+async function findRecurringOccurrence({ t, stops, companyId, rssId, occurrenceKey, serviceDate, zone }) {
+  const dedupKey = rssId + "|" + occurrenceKey;
+  const deterministicId = `com_ss_rss_${hashString(`${companyId}|${dedupKey}`, 32)}`;
+  const byKey = await t.get(stops.where("recurringServiceStopDedupKey", "==", dedupKey).limit(2));
+  if (byKey.size > 1) throw new Error("More than one stop represents this recurring occurrence.");
+  if (!byKey.empty) return byKey.docs[0];
 
-  if (deterministicSnap.exists) {
-    return {
-      serviceDate,
-      serviceStopId: deterministicSnap.id,
-      serviceStopRef: deterministicRef,
-      exists: true,
-      existingData: deterministicSnap.data(),
-    };
-  }
+  const canonical = await t.get(stops.doc(deterministicId));
+  const sameDay = zone
+    ? stops.where("recurringServiceStopId", "==", rssId)
+        .where("serviceDate", ">=", calendarDate(occurrenceKey, zone, 0))
+        .where("serviceDate", "<", calendarDate(addCalendarDays(occurrenceKey, 1), zone, 0))
+    : stops.where("recurringServiceStopId", "==", rssId).where("serviceDate", "==", normalizeToNoon(serviceDate));
+  const legacy = await t.get(sameDay.limit(3));
+  const matches = legacy.docs.filter(doc => !doc.data().recurringServiceStopDedupKey || doc.data().recurringServiceStopDedupKey === dedupKey);
+  if (legacy.size > 2 || matches.length > 1) throw new Error("More than one dated stop matches this recurring occurrence.");
+  if (matches.length === 1) return matches[0];
+  if (!canonical.exists) return canonical;
 
-  const duplicateSnap = await db
-    .collection(serviceStopsCol)
-    .where("recurringServiceStopId", "==", rssData.id)
-    .where("serviceDate", "==", normalizeToNoon(serviceDate))
-    .limit(1)
-    .get();
-
-  if (!duplicateSnap.empty) {
-    const duplicateDoc = duplicateSnap.docs[0];
-    return {
-      serviceDate,
-      serviceStopId: duplicateDoc.id,
-      serviceStopRef: duplicateDoc.ref,
-      exists: true,
-      existingData: duplicateDoc.data(),
-    };
-  }
-
-  return {
-    serviceDate,
-    serviceStopId: deterministicServiceStopId,
-    serviceStopRef: deterministicRef,
-    exists: false,
-    existingData: null,
-  };
+  // Old document IDs may already belong to an occurrence moved onto another date.
+  const alternate = await t.get(stops.doc(deterministicId + "_occurrence"));
+  if (alternate.exists) throw new Error("A recurring stop ID conflicts with a different occurrence.");
+  return alternate;
 }
 
 function buildServiceStopTask({ task, serviceStop, rssData, serviceStopTaskId }) {
@@ -1128,64 +1080,6 @@ function buildServiceStopTask({ task, serviceStop, rssData, serviceStopTaskId })
   };
 }
 
-async function ensureServiceStopTasks({ serviceStopRef, serviceStop, rssData, taskList }) {
-  for (const task of taskList) {
-    const serviceStopTaskId = buildServiceStopTaskId(serviceStop.id, task);
-    const serviceStopTask = buildServiceStopTask({
-      task,
-      serviceStop,
-      rssData,
-      serviceStopTaskId,
-    });
-    await serviceStopRef.collection("tasks").doc(serviceStopTask.id).set(serviceStopTask, { merge: true });
-  }
-}
-
-async function uploadServiceStopFromRss({
-  db,
-  companyId,
-  rssData,
-  serviceDate,
-  internalId,
-  taskList,
-  serviceStopId,
-}) {
-  const serviceStopsCol = `companies/${companyId}/serviceStops`;
-  const idss = serviceStopId || "com_ss_" + uuidv4();
-  const serviceStop = buildServiceStopIOSShape({
-    companyId,
-    rssData,
-    serviceDate,
-    idss,
-    internalId,
-  });
-  const serviceStopRef = db.collection(serviceStopsCol).doc(idss);
-
-  try {
-    await serviceStopRef.create(serviceStop);
-    await ensureServiceStopTasks({ serviceStopRef, serviceStop, rssData, taskList });
-    return { serviceStop, created: true };
-  } catch (error) {
-    if (!serviceStopId || !isAlreadyExistsFirestoreError(error)) {
-      throw error;
-    }
-
-    const existingSnap = await serviceStopRef.get();
-    const existingServiceStop = buildServiceStopFromExistingSnapshot(
-      idss,
-      existingSnap.data(),
-      rssData
-    );
-    await ensureServiceStopTasks({
-      serviceStopRef,
-      serviceStop: existingServiceStop,
-      rssData,
-      taskList,
-    });
-    return { serviceStop: existingServiceStop, created: false };
-  }
-}
-
 async function createServiceStopsForDates({
   companyId,
   rssData,
@@ -1196,81 +1090,79 @@ async function createServiceStopsForDates({
   outcomeDetails = {},
 }) {
   const db = getFirestore();
-  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
-
+  const company = db.collection("companies").doc(companyId);
+  const rssRef = company.collection("recurringServiceStop").doc(rssData.id);
   if (dates.length === 0) {
     return makeRssOutcome("skipped", noDatesReason, {
-      frequency: rssData.frequency || "",
-      lastCreated: dateToLog(lastCreated),
-      horizon: dateToLog(horizon),
-      serviceStopsCreated: 0,
-      ...outcomeDetails,
+      frequency: rssData.frequency || "", lastCreated: dateToLog(lastCreated),
+      horizon: dateToLog(horizon), serviceStopsCreated: 0, ...outcomeDetails,
     });
   }
 
   const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
-  const dateEntries = await Promise.all(dates.map((serviceDate) => (
-    findExistingServiceStopForRssDate({ db, companyId, rssData, serviceDate })
-  )));
-  const datesToCreate = dateEntries.filter((entry) => !entry.exists);
-  const internalIds = datesToCreate.length
-    ? await allocateInternalIds(db, companyId, datesToCreate.length)
-    : [];
-  const internalIdsByServiceStopId = new Map(
-    datesToCreate.map((entry, index) => [entry.serviceStopId, internalIds[index]])
-  );
+  const stops = company.collection("serviceStops");
+  const counterRef = company.collection("settings").doc("serviceStops");
+  const zone = rssData.routeScheduleTimeZone || null;
+  let last = lastCreated;
   let serviceStopsCreated = 0;
   let existingServiceStops = 0;
-  let last = lastCreated ? new Date(lastCreated) : null;
 
-  for (const entry of dateEntries) {
-    if (entry.exists) {
-      existingServiceStops += 1;
-      const existingServiceStop = buildServiceStopFromExistingSnapshot(
-        entry.serviceStopId,
-        entry.existingData,
-        rssData
-      );
-      await ensureServiceStopTasks({
-        serviceStopRef: entry.serviceStopRef,
-        serviceStop: existingServiceStop,
-        rssData,
-        taskList,
-      });
-    } else {
-      const uploadResult = await uploadServiceStopFromRss({
-        db,
-        companyId,
-        rssData,
-        serviceDate: entry.serviceDate,
-        internalId: internalIdsByServiceStopId.get(entry.serviceStopId),
-        taskList,
-        serviceStopId: entry.serviceStopId,
-      });
-
-      if (uploadResult.created) {
-        serviceStopsCreated += 1;
-      } else {
-        existingServiceStops += 1;
+  for (const serviceDate of dates) {
+    const occurrenceKey = zone ? dateKey(serviceDate, zone) : buildServiceDateKey(serviceDate);
+    const outcome = await db.runTransaction(async t => {
+      const current = await t.get(rssRef);
+      const data = current.data();
+      if (!data || (data.routeScheduleRevision || 0) !== (rssData.routeScheduleRevision || 0)) {
+        return "changed";
       }
+      const entry = await findRecurringOccurrence({ t, stops, companyId, rssId: rssData.id, occurrenceKey, serviceDate, zone });
+      const counter = entry.exists ? null : await t.get(counterRef);
+      const nextId = counter ? Number(counter.data()?.increment ?? 0) + 1 : null;
+      const existing = entry.data();
+      const stop = entry.exists ? buildServiceStopFromExistingSnapshot(entry.id, existing, rssData) : {
+        ...buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss: entry.id, internalId: "S" + nextId }),
+        serviceDate: zone ? serviceDate : normalizeToNoon(serviceDate),
+        recurringServiceStopDateKey: occurrenceKey,
+        recurringServiceStopDedupKey: rssData.id + "|" + occurrenceKey,
+        ...(rssData.recurringRouteId ? {
+          recurringRouteId: rssData.recurringRouteId,
+          recurringRouteDocId: rssData.recurringRouteId,
+          plannedRouteId: rssData.recurringRouteId,
+        } : {}),
+      };
+      const maySeed = !entry.exists || (!existing.routeScheduleException && !existing.oneTimeRouteMove && !started(existing) && !finished(existing));
+      const pending = [];
+      if (maySeed) {
+        for (const task of taskList) {
+          const id = buildServiceStopTaskId(stop.id, task);
+          const ref = entry.ref.collection("tasks").doc(id);
+          if (!(await t.get(ref)).exists) {
+            pending.push({ ref, value: buildServiceStopTask({ task, serviceStop: stop, rssData, serviceStopTaskId: id }) });
+          }
+        }
+      }
+      if (pending.length > 400) throw new Error("This recurring visit has too many tasks to create atomically.");
+      if (!entry.exists) {
+        t.set(entry.ref, stop);
+        t.set(counterRef, { increment: nextId, category: "serviceStops" }, { merge: true });
+      }
+      for (const task of pending) t.set(task.ref, task.value);
+      const cursor = parseDate(data.lastCreated);
+      if (!cursor || cursor < serviceDate) t.set(rssRef, { lastCreated: serviceDate }, { merge: true });
+      return entry.exists ? "existing" : "created";
+    });
+    if (outcome === "changed") {
+      return makeRssOutcome("skipped", "route_schedule_changed", { serviceStopsCreated, existingServiceStops });
     }
-
-    last = entry.serviceDate;
+    if (outcome === "created") serviceStopsCreated += 1;
+    else existingServiceStops += 1;
+    last = serviceDate;
   }
 
-  if (last) await rssRef.update({ lastCreated: last });
-
-  return makeRssOutcome("created", serviceStopsCreated > 0
-    ? "service_stops_created"
-    : "service_stops_already_existed", {
-    frequency: rssData.frequency || "",
-    serviceStopsCreated,
-    existingServiceStops,
-    serviceDatesConsidered: dates.length,
-    firstServiceDate: dateToLog(dates[0]),
-    lastServiceDate: dateToLog(last),
-    horizon: dateToLog(horizon),
-    ...outcomeDetails,
+  return makeRssOutcome("created", serviceStopsCreated > 0 ? "service_stops_created" : "service_stops_already_existed", {
+    frequency: rssData.frequency || "", serviceStopsCreated, existingServiceStops,
+    serviceDatesConsidered: dates.length, firstServiceDate: dateToLog(dates[0]),
+    lastServiceDate: dateToLog(last), horizon: dateToLog(horizon), ...outcomeDetails,
   });
 }
 
@@ -1317,13 +1209,20 @@ async function createWeekdayStops(companyId, rssData, lastCreated, horizon) {
 
 // ---------- Weekly / Biweekly ----------
 async function createWeeklyStops(companyId, rssData, lastCreated, horizon, intervalDays) {
-  const dates = weeklyServiceDates({
-    startDate: parseDate(rssData.startDate) || new Date(),
-    lastCreated,
-    horizon,
-    day: rssData.day,
-    intervalDays,
-  });
+  const zone = rssData.routeScheduleTimeZone;
+  const dates = [];
+  if (zone && rssData.routeScheduleAnchorDateKey) {
+    const end = dateKey(horizon, zone);
+    const last = lastCreated ? dateKey(lastCreated, zone) : "";
+    for (let key = rssData.routeScheduleAnchorDateKey; key <= end; key = addCalendarDays(key, intervalDays)) {
+      if (key > last) dates.push(calendarDate(key, zone));
+    }
+  } else {
+    dates.push(...weeklyServiceDates({
+      startDate: parseDate(rssData.startDate) || new Date(), lastCreated, horizon,
+      day: rssData.day, intervalDays,
+    }));
+  }
   return createServiceStopsForDates({
     companyId, rssData, dates, lastCreated, horizon,
     outcomeDetails: { intervalDays, day: rssData.day || "" },
@@ -1577,8 +1476,8 @@ exports.onRssUpdated = onDocumentUpdated(
 
     const before = event.data?.before?.data() || {};
     const after = event.data?.after?.data() || {};
-    if (!didRouteRelevantRssChange(before, after)) {
-      console.log("Skipping recurring route reconciliation for non-route RSS update", rssId);
+    if (before.routeScheduleRevision !== after.routeScheduleRevision || !didRouteRelevantRssChange(before, after)) {
+      console.log("Skipping redundant recurring route reconciliation", rssId);
       return null;
     }
 

@@ -111,6 +111,9 @@ function createRecurringAccess(db, { verifyIdToken } = {}) {
     }
     const previous = snap.data() || {};
     const next = { ...previous, ...pick(incoming, recurringFields), id };
+    if (create && snap.exists && (previous.day !== next.day || previous.techId !== next.techId)) {
+      fail('failed-precondition', 'Review what happens to this week’s visits before changing an existing schedule.');
+    }
     if (previous.companyId && previous.companyId !== companyId) fail('permission-denied', 'The recurring service stop belongs to another company.');
     const source = await sourceCompany(companyId, next);
     const [customer, location, worker] = await Promise.all([
@@ -205,6 +208,9 @@ function createRecurringAccess(db, { verifyIdToken } = {}) {
           await Promise.all(ids.map((id) => owned(companyId, 'serviceStops', id)));
           Object.assign(clean, { serviceStopList: ids.map((id) => ({ id })), newTech: worker, newDay: day });
         }
+      }
+      if (['update', 'routeAssignment', 'permanentMove'].includes(action)) {
+        clean.currentWeekReview = payload.currentWeekReview;
       }
       if (action === 'report') {
         await sourceCompany(companyId, reportStop);

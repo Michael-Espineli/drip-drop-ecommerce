@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { listenCompanyTodos } from "../../../utils/companyTodoAccess";
@@ -1144,52 +1145,46 @@ const TodoList = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 px-3 py-3 text-slate-900 sm:px-4 lg:px-5">
+    <div className="min-h-screen bg-slate-100 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-3">
-        <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <h1 className="text-xl font-bold text-slate-950">Todo Board</h1>
-              <span className="max-w-full truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-600">
-                {selectedBoardLabel}
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={openCreateTodoModal}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-              >
-                <FaPlus className="h-3.5 w-3.5" />
-                New Task
-              </button>
-              <button
-                type="button"
-                onClick={openCreateBoardModal}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FaPlus className="h-3.5 w-3.5" />
-                Create Board
-              </button>
-              <button
-                type="button"
-                onClick={() => startEditBoard(selectedEditableBoard)}
-                disabled={!selectedEditableBoard}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FaEdit className="h-3.5 w-3.5" />
-                Edit Board
-              </button>
-              <Link
-                to={todoHistoryLink}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
-              >
-                <MdHistory className="h-4 w-4" />
-                History
-              </Link>
-            </div>
-          </div>
-        </section>
+        <WorkspaceHeader
+          title="Todo Board"
+          meta={<span className="workspace-header-badge">{selectedBoardLabel}</span>}
+          actions={<>
+            <button
+              type="button"
+              onClick={openCreateTodoModal}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+            >
+              <FaPlus className="h-3.5 w-3.5" />
+              New Task
+            </button>
+            <button
+              type="button"
+              onClick={openCreateBoardModal}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              <FaPlus className="h-3.5 w-3.5" />
+              Create Board
+            </button>
+            <button
+              type="button"
+              onClick={() => startEditBoard(selectedEditableBoard)}
+              disabled={!selectedEditableBoard}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FaEdit className="h-3.5 w-3.5" />
+              Edit Board
+            </button>
+            <Link
+              to={todoHistoryLink}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              <MdHistory className="h-4 w-4" />
+              History
+            </Link>
+          </>}
+        />
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard icon={FaTasks} label="Open" value={stats.open} helper="Active todo items" tone="blue" />

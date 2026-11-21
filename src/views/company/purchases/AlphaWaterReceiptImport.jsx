@@ -18,6 +18,7 @@ import {
   findLinkedProductForVendorItem,
   getProductDisplayName,
   getProductSellPriceCents,
+  isMergedCatalogRecord,
   productCatalogCollectionRef,
   productCatalogDocRef,
   productOptionSearchText,
@@ -785,8 +786,8 @@ const AlphaWaterReceiptImport = () => {
         ]);
 
         const users = usersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-        const items = databaseSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-        const productItems = productSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        const items = databaseSnap.docs.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id })).filter(row => !isMergedCatalogRecord(row));
+        const productItems = productSnap.docs.map((docSnap) => ({ ...docSnap.data(), id: docSnap.id })).filter(row => !isMergedCatalogRecord(row));
         const alphaVendor =
           vendorList.find((vendor) => normalizeKey(vendor.name).includes("alphawatersystems")) ||
           vendorList.find((vendor) => normalizeKey(vendor.name).includes("alpha")) ||

@@ -1,6 +1,7 @@
 const admin = require('firebase-admin');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { hash, key, millis, id, invoiceSubscription } = require('./billingMath');
+const { customerBillingEnabled } = require('./partBillingSettings');
 const { fail } = require('./companyActor');
 
 const nextBill = row => ['nextbill', 'includeonnextbill'].includes(key(row.paymentPreference || row.paymentCollectionPreference));
@@ -10,8 +11,14 @@ const jobMaterial = row => Boolean(row.jobId || row.workOrderId || row.assignedJ
 const usable = row => !['canceled', 'cancelled', 'superseded', 'inactive', 'expired', 'paused'].includes(key(row.status)) &&
   (row.stripeSubscriptionId ? Boolean(row.stripeCustomerId && row.stripeConnectedAccountId) && ['active', 'trialing', 'pastdue', 'unpaid'].includes(key(row.stripeStatus || row.status)) : row.manualBillingEnabled === true && row.autopayEnabled !== true && row.billingCollectionMethod !== 'automaticStripe' && !row.checkoutHold);
 
+async function partBillingEnabled(reader, db, companyId) {
+  const company = db.collection('companies').doc(companyId);
+  const [record, settings] = await Promise.all([reader.get(company), reader.get(company.collection('settings').doc('companyWide'))]);
+  return customerBillingEnabled(record.data(), settings.data());
+}
+
 async function billingOptions(reader, db, approval) {
-  if (jobMaterial(approval)) return [];
+  if (jobMaterial(approval) || !await partBillingEnabled(reader, db, approval.companyId)) return [];
   const rows = await reader.get(db.collection('salesBillingSubscriptions').where('companyId', '==', approval.companyId).where('customerId', '==', approval.customerId));
   return rows.docs.filter(snap => {
     const row = snap.data(), locations = row.serviceLocationIds || [];
@@ -38,6 +45,7 @@ async function readSources(tx, db, row) {
     approval.companyId === row.companyId && approval.customerId === row.customerId && approval.shoppingListItemId === row.shoppingListItemId &&
     (item.partApprovalRequestId || item.approvalRequestId) === row.partApprovalRequestId && (!item.customerId || item.customerId === row.customerId) &&
     (delivered(item) || delivered({ status: approval.fulfillmentStatus })) &&
+    !approval.offlineBillingStatus && !item.offlineBillingStatus &&
     snapshots.every(snap => !snap.exists || !jobMaterial(snap.data()) && snap.data().returned !== true && snap.data().personalPurchase !== true && (!snap.data().customerId || snap.data().customerId === row.customerId) && (!snap.data().shoppingListItemId || snap.data().shoppingListItemId === row.shoppingListItemId) && !snap.data().manuallyInvoiced && (!(snap.data().salesInvoiceId || snap.data().invoiceId) || (snap.data().salesInvoiceId || snap.data().invoiceId) === row.invoiceId) && (!snap.data().invoiced || Boolean(row.invoiceId)));
   return { snapshots: snapshots.filter(snap => snap.exists), valid };
 }
@@ -84,6 +92,7 @@ function createRecurringPartCharges(db, stripe, now = () => new Date()) {
   // All reads occur before the parent invoice transaction writes anything.
   async function readManual(tx, subscription) {
     const rows = await tx.get(db.collection('recurringPartCharges').where('billingSubscriptionId', '==', subscription.id).where('status', '==', 'pending').limit(101));
+    if (!rows.size || !await partBillingEnabled(tx, db, subscription.companyId)) return { eligible: [], invalid: [] };
     if (rows.size > 100) fail('failed-precondition', 'Review the unusually large number of pending parts before billing.');
     const eligible = [], invalid = [];
     for (const snap of rows.docs) {
@@ -133,6 +142,7 @@ function createRecurringPartCharges(db, stripe, now = () => new Date()) {
         const current = await tx.get(snap.ref), row = current.data();
         const latestPlan = (await tx.get(planSnap.ref)).data();
         if (!current.exists || !['pending', 'attaching', 'attached'].includes(row.status) || row.stripeInvoiceId && row.stripeInvoiceId !== invoice.id) return null;
+        if (!await partBillingEnabled(tx, db, plan.companyId) && row.status === 'pending') return null;
         if (row.companyId !== plan.companyId || row.customerId !== plan.customerId || row.currency !== invoice.currency || !latestPlan || latestPlan.stripeSubscriptionId !== subId || !usable(latestPlan) || !['active', 'trialing', 'past_due', 'unpaid'].includes(sub.status)) fail('failed-precondition', 'Recurring collection changed before adding this part.');
         const sources = await readSources(tx, db, row);
         if (!sources.valid) {

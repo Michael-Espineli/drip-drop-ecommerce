@@ -47,7 +47,7 @@ export default function ServicePayrollTaskEditor({ companyId, form, setForm, sho
       <label className="block text-sm font-semibold text-slate-700">Task notes<textarea className={fieldClass} value={task.description} onChange={(event) => updateTask(task.id, "description", event.target.value)} /></label>
       <ServiceTaskProductFields task={task} {...productData} onChange={(field, value) => updateTask(task.id, field, value)} />
       <JobPayrollFields value={task} payTypes={data.payTypes} inheritedPayTypeId={form.payTypeId} previewData={data} previewPrice={form.unitAmount}
-        taskCostField={<label className="block text-sm font-semibold text-slate-700">Tech Labor Cost<input className={fieldClass} type="number" min="0" step="0.01" value={task.laborCost} onChange={(event) => updateTask(task.id, "laborCost", event.target.value)} /></label>}
+        taskCostField={<label className="block text-sm font-semibold text-slate-700">Contracted task pay<input className={fieldClass} type="number" min="0" step="0.01" value={task.laborCost} onChange={(event) => updateTask(task.id, "laborCost", event.target.value)} /></label>}
         onChange={(field, value) => updateTask(task.id, field, value)} />
     </div>)}
   </div>;

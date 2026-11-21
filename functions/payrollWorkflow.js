@@ -5,7 +5,7 @@ const { loadPayrollBodyOfWaterScope } = require("./payrollBodyOfWaterScope");
 const data = (snap) => snap.exists ? { ...snap.data(), id: snap.id } : null;
 const rows = (snap) => snap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
 const id = (value) => String(typeof value === "object" ? value?.id || "" : value || "").trim();
-const payKeys = ["status", "operationStatus", "techId", "tech", "workerId", "workerName", "workerType", "serviceDate", "completedAt", "finishedAt",
+const payKeys = ["status", "operationStatus", "techId", "tech", "workerId", "workerName", "workerType", "serviceDate", "completedAt", "finishedAt", "endTime",
   "jobId", "jobTaskId", "workOrderTaskId", "serviceStopId", "typeId", "type", "payTypeId", "payTypeName", "payWorkTypeId", "workTypeId",
   "contractedRate", "manualPayOverrideCents", "manualPayOverrideNotes", "payrollMode", "payrollStackBehavior", "payQuantity",
   "workerAssignmentMode", "payrollAgreement", "workOfferId", "workOfferClaimId", "estimatedTime", "estimatedMinutes", "estimatedDuration", "actualTime", "duration", "bodyOfWaterIds", "bodyOfWaterId", "bodyOfWaterCount",
@@ -24,6 +24,26 @@ const comparable = value => {
 };
 const equal = (a, b) => JSON.stringify(comparable(a)) === JSON.stringify(comparable(b));
 const BULK_FINISH_SOURCE = "payroll_setup_bulk_finish";
+
+function summarizeStopPay(lines, result) {
+  return {
+    ...result,
+    lineItems: lines.filter(line => line.calculationStatus !== "voided").map(line => ({
+      id: line.id,
+      title: line.displayTitle || line.title || line.taskName || "Work pay",
+      technicianId: line.technicianId || "",
+      technicianName: line.technicianName || "",
+      completedDateMillis: new Date(comparable(line.completedDate)).getTime() || null,
+      rateAmountCents: line.rateAmountCents ?? 0,
+      rateType: line.rateType || "",
+      quantity: line.quantity ?? 0,
+      quantityUnit: line.quantityUnit || "",
+      totalAmountCents: line.totalAmountCents ?? 0,
+      calculationStatus: line.calculationStatus || "",
+      notes: line.notes || "",
+    })),
+  };
+}
 
 function createPayrollWorkflow(db, options = {}) {
   const company = (companyId) => db.collection("companies").doc(companyId);
@@ -144,7 +164,7 @@ function createPayrollWorkflow(db, options = {}) {
       transaction.set(ref, { ...summary, payrollLastProcessedAt: new Date() }, { merge: true });
     }
   }
-  async function reconcileStop(companyId, stopId, { ratesChanged = false, scopes, loadBatchContext } = {}) {
+  async function reconcileStop(companyId, stopId, { ratesChanged = false, scopes, loadBatchContext, simulation, includeLineItems = false } = {}) {
     const companyRef = company(companyId);
     const stopRef = companyRef.collection("serviceStops").doc(stopId);
     return db.runTransaction(async (transaction) => {
@@ -158,12 +178,15 @@ function createPayrollWorkflow(db, options = {}) {
       if (!matchesScopes(stop, rows(tasksSnap), scopes)) return { skippedUnchangedScope: true };
       const ctx = await context(transaction, companyRef, loadBatchContext ? await loadBatchContext() : null);
       if (ctx.settings.payrollEnabled === false || ctx.settings.companyPayrollEnabled === false || ctx.settings.payrollDisabled === true) {
-        if (stop) saveSummary(transaction, stopRef, stop, { estimatedPayCents: 0, estimatedPayLines: [], estimatedPayNeedsReview: false, payrollReconcileStatus: "disabled" });
-        return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], payrollDisabled: true };
+        if (stop && !simulation) saveSummary(transaction, stopRef, stop, { estimatedPayCents: 0, estimatedPayLines: [], estimatedPayNeedsReview: false, payrollReconcileStatus: "disabled" });
+        const result = { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], payrollDisabled: true };
+        return includeLineItems ? summarizeStopPay([], result) : result;
       }
       const agreementCache = new Map();
+      if (simulation && stop) stop = { ...stop, ...simulation.stop };
       stop = await acceptedAgreement(transaction, companyRef, stop, agreementCache);
-      const tasks = await Promise.all(rows(tasksSnap).map(task => acceptedAgreement(transaction, companyRef, task, agreementCache, "stopTask", id(stop?.jobId), stopId)));
+      const tasks = await Promise.all(rows(tasksSnap).map(task => acceptedAgreement(transaction, companyRef,
+        { ...task, ...simulation?.tasks.get(task.id) }, agreementCache, "stopTask", id(stop?.jobId), stopId)));
       const jobId = id(stop?.jobId);
       const jobPaySnap = jobId ? await transaction.get(companyRef.collection("technicianPayLineItems").where("jobId", "==", jobId)) : null;
       if (stop) {
@@ -178,18 +201,22 @@ function createPayrollWorkflow(db, options = {}) {
       const existing = new Map(rows(paySnap).map((line) => [line.id, line]));
       if (jobPaySnap) rows(jobPaySnap).filter((line) => components.has(line.payrollComponentId)).forEach((line) => existing.set(line.id, line));
       const result = reconcilePayLines({ generated, existing: [...existing.values()], preserveCalculated: ratesChanged && ctx.settings.recalculateUnapprovedPayWhenRatesChange === false });
-      apply(transaction, companyRef, result, [...existing.values()]);
-      const preview = stop ? removeClearedZeroTasks(calculatePayLines({ ...input, mode: "preview" }), [...existing.values()]) : [];
-      const needsReview = currentLines([...existing.values()], result.writes).filter((line) => line.calculationStatus === "needsReview").length;
-      if (stop) saveSummary(transaction, stopRef, stop, {
-        estimatedPayCents: preview.reduce((sum, line) => sum + line.totalAmountCents, 0),
-        estimatedPayLines: preview, estimatedPayNeedsReview: preview.some((line) => line.calculationStatus === "needsReview"),
-        payrollReconcileStatus: result.conflicts.length ? "adjustmentRequired" : needsReview ? "needsReview" : "current",
-        payrollReconcileConflictIds: result.conflicts, payrollNeedsReviewCount: needsReview,
-      });
-      return { generatedLineItemCount: generated.length, savedLineItemCount: result.writes.length,
+      if (!simulation) apply(transaction, companyRef, result, [...existing.values()]);
+      const resultingLines = currentLines([...existing.values()], result.writes);
+      const needsReview = resultingLines.filter((line) => line.calculationStatus === "needsReview").length;
+      if (stop && !simulation) {
+        const preview = removeClearedZeroTasks(calculatePayLines({ ...input, mode: "preview" }), [...existing.values()]);
+        saveSummary(transaction, stopRef, stop, {
+          estimatedPayCents: preview.reduce((sum, line) => sum + line.totalAmountCents, 0),
+          estimatedPayLines: preview, estimatedPayNeedsReview: preview.some((line) => line.calculationStatus === "needsReview"),
+          payrollReconcileStatus: result.conflicts.length ? "adjustmentRequired" : needsReview ? "needsReview" : "current",
+          payrollReconcileConflictIds: result.conflicts, payrollNeedsReviewCount: needsReview,
+        });
+      }
+      const summary = { generatedLineItemCount: generated.length, savedLineItemCount: simulation ? 0 : result.writes.length,
         needsReviewCount: needsReview, conflictLineItemIds: result.conflicts };
-    });
+      return includeLineItems ? summarizeStopPay(resultingLines, summary) : summary;
+    }, simulation ? { readOnly: true } : undefined);
   }
   async function reconcileJob(companyId, jobId, { ratesChanged = false, scopes, loadBatchContext } = {}) {
     const companyRef = company(companyId);
@@ -358,7 +385,8 @@ function createPayrollWorkflow(db, options = {}) {
     if (sig(before)===sig(after)) return;
     for(const offerId of new Set([before?.workOfferId,after?.workOfferId].filter(Boolean))) await reconcileOffer(event.params.companyId,offerId);
   }
-  return { clearZeroDollarTasks, reconcileOffer, onOfferWrite, onPayLineWrite, refreshRequestedStop, reconcileStop, reconcileJob, onStopWrite, onStopTaskWrite, onJobTaskWrite, onRateWrite, onSettingsWrite, processRefresh };
+  return { clearZeroDollarTasks, reconcileOffer, onOfferWrite, onPayLineWrite, refreshRequestedStop, reconcileStop, reconcileJob, onStopWrite, onStopTaskWrite, onJobTaskWrite, onRateWrite, onSettingsWrite, processRefresh,
+    loadStopPayContext: companyId => context({ get: ref => ref.get() }, company(companyId)) };
 }
 
 module.exports = { createPayrollWorkflow };

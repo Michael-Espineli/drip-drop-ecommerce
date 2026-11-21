@@ -1,3 +1,4 @@
+import { remapTemplateMaterialTasks } from "../../../utils/jobTemplateScope";
 import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
@@ -6,8 +7,8 @@ import { resolveJobCreator } from "../../../utils/jobHistory";
 import JobPayrollFields from "./JobPayrollFields";
 import useServicePayrollData from "../../../hooks/useServicePayrollData";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
-import { loadJobProductCatalog } from "../../../utils/productCatalog";
-import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
+import { isMergedCatalogRecord, loadJobProductCatalog } from "../../../utils/productCatalog";
+import { completeJobLaborLines, jobLaborTotals, visitCustomerPriceCents } from "../../../utils/jobScopePricing";
 import { createJobAtomically } from "../../../utils/createJobAtomically";
 import { isActiveJobTemplate } from "../../../utils/jobTemplateAvailability";
 import React, { useState, useEffect, useContext, useMemo } from "react";
@@ -261,6 +262,7 @@ const CreateNewJob = () => {
     const createdFromCustomerDetail = Boolean(location.state?.createdFromCustomerDetail);
     const createdFromEquipmentCard = Boolean(location.state?.createdFromEquipmentCard);
     const createdFromEquipmentDetail = Boolean(location.state?.createdFromEquipmentDetail);
+    const templateRequired = location.state?.requireTemplate === true;
     const startingTemplateFromState =
         location.state?.startingTemplate ||
         location.state?.jobTemplate ||
@@ -287,8 +289,9 @@ const CreateNewJob = () => {
 
     const [jobTemplateList, setJobTemplateList] = useState([]);
     const [selectedTemplate, setSelectedTemplate] = useState(null);
-    const [templateApplied, setTemplateApplied] = useState(false);
+    const [appliedTemplateId, setAppliedTemplateId] = useState("");
     const [loadingTemplate, setLoadingTemplate] = useState(false);
+    const templateApplied = Boolean(selectedTemplate?.id && appliedTemplateId === selectedTemplate.id);
 
     const [taskTypeList, setTaskTypeList] = useState([]);
     const [taskGroupList, setTaskGroupList] = useState([]);
@@ -539,6 +542,7 @@ const CreateNewJob = () => {
         !!selectedAdmin?.id &&
         !!selectedCustomer?.id &&
         !!selectedServiceLocation?.id &&
+        (!templateRequired || (templateApplied && !loadingTemplate)) &&
         missingEquipmentAssignments.length === 0 &&
         (!selectedTemplateRequiresEquipment || assignedEquipmentIds.length > 0) &&
         (!selectedTemplateRequiresBodyOfWater || !!resolvedJobBodyOfWaterId);
@@ -562,6 +566,10 @@ const CreateNewJob = () => {
             missing.push("Service Location");
         }
 
+        if (templateRequired && (!templateApplied || loadingTemplate)) {
+            missing.push(selectedTemplate ? "Loaded Job Template" : "Job Template");
+        }
+
         if (missingEquipmentAssignments.length > 0) {
             missing.push("Equipment Assignments");
         }
@@ -583,8 +591,12 @@ const CreateNewJob = () => {
         selectedAdmin,
         selectedCustomer,
         selectedServiceLocation,
+        selectedTemplate,
         selectedTemplateRequiresEquipment,
         selectedTemplateRequiresBodyOfWater,
+        loadingTemplate,
+        templateApplied,
+        templateRequired,
     ]);
 
     useEffect(() => {
@@ -756,8 +768,12 @@ const CreateNewJob = () => {
             purchaserId: item.purchaserId || createdByUserId || "",
             purchaserName: item.purchaserName || createdByUserName || "",
 
-            genericItemId: item.genericItemId || "",
+            genericItemId: item.genericItemId || item.productId || "",
+            productId: item.productId || item.genericItemId || "",
+            billable: item.billable ?? true,
             taxable: Boolean(item.taxable),
+            linkedTaskId: item.linkedTaskId || "",
+            linkedTaskIds: item.linkedTaskIds || [],
             name: item.name || "",
             description: item.description || "",
             datePurchased: null,
@@ -802,13 +818,14 @@ const CreateNewJob = () => {
             companyId: recentlySelectedCompany,
             jobId,
             sourceTemplateId: stop.sourceTemplateId || selectedTemplate?.id || "",
-            sourceTemplatePlannedStopId: stop.sourceTemplatePlannedStopId || stop.sourcePlannedStopId || stop.id || "",
+            sourceTemplatePlannedStopId: stop.sourceTemplatePlannedStopId || stop.id || "",
 
             name: stop.name || stop.serviceStopTypeName || "Planned Stop",
             description: stop.description || "",
 
             serviceStopTypeId: stop.serviceStopTypeId || "",
             ...jobPayFields(stop, { payTypeId: stop.serviceStopTypeId, payTypeName: stop.serviceStopTypeName }),
+            billingLaborPriceCents: visitCustomerPriceCents(stop),
             serviceStopTypeName: stop.serviceStopTypeName || "",
             serviceStopTypeImage: stop.serviceStopTypeImage || "",
 
@@ -902,7 +919,7 @@ const CreateNewJob = () => {
             })
             : [
                 ...normalizedPlannedStops.map((stop) => {
-                    const amount = Number(stop.plannedLaborCostCents || 0);
+                    const amount = visitCustomerPriceCents(stop);
                     return {
                         id: `${planId}_${stop.id || "planned_stop"}`,
                         sourceType: SalesCatalogSourceType.serviceStopType,
@@ -1010,7 +1027,7 @@ const CreateNewJob = () => {
         const planLaborPriceCents = normalizedLaborLineItems.length
             ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.totalPriceCents || 0), 0)
             : normalizedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0)
-                + normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+                + normalizedPlannedStops.reduce((total, stop) => total + visitCustomerPriceCents(stop), 0);
         const materialCostCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalCostCents(item), 0);
         const materialPriceCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalPriceCents(item), 0);
         const internalCostCents = planLaborCostCents + materialCostCents;
@@ -1303,7 +1320,8 @@ const CreateNewJob = () => {
                     if (matched) {
                         setSelectedTemplate(matched);
                     } else {
-                        appAlert("This job template is inactive or no longer available. Choose an active template or create a custom job.");
+                        if (templateRequired) setActiveCreateSection("Template");
+                        appAlert(`This job template is inactive or no longer available. Choose an active template${templateRequired ? "" : " or create a custom job"}.`);
                     }
                 }
             } catch (error) {
@@ -1315,7 +1333,7 @@ const CreateNewJob = () => {
         };
 
         fetchData();
-    }, [recentlySelectedCompany, startingTemplateFromState, startingTemplateIdFromState, templateIdParam]);
+    }, [recentlySelectedCompany, startingTemplateFromState, startingTemplateIdFromState, templateIdParam, templateRequired]);
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -1332,6 +1350,7 @@ const CreateNewJob = () => {
                 if (cancelled) return;
                 setEquipmentDatabaseItems(
                     catalog.vendorItems
+                        .filter(item => !isMergedCatalogRecord(item))
                         .map((item) => buildEquipmentDatabaseItemOption(item, item.id))
                         .filter(isEquipmentDatabaseItem)
                 );
@@ -1600,13 +1619,17 @@ const CreateNewJob = () => {
     }, [bodyOfWaterList, selectedBodyOfWater?.id, selectedEquipment]);
 
     useEffect(() => {
-        if (!selectedTemplate || templateApplied) return;
+        if (!selectedTemplate) return;
 
-        applyTemplate(selectedTemplate);
+        let cancelled = false;
+        applyTemplate(selectedTemplate, () => cancelled);
+        return () => {
+            cancelled = true;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedTemplate]);
+    }, [recentlySelectedCompany, selectedTemplate]);
 
-    const applyTemplate = async (template) => {
+    const applyTemplate = async (template, isCancelled) => {
         if (!recentlySelectedCompany || !template?.id) return;
 
         try {
@@ -1657,6 +1680,8 @@ const CreateNewJob = () => {
                 ),
             ]);
 
+            if (isCancelled()) return;
+
             const templateTasks = tasksSnap.docs.map((docSnap) => ({
                 ...docSnap.data(),
                 id: docSnap.data().id || docSnap.id,
@@ -1686,6 +1711,7 @@ const CreateNewJob = () => {
             const templatePlannedStops = plannedStopsSnap.docs.map((docSnap) => ({
                 ...docSnap.data(),
                 id: docSnap.data().id || docSnap.id,
+                sourceTemplatePlannedStopId: docSnap.id,
             }));
             const copiedStops = templatePlannedStops.map((plannedStop) =>
                 normalizePlannedStopForJob(plannedStop, taskIdMap)
@@ -1746,12 +1772,20 @@ const CreateNewJob = () => {
                     };
                 });
 
+            const materialTaskIdMap = new Map(Object.entries(taskIdMap));
             const copiedShopping = shoppingSnap.docs.map((docSnap) =>
                 normalizeShoppingItemForJob({
                     ...docSnap.data(),
+                    ...remapTemplateMaterialTasks(docSnap.data(), materialTaskIdMap),
                     id: `comp_shop_${uuidv4()}`,
                 })
             );
+
+            for (const task of copiedTasks) {
+                const materialIds = copiedShopping.filter((item) => item.linkedTaskIds.includes(task.id)).map((item) => item.id);
+                task.shoppingListItemId = materialIds[0] || "";
+                task.shoppingListItemIds = materialIds;
+            }
 
             setTaskList(copiedTasks);
             setPlannedServiceStops(copiedStops);
@@ -1763,16 +1797,19 @@ const CreateNewJob = () => {
             setLaborCost(((Number(template.defaultLaborCostCents || 0) / 100) || 0).toFixed(2));
             setIssuePriorityLevel(repairRequest ? getRepairRequestIssuePriority(repairRequest) : getTemplateDefaultIssuePriority(template));
 
-            setTemplateApplied(true);
+            setAppliedTemplateId(templateId);
         } catch (error) {
+            if (isCancelled()) return;
             console.error("Error applying job template:", error);
             appAlert(userFacingErrorMessage(error, "Failed to apply job template."));
         } finally {
-            setLoadingTemplate(false);
+            if (!isCancelled()) setLoadingTemplate(false);
         }
     };
 
     const handleTemplateChange = async (template) => {
+        if (templateApplied && template?.id === selectedTemplate?.id) return;
+
         const shouldReplace = !template || !templateApplied || await appConfirm({
             title: "Apply Job Template",
             message: "Apply this template and replace current planned tasks, stops, and materials?",
@@ -1781,21 +1818,19 @@ const CreateNewJob = () => {
 
         if (!shouldReplace) return;
 
-        setSelectedTemplate(template);
-        setTemplateApplied(false);
+        setSelectedTemplate(template && template === selectedTemplate ? { ...template } : template);
+        setAppliedTemplateId("");
 
-            if (!template) {
-                setTaskList([]);
-                setPlannedServiceStops([]);
-                setShoppingList([]);
-                setLaborLineItems([]);
-                setDescription("");
-                setRate("0");
-                setLaborCost("0");
-            return;
+        if (!template) {
+            setLoadingTemplate(false);
+            setTaskList([]);
+            setPlannedServiceStops([]);
+            setShoppingList([]);
+            setLaborLineItems([]);
+            setDescription("");
+            setRate("0");
+            setLaborCost("0");
         }
-
-        await applyTemplate(template);
     };
 
     const handleTaskGroupChange = async (taskGroup) => {
@@ -1879,11 +1914,11 @@ const CreateNewJob = () => {
             return;
         }
         if (!Number.isFinite(Number(taskLaborCost || 0)) || Number(taskLaborCost || 0) < 0) {
-            await appAlert("Tech labor cost cannot be negative.");
+            await appAlert("Contracted task pay cannot be negative.");
             return;
         }
         if (!Number.isFinite(Number(taskBillingLaborPrice || 0)) || Number(taskBillingLaborPrice || 0) < 0) {
-            await appAlert("Billing labor price cannot be negative.");
+            await appAlert("Customer task price cannot be negative.");
             return;
         }
 
@@ -1927,9 +1962,7 @@ const CreateNewJob = () => {
         }
 
         const techLaborCents = dollarsToCents(taskLaborCost);
-        const billingLaborPriceCents = taskBillingLaborPrice === ""
-            ? techLaborCents
-            : dollarsToCents(taskBillingLaborPrice);
+        const billingLaborPriceCents = dollarsToCents(taskBillingLaborPrice);
         const newTaskType = canonicalJobTaskType(selectedTaskType.value || selectedTaskType.name);
 
         const newTask = normalizeJobTask(
@@ -2703,9 +2736,11 @@ const CreateNewJob = () => {
                 return (
                     <SectionCard
                         title="Template"
-                        subtitle="Optional. Start this job from a saved job template."
+                        subtitle={templateRequired ? "Choose a job template before creating this job." : "Optional. Start this job from a saved job template."}
                     >
                         <Select
+                            aria-label="Job Template"
+                            required={templateRequired}
                             options={jobTemplateList}
                             value={selectedTemplate}
                             onChange={handleTemplateChange}
@@ -2715,7 +2750,7 @@ const CreateNewJob = () => {
                             isLoading={loadingTemplate}
                         />
 
-                        {selectedTemplate ? (
+                        {templateApplied ? (
                             <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
                                 <p className="text-sm font-bold text-blue-800">
                                     Template Applied: {selectedTemplate.name}
@@ -2724,11 +2759,11 @@ const CreateNewJob = () => {
                                     Service lines, tasks, planned stops, materials, and calculated plan pricing were copied into this new job.
                                 </p>
                             </div>
-                        ) : (
+                        ) : !selectedTemplate && (
                             <div className="mt-6">
                                 {emptyState(
                                     "No template selected.",
-                                    "You can skip this step or choose a template to prefill this job."
+                                    templateRequired ? "Select an available template to continue." : "You can skip this step or choose a template to prefill this job."
                                 )}
                             </div>
                         )}
@@ -3057,8 +3092,9 @@ const CreateNewJob = () => {
                                     )}
 
                                     <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                        Tech Labor Cost
+                                        Contracted task pay
                                         <input
+                                            aria-describedby="new-job-contracted-pay-help"
                                             value={taskLaborCost}
                                             onChange={(e) => setTaskLaborCost(e.target.value)}
                                             type="number"
@@ -3069,7 +3105,7 @@ const CreateNewJob = () => {
                                     </label>
 
                                     <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                        Billing Labor
+                                        Customer task price
                                         <input
                                             value={taskBillingLaborPrice}
                                             onChange={(e) => setTaskBillingLaborPrice(e.target.value)}
@@ -3110,6 +3146,7 @@ const CreateNewJob = () => {
                                     </div>
                                 )}
 
+                                <p id="new-job-contracted-pay-help" className="text-xs text-slate-600">Payroll uses contracted task pay when the task rate source calls for it. Leave customer price blank when this task is included in a service.</p>
                                 <JobPayrollFields value={taskPayroll} payTypes={taskPayData.payTypes} onChange={(field, value) => setTaskPayroll((current) => ({ ...current, [field]: value }))} />
 
                                 <button

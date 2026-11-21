@@ -55,3 +55,9 @@ export const appAlert = (messageOrOptions) => openAppDialog('alert', messageOrOp
 export const appConfirm = (messageOrOptions) => openAppDialog('confirm', messageOrOptions);
 
 export const appPrompt = (messageOrOptions) => openAppDialog('prompt', messageOrOptions);
+
+
+export const appCustomDialog = (render) => {
+  if (!appDialogOpener) return Promise.reject(new Error('The review dialog is unavailable. Refresh and try again.'));
+  return appDialogOpener({ type: 'custom', render });
+};

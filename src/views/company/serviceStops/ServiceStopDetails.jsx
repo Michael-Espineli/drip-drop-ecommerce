@@ -19,6 +19,7 @@ import {
     orderBy,
     serverTimestamp,
 } from "firebase/firestore";
+import { v4 as uuidv4 } from "uuid";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
@@ -95,6 +96,7 @@ import {
     hasDatabaseEquipmentMapping,
     isEquipmentDatabaseItem,
 } from "../../../utils/databaseEquipmentItems";
+import { isMergedCatalogRecord } from "../../../utils/productCatalog";
 
 const jobTaskTypeOptions = [
     "Basic",
@@ -1041,6 +1043,7 @@ const ServiceStopDetails = () => {
     const [deleting, setDeleting] = useState(false);
     const [partApprovals, setPartApprovals] = useState([]);
     const [serviceStopShoppingItems, setServiceStopShoppingItems] = useState([]);
+    const [extraMaterial, setExtraMaterial] = useState(null);
     const [loadingPartWorkflow, setLoadingPartWorkflow] = useState(false);
     const [showPartApprovalModal, setShowPartApprovalModal] = useState(false);
     const [partWorkflowActionId, setPartWorkflowActionId] = useState("");
@@ -1340,6 +1343,7 @@ const ServiceStopDetails = () => {
                 if (cancelled) return;
                 setEquipmentDatabaseItems(
                     itemsSnap.docs
+                        .filter(itemDoc => !isMergedCatalogRecord(itemDoc.data()))
                         .map((itemDoc) => buildEquipmentDatabaseItemOption(itemDoc.data(), itemDoc.id))
                         .filter(isEquipmentDatabaseItem)
                 );
@@ -1368,16 +1372,21 @@ const ServiceStopDetails = () => {
         try {
             setLoadingPartWorkflow(true);
             const shoppingCollection = collection(db, "companies", recentlySelectedCompany, "shoppingList");
-            const [shoppingByStopSnap, shoppingByScheduledStopSnap, approvalSnap] = await Promise.all([
+            const jobId = serviceStop?.jobId?.id || serviceStop?.jobId;
+            const [shoppingByStopSnap, shoppingByScheduledStopSnap, shoppingByJobSnap, approvalSnap] = await Promise.all([
                 getDocs(query(shoppingCollection, where("serviceStopId", "==", serviceStopId))),
                 getDocs(query(shoppingCollection, where("scheduledServiceStopId", "==", serviceStopId))),
+                jobId ? getDocs(query(shoppingCollection, where("jobId", "==", jobId))) : null,
                 getDocs(query(collection(db, "customerPartApprovals"), where("companyId", "==", recentlySelectedCompany))),
             ]);
 
             const shoppingItemsById = new Map();
-            [shoppingByStopSnap, shoppingByScheduledStopSnap].forEach((snapshot) => {
+            [shoppingByStopSnap, shoppingByScheduledStopSnap, shoppingByJobSnap].filter(Boolean).forEach((snapshot) => {
                 snapshot.docs.forEach((itemDoc) => {
                     const data = itemDoc.data() || {};
+                    const allocatedStop = data.serviceStopId || data.scheduledServiceStopId;
+                    if (data.planWorkspaceOnly || data.shoppingListActive === false || data.returned ||
+                        (snapshot === shoppingByJobSnap && allocatedStop && allocatedStop !== serviceStopId)) return;
                     shoppingItemsById.set(itemDoc.id, {
                         id: itemDoc.id,
                         ...data,
@@ -1427,7 +1436,7 @@ const ServiceStopDetails = () => {
         } finally {
             setLoadingPartWorkflow(false);
         }
-    }, [recentlySelectedCompany, serviceStop?.serviceDate, serviceStop?.serviceLocationId, serviceStopId]);
+    }, [recentlySelectedCompany, serviceStop?.jobId, serviceStop?.serviceDate, serviceStop?.serviceLocationId, serviceStopId]);
 
     useEffect(() => {
         if (!serviceStop) return;
@@ -3193,6 +3202,26 @@ const ServiceStopDetails = () => {
         }
     };
 
+    const recordStopMaterial = async (data) => {
+        if (!canManagePartWorkflow || partWorkflowActionId) return;
+        setPartWorkflowActionId(data.shoppingItemId ? `deliver-${data.shoppingItemId}` : "use-extra");
+        try {
+            await httpsCallable(functions, "recordJobStopMaterial")({
+                ...(await getCallableAuthPayload()),
+                companyId: recentlySelectedCompany,
+                serviceStopId,
+                ...data,
+            });
+            if (data.action === "useExtra") setExtraMaterial(null);
+            toast.success(data.action === "install" ? "Part marked installed." : "Extra part recorded.");
+            await loadPartWorkflow();
+        } catch (error) {
+            toast.error(userFacingErrorMessage(error, "Could not record this material."));
+        } finally {
+            setPartWorkflowActionId("");
+        }
+    };
+
     const markShoppingItemDelivered = async (item) => {
         if (!canManagePartWorkflow) {
             toast.error("Only the assigned technician or an admin can install this part from the stop.");
@@ -4019,59 +4048,58 @@ const ServiceStopDetails = () => {
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
                 {serviceLocation?.serviceOnboarding?.required && serviceLocation.serviceOnboarding.status === 'pending' && !serviceStop.jobId && !/estimate|survey|inspection/i.test(serviceStop.type || '') && <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">First routine service is awaiting office release. <Link to={`/company/sales/agreements/${serviceLocation.serviceOnboarding.agreementId}`} className="font-semibold underline">Review onboarding</Link></div>}
-                <WorkspaceRecordHeader title={<>Service Stop Details</>} eyebrow="Company operations"><div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                        <Link
-                            to="/company/serviceStops"
-                            className="app-back-link"
-                        >
-                            &larr; Back to Service Stops
-                        </Link>
-
-                        <p className="text-sm text-slate-500">#{displayReferenceValue(serviceStop.internalId || "—", "Service visit")}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                        {(can("244") || can("246")) && (
+                <WorkspaceRecordHeader
+                    title="Service Stop Details"
+                    eyebrow="Company operations"
+                    backLink={{ to: "/company/serviceStops", label: "Back to Service Stops" }}
+                >
+                    <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <p className="text-sm text-slate-500">#{displayReferenceValue(serviceStop.internalId || "—", "Service visit")}</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            {(can("244") || can("246")) && (
+                                <button
+                                    type="button"
+                                    onClick={() => toggleEditEnabled(true)}
+                                    disabled={editEnabled}
+                                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-default disabled:bg-slate-200 disabled:text-slate-500"
+                                >
+                                    Edit
+                                </button>
+                            )}
+                            <ShareItemButton
+                                type="serviceStop"
+                                recordId={serviceStopId}
+                                title={serviceStop.type || serviceStop.serviceStopType || "Service Stop"}
+                                subtitle={[serviceStop.customerName, displayReferenceValue(serviceStop.internalId || "Service visit", "Service visit")].filter(Boolean).join(" - ")}
+                                companyId={recentlySelectedCompany}
+                                customerId={serviceStop.customerId}
+                                collectionPath={`companies/${recentlySelectedCompany}/serviceStops`}
+                                webPath={`/company/serviceStops/detail/${serviceStopId}`}
+                            />
                             <button
                                 type="button"
-                                onClick={() => toggleEditEnabled(true)}
-                                disabled={editEnabled}
-                                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-default disabled:bg-slate-200 disabled:text-slate-500"
+                                onClick={printServiceReport}
+                                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                             >
-                                Edit
+                                <PrinterIcon className="h-4 w-4" />
+                                Print Report
                             </button>
-                        )}
-                        <ShareItemButton
-                            type="serviceStop"
-                            recordId={serviceStopId}
-                            title={serviceStop.type || serviceStop.serviceStopType || "Service Stop"}
-                            subtitle={[serviceStop.customerName, displayReferenceValue(serviceStop.internalId || "Service visit", "Service visit")].filter(Boolean).join(" - ")}
-                            companyId={recentlySelectedCompany}
-                            customerId={serviceStop.customerId}
-                            collectionPath={`companies/${recentlySelectedCompany}/serviceStops`}
-                            webPath={`/company/serviceStops/detail/${serviceStopId}`}
-                        />
-                        <button
-                            type="button"
-                            onClick={printServiceReport}
-                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                        >
-                            <PrinterIcon className="h-4 w-4" />
-                            Print Report
-                        </button>
-                        {can("244") && (
-                            <button
-                                type="button"
-                                onClick={sendServiceReport}
-                                disabled={sendingServiceReport}
-                                className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                <PaperAirplaneIcon className="h-4 w-4" />
-                                {sendingServiceReport ? "Sending..." : "Send Report"}
-                            </button>
-                        )}
+                            {can("244") && (
+                                <button
+                                    type="button"
+                                    onClick={sendServiceReport}
+                                    disabled={sendingServiceReport}
+                                    className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <PaperAirplaneIcon className="h-4 w-4" />
+                                    {sendingServiceReport ? "Sending..." : "Send Report"}
+                                </button>
+                            )}
+                        </div>
                     </div>
-                </div></WorkspaceRecordHeader>
+                </WorkspaceRecordHeader>
 
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
                     <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:col-span-3">
@@ -4284,16 +4312,40 @@ const ServiceStopDetails = () => {
 
                                     <div>
                                         <div className="mb-3 flex items-center justify-between gap-3">
-                                            <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Approved Parts For This Stop</h4>
+                                            <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">{serviceStop.jobId ? "Materials for This Job Stop" : "Approved Parts for This Stop"}</h4>
                                             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
                                                 {serviceStopShoppingItems.length}
                                             </span>
                                         </div>
 
+                                        {serviceStop.jobId && canManagePartWorkflow && (extraMaterial ? (
+                                            <form className="mb-4 grid gap-2 rounded-md border p-3" onSubmit={(event) => {
+                                                event.preventDefault();
+                                                recordStopMaterial({ action: "useExtra", ...extraMaterial, quantity: Number(extraMaterial.quantity) });
+                                            }}>
+                                                <label className="text-sm font-semibold">Part name
+                                                    <input required maxLength={180} className="block w-full rounded-md border px-2 py-1" value={extraMaterial.name} onChange={(event) => setExtraMaterial({ ...extraMaterial, name: event.target.value })} />
+                                                </label>
+                                                <label className="text-sm font-semibold">Quantity used
+                                                    <input required type="number" min="0.001" max="100000" step="any" className="block w-full rounded-md border px-2 py-1" value={extraMaterial.quantity} onChange={(event) => setExtraMaterial({ ...extraMaterial, quantity: event.target.value })} />
+                                                </label>
+                                                <label className="text-sm font-semibold">Note
+                                                    <input maxLength={1000} className="block w-full rounded-md border px-2 py-1" value={extraMaterial.note} onChange={(event) => setExtraMaterial({ ...extraMaterial, note: event.target.value })} />
+                                                </label>
+                                                <div className="flex gap-3">
+                                                    <button type="submit" className="rounded-md bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50" disabled={Boolean(partWorkflowActionId)}>Save part used</button>
+                                                    <button type="button" className="text-sm" disabled={Boolean(partWorkflowActionId)} onClick={() => setExtraMaterial(null)}>Cancel</button>
+                                                </div>
+                                            </form>
+                                        ) : (
+                                            <button type="button" className="mb-3 text-sm font-semibold text-blue-700" onClick={() => setExtraMaterial({ requestId: uuidv4(), name: "", quantity: "1", note: "" })}>Record extra part used</button>
+                                        ))}
                                         {serviceStopShoppingItems.length ? (
                                             <div className="space-y-3">
                                                 {serviceStopShoppingItems.map((item) => {
-                                                    const delivered = isShoppingItemDelivered(item);
+                                                    const jobMaterial = Boolean(item.jobId || item.workOrderId || item.assignedJobId);
+                                                    const delivered = jobMaterial ? Boolean(item.installedAt) || item.status === "Installed" : isShoppingItemDelivered(item);
+                                                    const readyToInstall = !jobMaterial || Boolean(item.datePurchased || item.purchasedAt || item.purchasedItem) || ["Purchased", "Delivered"].includes(item.status);
                                                     const actionId = `deliver-${item.id}`;
 
                                                     return (
@@ -4320,16 +4372,19 @@ const ServiceStopDetails = () => {
                                                                             {item.status || "Ready"}
                                                                         </span>
                                                                     </div>
+                                                                    {item.materialUsageOnly && <p className="mt-2 text-xs text-slate-500">{item.purchasedItem ? "Extra part used · Purchase matched" : "Extra part used · Purchase match pending"}</p>}
                                                                     <p className="mt-2 text-xs text-slate-500">
                                                                         Assigned to {item.assignedTechName || item.assignedToUserName || item.userName || serviceStop.tech || "technician"}
                                                                     </p>
                                                                 </div>
                                                             </div>
 
-                                                            {canManagePartWorkflow && !delivered && (
+                                                            {canManagePartWorkflow && !delivered && readyToInstall && (
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => markShoppingItemDelivered(item)}
+                                                                    onClick={() => jobMaterial
+                                                                        ? recordStopMaterial({ action: "install", shoppingItemId: item.id })
+                                                                        : markShoppingItemDelivered(item)}
                                                                     disabled={partWorkflowActionId === actionId}
                                                                     className="mt-4 rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                                                                 >

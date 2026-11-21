@@ -1,5 +1,5 @@
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import React, { useEffect, useState, useContext, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { arrayUnion, collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, updateDoc, deleteDoc, where, serverTimestamp, setDoc } from 'firebase/firestore';
@@ -900,27 +900,25 @@ const RepairRequestDetailView = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <WorkspaceRecordHeader title={<>Repair Request Details</>} eyebrow="Company operations"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <Link
-              to={"/company/repair-requests"}
-              className="app-back-link"
-            >&larr; Back to Repair Requests</Link>
-
-            <p className="text-sm text-gray-500">{displayRepairRequestStatus(repairRequest.status)} request</p>
-          </div>
-          <ShareItemButton
-            type="repairRequest"
-            recordId={repairRequestId}
-            title={repairRequest.description || repairRequest.notes || "Repair Request"}
-            subtitle={[displayRepairRequestStatus(repairRequest.status), repairRequest.customerName || repairRequest.requesterName].filter(Boolean).join(" - ")}
-            companyId={recentlySelectedCompany}
-            customerId={repairRequest.customerId}
-            customerUserId={repairRequest.customerUserId || repairRequest.homeownerId}
-            collectionPath={sourcePath === "homeowner" ? "homeownerRepairRequests" : `companies/${recentlySelectedCompany}/repairRequests`}
-            webPath={`/company/repair-requests/detail/${repairRequestId}`}
-          />
-        </div></WorkspaceRecordHeader>
+        <WorkspaceHeader
+          title="Repair Request Details"
+          eyebrow="Company operations"
+          description={`${displayRepairRequestStatus(repairRequest.status)} request`}
+          backLink={{ to: "/company/repair-requests", label: "Back to Repair Requests" }}
+          actions={
+            <ShareItemButton
+              type="repairRequest"
+              recordId={repairRequestId}
+              title={repairRequest.description || repairRequest.notes || "Repair Request"}
+              subtitle={[displayRepairRequestStatus(repairRequest.status), repairRequest.customerName || repairRequest.requesterName].filter(Boolean).join(" - ")}
+              companyId={recentlySelectedCompany}
+              customerId={repairRequest.customerId}
+              customerUserId={repairRequest.customerUserId || repairRequest.homeownerId}
+              collectionPath={sourcePath === "homeowner" ? "homeownerRepairRequests" : `companies/${recentlySelectedCompany}/repairRequests`}
+              webPath={`/company/repair-requests/detail/${repairRequestId}`}
+            />
+          }
+        />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <div className="min-w-0 space-y-6">

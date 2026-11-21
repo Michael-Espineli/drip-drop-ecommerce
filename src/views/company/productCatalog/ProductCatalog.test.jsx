@@ -2,21 +2,22 @@ import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { getDocs, setDoc, writeBatch } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import ProductCatalog from "./ProductCatalog";
 import ProductCatalogImport from "./ProductCatalogImport";
+import CatalogDuplicates from "./CatalogDuplicates";
 import { productAvailabilityPatch, updateProductAvailability } from "../../../utils/productAvailability";
 import { deleteCatalogProduct, saveVendorProductConnection } from "../../../utils/productVendorConnections";
-import { appConfirm } from "../../../utils/appDialog";
 
 jest.mock("../../../context/AuthContext", () => ({ Context: require("react").createContext({}) }));
 jest.mock("../../../utils/config", () => ({ db: {} }));
 jest.mock("../../../utils/productAvailability", () => ({ ...jest.requireActual("../../../utils/productAvailability"), updateProductAvailability: jest.fn() }));
 jest.mock("../../../utils/productVendorConnections", () => ({ deleteCatalogProduct: jest.fn(), saveVendorProductConnection: jest.fn() }));
-jest.mock("../../../utils/appDialog", () => ({ appAlert: jest.fn(), appConfirm: jest.fn() }));
 jest.mock("react-hot-toast", () => ({ success: jest.fn(), error: jest.fn() }));
 jest.mock("firebase/firestore", () => ({ getDocs: jest.fn(), setDoc: jest.fn(), writeBatch: jest.fn(), runTransaction: jest.fn(), orderBy: jest.fn(), query: (path) => path, collection: (_, ...parts) => parts.join("/"), doc: (_, ...parts) => parts.join("/") }));
+jest.mock("firebase/functions", () => ({ httpsCallable: jest.fn() }));
 const record = (data) => ({ id: data.id, data: () => data });
 const product = { id: "product", name: "Pool seal", commonName: "Pool seal", sellPrice: 4500, defaultCostCents: 1750, billable: true, preferredVendorItemId: "vendor" };
 const vendor = { id: "vendor", name: "Supplier seal", storeName: "Pool supply", rate: 2300, productId: "product" };
@@ -30,7 +31,6 @@ beforeEach(() => {
   });
   getDocs.mockImplementation(async (path) => ({ docs: (path.includes("genericItems") ? catalogProducts : vendors).map(record) }));
   setDoc.mockResolvedValue(undefined);
-  appConfirm.mockResolvedValue(true);
   deleteCatalogProduct.mockImplementation(async ({ productId }) => {
     catalogProducts = catalogProducts.filter((item) => item.id !== productId);
   });
@@ -39,6 +39,7 @@ const open = (path = "/company/product-catalog", permission = true) => render(
   <Context.Provider value={{ recentlySelectedCompany: "company", companyRoleLoaded: true, companyRoleLoading: false, hasCompanyPermission: typeof permission === "function" ? permission : () => permission }}>
     <MemoryRouter initialEntries={[path]}>
       <Routes>
+        <Route path="/company/product-catalog/duplicates" element={<CatalogDuplicates />} />
         <Route path="/company/product-catalog/:productId?" element={<ProductCatalog />} />
         <Route path="/company/settings/product-catalog/:productId?" element={<ProductCatalog />} />
       </Routes>
@@ -88,6 +89,9 @@ test("edit uses the standard pickers and keeps saved custom values available", a
 
   open("/company/product-catalog/product");
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText(/Current Unit Cost/)).toHaveValue("$23.00");
+  expect(screen.getByLabelText(/Current Unit Cost/)).toHaveAttribute("readonly");
+  expect(screen.getByLabelText(/Manual Unit Cost/)).toHaveValue(17.5);
   const category = screen.getByRole("combobox", { name: "Category" });
   expect(category).toHaveValue("Pool Supplies");
   expect(screen.getByRole("combobox", { name: "Subcategory" })).toHaveValue("Seal Kits");
@@ -144,12 +148,30 @@ test.each([
 ])("%s can delete a product from the Edit popup and return to the list", async (path) => {
   open(path);
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.click(screen.getByRole("button", { name: "Delete Product" }));
-
-  expect(appConfirm).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("Pool seal"), variant: "danger" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete Product", exact: true }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Delete product" }));
+  expect(dialog.getByText("Pool seal")).toBeInTheDocument();
+  expect(dialog.getByRole("checkbox", { name: /Supplier seal/ })).not.toBeChecked();
+  fireEvent.click(dialog.getByRole("button", { name: "Delete product", exact: true }));
   expect(await screen.findByText("No products found.")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Product Catalog" })).toBeInTheDocument();
   expect(deleteCatalogProduct).toHaveBeenCalledWith(expect.objectContaining({ companyId: "company", productId: "product" }));
+});
+
+test("product deletion passes only the vendor items the user checked", async () => {
+  vendors = [vendor, { ...vendor, id: "retain", name: "Keep supplier" }];
+  const callable = jest.fn(async () => { catalogProducts = []; return { data: { status: "deleted" } }; });
+  httpsCallable.mockReturnValue(callable);
+  open();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete Product", exact: true }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Delete product" }));
+  fireEvent.click(dialog.getByRole("checkbox", { name: /Supplier seal/ }));
+  fireEvent.click(dialog.getByRole("button", { name: "Delete product and 1 vendor item" }));
+  await screen.findByText("No products found.");
+  expect(httpsCallable).toHaveBeenCalledWith(undefined, "deleteCatalogProductAndVendorItems");
+  expect(callable).toHaveBeenCalledWith({ companyId: "company", productId: "product", vendorItemIds: ["vendor"] });
+  expect(deleteCatalogProduct).not.toHaveBeenCalled();
 });
 
 test("edit permission alone does not show the delete action", async () => {
@@ -160,17 +182,20 @@ test("edit permission alone does not show the delete action", async () => {
 });
 
 test("canceling or failing deletion leaves the product and Edit popup available", async () => {
-  appConfirm.mockResolvedValueOnce(false);
   deleteCatalogProduct.mockRejectedValueOnce(new Error("Offline"));
   open();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const deleteButton = screen.getByRole("button", { name: "Delete Product" });
 
   fireEvent.click(deleteButton);
+  let dialog = within(await screen.findByRole("dialog", { name: "Delete product" }));
+  fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(deleteButton).toBeEnabled());
   expect(deleteCatalogProduct).not.toHaveBeenCalled();
 
   fireEvent.click(deleteButton);
+  dialog = within(await screen.findByRole("dialog", { name: "Delete product" }));
+  fireEvent.click(dialog.getByRole("button", { name: "Delete product", exact: true }));
   await waitFor(() => expect(toast.error).toHaveBeenCalled());
   expect(screen.getByRole("link", { name: "Pool seal" })).toBeInTheDocument();
   expect(deleteButton).toBeEnabled();
@@ -208,12 +233,58 @@ test("bulk editing can select all filtered products across pages and applies onl
 test("changing filters clears selection and retired duplicate products cannot be bulk reactivated", async () => {
   catalogProducts = [product, { ...product, id: 'retired', name: 'Retired seal', active: false, mergedIntoProductId: 'product' }];
   open();
-  await screen.findByText('Retired seal');
-  expect(screen.getByRole('checkbox', { name: 'Select Retired seal' })).toBeDisabled();
+  await screen.findByRole('link', { name: 'Pool seal' });
+  expect(screen.queryByText('Retired seal')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Select all filtered (1)' }));
   expect(screen.getByText('1 selected')).toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText('Search products'), { target: { value: 'Pool' } });
   expect(screen.getByText('0 selected')).toBeInTheDocument();
+});
+
+test("merge can be reviewed from product detail and confirmation archives the source after swapping", async () => {
+  const duplicate = { ...product, id: "duplicate", name: "Pool seal duplicate", sku: "SEAL-22", sellPrice: 3800 };
+  catalogProducts = [product, duplicate];
+  const callable = jest.fn(async ({ action, keepId, sourceId }) => {
+    if (action === "preview") return { data: {
+      keep: { ...duplicate, priceCents: duplicate.sellPrice }, source: { ...product, priceCents: product.sellPrice },
+      reviewToken: "reviewed", summary: { vendorItemsToMove: 1 },
+    } };
+    catalogProducts = catalogProducts.map(row => row.id === sourceId ? { ...row, mergedIntoProductId: keepId, archived: true } : row);
+    return { data: { keepId } };
+  });
+  httpsCallable.mockReturnValue(callable);
+  open("/company/product-catalog/product");
+  fireEvent.click(await screen.findByRole("button", { name: "Merge duplicate" }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Merge products" }));
+  await waitFor(() => expect(dialog.getByRole("combobox", { name: "Record to keep" })).toHaveValue("product"));
+  fireEvent.change(dialog.getByRole("textbox", { name: "Search for duplicate to archive" }), { target: { value: "SEAL-22" } });
+  fireEvent.change(dialog.getByRole("combobox", { name: "Duplicate to archive" }), { target: { value: "duplicate" } });
+  fireEvent.click(dialog.getByRole("button", { name: "Swap records" }));
+  fireEvent.click(dialog.getByRole("button", { name: "Review merge" }));
+  const confirm = await dialog.findByRole("button", { name: "Confirm merge" });
+  expect(callable).toHaveBeenCalledTimes(1);
+  expect(callable).toHaveBeenCalledWith({ action: "preview", companyId: "company", kind: "product", keepId: "duplicate", sourceId: "product" });
+  expect(dialog.getByText("$38.00")).toBeInTheDocument();
+  fireEvent.click(confirm);
+  expect(await screen.findByRole("heading", { name: "Pool seal duplicate", level: 1 })).toBeInTheDocument();
+  expect(callable).toHaveBeenLastCalledWith(expect.objectContaining({ action: "merge", reviewToken: "reviewed" }));
+});
+
+test("the duplicates page suggests vendor matches within a supplier and opens the shared dialog", async () => {
+  vendors = [
+    { ...vendor, id: "first", vendorId: "supplier-a", sku: "X01" },
+    { ...vendor, id: "second", vendorId: "supplier-a", sku: "X01" },
+    { ...vendor, id: "other", vendorId: "supplier-b", sku: "X01", storeName: "Other vendor" },
+    { ...vendor, id: "archived", vendorId: "supplier-a", sku: "X01", mergedIntoVendorItemId: "first" },
+  ];
+  open("/company/product-catalog/duplicates?kind=vendorItem");
+  expect(await screen.findByText("Same SKU")).toBeInTheDocument();
+  const suggestions = screen.getAllByRole("button", { name: "Keep and compare" });
+  expect(suggestions).toHaveLength(2);
+  fireEvent.click(suggestions[0]);
+  const dialog = within(await screen.findByRole("dialog", { name: "Merge vendor items" }));
+  await waitFor(() => expect(dialog.getByRole("combobox", { name: "Record to keep" })).toHaveValue("first"));
+  expect(dialog.getByRole("combobox", { name: "Duplicate to archive" })).toHaveValue("second");
 });
 
 test("availability can be combined with category, including legacy flags and defaults", async () => {
@@ -305,11 +376,26 @@ test("active-only updates refresh legacy availability defaults and keep saved pr
     fireEvent.change(screen.getByLabelText('Active in catalog'), { target: { value: active } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply to 1 product' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    await screen.findByText(active === 'no' ? 'No Jobs' : 'Jobs', { exact: true });
-    expect(Boolean(screen.queryByText('Inactive', { exact: true }))).toBe(active === 'no');
+    await waitFor(() => expect(Boolean(screen.queryByText('Active', { exact: true }))).toBe(active === 'yes'));
+    expect(screen.queryByText('Jobs', { exact: true })).not.toBeInTheDocument();
   }
   expect(catalogProducts[0]).toMatchObject({ active: true, sellPrice: 4500, preferredVendorItemId: 'vendor', defaultCostCents: 1750 });
   expect(catalogProducts[0]).not.toHaveProperty('availableForJobs');
   expect(screen.getByText('$23.00')).toBeInTheDocument();
   expect(screen.getByText('$45.00')).toBeInTheDocument();
+});
+
+test("availability renders one positive tag per enabled option, including legacy aliases and Billable", async () => {
+  catalogProducts = [
+    { ...product, active: true, availableForJobs: true, availableForJob: true, partApprovalAvailable: true, partPurchaseAvailable: true },
+    { id: "some", name: "Purchase only", active: false, availableForJobs: false, availableForPartApproval: false, partPurchaseAvailable: true },
+    { id: "missing", name: "No saved availability" },
+  ];
+  open();
+  const all = (await screen.findByRole("link", { name: "Pool seal" })).closest("tr");
+  expect([...all.cells[5].querySelectorAll("span")].map(tag => tag.textContent)).toEqual(["Active", "Jobs", "Part Approval Sales", "Part Purchase", "Billable"]);
+  const some = screen.getByRole("link", { name: "Purchase only" }).closest("tr");
+  expect(some.cells[5]).toHaveTextContent(/^Part Purchase$/);
+  const missing = screen.getByRole("link", { name: "No saved availability" }).closest("tr");
+  expect(missing.cells[5]).not.toHaveTextContent(/\S/);
 });

@@ -26,11 +26,11 @@ test('permissions stay closed until loaded',()=>{mount({permissions:['420'],load
 
 test('personal My Pay is separate from the payroll permission gate',()=>{mount({path:'/company/my-pay'});expect(screen.getByText('Authorized payroll')).toBeInTheDocument();});
 
-test('registered My Pay route and sidebar entry use personal access separately from management Payroll',()=>{
+test('My Pay remains reachable through its personal route without a sidebar entry or management permission',()=>{
  const personal=sellerRoutes.find(route=>route.path==='/company/my-pay');
  expect(personal).toBeDefined();
  expect(personal.permissionId).toBeUndefined();
- expect(allNav.find(item=>item.path==='/company/my-pay').permissionId).toBeUndefined();
+ expect(allNav.some(item=>item.path==='/company/my-pay')).toBe(false);
  expect(allNav.find(item=>item.path==='/company/payroll').permissionId).toBe('420');
  mount({path:personal.path,routeConfig:personal});
  expect(screen.getByText('Authorized payroll')).toBeInTheDocument();

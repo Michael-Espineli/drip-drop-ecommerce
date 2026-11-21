@@ -5848,16 +5848,14 @@ export default function CustomerDetails() {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-4 text-slate-900 sm:px-3 sm:py-6 lg:px-4">
             <div className="w-full space-y-4 sm:space-y-6">
-                <WorkspaceRecordHeader title={<>{customerName}</>} eyebrow="Customer profile"><div className="workspace-record-toolbar">
+                <WorkspaceRecordHeader
+                  title={customerName}
+                  eyebrow="Customer profile"
+                  backLink={{ to: "/company/customers", label: "Back to Customers" }}
+                >
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                             <div className="flex flex-wrap items-center gap-2">
-                                <Link
-                                    to="/company/customers"
-                                    className="app-back-link"
-                                >
-                                    &larr; Back to Customers
-                                </Link>
                                 <StatusBadge tone={customer.active ? 'emerald' : 'rose'}>
                                     {getCustomerLifecycleLabel(customer)}
                                 </StatusBadge>
@@ -5927,7 +5925,7 @@ export default function CustomerDetails() {
                             {profileHeaderActions}
                         </div>
                     </div>
-                </div></WorkspaceRecordHeader>
+                </WorkspaceRecordHeader>
 
                 <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] xl:gap-6">
                     <aside className="space-y-4">

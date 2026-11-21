@@ -1,3 +1,4 @@
+import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -1728,79 +1729,71 @@ const SalesAgreements = ({
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-bold text-slate-950">
-                  {routingQueueOnly ? 'Agreements Needing Routing' : 'Service Agreements'}
-                </h1>
-                <FeatureInfoButton title="How Service Agreements Work" align="left">
-                  <p>
-                    Service agreements are customer-facing billing snapshots built from company catalog items,
-                    service locations, and company-scoped terms templates.
-                  </p>
-                  <p>
-                    Drafts can be reviewed, emailed through SendGrid, accepted by the customer, and later connected
-                    to Stripe subscriptions or invoice workflows.
-                  </p>
-                </FeatureInfoButton>
-              </div>
-              <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                {routingQueueOnly
-                  ? 'Accepted recurring service agreements that still need a routed recurring stop.'
-                  : 'Search, review, and send customer service agreement snapshots.'}
+        <WorkspaceHeader
+          title={routingQueueOnly ? 'Agreements Needing Routing' : 'Service Agreements'}
+          eyebrow="Company sales"
+          description={routingQueueOnly
+            ? 'Accepted recurring service agreements that still need a routed recurring stop.'
+            : 'Search, review, and send customer service agreement snapshots.'}
+          titleAccessory={
+            <FeatureInfoButton title="How Service Agreements Work" align="left">
+              <p>
+                Service agreements are customer-facing billing snapshots built from company catalog items,
+                service locations, and company-scoped terms templates.
               </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {routingQueueOnly ? (
-                <Link
-                  to="/company/sales/agreements"
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  All Agreements
-                </Link>
-              ) : (
-                <Link
-                  to="/company/sales/agreements/needs-routing"
-                  className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100"
-                >
-                  Needs Routing
-                </Link>
-              )}
-              {!routingQueueOnly && (
-                <Link
-                  to="/company/sales/agreements/active-customers-without-service-agreements"
-                  className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
-                >
-                  <FaUserCheck className="text-xs" />
-                  Missing Agreements
-                </Link>
-              )}
-              {!routingQueueOnly && (
-                <button
-                  type="button"
-                  onClick={handleGenerateFromRoutes}
-                  disabled={generatingFromRoutes || !canCreateServiceAgreements}
-                  className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                >
-                  <FaRoute className="text-xs" />
-                  {generatingFromRoutes ? 'Generating...' : 'Generate From Routes'}
-                </button>
-              )}
-              {canCreateServiceAgreements && (
-                <Link
-                  to="/company/sales/agreements/new"
-                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                >
-                  <FaPlus className="text-xs" />
-                  New Agreement
-                </Link>
-              )}
-            </div>
-          </div>
-        </section>
+              <p>
+                Drafts can be reviewed, emailed through SendGrid, accepted by the customer, and later connected
+                to Stripe subscriptions or invoice workflows.
+              </p>
+            </FeatureInfoButton>
+          }
+          actions={<>
+            {routingQueueOnly ? (
+              <Link
+                to="/company/sales/agreements"
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                All Agreements
+              </Link>
+            ) : (
+              <Link
+                to="/company/sales/agreements/needs-routing"
+                className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100"
+              >
+                Needs Routing
+              </Link>
+            )}
+            {!routingQueueOnly && (
+              <Link
+                to="/company/sales/agreements/active-customers-without-service-agreements"
+                className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+              >
+                <FaUserCheck className="text-xs" />
+                Missing Agreements
+              </Link>
+            )}
+            {!routingQueueOnly && (
+              <button
+                type="button"
+                onClick={handleGenerateFromRoutes}
+                disabled={generatingFromRoutes || !canCreateServiceAgreements}
+                className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                <FaRoute className="text-xs" />
+                {generatingFromRoutes ? 'Generating...' : 'Generate From Routes'}
+              </button>
+            )}
+            {canCreateServiceAgreements && (
+              <Link
+                to="/company/sales/agreements/new"
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+              >
+                <FaPlus className="text-xs" />
+                New Agreement
+              </Link>
+            )}
+          </>}
+        />
 
         {error && (
           <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">

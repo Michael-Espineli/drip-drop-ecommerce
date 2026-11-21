@@ -5,10 +5,12 @@ import { jobStatusClass } from '../../../utils/statusPresentation';
 import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
 import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
 import { jobExecutionProgress } from "../../../utils/jobExecutionProgress";
+import { isCancelledVisit, plannedVisitSchedule, scheduledVisitIds } from "../../../utils/plannedVisitSchedule";
+import { syncShoppingItemsForScheduledJobTasks } from "../../../utils/scheduledJobMaterials";
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
 import { jobHistoryActorName, formatJobHistoryDate } from "../../../utils/jobHistory";
 import { getJobMaterialVendorItemId, loadJobProductCatalog, buildJobProductCatalog, buildProductFromVendorItem, buildVendorItemProductPatch, productCatalogDocRef } from "../../../utils/productCatalog";
-import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
+import { completeJobLaborLines, jobLaborTotals, visitCustomerPriceCents } from "../../../utils/jobScopePricing";
 import { calculatePayLines, jobPayFields } from "../../../utils/payroll/payCalculation";
 import JobPayrollFields from "./JobPayrollFields";
 import WorkOfferPaySection from "./WorkOfferPaySection";
@@ -29,6 +31,7 @@ import {
   deleteDoc,
   collection,
   getDocs,
+  runTransaction,
   query,
   where,
   orderBy,
@@ -51,7 +54,7 @@ import JobDeleteOptionsDialog from "./JobDeleteOptionsDialog";
 import JobUseTemplateDialog from "./JobUseTemplateDialog";
 import { copyJobTemplateScope, combineJobTemplateScope } from "../../../utils/jobTemplateScope";
 import { formatAddressLabel } from "../../../utils/customerLocationData";
-import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
+import { Dialog, DialogPanel, DialogTitle, Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import { GoHistory } from "react-icons/go";
 import {
   ArrowDownTrayIcon,
@@ -155,7 +158,6 @@ import {
   itemPhotoFieldsFromSource,
 } from "../../../utils/itemPhotos";
 import {
-  SHOPPING_LIST_INVOICED_STATUS,
   isShoppingListStatusClosed,
   syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
@@ -164,7 +166,6 @@ import {
   SHOPPING_LIST_STATUS_OPTIONS,
   canonicalShoppingListStatus,
 } from "../../../utils/shoppingListStatus";
-import { createAndSendShoppingItemInstallInvoice } from "../../../utils/sales/shoppingItemInvoiceAutomation";
 import { deleteShoppingListItemWithLinks } from "../../../utils/shoppingListDelete";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import ShareItemButton from "../../components/share/ShareItemButton";
@@ -260,8 +261,8 @@ const CUSTOMER_NOTE_AUDIENCE_OPTIONS = [
 ];
 const JOB_DETAIL_SECTIONS = [
   { id: "overview", tab: "Plans", label: "Overview", helper: "Customer options for solving this job" },
-  { id: "create-plans", tab: "Planned", label: "Create Plans", helper: "Create estimates based on services and products" },
-  { id: "actual", tab: "Actual", label: "Actual", helper: "Service stops, payroll, and purchased parts" },
+  { id: "create-plans", tab: "Planned", label: "Job Plan", helper: "Services, tasks, planned visits, and products" },
+  { id: "actual", tab: "Actual", label: "Schedule & Work", helper: "Scheduled visits, work offers, payroll, and purchases" },
   { id: "billing", tab: "Billing", label: "Billing", helper: "Estimate, invoice, and payment lifecycle" },
 ];
 const DEFAULT_JOB_DETAIL_SECTION_ID = "overview";
@@ -363,6 +364,7 @@ const createEmptyScheduleTaskForm = () => ({
 });
 
 const EMPTY_PLANNED_STOP_FORM = {
+  customerPrice: "",
   serviceStopTypeId: "",
   name: "",
   description: "",
@@ -418,6 +420,7 @@ const isValidActualServiceStopOperationStatus = (status) =>
 const normalizeActualServiceStopOperationStatus = (status, fallback = "Not Finished") => {
   const normalizedStatus = String(status || "").trim();
   if (isValidActualServiceStopOperationStatus(normalizedStatus)) return normalizedStatus;
+  if (isCancelledVisit(normalizedStatus)) return "Skipped";
 
   const normalizedFallback = String(fallback || "").trim();
   return isValidActualServiceStopOperationStatus(normalizedFallback) ? normalizedFallback : "Not Finished";
@@ -1178,8 +1181,6 @@ const JobDetailView = () => {
   // Auth / company context
   const authCtx = useContext(Context);
   const { recentlySelectedCompany, dataBaseUser } = authCtx;
-  const shoppingItemInstallInvoiceAutomationEnabled =
-    authCtx?.shoppingItemInstallInvoiceAutomationEnabled === true;
   const { can, requirePermission } = useCompanyPermissions();
   const salesWorkflowEnabled = authCtx?.isFeatureEnabled?.("feature_flag_004") === true;
 
@@ -1303,6 +1304,7 @@ const JobDetailView = () => {
   const [showAllActualServiceStops, setShowAllActualServiceStops] = useState(false);
   const [showScheduleServiceStopModal, setShowScheduleServiceStopModal] = useState(false);
   const [scheduleServiceStopMode, setScheduleServiceStopMode] = useState("");
+  const [scheduleLockedVisitId, setScheduleLockedVisitId] = useState("");
   const [scheduleServiceStopForm, setScheduleServiceStopForm] = useState(() => createActualServiceStopForm());
   const [savingScheduledServiceStop, setSavingScheduledServiceStop] = useState(false);
   const [showScheduleTaskCreator, setShowScheduleTaskCreator] = useState(false);
@@ -1513,6 +1515,11 @@ const JobDetailView = () => {
   // Tasks
   const [taskTypeList, setTaskTypeList] = useState([]);
   const [taskList, setTaskList] = useState([]);
+  const scheduledVisitsByPlan = useMemo(
+    () => plannedVisitSchedule(plannedServiceStops, serviceStops, taskList),
+    [plannedServiceStops, serviceStops, taskList]
+  );
+
   const [taskGroupList, setTaskGroupList] = useState([]);
   const [loadingTaskGroups, setLoadingTaskGroups] = useState(false);
   const [selectedTaskGroup, setSelectedTaskGroup] = useState(null);
@@ -2087,6 +2094,7 @@ const JobDetailView = () => {
   };
 
   const getShoppingPlannedTotalCostCents = (item) => {
+    if (item?.materialUsageOnly) return 0;
     if (item?.plannedTotalCostCents !== undefined && item?.plannedTotalCostCents !== null) {
       return cents(item.plannedTotalCostCents);
     }
@@ -2098,6 +2106,7 @@ const JobDetailView = () => {
   };
 
   const getShoppingPlannedTotalPriceCents = (item) => {
+    if (item?.materialUsageOnly) return 0;
     if (item?.plannedTotalPriceCents !== undefined && item?.plannedTotalPriceCents !== null) {
       return cents(item.plannedTotalPriceCents);
     }
@@ -3994,7 +4003,7 @@ const JobDetailView = () => {
   };
 
   const getPlannedStopTasks = (stop) => {
-    const taskIds = Array.isArray(stop?.taskIds) ? stop.taskIds : [];
+    const taskIds = Array.isArray(stop?.taskIds) ? stop.taskIds.map(idValue).filter(Boolean) : [];
     if (!taskIds.length) {
       return stop?.taskAssignmentMode === "all" || stop?.appliesToAllTasks === true
         ? taskList || []
@@ -4005,13 +4014,14 @@ const JobDetailView = () => {
   };
 
   const getPlannedStopType = (stop) => {
-    const typeId = stop?.serviceStopTypeId || stop?.typeId || "";
+    const typeId = stop?.serviceStopTypeId || stop?.typeId || stop?.payTypeId || "";
     if (!typeId) return null;
 
     return (
       companyServiceStopTypes.find((type) => type.id === typeId) || {
         id: typeId,
-        name: stop.serviceStopTypeName || stop.type || "Service Stop",
+        name: stop.serviceStopTypeName || stop.type || stop.payTypeName || "Service Stop",
+        imageName: stop.serviceStopTypeImage || stop.typeImage || "",
         defaultWorkTypeIds: stop.defaultWorkTypeIds || [],
       }
     );
@@ -4195,6 +4205,11 @@ const JobDetailView = () => {
     estimatePlannedServiceStopPayRange({
       companyId: recentlySelectedCompany,
       settings: paySettings,
+      serviceStop: {
+        ...jobPayFields(plannedStopForm),
+        payTypeId: selectedPlannedStopType?.id || "",
+        serviceLocationId: job.serviceLocationId,
+      },
       serviceStopType: selectedPlannedStopType,
       tasks: plannedStopFormTasks,
       companyUsers: companyUserList,
@@ -4205,6 +4220,8 @@ const JobDetailView = () => {
   ), [
     recentlySelectedCompany,
     paySettings,
+    plannedStopForm,
+    job.serviceLocationId,
     selectedPlannedStopType,
     plannedStopFormTasks,
     companyUserList,
@@ -4892,7 +4909,7 @@ const JobDetailView = () => {
         }]
         : [];
 
-    const materialItems = (materials || []).map((item) => {
+    const materialItems = (materials || []).filter((item) => !item.materialUsageOnly).map((item) => {
       const amount = getShoppingPlannedTotalPriceCents(item);
       const quantity = Number(item.quantity || 0);
       const unitAmountCents =
@@ -4922,6 +4939,7 @@ const JobDetailView = () => {
         stripeProductId: item.stripeProductId || "",
         stripePriceId: item.stripePriceId || "",
         displayAmount: moneyFromCents(amount),
+        metadata: { ...item.metadata, shoppingListItemId: item.id },
       };
     });
 
@@ -5028,7 +5046,9 @@ const JobDetailView = () => {
     return plannedLaborPriceCents + plannedMaterialPriceCents;
   }, [plannedLaborPriceCents, plannedMaterialPriceCents]);
 
-  const displayedEstimatePriceCents = laborLineItems.length || plannedEstimatePriceCents !== 0 ? plannedEstimatePriceCents : cents(job.rate);
+  const acceptedEstimatePrice = job.acceptedEstimateTotalCents ?? job.estimateTotalCents ?? (job.dateEstimateAccepted || job.acceptedPlanId ? job.rate : null);
+  const displayedEstimatePriceCents = acceptedEstimatePrice != null ? cents(acceptedEstimatePrice)
+    : laborLineItems.length || plannedEstimatePriceCents !== 0 ? plannedEstimatePriceCents : cents(job.rate);
 
   const activePlan = useMemo(() => (
     (jobPlans || []).find((solution) => solution.id === (job.activePlanId || job.activeSolutionId)) ||
@@ -5435,7 +5455,7 @@ const JobDetailView = () => {
       sourcePlanId: solutionId,
       sourceSolutionId: solutionId,
     }));
-    const materialSnapshots = (scope?.shoppingItems || shoppingList || []).map((item, index) => ({
+    const materialSnapshots = (scope?.shoppingItems || shoppingList || []).filter((item) => !item.materialUsageOnly).map((item, index) => ({
       ...item,
       sortOrder: Number(item.sortOrder ?? index),
       companyId: recentlySelectedCompany,
@@ -5648,6 +5668,7 @@ const JobDetailView = () => {
     recordHistory = true,
     historyTitle = "",
     switchToTab = "",
+    scope = null,
   } = {}) => {
     if (!recentlySelectedCompany || !jobId) throw new Error("Missing job context.");
 
@@ -5679,6 +5700,7 @@ const JobDetailView = () => {
         fallbackRateCents: hasScopedPricing ? 0 : cents(job.rate),
         fallbackLaborCostCents: hasScopedPricing ? 0 : cents(job.laborCost),
         status: nextStatus,
+        scope,
       }),
       isAccepted: Boolean(existingSolution?.isAccepted),
       isActivePlan: makeActive ? true : Boolean(existingSolution?.isActivePlan),
@@ -6044,9 +6066,9 @@ const JobDetailView = () => {
 
   const actualPurchasedMaterialCostCents = useMemo(() => {
     return (purchasedItems || []).reduce((total, item) => {
-      const price = cents(item.price);
-      const qty = quantityNumber(item.quantityString ?? item.quantity);
-      return total + Math.round(price * qty);
+      if (item.returned || item.personalPurchase || item.assignmentStatus === "personal") return total;
+      const subtotal = Math.round(cents(item.price) * quantityNumber(item.quantityString ?? item.quantity));
+      return total + cents(item.totalAfterTax ?? item.receiptLineTotalCents ?? item.total ?? subtotal);
     }, 0);
   }, [purchasedItems]);
 
@@ -6054,7 +6076,7 @@ const JobDetailView = () => {
     return (purchasedItems || []).reduce((total, item) => {
       const isHandledByJob = item.billingOwner === "job" || item.assignedToJob || item.jobId || item.workOrderId;
       const isJobBillable = item.jobBillable ?? item.billable;
-      if (!isHandledByJob || !isJobBillable) return total;
+      if (!isHandledByJob || !isJobBillable || item.materialUsageOnly || item.returned || item.personalPurchase) return total;
 
       const unit = item.jobBillingRate !== undefined && item.jobBillingRate !== null
         ? cents(item.jobBillingRate)
@@ -6074,180 +6096,6 @@ const JobDetailView = () => {
     String(JOB_OPERATION_STATUS.finished || "Finished").trim().toLowerCase();
   const markingJobInvoiced = Boolean(jobInvoiceActionInProgress);
   const convertInvoiceActionLabel = jobIsFinished ? "Convert to Invoice" : "Mark As Invoiced";
-
-  const purchasedItemInvoiceUpdates = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
-    invoiced: true,
-    invoiceStatus: "Invoiced",
-    jobBillingStatus: "invoiced",
-    status: "Invoiced",
-    invoiceId: invoiceId || "",
-    invoiceRef: invoiceId || "",
-    invoiceType,
-    invoicedAt: serverTimestamp(),
-    jobInvoicedAt: serverTimestamp(),
-  });
-
-  const purchasedItemInvoiceState = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
-    invoiced: true,
-    invoiceStatus: "Invoiced",
-    jobBillingStatus: "invoiced",
-    status: "Invoiced",
-    invoiceId: invoiceId || "",
-    invoiceRef: invoiceId || "",
-    invoiceType,
-    invoicedAt: new Date(),
-    jobInvoicedAt: new Date(),
-  });
-
-  const shoppingItemInvoiceUpdates = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
-    invoiced: true,
-    invoiceStatus: "Invoiced",
-    jobBillingStatus: "invoiced",
-    status: SHOPPING_LIST_INVOICED_STATUS,
-    needsAction: false,
-    invoiceId: invoiceId || "",
-    invoiceRef: invoiceId || "",
-    invoiceType,
-    invoicedAt: serverTimestamp(),
-    jobInvoicedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  const shoppingItemInvoiceState = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
-    invoiced: true,
-    invoiceStatus: "Invoiced",
-    jobBillingStatus: "invoiced",
-    status: SHOPPING_LIST_INVOICED_STATUS,
-    needsAction: false,
-    invoiceId: invoiceId || "",
-    invoiceRef: invoiceId || "",
-    invoiceType,
-    invoicedAt: new Date(),
-    jobInvoicedAt: new Date(),
-    updatedAt: new Date(),
-  });
-
-  const markPurchasedItemsInvoicedForJob = async ({ invoiceId = "", invoiceType = "job" } = {}) => {
-    if (!recentlySelectedCompany || !jobId) return 0;
-
-    const itemsById = new Map((purchasedItems || []).map((item) => [item.id, item]));
-
-    const addSnapDocs = (snap) => {
-      snap.docs.forEach((itemDoc) => {
-        const item = withFirestoreDocId(itemDoc);
-        itemsById.set(getFirestoreDocId(item), item);
-      });
-    };
-
-    const [jobIdSnap, workOrderIdSnap, assignedJobIdSnap] = await Promise.all([
-      getDocs(query(purchasedItemsPath(recentlySelectedCompany), where("jobId", "==", jobId))),
-      getDocs(query(purchasedItemsPath(recentlySelectedCompany), where("workOrderId", "==", jobId))),
-      getDocs(query(purchasedItemsPath(recentlySelectedCompany), where("assignedJobId", "==", jobId))),
-    ]);
-
-    addSnapDocs(jobIdSnap);
-    addSnapDocs(workOrderIdSnap);
-    addSnapDocs(assignedJobIdSnap);
-
-    const items = Array.from(itemsById.values()).filter((item) => item?.id);
-    if (!items.length) return 0;
-
-    const updates = purchasedItemInvoiceUpdates({ invoiceId, invoiceType });
-    const stateUpdates = purchasedItemInvoiceState({ invoiceId, invoiceType });
-    await Promise.all(
-      items.map(async (item) => {
-        const purchasedItemId = getFirestoreDocId(item);
-        await updateDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchasedItemId), updates);
-
-        if (item.shoppingListItemId) {
-          await syncLinkedShoppingPurchase({
-            db,
-            companyId: recentlySelectedCompany,
-            purchasedItemId,
-            shoppingItemId: item.shoppingListItemId,
-            purchasedItemData: {
-              ...item,
-              ...stateUpdates,
-              id: purchasedItemId,
-            },
-            invoiced: true,
-            preferPurchasedContext: true,
-          });
-        }
-      })
-    );
-
-    setPurchasedItems((prev) =>
-      (prev || []).map((item) => (itemsById.has(getFirestoreDocId(item)) ? { ...item, ...stateUpdates } : item))
-    );
-
-    return items.length;
-  };
-
-  const markShoppingItemsInvoicedForJob = async ({ invoiceId = "", invoiceType = "job" } = {}) => {
-    if (!recentlySelectedCompany || !jobId) return 0;
-
-    const itemsById = new Map((shoppingList || []).map((item) => [getFirestoreDocId(item), item]));
-
-    const addSnapDocs = (snap) => {
-      snap.docs.forEach((itemDoc) => {
-        const item = withFirestoreDocId(itemDoc);
-        itemsById.set(getFirestoreDocId(item), item);
-      });
-    };
-
-    const [jobIdSnap, workOrderIdSnap, assignedJobIdSnap] = await Promise.all([
-      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
-      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("workOrderId", "==", jobId))),
-      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("assignedJobId", "==", jobId))),
-    ]);
-
-    addSnapDocs(jobIdSnap);
-    addSnapDocs(workOrderIdSnap);
-    addSnapDocs(assignedJobIdSnap);
-
-    const items = Array.from(itemsById.values()).filter((item) => getFirestoreDocId(item));
-    if (!items.length) return 0;
-
-    const updates = shoppingItemInvoiceUpdates({ invoiceId, invoiceType });
-    const stateUpdates = shoppingItemInvoiceState({ invoiceId, invoiceType });
-    const linkedPurchaseUpdates = purchasedItemInvoiceUpdates({ invoiceId, invoiceType });
-
-    await Promise.all(
-      items.map(async (item) => {
-        const shoppingItemId = getFirestoreDocId(item);
-        const purchasedItemId = item.purchasedItem || item.purchasedItemId || "";
-        await updateDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", shoppingItemId), updates);
-
-        if (purchasedItemId) {
-          try {
-            await updateDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchasedItemId), linkedPurchaseUpdates);
-          } catch (error) {
-            console.warn(`Could not mark linked purchased item ${purchasedItemId} as invoiced`, error);
-          }
-
-          await syncLinkedShoppingPurchase({
-            db,
-            companyId: recentlySelectedCompany,
-            shoppingItemId,
-            purchasedItemId,
-            shoppingItemData: {
-              ...item,
-              ...stateUpdates,
-              id: shoppingItemId,
-            },
-            invoiced: true,
-          });
-        }
-      })
-    );
-
-    setShoppingList((current) =>
-      (current || []).map((item) => (itemsById.has(getFirestoreDocId(item)) ? { ...item, ...stateUpdates } : item))
-    );
-
-    return items.length;
-  };
 
   const actualPayrollTotalCents = useMemo(() => {
     return (actualPayLineItems || []).filter((line) => line.calculationStatus !== "voided" && !line.voidedAt).reduce((total, line) => {
@@ -6302,9 +6150,11 @@ const JobDetailView = () => {
     return estimateInternalCostCents - actualRecordedCostCents;
   }, [actualRecordedCostCents, estimateInternalCostCents]);
 
-  const actualProfitCents = useMemo(() => {
-    return estimateCustomerPriceCents - actualRecordedCostCents;
-  }, [actualRecordedCostCents, estimateCustomerPriceCents]);
+  const jobRevenueCents = linkedSalesInvoice && linkedSalesInvoice.jobId === jobId && linkedSalesInvoice.billingScope !== "approvedPart" &&
+    !["void", "voided", "canceled", "cancelled", "draft"].includes(String(linkedSalesInvoice.status).toLowerCase())
+      ? cents(linkedSalesInvoice.totalAmountCents) - cents(linkedSalesInvoice.taxAmountCents)
+      : estimateCustomerPriceCents;
+  const actualProfitCents = jobRevenueCents - actualRecordedCostCents;
 
   const contractTotalCents = useMemo(() => {
     if (selectedSalesAgreement) {
@@ -7859,11 +7709,9 @@ const JobDetailView = () => {
   ]);
 
   const actualMarginPercent = useMemo(() => {
-    const rate = estimateCustomerPriceCents;
-    if (rate <= 0) return "0.0";
-
-    return ((actualProfitCents / rate) * 100).toFixed(1);
-  }, [estimateCustomerPriceCents, actualProfitCents]);
+    if (jobRevenueCents <= 0) return "0.0";
+    return ((actualProfitCents / jobRevenueCents) * 100).toFixed(1);
+  }, [jobRevenueCents, actualProfitCents]);
 
   const billingReadyCents = useMemo(() => {
     return estimateCustomerPriceCents;
@@ -7876,16 +7724,6 @@ const JobDetailView = () => {
   const estimateDifferenceCents = useMemo(() => {
     return contractTotalCents - estimateCustomerPriceCents;
   }, [contractTotalCents, estimateCustomerPriceCents]);
-
-  const mergeShoppingListItems = (items = []) => {
-    const itemsById = new Map((shoppingList || []).map((item) => [getFirestoreDocId(item), item]));
-    (items || []).forEach((item) => {
-      const itemId = getFirestoreDocId(item);
-      if (itemId) itemsById.set(itemId, item);
-    });
-
-    return Array.from(itemsById.values());
-  };
 
   const loadConnectedJobShoppingItems = async ({ updateState = false } = {}) => {
     if (!recentlySelectedCompany || !jobId) return shoppingList || [];
@@ -7919,16 +7757,14 @@ const JobDetailView = () => {
     (items || []).filter((item) => {
       const itemId = getFirestoreDocId(item);
       if (!itemId) return false;
-      return !isShoppingListStatusClosed(item.status);
+      return item.shoppingListActive !== false && !item.materialUsageOnly && !item.returned &&
+        !item.installedAt && canonicalShoppingListStatus(item.status) !== SHOPPING_LIST_STATUS.installed;
     })
   );
 
-  const buildDefaultJobFinishShoppingActions = (items = shoppingList) => (
-    getUnfinishedJobFinishShoppingItems(items).reduce((actions, item) => ({
-      ...actions,
-      [getFirestoreDocId(item)]: "installed",
-    }), {})
-  );
+  const canConfirmJobMaterialInstallation = (item) => !item.returned && item.shoppingListActive !== false &&
+    !item.planWorkspaceOnly && Boolean(item.purchasedItem || item.purchasedItemId || item.datePurchased || item.purchasedAt ||
+      [SHOPPING_LIST_STATUS.purchased, SHOPPING_LIST_STATUS.delivered].includes(canonicalShoppingListStatus(item.status)));
 
   const openJobFinishConfirm = async () => {
     if (markingJobFinished || loadingJobFinish) return;
@@ -7939,7 +7775,7 @@ const JobDetailView = () => {
     setLoadingJobFinish(true);
     setJobFinishError("");
     try {
-      const [connectedShoppingItems, stopTaskEntries] = await Promise.all([
+      const [, stopTaskEntries] = await Promise.all([
         loadConnectedJobShoppingItems({ updateState: true }),
         Promise.all(serviceStops.filter(isOpenJobFinishStop).map(async (stop) => {
           const snapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks"));
@@ -7948,7 +7784,7 @@ const JobDetailView = () => {
       ]);
       const unfinishedTasks = (taskList || []).filter((task) => isOpenTaskStatus(task.status));
       setJobFinishTaskIds(unfinishedTasks.map((task) => task.id).filter(Boolean));
-      setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(connectedShoppingItems));
+      setJobFinishShoppingItemActions({});
       setJobFinishServiceIds(laborLineItems.filter((line) => line.completionStatus !== "Finished").map((line) => line.id));
       setJobFinishServiceStopIds([]);
       setJobFinishStopTasks(Object.fromEntries(stopTaskEntries));
@@ -8010,7 +7846,11 @@ const JobDetailView = () => {
     setAllJobFinishTasks(true);
     selectJobFinishStops(unfinishedJobFinishStops.map((stop) => stop.id));
     setJobFinishServiceIds(laborLineItems.map((line) => line.id));
-    setJobFinishShoppingItemActions(buildDefaultJobFinishShoppingActions(shoppingList));
+    setJobFinishShoppingItemActions(Object.fromEntries(
+      unfinishedJobFinishShoppingItems
+        .filter(canConfirmJobMaterialInstallation)
+        .map((item) => [getFirestoreDocId(item), "installed"])
+    ));
     setCloseoutCancelVisits(true);
   };
 
@@ -8020,199 +7860,6 @@ const JobDetailView = () => {
       ...prev,
       [itemId]: action,
     }));
-  };
-
-  const setAllJobFinishShoppingItems = (action) => {
-    setJobFinishShoppingItemActions(
-      getUnfinishedJobFinishShoppingItems().reduce((actions, item) => ({
-        ...actions,
-        [getFirestoreDocId(item)]: action,
-      }), {})
-    );
-  };
-
-  const handleJobFinishShoppingItems = async ({ actionMap = {}, completedAt }) => {
-    const connectedShoppingItems = await loadConnectedJobShoppingItems();
-    const unfinishedShoppingItems = getUnfinishedJobFinishShoppingItems(connectedShoppingItems);
-    if (!unfinishedShoppingItems.length) {
-      return { installedCount: 0, deliveredCount: 0, deletedCount: 0, remainingItems: shoppingList || [] };
-    }
-
-    const deliveredAt = completedAt || new Date();
-    const actorUserId = getUserId() || "";
-    const actorUserName = getAuditUserName();
-    const dateFromValue = (value) => {
-      const date = value?.toDate?.() || (value instanceof Date ? value : value ? new Date(value) : null);
-      return date && !Number.isNaN(date.getTime()) ? date : null;
-    };
-    const deliveredItems = [];
-    const deletedItems = [];
-
-    for (const item of unfinishedShoppingItems) {
-      const shoppingListItemId = getFirestoreDocId(item);
-      if (!shoppingListItemId) continue;
-
-      const selectedAction = actionMap[shoppingListItemId] || "installed";
-
-      if (selectedAction === "delete") {
-        const deleteResult = await deleteShoppingListItemWithLinks({
-          db,
-          companyId: recentlySelectedCompany,
-          itemId: shoppingListItemId,
-          item,
-        });
-        deletedItems.push({ item, ...deleteResult });
-        continue;
-      }
-
-      const purchasedAt = dateFromValue(item.datePurchased) || dateFromValue(item.purchasedAt) || deliveredAt;
-      const purchaserId = item.purchaserId || item.purchasedByUserId || actorUserId;
-      const purchaserName = item.purchaserName || item.purchasedByUserName || actorUserName;
-      const firestoreUpdates = {
-        status: SHOPPING_LIST_STATUS.installed,
-        datePurchased: Timestamp.fromDate(purchasedAt),
-        purchasedAt: Timestamp.fromDate(purchasedAt),
-        purchasedByUserId: purchaserId,
-        purchasedByUserName: purchaserName,
-        purchaserId,
-        purchaserName,
-        deliveryStatus: "installed",
-        fulfillmentStatus: "installed",
-        deliveredAt: Timestamp.fromDate(deliveredAt),
-        deliveredByUserId: actorUserId,
-        deliveredByUserName: actorUserName,
-        installedAt: Timestamp.fromDate(deliveredAt),
-        installedByUserId: actorUserId,
-        installedByUserName: actorUserName,
-        needsAction: false,
-        updatedAt: serverTimestamp(),
-      };
-      const stateUpdates = {
-        status: SHOPPING_LIST_STATUS.installed,
-        datePurchased: purchasedAt,
-        purchasedAt,
-        purchasedByUserId: purchaserId,
-        purchasedByUserName: purchaserName,
-        purchaserId,
-        purchaserName,
-        deliveryStatus: "installed",
-        fulfillmentStatus: "installed",
-        deliveredAt,
-        deliveredByUserId: actorUserId,
-        deliveredByUserName: actorUserName,
-        installedAt: deliveredAt,
-        installedByUserId: actorUserId,
-        installedByUserName: actorUserName,
-        needsAction: false,
-        updatedAt: deliveredAt,
-      };
-
-      await updateDoc(
-        doc(db, "companies", recentlySelectedCompany, "shoppingList", shoppingListItemId),
-        firestoreUpdates
-      );
-
-      const purchasedItemId = item.purchasedItem || item.purchasedItemId || "";
-      if (purchasedItemId) {
-        await syncLinkedShoppingPurchase({
-          db,
-          companyId: recentlySelectedCompany,
-          shoppingItemId: shoppingListItemId,
-          purchasedItemId,
-          shoppingItemData: {
-            ...item,
-            ...stateUpdates,
-            id: shoppingListItemId,
-          },
-          invoiced: false,
-        });
-      }
-
-      let automationStateUpdates = {};
-      const shouldAutoInvoiceOnInstall = !jobId && (item.autoInvoiceOnInstall === undefined
-        ? shoppingItemInstallInvoiceAutomationEnabled
-        : item.autoInvoiceOnInstall === true);
-      if (shouldAutoInvoiceOnInstall && !item.invoiced && !item.invoiceId && !item.salesInvoiceId) {
-        const invoiceResult = await createAndSendShoppingItemInstallInvoice({
-          db,
-          functions,
-          companyId: recentlySelectedCompany,
-          shoppingItem: {
-            ...item,
-            ...stateUpdates,
-            id: shoppingListItemId,
-            status: SHOPPING_LIST_STATUS.installed,
-          },
-          user: currentUser,
-          getCallableAuthPayload,
-        });
-        automationStateUpdates = invoiceResult.shoppingPayload || {};
-
-        if (invoiceResult.status === "sent") {
-          toast.success("Invoice created and sent.");
-        } else if (invoiceResult.status === "created_email_failed") {
-          toast.error(`Invoice created, but email was not sent: ${invoiceResult.reason}`);
-        } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_billable_amount") {
-          toast.error("Shopping item installed, but no invoice was created because it has no billable amount.");
-        } else if (invoiceResult.status === "skipped" && invoiceResult.reason === "missing_customer_email") {
-          toast.error("Shopping item installed, but no invoice was created because the customer is missing an email.");
-        }
-      }
-
-      deliveredItems.push({
-        item,
-        shoppingListItemId,
-        stateUpdates: {
-          ...stateUpdates,
-          ...automationStateUpdates,
-        },
-      });
-    }
-
-    const deliveredItemIds = new Set(deliveredItems.map(({ shoppingListItemId }) => shoppingListItemId));
-    const deletedItemIds = new Set(deletedItems.map(({ shoppingListItemId }) => shoppingListItemId));
-    const deliveredStateById = new Map(
-      deliveredItems.map(({ shoppingListItemId, stateUpdates }) => [shoppingListItemId, stateUpdates])
-    );
-    const remainingItems = mergeShoppingListItems(connectedShoppingItems)
-      .filter((item) => !deletedItemIds.has(getFirestoreDocId(item)))
-      .map((item) => (
-        deliveredItemIds.has(getFirestoreDocId(item))
-          ? { ...item, ...deliveredStateById.get(getFirestoreDocId(item)) }
-          : item
-      ));
-
-    setShoppingList(remainingItems);
-
-    const deletedTaskItemIds = new Set(deletedItems.map(({ linkedTaskId }) => linkedTaskId).filter(Boolean));
-    if (deletedTaskItemIds.size > 0) {
-      const deletedShoppingItemIds = new Set(deletedItems.map(({ shoppingListItemId }) => shoppingListItemId).filter(Boolean));
-      setTaskList((prev) =>
-        (prev || []).map((task) =>
-          deletedTaskItemIds.has(task.id)
-            ? {
-              ...task,
-              shoppingListItemId: deletedShoppingItemIds.has(task.shoppingListItemId) ? "" : task.shoppingListItemId,
-              shoppingListItemIds: (task.shoppingListItemIds || []).filter((itemId) => !deletedShoppingItemIds.has(itemId)),
-            }
-            : task
-        )
-      );
-    }
-
-    await loadJobWorkflowData({
-      companyId: recentlySelectedCompany,
-      currentJobId: jobId,
-      currentTaskList: taskList,
-      currentShoppingList: remainingItems,
-    });
-
-    return {
-      installedCount: deliveredItems.length,
-      deliveredCount: deliveredItems.length,
-      deletedCount: deletedItems.length,
-      remainingItems,
-    };
   };
 
   const markJobAsFinished = async (selectedTaskIds = null, selectedShoppingActions = null) => {
@@ -8291,11 +7938,6 @@ const JobDetailView = () => {
         else finishedTasks.push(finishedTask);
       }
 
-      const shoppingCleanupResult = await handleJobFinishShoppingItems({
-        actionMap: selectedShoppingActions || jobFinishShoppingItemActions,
-        completedAt,
-      });
-
       await updateDoc(jobRef, { billingStatus: nextBillingStatus });
 
       await Promise.all(
@@ -8367,10 +8009,16 @@ const JobDetailView = () => {
       const closeoutResult = await technicianWorkflow("finalizeTechnicianJob", {
         companyId: recentlySelectedCompany, jobId, requestId: jobFinishRequestId, finishJob: closeoutWholeJob,
         cancelRemainingVisits: closeoutCancelVisits, serviceIds: jobFinishServiceIds,
-        taskIds: finishedTasks.map(task=>task.id), productIds: [],
+        taskIds: finishedTasks.map(task=>task.id),
+        productIds: Object.entries(selectedShoppingActions || jobFinishShoppingItemActions)
+          .filter(([, action]) => action === "installed").map(([id]) => id),
         serviceStopIds: jobFinishServiceStopIds,
         serviceStopTaskIds: Object.fromEntries(stopsToFinish.map((stop) => [stop.id, (jobFinishStopTasks[stop.id] || []).map((task) => task.id)])),
       });
+      const installedIds = new Set(closeoutResult.installedProductIds || []);
+      setShoppingList(items => items.map(item => installedIds.has(getFirestoreDocId(item))
+        ? { ...item, status: SHOPPING_LIST_STATUS.installed, installedAt: completedAt, needsAction: false }
+        : item));
       const completedStopIds = new Set(closeoutResult.completedServiceStopIds || []);
       setServiceStops((stops) => stops.map((stop) => completedStopIds.has(stop.id)
         ? { ...stop, operationStatus: "Finished", completedAt }
@@ -8396,12 +8044,11 @@ const JobDetailView = () => {
       await recordJobHistory({
         eventType: "Status Change",
         title: closeoutWholeJob ? "Job marked as finished" : "Selected work finished",
-        description: `${finishedTasks.length} of ${unfinishedTasks.length} unfinished task(s) were marked finished. ${shoppingCleanupResult.installedCount} planned product(s) marked installed and ${shoppingCleanupResult.deletedCount} removed.`,
+        description: `${finishedTasks.length} of ${unfinishedTasks.length} unfinished task(s) were marked finished. ${installedIds.size} planned product(s) marked installed.`,
         changes: [
           ...(closeoutWholeJob ? [buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", "Finished")] : []),
           buildHistoryChange("billingStatus", "Billing Status", previousBillingStatus, nextBillingStatus),
-          buildHistoryChange("shoppingInstalled", "Shopping Installed", "—", String(shoppingCleanupResult.installedCount)),
-          buildHistoryChange("shoppingDeleted", "Shopping Removed", "—", String(shoppingCleanupResult.deletedCount)),
+          buildHistoryChange("shoppingInstalled", "Shopping Installed", "—", String(installedIds.size)),
         ],
       });
       await addJobCommentDocument(`${closeoutWholeJob ? "Job" : "Selected work"} finished by ${getAuditUserName()}.`, {
@@ -8413,9 +8060,8 @@ const JobDetailView = () => {
           taskCount: taskList?.length || 0,
           markedFinishedTaskCount: finishedTasks.length,
           openTaskCountAtFinish: unfinishedTasks.length,
-          installedShoppingItemCount: shoppingCleanupResult.installedCount,
-          deliveredShoppingItemCount: shoppingCleanupResult.installedCount,
-          deletedShoppingItemCount: shoppingCleanupResult.deletedCount,
+          installedShoppingItemCount: installedIds.size,
+          deliveredShoppingItemCount: installedIds.size,
         },
       });
 
@@ -8651,12 +8297,13 @@ const JobDetailView = () => {
 
   const isTaskUnavailableForNewServiceStop = (task = {}) => {
     const status = String(task.status || "").trim().toLowerCase();
-    return ["scheduled", "finished", "canceled", "cancelled", "rejected"].includes(status);
+    return ["scheduled", "in progress"].includes(status) || isFinishedTaskStatus(status) || isCanceledOrRejectedTaskStatus(status);
   };
 
   const openScheduleServiceStopChooser = () => {
-    if (!requirePermission("242", "create service stops")) return;
+    if (savingScheduledServiceStop || !requirePermission("242", "create service stops")) return;
     setScheduleServiceStopMode("");
+    setScheduleLockedVisitId("");
     setScheduleServiceStopForm(createActualServiceStopForm());
     setShowScheduleTaskCreator(false);
     setScheduleTaskForm(createEmptyScheduleTaskForm());
@@ -8667,6 +8314,7 @@ const JobDetailView = () => {
     if ((savingScheduledServiceStop || savingScheduleTask) && !force) return;
     setShowScheduleServiceStopModal(false);
     setScheduleServiceStopMode("");
+    setScheduleLockedVisitId("");
     setScheduleServiceStopForm(createActualServiceStopForm());
     setShowScheduleTaskCreator(false);
     setScheduleTaskForm(createEmptyScheduleTaskForm());
@@ -8803,7 +8451,7 @@ const JobDetailView = () => {
       return toast.error("Labor cost cannot be negative.");
     }
     if (!Number.isFinite(billingLaborPriceNumber) || billingLaborPriceNumber < 0) {
-      return toast.error("Billing labor price cannot be negative.");
+      return toast.error("Customer task price cannot be negative.");
     }
     if (!Number.isFinite(estimatedTimeNumber) || estimatedTimeNumber < 0) {
       return toast.error("Estimated time cannot be negative.");
@@ -8893,8 +8541,8 @@ const JobDetailView = () => {
         title: `Task added while scheduling: ${nextName}`,
         changes: [
           buildHistoryChange("type", "Task Type", "—", scheduleTaskTypeValue),
-          buildHistoryChange("contractedRate", "Tech Labor Cost", "—", moneyFromCents(costCents)),
-          buildHistoryChange("billingLaborPriceCents", "Billing Labor Price", "—", moneyFromCents(billingLaborPriceCents)),
+          buildHistoryChange("contractedRate", "Contracted task pay", "—", moneyFromCents(costCents)),
+          buildHistoryChange("billingLaborPriceCents", "Customer task price", "—", moneyFromCents(billingLaborPriceCents)),
           buildHistoryChange("estimatedTime", "Estimated Time", "—", `${estimatedTimeNumber} minutes`),
           ...(scheduleTaskNeedsBodyOfWater
             ? [buildHistoryChange("bodyOfWaterId", "Body Of Water", "—", bodyOfWaterById.get(scheduleTaskResolvedBodyOfWaterId)?.label || bodyOfWaterById.get(scheduleTaskResolvedBodyOfWaterId)?.name || "—")]
@@ -8951,27 +8599,62 @@ const JobDetailView = () => {
     });
   };
 
+  const plannedVisitFormValues = (plannedStop, defaults) => ({
+    plannedServiceStopId: plannedStop.id,
+    serviceStopTypeId: plannedStop.serviceStopTypeId || plannedStop.typeId || plannedStop.payTypeId ||
+      getActualServiceStopTypeOptions(SERVICE_STOP_TYPE_USE_CASES.jobVisit)[0]?.id || "",
+    estimatedDuration: String(plannedStop.estimatedMinutes ?? plannedStop.estimatedDuration ??
+      plannedStop.duration ?? defaults.estimatedDuration),
+    description: plannedStop.description || plannedStop.name || "",
+    includeReadings: plannedStop.includeReadings ?? defaults.includeReadings,
+    includeDosages: plannedStop.includeDosages ?? defaults.includeDosages,
+    taskIds: getPlannedStopTasks(plannedStop).filter((task) => !isTaskUnavailableForNewServiceStop(task)).map((task) => task.id),
+  });
+
   const applyPlannedStopToScheduleServiceStopForm = (plannedStopId) => {
-    const plannedStop = (plannedServiceStops || []).find((stop) => stop.id === plannedStopId) || null;
-    const schedulableTaskIds = new Set(
-      (taskList || [])
-        .filter((task) => task.id && !isTaskUnavailableForNewServiceStop(task))
-        .map((task) => task.id)
-    );
-    setScheduleServiceStopForm((prev) => ({
-      ...prev,
-      plannedServiceStopId: plannedStopId,
-      serviceStopTypeId: plannedStop?.serviceStopTypeId || plannedStop?.typeId || prev.serviceStopTypeId,
-      estimatedDuration: plannedStop
-        ? String(plannedStop.estimatedMinutes || plannedStop.estimatedDuration || plannedStop.duration || prev.estimatedDuration)
-        : prev.estimatedDuration,
-      description: plannedStop?.description || prev.description,
-      taskIds: plannedStop
-        ? Array.from(new Set(Array.isArray(plannedStop.taskIds) ? plannedStop.taskIds : []))
-          .filter((taskId) => schedulableTaskIds.has(taskId))
-        : prev.taskIds,
+    const plannedStop = plannedServiceStops.find((stop) => stop.id === plannedStopId);
+    const defaults = createActualServiceStopForm("jobVisit");
+    setScheduleServiceStopForm((previous) => ({
+      ...defaults,
+      techId: previous.techId,
+      serviceDate: previous.serviceDate,
+      ...(plannedStop ? plannedVisitFormValues(plannedStop, defaults) : {
+        serviceStopTypeId: getActualServiceStopTypeOptions(SERVICE_STOP_TYPE_USE_CASES.jobVisit)[0]?.id || "",
+        taskIds: taskList.filter((task) => !isTaskUnavailableForNewServiceStop(task)).map((task) => task.id),
+      }),
     }));
+    resetScheduleTaskCreator();
   };
+
+  const openPlannedVisitScheduler = (plannedStop) => {
+    if (savingScheduledServiceStop || !requirePermission("242", "create service stops")) return;
+    if (scheduledVisitsByPlan.get(plannedStop.id)?.fullyScheduled || isCancelledVisit(plannedStop.status)) {
+      toast.error("This planned visit is already scheduled or was cancelled.");
+      return;
+    }
+
+    const defaults = createActualServiceStopForm("jobVisit");
+    setScheduleServiceStopForm({ ...defaults, ...plannedVisitFormValues(plannedStop, defaults) });
+    setScheduleServiceStopMode("jobVisit");
+    setScheduleLockedVisitId(plannedStop.id);
+    resetScheduleTaskCreator();
+    setShowScheduleServiceStopModal(true);
+  };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const visitId = params.get("scheduleVisit");
+    if (!visitId || loading || sectionLoading.plannedWork || sectionLoading.actual || savingScheduledServiceStop || !recentlySelectedCompany) return;
+
+    const visit = plannedServiceStops.find((stop) => stop.id === visitId);
+    if (visit) openPlannedVisitScheduler(visit);
+    else toast.error("That planned visit is no longer available.");
+
+    params.delete("scheduleVisit");
+    navigate({ pathname: location.pathname, search: params.toString() }, { replace: true, state: location.state });
+    // Only consume the requested visit when the initial job scope is ready.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search, loading, sectionLoading.plannedWork, sectionLoading.actual, savingScheduledServiceStop, recentlySelectedCompany, jobId]);
 
   const openEditActualServiceStopModal = (stop = {}) => {
     if (!requirePermission("244", "update service stops")) return;
@@ -9037,6 +8720,7 @@ const JobDetailView = () => {
 
   const saveScheduledServiceStop = async (event) => {
     event.preventDefault();
+    if (savingScheduledServiceStop) return;
     if (!requirePermission("242", "create service stops")) return;
     if (savingScheduleTask) return toast.error("Finish adding the task before scheduling the stop.");
     if (!recentlySelectedCompany || !jobId) return toast.error("Missing job context.");
@@ -9064,6 +8748,17 @@ const JobDetailView = () => {
     if (modeConfig.id === "jobVisit" && !tasksToSchedule.length) {
       return toast.error("Select at least one job task for the service stop.");
     }
+    const plannedStop = (plannedServiceStops || []).find((stop) => stop.id === scheduleServiceStopForm.plannedServiceStopId);
+    if (scheduleServiceStopForm.plannedServiceStopId && !plannedStop) {
+      return toast.error("That planned visit is no longer available. Select another visit.");
+    }
+    if (plannedStop && (scheduledVisitsByPlan.get(plannedStop.id)?.fullyScheduled || isCancelledVisit(plannedStop.status))) {
+      return toast.error("This planned visit is already scheduled or was cancelled.");
+    }
+    const plannedPay = plannedStop ? jobPayFields(plannedStop) : null;
+    if (plannedPay?.payrollMode === "custom" && (plannedPay.manualPayOverrideCents ?? -1) < 0) {
+      return toast.error("Set the planned visit’s custom pay amount before scheduling.");
+    }
 
     try {
       setSavingScheduledServiceStop(true);
@@ -9071,179 +8766,208 @@ const JobDetailView = () => {
       const serviceStopId = "comp_ss_" + uuidv4();
       const serviceStopRef = doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId);
       const counterRef = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
-      const counterSnap = await getDoc(counterRef);
-      const serviceStopCount = counterSnap.exists() && typeof counterSnap.data().increment === "number"
-        ? counterSnap.data().increment
-        : 0;
-      const internalId = `SS${serviceStopCount}`;
-      await setDoc(counterRef, { increment: serviceStopCount + 1 }, { merge: true });
+      const jobTaskRef = (taskId) => doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", taskId);
+      const plannedStopRef = plannedStop ? doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), plannedStop.id) : null;
+      const writeSchedule = (writer, counterSnap) => {
+        const serviceStopCount = counterSnap.exists() && typeof counterSnap.data().increment === "number"
+          ? counterSnap.data().increment
+          : 0;
+        const internalId = `SS${serviceStopCount}`;
 
-      const selectedType = getActualServiceStopSelectedType(scheduleServiceStopForm.serviceStopTypeId);
-      const basePayload = actualServiceStopPayloadFromForm({
-        form: scheduleServiceStopForm,
-        modeConfig,
-        selectedType,
-        selectedWorker,
-        serviceDate,
-        durationMinutes,
-        context: "JobDetailView.saveScheduledServiceStop",
-      });
-      console.info("[JobDetailView][saveScheduledServiceStop][serviceStopPayload]", {
-        companyId: recentlySelectedCompany,
-        jobId,
-        mode: modeConfig.id,
-        serviceDate: format(serviceDate, "yyyy-MM-dd"),
-        techId: getCompanyUserId(selectedWorker),
-        tech: getCompanyUserName(selectedWorker),
-        operationStatus: basePayload.operationStatus,
-        billingStatus: basePayload.billingStatus,
-        category: basePayload.category,
-        typeId: basePayload.typeId,
-        type: basePayload.type,
-      });
-      const paySummary = estimateServiceStopPaySummary({
-        companyId: recentlySelectedCompany,
-        bodiesOfWater: taskBodyOfWaterList,
-        settings: paySettings,
-        serviceStop: {
-          ...basePayload,
-          id: serviceStopId,
+        const selectedType = getActualServiceStopSelectedType(scheduleServiceStopForm.serviceStopTypeId) ||
+          (plannedStop ? getPlannedStopType(plannedStop) : null);
+        const stopFields = actualServiceStopPayloadFromForm({
+          form: scheduleServiceStopForm,
+          modeConfig,
+          selectedType,
+          selectedWorker,
+          serviceDate,
+          durationMinutes,
+          context: "JobDetailView.saveScheduledServiceStop",
+        });
+        const basePayload = { ...stopFields, ...jobPayFields(plannedStop || {}, stopFields) };
+        console.info("[JobDetailView][saveScheduledServiceStop][serviceStopPayload]", {
+          companyId: recentlySelectedCompany,
           jobId,
-          serviceLocationId: serviceLocation.id || job.serviceLocationId || "",
-        },
-        serviceStopType: selectedType || {
-          id: basePayload.typeId,
-          name: basePayload.type,
-        },
-        serviceStopUseCaseSourceId: basePayload.typeId,
-        tasks: tasksToSchedule,
-        worker: selectedWorker,
-        workTypes: companyWorkTypes,
-        mappings: workTypeMappings,
-        rates: technicianRates,
-        date: serviceDate,
-      });
-      const rate = tasksToSchedule.reduce(
-        (total, task) => total + Number(task.rate || task.contractedRate || 0),
-        0
-      );
-      const address = serviceLocation.address || {
-        streetAddress: serviceLocation.streetAddress || "",
-        city: serviceLocation.city || "",
-        state: serviceLocation.state || "",
-        zip: serviceLocation.zip || "",
-      };
-      const newServiceStop = {
-        id: serviceStopId,
-        address,
-        companyId: recentlySelectedCompany,
-        companyName: authCtx?.recentlySelectedCompanyName || "",
-        customerId: activeCustomerId,
-        customerName: job.customerName || getCustomerDisplayName(),
-        dateCreated: Timestamp.now(),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        ...basePayload,
-        contractedCompanyId: "",
-        jobId,
-        workOrderId: jobId,
-        assignedJobId: jobId,
-        jobName: job.description || job.internalId || "Job",
-        serviceLocationId: activeServiceLocationId,
-        internalId,
-        checkList: [],
-        mainCompanyId: "",
-        otherCompany: false,
-        laborContractId: "",
-        endTime: null,
-        startTime: null,
-        estimatedPayCents: paySummary.totalAmountCents,
-        estimatedPayLines: paySummary.lines,
-        manualPayOverrideCents: null,
-        manualPayOverrideNotes: "",
-        plannedServiceStopId: scheduleServiceStopForm.plannedServiceStopId || "",
-        rate,
-        recurringServiceStopId: "",
-        leadId: "",
-        source: "JobDetailViewActualModal",
-        serviceNotes: "",
-      };
+          mode: modeConfig.id,
+          serviceDate: format(serviceDate, "yyyy-MM-dd"),
+          techId: getCompanyUserId(selectedWorker),
+          tech: getCompanyUserName(selectedWorker),
+          operationStatus: basePayload.operationStatus,
+          billingStatus: basePayload.billingStatus,
+          category: basePayload.category,
+          typeId: basePayload.typeId,
+          type: basePayload.type,
+        });
+        const paySummary = estimateServiceStopPaySummary({
+          companyId: recentlySelectedCompany,
+          bodiesOfWater: taskBodyOfWaterList,
+          settings: paySettings,
+          serviceStop: {
+            ...basePayload,
+            id: serviceStopId,
+            jobId,
+            serviceLocationId: serviceLocation.id || job.serviceLocationId || "",
+          },
+          serviceStopType: selectedType || {
+            id: basePayload.typeId,
+            name: basePayload.type,
+          },
+          serviceStopUseCaseSourceId: basePayload.typeId,
+          tasks: tasksToSchedule,
+          worker: selectedWorker,
+          workTypes: companyWorkTypes,
+          mappings: workTypeMappings,
+          rates: technicianRates,
+          date: serviceDate,
+        });
+        const rate = tasksToSchedule.reduce(
+          (total, task) => total + Number(task.rate || task.contractedRate || 0),
+          0
+        );
+        const address = serviceLocation.address || {
+          streetAddress: serviceLocation.streetAddress || "",
+          city: serviceLocation.city || "",
+          state: serviceLocation.state || "",
+          zip: serviceLocation.zip || "",
+        };
+        const newServiceStop = {
+          id: serviceStopId,
+          address,
+          companyId: recentlySelectedCompany,
+          companyName: authCtx?.recentlySelectedCompanyName || "",
+          customerId: activeCustomerId,
+          customerName: job.customerName || getCustomerDisplayName(),
+          dateCreated: Timestamp.now(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          ...basePayload,
+          contractedCompanyId: "",
+          jobId,
+          workOrderId: jobId,
+          assignedJobId: jobId,
+          jobName: job.description || job.internalId || "Job",
+          serviceLocationId: activeServiceLocationId,
+          internalId,
+          checkList: [],
+          mainCompanyId: "",
+          otherCompany: false,
+          laborContractId: "",
+          endTime: null,
+          startTime: null,
+          estimatedPayCents: paySummary.totalAmountCents,
+          estimatedPayLines: paySummary.lines,
+          plannedServiceStopId: scheduleServiceStopForm.plannedServiceStopId || "",
+          rate,
+          recurringServiceStopId: "",
+          leadId: "",
+          source: "JobDetailViewActualModal",
+          serviceNotes: "",
+        };
 
-      const taskWrites = tasksToSchedule.map((task) => {
-        const taskId = `comp_ss_tas_${uuidv4()}`;
-        return setDoc(
-          doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId, "tasks", taskId),
-          {
-            ...task,
-            id: taskId,
+        writer.set(counterRef, { increment: serviceStopCount + 1 }, { merge: true });
+        writer.set(serviceStopRef, newServiceStop);
+        tasksToSchedule.forEach((task) => {
+          const taskId = `comp_ss_tas_${uuidv4()}`;
+          writer.set(
+            doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId, "tasks", taskId),
+            {
+              ...task,
+              id: taskId,
+              workerId: getCompanyUserId(selectedWorker),
+              workerName: getCompanyUserName(selectedWorker),
+              workerType: getCompanyUserWorkerType(selectedWorker),
+              status: "Scheduled",
+              serviceStopId: {
+                id: serviceStopId,
+                internalId,
+              },
+              jobId: {
+                id: jobId,
+                internalId: job.internalId || "",
+              },
+              recurringServiceStopId: {
+                id: "",
+                internalId: "",
+              },
+              jobTaskId: task.id,
+              ...jobPayFields(task),
+
+              workOrderTaskId: task.id,
+            }
+          );
+        });
+        tasksToSchedule.forEach((task) =>
+          writer.update(jobTaskRef(task.id), {
+            status: "Scheduled",
             workerId: getCompanyUserId(selectedWorker),
             workerName: getCompanyUserName(selectedWorker),
             workerType: getCompanyUserWorkerType(selectedWorker),
-            status: "Scheduled",
             serviceStopId: {
               id: serviceStopId,
               internalId,
             },
-            jobId: {
-              id: jobId,
-              internalId: job.internalId || "",
-            },
-            recurringServiceStopId: {
-              id: "",
-              internalId: "",
-            },
-            jobTaskId: task.id,
-            ...jobPayFields(task),
-
-            workOrderTaskId: task.id,
-          }
-        );
-      });
-      const jobTaskWrites = tasksToSchedule.map((task) =>
-        updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id), {
-          status: "Scheduled",
-          workerId: getCompanyUserId(selectedWorker),
-          workerName: getCompanyUserName(selectedWorker),
-          workerType: getCompanyUserWorkerType(selectedWorker),
-          serviceStopId: {
-            id: serviceStopId,
-            internalId,
-          },
-          serviceStopIdString: serviceStopId,
-          updatedAt: serverTimestamp(),
-        })
-      );
-      const plannedStopWrite = scheduleServiceStopForm.plannedServiceStopId
-        ? setDoc(
-          doc(plannedServiceStopsPath(recentlySelectedCompany, jobId), scheduleServiceStopForm.plannedServiceStopId),
-          {
-            serviceStopId,
-            scheduledServiceStopId: serviceStopId,
-            scheduledServiceStopInternalId: internalId,
-            status: "Scheduled",
+            serviceStopIdString: serviceStopId,
             updatedAt: serverTimestamp(),
-            updatedAtMillis: Date.now(),
-          },
-          { merge: true }
-        )
-        : Promise.resolve();
-
-      await Promise.all([
-        setDoc(serviceStopRef, newServiceStop),
-        ...taskWrites,
-        ...jobTaskWrites,
-        plannedStopWrite,
-        updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
+          })
+        );
+        if (plannedStop) {
+          writer.update(
+            plannedStopRef,
+            {
+              serviceStopId,
+              scheduledServiceStopId: serviceStopId,
+              scheduledServiceStopInternalId: internalId,
+              status: "Scheduled",
+              updatedAt: serverTimestamp(),
+              updatedAtMillis: Date.now(),
+            }
+          );
+        }
+        writer.update(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
           serviceStopIds: arrayUnion(serviceStopId),
           ...(modeConfig.id !== "jobEstimate" ? { operationStatus: "Scheduled" } : {}),
           updatedAt: serverTimestamp(),
-        }),
-      ]);
-      await syncActiveRouteForServiceStops({
-        date: serviceDate,
-        techId: getCompanyUserId(selectedWorker),
-        techName: getCompanyUserName(selectedWorker),
-      });
+        });
+        return { newServiceStop, internalId };
+      };
+
+      let scheduled;
+      if (plannedStopRef) {
+        scheduled = await runTransaction(db, async (transaction) => {
+          const [counter, visit, ...tasks] = await Promise.all([
+            transaction.get(counterRef),
+            transaction.get(plannedStopRef),
+            ...tasksToSchedule.map((task) => transaction.get(jobTaskRef(task.id))),
+          ]);
+          if (!visit.exists() || isCancelledVisit(visit.data().status)) {
+            return { conflict: "This planned visit is no longer available." };
+          }
+          if (JSON.stringify(jobPayFields(visit.data())) !== JSON.stringify(plannedPay)) {
+            return { conflict: "The planned visit pay changed. Reload the job before scheduling it." };
+          }
+          // Read the saved assignment inside the transaction so two schedulers cannot book the same visit.
+          const linkedVisits = await Promise.all(scheduledVisitIds(visit.data()).map((id) =>
+            transaction.get(doc(db, "companies", recentlySelectedCompany, "serviceStops", id))
+          ));
+          if (linkedVisits.some((snapshot) => snapshot.exists() && !isCancelledVisit(snapshot.data().operationStatus || snapshot.data().status))) {
+            return { conflict: "This planned visit already has a scheduled service stop." };
+          }
+          if (tasks.some((snapshot) => !snapshot.exists() || isTaskUnavailableForNewServiceStop(snapshot.data()))) {
+            return { conflict: "A selected task is no longer available for scheduling. Close this dialog and try again." };
+          }
+          return writeSchedule(transaction, counter);
+        });
+      } else {
+        const batch = writeBatch(db);
+        scheduled = writeSchedule(batch, await getDoc(counterRef));
+        await batch.commit();
+      }
+      if (scheduled.conflict) {
+        toast.error(scheduled.conflict);
+        return;
+      }
+      const { newServiceStop, internalId } = scheduled;
 
       setServiceStops((prev) => sortActualServiceStops([
         {
@@ -9302,12 +9026,44 @@ const JobDetailView = () => {
         }));
       }
 
+      closeScheduleServiceStopModal({ force: true });
+      toast.success(`${modeConfig.title} scheduled`);
+
+      const [routeRefresh, materialSync] = await Promise.allSettled([
+        syncActiveRouteForServiceStops({
+          date: serviceDate,
+          techId: getCompanyUserId(selectedWorker),
+          techName: getCompanyUserName(selectedWorker),
+        }),
+        plannedStop && syncShoppingItemsForScheduledJobTasks({
+          db,
+          companyId: recentlySelectedCompany,
+          jobId,
+          selectedUser: { userId: getCompanyUserId(selectedWorker), userName: getCompanyUserName(selectedWorker) },
+          selectedTasks: tasksToSchedule,
+          selectedPlannedStop: plannedStop,
+          serviceDate,
+          serviceStopId,
+          internalId,
+          customerId: activeCustomerId,
+          serviceLocationId: activeServiceLocationId,
+        }),
+      ]);
+      if (routeRefresh.status === "rejected") {
+        console.warn("[JobDetailView] Scheduled visit route refresh failed", routeRefresh.reason);
+        toast.error("The visit was saved. The technician’s route couldn’t refresh.");
+      }
+      if (materialSync.status === "rejected") {
+        console.warn("[JobDetailView] Scheduled visit material sync failed", materialSync.reason);
+        toast.error("The visit was saved. The shopping list couldn’t refresh.");
+      }
+
       await recordJobHistory({
         eventType: "Service Stop",
         title: `${modeConfig.title} scheduled: ${internalId}`,
         description: scheduleServiceStopForm.description || "",
         changes: [
-          buildHistoryChange("type", "Type", "—", basePayload.type),
+          buildHistoryChange("type", "Type", "—", newServiceStop.type),
           buildHistoryChange("serviceDate", "Service Date", "—", formatDateValue(serviceDate)),
           buildHistoryChange("tech", "Technician", "—", getCompanyUserName(selectedWorker)),
           buildHistoryChange("taskIds", "Linked Tasks", "—", String(tasksToSchedule.length)),
@@ -9321,8 +9077,6 @@ const JobDetailView = () => {
         severity: "success",
       });
 
-      toast.success(`${modeConfig.title} scheduled`);
-      closeScheduleServiceStopModal({ force: true });
     } catch (err) {
       console.error(err);
       toast.error(userFacingErrorMessage(err, "Failed to schedule service stop."));
@@ -10047,6 +9801,43 @@ const JobDetailView = () => {
   }, [recentlySelectedCompany, jobId, loadJobSiteDetails]);
 
   useEffect(() => {
+    if (!recentlySelectedCompany || !jobId || sectionLoading.actual) return;
+    const stops = collection(db, "companies", recentlySelectedCompany, "serviceStops");
+    const subscriptions = ["jobId", "jobId.id", "workOrderId", "assignedJobId"].map((field) =>
+      onSnapshot(query(stops, where(field, "==", jobId)), (snapshot) => {
+        const changes = snapshot.docChanges?.() || [];
+        if (!changes.length) return;
+        setServiceStops((current) => {
+          const byId = new Map(current.map((stop) => [stop.id, stop]));
+          for (const { type, doc: row } of changes) {
+            if (type === "removed") byId.delete(row.id);
+            else byId.set(row.id, withFirestoreDocId(row));
+          }
+          return sortActualServiceStops([...byId.values()]);
+        });
+      }, (error) => console.warn("Could not refresh scheduled job visits", error))
+    );
+    subscriptions.push(onSnapshot(collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks"), (snapshot) => {
+      if (!snapshot.docChanges?.().length) return;
+      setTaskList((current) => {
+        const assignments = new Map(snapshot.docs.map((row) => [row.id, row.data()]));
+        return current.map((task) => {
+          const assignment = assignments.get(task.id);
+          return assignment ? {
+            ...task,
+            status: assignment.status || task.status,
+            serviceStopId: assignment.serviceStopId ?? "",
+            serviceStopIdString: assignment.serviceStopIdString ?? "",
+          } : task;
+        });
+      });
+    }, (error) => console.warn("Could not refresh scheduled task assignments", error)));
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+    // The listeners are scoped to the current job and only mirror saved scheduling fields.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentlySelectedCompany, jobId, sectionLoading.actual]);
+
+  useEffect(() => {
     if (!recentlySelectedCompany || !jobId) return;
     const snapshots = new Map();
     const publish = () => setActualPayLineItems([...new Map([...snapshots.values()].flat().map((line) => [line.id, line])).values()]);
@@ -10692,15 +10483,7 @@ const JobDetailView = () => {
         }
 
         await updateDoc(jobRef, updates);
-        let invoicedPurchasedItemCount = 0;
-        let invoicedShoppingItemCount = 0;
         let terminalCleanupSummary = null;
-        if (updates.billingStatus && jobBillingIsInvoiced(updates.billingStatus)) {
-          const invoiceId = job.salesInvoiceId || job.invoiceRef || job.invoiceId || "";
-          const invoiceType = job.invoiceType || (job.salesInvoiceId ? "salesInvoice" : "job");
-          invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({ invoiceId, invoiceType });
-          invoicedShoppingItemCount = await markShoppingItemsInvoicedForJob({ invoiceId, invoiceType });
-        }
         if (terminalStatusWasTouched && terminalBillingStatuses.includes(nextSavedBillingStatus)) {
           terminalCleanupSummary = await cleanupJobRelatedWorkForTerminalStatus({
             nextBillingStatus: nextSavedBillingStatus,
@@ -10724,9 +10507,6 @@ const JobDetailView = () => {
             buildHistoryChange("issuePriority", "Issue Priority", getIssuePriorityLabel(job.issuePriorityLevel || job.priorityLevel || job.solutionTier), getIssuePriorityLabel(updates.issuePriorityLevel ?? job.issuePriorityLevel ?? job.priorityLevel ?? job.solutionTier)),
           ],
           metadata: {
-            ...(invoicedPurchasedItemCount || invoicedShoppingItemCount
-              ? { invoicedPurchasedItemCount, invoicedShoppingItemCount }
-              : {}),
             ...(terminalCleanupSummary ? { terminalCleanupSummary } : {}),
           },
         });
@@ -11488,6 +11268,8 @@ const JobDetailView = () => {
             name: plannedStop.name || plannedStop.serviceStopTypeName || "Planned Stop",
             description: plannedStop.description || "",
             serviceStopTypeId: plannedStop.serviceStopTypeId || "",
+            ...jobPayFields(plannedStop, { payTypeId: plannedStop.serviceStopTypeId, payTypeName: plannedStop.serviceStopTypeName }),
+            billingLaborPriceCents: visitCustomerPriceCents(plannedStop),
             serviceStopTypeName: plannedStop.serviceStopTypeName || "",
             serviceStopTypeImage: plannedStop.serviceStopTypeImage || "",
             serviceStopTypeUseCaseRawValue: plannedStop.serviceStopTypeUseCaseRawValue || "",
@@ -12802,7 +12584,7 @@ const JobDetailView = () => {
       return toast.error("Labor cost cannot be negative.");
     }
     if (!Number.isFinite(Number(taskEditForm.billingLaborPrice || 0)) || nextBillingLaborPriceCents < 0) {
-      return toast.error("Billing labor price cannot be negative.");
+      return toast.error("Customer task price cannot be negative.");
     }
     if (!Number.isFinite(nextEstimatedMinutes) || nextEstimatedMinutes < 0) {
       return toast.error("Estimated time cannot be negative.");
@@ -12978,8 +12760,8 @@ const JobDetailView = () => {
           buildHistoryChange("name", "Name", originalTask.name || originalTask.description || "—", nextName),
           buildHistoryChange("type", "Task Type", originalTask.type || "—", nextType),
           buildHistoryChange("status", "Status", originalTask.status || "—", nextStatus),
-          buildHistoryChange("contractedRate", "Tech Labor Cost", moneyFromCents(originalTask.contractedRate), moneyFromCents(nextLaborCents)),
-          buildHistoryChange("billingLaborPriceCents", "Billing Labor Price", moneyFromCents(getTaskBillingLaborPriceCents(originalTask)), moneyFromCents(nextBillingLaborPriceCents)),
+          buildHistoryChange("contractedRate", "Contracted task pay", moneyFromCents(originalTask.contractedRate), moneyFromCents(nextLaborCents)),
+          buildHistoryChange("billingLaborPriceCents", "Customer task price", moneyFromCents(getTaskBillingLaborPriceCents(originalTask)), moneyFromCents(nextBillingLaborPriceCents)),
           buildHistoryChange("estimatedTime", "Estimated Time", `${Number(originalTask.estimatedTime || 0)} minutes`, `${nextEstimatedMinutes} minutes`),
           buildHistoryChange("customerApproval", "Customer Approval", Boolean(originalTask.customerApproval), Boolean(taskEditForm.customerApproval)),
           buildHistoryChange("bodyOfWaterId", "Body Of Water", originalTask.bodyOfWaterId || "—", taskUpdates.bodyOfWaterId || "—"),
@@ -13081,7 +12863,7 @@ const JobDetailView = () => {
         return toast.error("Labor cost cannot be negative.");
       }
       if (!Number.isFinite(billingLaborPriceNumber) || billingLaborPriceNumber < 0) {
-        return toast.error("Billing labor price cannot be negative.");
+        return toast.error("Customer task price cannot be negative.");
       }
       if (!Number.isFinite(estimatedTimeNumber) || estimatedTimeNumber < 0) {
         return toast.error("Estimated time cannot be negative.");
@@ -13179,8 +12961,8 @@ const JobDetailView = () => {
         title: targetLaborLineId ? `Task added to service line: ${taskDescription}` : `Task added: ${taskDescription}`,
         changes: [
           buildHistoryChange("type", "Task Type", "—", newTaskType),
-          buildHistoryChange("contractedRate", "Tech Labor Cost", "—", moneyFromCents(costCents)),
-          buildHistoryChange("billingLaborPriceCents", "Billing Labor Price", "—", moneyFromCents(billingLaborPriceCents)),
+          buildHistoryChange("contractedRate", "Contracted task pay", "—", moneyFromCents(costCents)),
+          buildHistoryChange("billingLaborPriceCents", "Customer task price", "—", moneyFromCents(billingLaborPriceCents)),
           buildHistoryChange("estimatedTime", "Estimated Time", "—", `${estMin} minutes`),
           ...(taskNeedsBodyOfWater
             ? [buildHistoryChange("bodyOfWaterId", "Body Of Water", "—", bodyOfWaterById.get(resolvedTaskBodyOfWaterId)?.label || bodyOfWaterById.get(resolvedTaskBodyOfWaterId)?.name || selectedTaskBodyOfWater?.label || selectedTaskBodyOfWater?.name || "—")]
@@ -13240,9 +13022,11 @@ const JobDetailView = () => {
     setEditingPlannedStopId(plannedStop?.id || "");
     setPlannedStopForm({
       ...EMPTY_PLANNED_STOP_FORM,
+      ...jobPayFields(plannedStop || {}),
       serviceStopTypeId: plannedStop?.serviceStopTypeId || plannedStop?.payTypeId || "",
       name: plannedStop?.name || "",
       description: plannedStop?.description || "",
+      customerPrice: dollarsFromCents(visitCustomerPriceCents(plannedStop)),
       estimatedMinutes: String(plannedStop?.estimatedMinutes || 0),
       taskIds: Array.isArray(plannedStop?.taskIds) ? plannedStop.taskIds : [],
     });
@@ -13287,6 +13071,11 @@ const JobDetailView = () => {
     if (!selectedPlannedStopType) return toast.error("Select a pay type.");
     const existingStop = (plannedServiceStops || []).find((stop) => stop.id === editingPlannedStopId) || null;
 
+    if (plannedStopForm.payrollMode === "custom"
+      && (!Number.isFinite(plannedStopForm.manualPayOverrideCents) || plannedStopForm.manualPayOverrideCents < 0)) {
+      return toast.error("Enter a fixed visit pay amount.");
+    }
+
     const estimatedMinutesNumber = Number(plannedStopForm.estimatedMinutes || 0);
     if (!Number.isFinite(estimatedMinutesNumber) || estimatedMinutesNumber < 0) {
       return toast.error("Estimated time cannot be negative.");
@@ -13317,6 +13106,7 @@ const JobDetailView = () => {
         name: stopName,
         description: plannedStopForm.description.trim(),
         type: typeName,
+        ...jobPayFields(plannedStopForm),
         payTypeId: selectedPlannedStopType.id || "",
         payTypeName: typeName,
         serviceStopTypeId: selectedPlannedStopType.id || "",
@@ -13328,7 +13118,7 @@ const JobDetailView = () => {
           "jobVisit",
         estimatedMinutes: estimatedMinutesNumber,
         plannedLaborCostCents,
-        billingLaborPriceCents: existingStop?.billingLaborPriceCents ?? existingStop?.plannedLaborCostCents ?? 0,
+        billingLaborPriceCents: centsFromCurrencyInput(plannedStopForm.customerPrice),
         estimatedLaborCostCents: plannedLaborCostCents,
         payrollEstimateMinAmountCents: cents(plannedStopFormPayRange.minAmountCents),
         payrollEstimateMaxAmountCents: plannedLaborCostCents,
@@ -13572,9 +13362,9 @@ const JobDetailView = () => {
   const handleShoppingDbItemChange = (option) => {
     setSelectedShoppingDbItem(option);
     const photoFields = option ? itemPhotoFieldsFromSource(option, option.name || "Shopping item photo") : {};
-    const plannedUnitCost = option ? dollarsFromCents(option.rate || option.cost || 0) : "";
+    const plannedUnitCost = option ? dollarsFromCents(option.rate ?? option.cost ?? 0) : "";
     const plannedUnitPrice = option
-      ? dollarsFromCents(option.sellPrice ?? option.rate ?? option.cost ?? 0)
+      ? dollarsFromCents(option.billable === false ? 0 : option.sellPrice ?? option.billingRate ?? 0)
       : "";
     setShoppingFormData((prev) => ({
       ...prev,
@@ -15149,11 +14939,6 @@ const JobDetailView = () => {
 
     try {
       const selectedItems = availablePurchasedItems.filter((item) => selectedPurchasedItemIds.includes(item.id));
-      const shouldMarkInvoiced = jobBillingIsInvoiced();
-      const invoiceId = job.salesInvoiceId || job.invoiceRef || "";
-      const invoiceState = shouldMarkInvoiced
-        ? purchasedItemInvoiceState({ invoiceId, invoiceType: job.invoiceType || "job" })
-        : {};
 
       await Promise.all(
         selectedItems.map(async (item) => {
@@ -15165,13 +14950,10 @@ const JobDetailView = () => {
             assignedToJob: true,
             assignmentStatus: "assignedToJob",
             billingOwner: "job",
-            jobBillingStatus: shouldMarkInvoiced ? "invoiced" : "handledByJob",
+            jobBillingStatus: item.invoiced ? "invoiced" : "handledByJob",
             jobBillable: Boolean(item.jobBillable ?? item.billable ?? true),
             jobBillingRate: cents(item.jobBillingRate ?? item.billingRate ?? item.price),
-            status: shouldMarkInvoiced ? "Invoiced" : "Connected to Job",
-            ...(shouldMarkInvoiced
-              ? purchasedItemInvoiceUpdates({ invoiceId, invoiceType: job.invoiceType || "job" })
-              : {}),
+            status: item.invoiced ? "Invoiced" : "Connected to Job",
           };
 
           await updateDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchasedItemId), itemUpdates);
@@ -15185,10 +14967,8 @@ const JobDetailView = () => {
               purchasedItemData: {
                 ...item,
                 ...itemUpdates,
-                ...invoiceState,
                 id: purchasedItemId,
               },
-              invoiced: shouldMarkInvoiced ? true : undefined,
               preferPurchasedContext: true,
             });
           }
@@ -15210,11 +14990,10 @@ const JobDetailView = () => {
             assignedToJob: true,
             assignmentStatus: "assignedToJob",
             billingOwner: "job",
-            jobBillingStatus: shouldMarkInvoiced ? "invoiced" : "handledByJob",
+            jobBillingStatus: item.invoiced ? "invoiced" : "handledByJob",
             jobBillable: Boolean(item.jobBillable ?? item.billable ?? true),
             jobBillingRate: cents(item.jobBillingRate ?? item.billingRate ?? item.price),
-            status: shouldMarkInvoiced ? "Invoiced" : "Connected to Job",
-            ...invoiceState,
+            status: item.invoiced ? "Invoiced" : "Connected to Job",
           })),
           ...prev.filter((item) => !selectedPurchasedItemIds.includes(item.id)),
         ].filter((item) => {
@@ -16423,7 +16202,7 @@ const JobDetailView = () => {
     historyMetadata = {},
   } = {}) => {
     if (!recentlySelectedCompany || !jobId) {
-      return { invoicedPurchasedItemCount: 0, invoicedShoppingItemCount: 0 };
+      return;
     }
 
     const resolvedInvoiceId =
@@ -16484,14 +16263,6 @@ const JobDetailView = () => {
 
     await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobUpdates);
 
-    const invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({
-      invoiceId: resolvedInvoiceId,
-      invoiceType: resolvedInvoiceType,
-    });
-    const invoicedShoppingItemCount = await markShoppingItemsInvoicedForJob({
-      invoiceId: resolvedInvoiceId,
-      invoiceType: resolvedInvoiceType,
-    });
 
     setJob((prev) => ({
       ...prev,
@@ -16526,18 +16297,10 @@ const JobDetailView = () => {
         contractId: contract?.id || "",
         invoiceId: resolvedInvoiceId,
         invoiceType: resolvedInvoiceType,
-        invoicedPurchasedItemCount,
-        invoicedShoppingItemCount,
         ...historyMetadata,
       },
     });
 
-    return {
-      invoicedPurchasedItemCount,
-      invoicedShoppingItemCount,
-      invoiceId: resolvedInvoiceId,
-      invoiceType: resolvedInvoiceType,
-    };
   };
 
   const handleEmailInvoice = async () => {
@@ -16626,7 +16389,7 @@ const JobDetailView = () => {
             ? "contract"
             : job.invoiceType || "job";
 
-      const result = await markJobAndRelatedItemsInvoiced({
+      await markJobAndRelatedItemsInvoiced({
         salesAgreement,
         salesInvoice,
         invoiceId,
@@ -16646,7 +16409,7 @@ const JobDetailView = () => {
       });
 
       toast.success(
-        `${invoiceActionTitle}. ${result.invoicedPurchasedItemCount} purchased item(s) and ${result.invoicedShoppingItemCount} shopping item(s) updated.`
+        `${invoiceActionTitle}.`
       );
     } catch (err) {
       console.error(err);
@@ -16656,6 +16419,14 @@ const JobDetailView = () => {
     }
   };
   const renderPlannedServiceStopCard = (stop) => {
+    const visitName = stop.name || stop.serviceStopTypeName || "Planned Visit";
+    const { stops: scheduledStops, fullyScheduled } = scheduledVisitsByPlan.get(stop.id);
+    const cancelled = isCancelledVisit(stop.status);
+    const completed = fullyScheduled && scheduledStops.every((visit) =>
+      ["finished", "completed"].includes(String(visit.operationStatus || visit.status || "").toLowerCase())
+    );
+    const status = completed ? "Completed" : fullyScheduled ? "Scheduled" :
+      cancelled ? "Cancelled" : scheduledStops.length ? "Partially scheduled" : "Unscheduled";
     const linkedTasks = getPlannedStopTasks(stop);
     const linkedTaskCount = linkedTasks.length;
     const billingServiceNames = Array.from(new Set(
@@ -16679,18 +16450,19 @@ const JobDetailView = () => {
       ?.lines?.find((line) => line.calculationStatus === "calculated");
 
     return (
-      <div
+      <article
         key={stop.id}
+        aria-label={visitName}
         className="rounded-md border border-slate-200 bg-white px-3 py-2.5"
       >
         <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="truncate text-sm font-bold text-slate-900">
-              {stop.name || stop.serviceStopTypeName || "Planned Visit"}
+                {visitName}
               </p>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-600">
-                Planned Stop
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${fullyScheduled ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
+                {status}
               </span>
               {stop.serviceStopTypeName && (
                 <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
@@ -16703,15 +16475,27 @@ const JobDetailView = () => {
                 {stop.description}
               </p>
             )}
+            {scheduledStops.map((visit) => (
+              <div key={visit.id} className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-700">
+                <Link className="font-semibold text-blue-700 hover:underline" to={`/company/serviceStops/detail/${encodeURIComponent(visit.id)}`}>
+                  {visit.internalId ? `Visit ${visit.internalId}` : "View scheduled visit"}
+                </Link>
+                <span>{[visit.serviceDate && formatDateValue(visit.serviceDate), visit.tech || visit.technicianName].filter(Boolean).join(" · ")}</span>
+              </div>
+            ))}
           </div>
 
           <div className="flex shrink-0 flex-wrap gap-1.5 lg:justify-end">
-            <Link
-              to={`/company/serviceStops/createNew/${jobId}?plannedStopId=${stop.id}&category=jobVisit`}
-              className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700 transition hover:bg-blue-100"
-            >
-              Schedule
-            </Link>
+            {!fullyScheduled && !cancelled && can("242") && (
+              <button
+                type="button"
+                onClick={() => openPlannedVisitScheduler(stop)}
+                disabled={sectionLoading.actual || savingScheduledServiceStop}
+                className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700 transition hover:bg-blue-100 disabled:opacity-50"
+              >
+                {scheduledStops.length ? "Schedule remaining tasks" : "Schedule"}
+              </button>
+            )}
 
             {canBuildJobEstimatePlan && (
               <JobLineActionMenu
@@ -16812,7 +16596,7 @@ const JobDetailView = () => {
             Some technician rates need review before this range is complete.
           </p>
         )}
-      </div>
+      </article>
     );
   };
 
@@ -16827,7 +16611,7 @@ const JobDetailView = () => {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
-            {plannedServiceStops.length} stop{plannedServiceStops.length === 1 ? "" : "s"}
+            {plannedServiceStops.filter((stop) => scheduledVisitsByPlan.get(stop.id)?.fullyScheduled).length} of {plannedServiceStops.length} scheduled
           </span>
           <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
             {unassignedOperationsTasks.length} unassigned task{unassignedOperationsTasks.length === 1 ? "" : "s"}
@@ -16906,13 +16690,15 @@ const JobDetailView = () => {
     const typeOptions = getActualServiceStopTypeOptions(modeConfig.useCase, form.serviceStopTypeId);
     const selectedTaskIds = new Set(form.taskIds || []);
     const showTaskPicker = modeConfig.id === "jobVisit" && !isEdit;
+    const plannedStop = !isEdit && plannedServiceStops.find((stop) => stop.id === form.plannedServiceStopId);
+    const plannedPay = plannedStop ? jobPayFields(plannedStop) : null;
     const technicianOptions = (companyUserList || []).filter((user) => getCompanyUserId(user));
     const selectedTechnicianOption = form.techId ? findCompanyUserById(form.techId) : null;
     const selectedServiceStopTypeOption = form.serviceStopTypeId
       ? typeOptions.find((type) => getActualServiceStopTypeOptionId(type) === form.serviceStopTypeId) ||
-        getActualServiceStopSelectedType(form.serviceStopTypeId)
+        getActualServiceStopSelectedType(form.serviceStopTypeId) || (plannedStop ? getPlannedStopType(plannedStop) : null)
       : null;
-    const selectPortalTarget = typeof document !== "undefined" ? document.body : undefined;
+    const selectPortalTarget = isEdit && typeof document !== "undefined" ? document.body : undefined;
     const scheduleTaskTypeOption = scheduleTaskTypeValue
       ? (taskTypeList || []).find((option) => canonicalJobTaskType(option.value || option.name || option.label || "") === scheduleTaskTypeValue) ||
         scheduleTaskForm.type
@@ -16940,93 +16726,107 @@ const JobDetailView = () => {
       menuPortal: (base) => ({ ...base, zIndex: 9999 }),
     });
 
-    return (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <div>
-          <label
-            htmlFor={`actual-service-stop-pay-type-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
-            className="block text-sm font-semibold text-slate-700"
-          >
-            Pay Type
-          </label>
-          <Select
-            inputId={`actual-service-stop-pay-type-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
-            options={typeOptions}
-            value={selectedServiceStopTypeOption}
-            onChange={(option) => updateForm("serviceStopTypeId", option ? getActualServiceStopTypeOptionId(option) : "")}
-            isClearable
-            isDisabled={saving}
-            placeholder={`Use default ${modeConfig.fallbackName}`}
-            noOptionsMessage={() => "No pay types found"}
-            getOptionValue={(option) => getActualServiceStopTypeOptionId(option)}
-            getOptionLabel={(option) => getActualServiceStopTypeOptionLabel(option)}
-            formatOptionLabel={renderActualServiceStopTypeOption}
-            className="mt-1 text-sm"
-            menuPortalTarget={selectPortalTarget}
-            menuPosition="fixed"
-            styles={scheduleSelectStyles}
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor={`actual-service-stop-technician-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
-            className="block text-sm font-semibold text-slate-700"
-          >
-            Assign Technician
-          </label>
-          <Select
-            inputId={`actual-service-stop-technician-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
-            options={technicianOptions}
-            value={selectedTechnicianOption}
-            onChange={(option) => updateForm("techId", option ? getCompanyUserId(option) : "")}
-            isClearable
-            isDisabled={saving}
-            placeholder="Select a technician..."
-            noOptionsMessage={() => "No technicians found"}
-            getOptionValue={(option) => getCompanyUserId(option)}
-            getOptionLabel={(option) => getCompanyUserName(option)}
-            className="mt-1 text-sm"
-            menuPortalTarget={selectPortalTarget}
-            menuPosition="fixed"
-            styles={scheduleSelectStyles}
-          />
-        </div>
-
-        {!isEdit && modeConfig.id === "jobVisit" && plannedServiceStops.length > 0 && (
-          <label className="block text-sm font-semibold text-slate-700 md:col-span-2">
-            Planned Operations Stop
-            <select
-              value={form.plannedServiceStopId}
-              onChange={(event) => onPlannedStopChange?.(event.target.value)}
-              disabled={saving}
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <option value="">No planned stop selected</option>
-              {plannedServiceStops.map((plannedStop) => {
-                const alreadyScheduled = plannedStop.serviceStopId || plannedStop.scheduledServiceStopId || plannedStop.convertedServiceStopId;
-                return (
-                  <option key={plannedStop.id} value={plannedStop.id}>
-                    {plannedStop.name || plannedStop.serviceStopTypeName || plannedStop.type || "Planned stop"}
-                    {alreadyScheduled ? " (already scheduled)" : ""}
-                  </option>
-                );
-              })}
-            </select>
-          </label>
-        )}
-
-        <label className="block text-sm font-semibold text-slate-700">
-          Service Date
-          <input
-            type="date"
-            value={form.serviceDate}
-            onChange={(event) => updateForm("serviceDate", event.target.value)}
-            disabled={saving}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-          />
+    const payTypeField = (
+      <div>
+        <label
+          htmlFor={`actual-service-stop-pay-type-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+          className="block text-sm font-semibold text-slate-700"
+        >
+          Pay Type
         </label>
+        <Select
+          inputId={`actual-service-stop-pay-type-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+          options={typeOptions}
+          value={selectedServiceStopTypeOption}
+          onChange={(option) => updateForm("serviceStopTypeId", option ? getActualServiceStopTypeOptionId(option) : "")}
+          isClearable
+          isDisabled={saving || Boolean(plannedStop)}
+          placeholder={`Use default ${modeConfig.fallbackName}`}
+          noOptionsMessage={() => "No pay types found"}
+          getOptionValue={(option) => getActualServiceStopTypeOptionId(option)}
+          getOptionLabel={(option) => getActualServiceStopTypeOptionLabel(option)}
+          formatOptionLabel={renderActualServiceStopTypeOption}
+          className="mt-1 text-sm"
+          menuPortalTarget={selectPortalTarget}
+          menuPosition="fixed"
+          styles={scheduleSelectStyles}
+        />
+      </div>
+    );
+    const technicianField = (
+      <div>
+        <label
+          htmlFor={`actual-service-stop-technician-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+          className="block text-sm font-semibold text-slate-700"
+        >
+          Assign Technician
+        </label>
+        <Select
+          inputId={`actual-service-stop-technician-${form.scheduleMode}${isEdit ? "-edit" : ""}`}
+          options={technicianOptions}
+          value={selectedTechnicianOption}
+          onChange={(option) => updateForm("techId", option ? getCompanyUserId(option) : "")}
+          isClearable
+          isDisabled={saving}
+          placeholder="Select a technician..."
+          noOptionsMessage={() => "No technicians found"}
+          getOptionValue={(option) => getCompanyUserId(option)}
+          getOptionLabel={(option) => getCompanyUserName(option)}
+          className="mt-1 text-sm"
+          menuPortalTarget={selectPortalTarget}
+          menuPosition="fixed"
+          styles={scheduleSelectStyles}
+        />
+      </div>
+    );
+    const plannedStopPicker = !isEdit && !scheduleLockedVisitId && modeConfig.id === "jobVisit" && plannedServiceStops.length > 0 && (
+      <label className="block text-sm font-semibold text-slate-700 md:col-span-2">
+        Planned Operations Stop
+        <select
+          value={form.plannedServiceStopId}
+          onChange={(event) => onPlannedStopChange?.(event.target.value)}
+          disabled={saving}
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <option value="">No planned stop selected</option>
+          {plannedServiceStops.map((visit) => {
+            const alreadyScheduled = scheduledVisitsByPlan.get(visit.id)?.fullyScheduled;
+            const cancelled = isCancelledVisit(visit.status);
+            return (
+              <option key={visit.id} value={visit.id} disabled={alreadyScheduled || cancelled}>
+                {visit.name || visit.serviceStopTypeName || visit.type || "Planned stop"}
+                {alreadyScheduled ? " (already scheduled)" : cancelled ? " (cancelled)" : ""}
+              </option>
+            );
+          })}
+        </select>
+      </label>
+    );
 
+    const paySummary = plannedPay && plannedPay.payrollMode !== "automatic" && (
+      <p className="text-sm text-slate-700 md:col-span-2">
+        {plannedPay.payrollMode === "custom"
+          ? (plannedPay.manualPayOverrideCents ?? -1) < 0 ? "Set the custom pay amount on the planned visit before scheduling."
+            : `Fixed service stop pay of ${moneyFromCents(plannedPay.manualPayOverrideCents)} from the plan.`
+          : plannedPay.payrollMode === "included" ? "Service stop pay is included in another payment."
+            : "This visit has no separate service stop pay."}
+      </p>
+    );
+
+    const dateField = (
+      <label className="block text-sm font-semibold text-slate-700">
+        Service Date
+        <input
+          type="date"
+          value={form.serviceDate}
+          onChange={(event) => updateForm("serviceDate", event.target.value)}
+          disabled={saving}
+          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        />
+      </label>
+    );
+
+    const additionalFields = <>
         <label className="block text-sm font-semibold text-slate-700">
           Estimated Duration (Min)
           <input
@@ -17246,7 +17046,7 @@ const JobDetailView = () => {
                   )}
 
                   <label className={scheduleTaskFieldLabelClass}>
-                    Tech Labor Cost
+                    Contracted task pay
                     <input
                       type="number"
                       min="0"
@@ -17259,7 +17059,7 @@ const JobDetailView = () => {
                   </label>
 
                   <label className={scheduleTaskFieldLabelClass}>
-                    Billing Labor
+                    Customer task price
                     <input
                       type="number"
                       min="0"
@@ -17353,9 +17153,42 @@ const JobDetailView = () => {
             </div>
           </div>
         )}
+    </>;
+
+    if (plannedStop) {
+      return (
+        <div className="space-y-4">
+          {plannedStopPicker}
+          <div className="grid gap-4 md:grid-cols-2">
+            {technicianField}
+            {dateField}
+          </div>
+          {paySummary}
+          {!selectedTaskIds.size && (
+            <p className="text-sm text-amber-800">Choose an available task under Advanced to schedule this visit.</p>
+          )}
+          <details key={plannedStop.id} className="rounded-md border border-slate-200 px-3 py-2">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-800">Advanced</summary>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              {payTypeField}
+              {additionalFields}
+            </div>
+          </details>
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid gap-4 md:grid-cols-2">
+        {payTypeField}
+        {technicianField}
+        {plannedStopPicker}
+        {dateField}
+        {additionalFields}
       </div>
     );
   };
+
 
   const renderServiceStopCard = (stop) => {
     const scheduledLaborCents = getScheduledStopEstimatedLaborCents(stop);
@@ -17830,8 +17663,8 @@ const JobDetailView = () => {
       count: String(jobPlans?.length || 0),
     },
 	    Planned: {
-	      label: "Create Plans",
-	      helper: "Create estimates based on services and products",
+	      label: "Job Plan",
+	      helper: "Services, tasks, planned visits, and products",
 	      count: String(
 	        (taskList?.length || 0) +
 	        (plannedServiceStops?.length || 0) +
@@ -17840,8 +17673,8 @@ const JobDetailView = () => {
 	      ),
 	    },
 	    Actual: {
-	      label: "Actual",
-	      helper: "Service stops, payroll, and purchased parts",
+	      label: "Schedule & Work",
+	      helper: "Scheduled visits, work offers, payroll, and purchases",
 	      count: String(
 	        (serviceStops?.length || 0) +
 	        (actualPayLineItems?.length || 0) +
@@ -17892,13 +17725,9 @@ const JobDetailView = () => {
     unfinishedJobFinishTasks.some((task) => task.id === taskId)
   ).length;
   const unfinishedJobFinishShoppingItems = getUnfinishedJobFinishShoppingItems();
-  const jobFinishShoppingDeleteCount = unfinishedJobFinishShoppingItems.filter((item) =>
-    jobFinishShoppingItemActions[getFirestoreDocId(item)] === "delete"
+  const jobFinishShoppingInstalledCount = unfinishedJobFinishShoppingItems.filter((item) =>
+    jobFinishShoppingItemActions[getFirestoreDocId(item)] === "installed"
   ).length;
-  const jobFinishShoppingInstalledCount = Math.max(
-    unfinishedJobFinishShoppingItems.length - jobFinishShoppingDeleteCount,
-    0
-  );
   const currentPlanInvoiceLineItems = (() => {
     const explicitLaborLines = normalizeJobLaborLineItems(completeJobLaborLines({ laborLineItems, tasks: taskList, plannedServiceStops, plannedStopCost: getPlannedStopCostCents, taskCost: getTaskCostCents }));
     const laborLines = explicitLaborLines.length
@@ -18030,6 +17859,38 @@ const JobDetailView = () => {
     (stop) => !stop.serviceStopId && !stop.scheduledServiceStopId && !stop.convertedServiceStopId
   );
   const plannedMaterialsToPurchase = (shoppingList || []).filter((item) => !isShoppingListItemPurchased(item));
+  const quotedMaterials = new Map((job.acceptedEstimateLineItems || acceptedPlan?.lineItems || job.estimateLineItems || []).map((line) => [
+    line.metadata?.shoppingListItemId || line.shoppingListItemId || line.id, line,
+  ]));
+  const approvedExtrasToReview = shoppingList.filter((item) =>
+    !item.materialUsageOnly && (item.partApprovalRequestId || item.approvalRequestId) &&
+    String(item.customerApprovalStatus || item.customerApprovalResponse).toLowerCase() === "approved" &&
+    (!quotedMaterials.has(getFirestoreDocId(item)) ||
+      cents(quotedMaterials.get(getFirestoreDocId(item)).totalAmountCents) !== getShoppingPlannedTotalPriceCents(item))
+  );
+  const draftRevisionForApprovedParts = async () => {
+    if (!canBuildJobEstimatePlan || savingPlan || !approvedExtrasToReview.length) return;
+    setSavingPlan(true);
+    try {
+      const scope = acceptedPlan ? planScopeArrays(acceptedPlan) : { tasks: taskList, plannedServiceStops, laborLineItems, shoppingItems: shoppingList };
+      const include = new Map(scope.shoppingItems.map((item) => [getFirestoreDocId(item), item]));
+      approvedExtrasToReview.forEach((item) => include.set(getFirestoreDocId(item), item));
+      const draft = await saveCurrentEditorToPlan({
+        title: `${getJobPlanDisplayName(acceptedPlan, "Job estimate")} · Revision`,
+        planTier: acceptedPlan?.planTier, status: JOB_PLAN_STATUS.DRAFT, makeActive: false, showToast: false,
+        scope: { ...scope, shoppingItems: [...include.values()] },
+      });
+      setSelectedBillingPlanId(draft.id);
+      toast.success("Revision drafted. Review and accept it before invoicing.");
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Could not draft a revision."));
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+  const materialsWaitingForCost = shoppingList.filter((item) =>
+    (item.installedAt || item.status === SHOPPING_LIST_STATUS.installed) && !item.purchasedItem && !item.purchasedItemId
+  );
   const acceptedWorkflowIsReady = Boolean(acceptedPlan) || isJobAcceptedForMaterials();
   const timelineStatusKey = (value = "") => String(value || "").trim().toLowerCase();
   const billingStatusKey = timelineStatusKey(job.billingStatus || "Draft");
@@ -18287,7 +18148,7 @@ const JobDetailView = () => {
                       {[task.type || "", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : "", taskContextLabel(task)].filter(Boolean).join(" • ") || "Task"}
                     </span>
                     <span className="mt-1 block font-semibold text-slate-700">
-                      Cost {moneyFromCents(task.contractedRate)} • Task billing {moneyFromCents(getTaskBillingLaborPriceCents(task))}
+                      Contracted pay {moneyFromCents(task.contractedRate)} • Customer price {moneyFromCents(getTaskBillingLaborPriceCents(task))}
                     </span>
                     <span className={assignedElsewhere ? "mt-1 block font-semibold text-amber-700" : "mt-1 block font-semibold text-slate-500"}>
                       {assignmentMessage}
@@ -18569,7 +18430,7 @@ const JobDetailView = () => {
                           {[task.type || "", task.estimatedTime ? formatDurationMinutes(task.estimatedTime) : "", taskContextLabel(task)].filter(Boolean).join(" • ") || "Task"}
                         </p>
                         <p className="mt-1 text-xs font-semibold text-slate-700">
-                          Cost {moneyFromCents(task.contractedRate)} • Task billing {moneyFromCents(getTaskBillingLaborPriceCents(task))}
+                          Contracted pay {moneyFromCents(task.contractedRate)} • Customer price {moneyFromCents(getTaskBillingLaborPriceCents(task))}
                         </p>
                         <p className={assignedElsewhere ? "mt-1 text-xs font-semibold text-amber-700" : "mt-1 text-xs font-semibold text-slate-500"}>
                           {assignmentLabel}
@@ -19117,7 +18978,7 @@ const JobDetailView = () => {
         </label>
         <div className="col-span-full"><JobPayrollFields value={taskEditForm} onChange={updateTaskEditForm} showPayType={false} /></div>
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-          Tech Labor Cost
+          Contracted task pay
           <input
             type="number"
             min="0"
@@ -19128,7 +18989,7 @@ const JobDetailView = () => {
           />
         </label>
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-          Billing Labor
+          Customer task price
           <input
             type="number"
             min="0"
@@ -19392,7 +19253,7 @@ const JobDetailView = () => {
           </div>
         )}
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-          Tech Labor Cost
+          Contracted task pay
           <input
             type="number"
             min="0"
@@ -19403,7 +19264,7 @@ const JobDetailView = () => {
           />
         </label>
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-          Billing Labor
+          Customer task price
           <input
             type="number"
             min="0"
@@ -19987,34 +19848,26 @@ const JobDetailView = () => {
 
 
       <div className="w-full space-y-6">
-        <WorkspaceRecordHeader title={<>{job.type || "Job Details"}</>} eyebrow="Job details"><div className="workspace-record-toolbar">
+        <WorkspaceRecordHeader
+          title={job.type || "Job Details"}
+          eyebrow="Job details"
+          backLink={{ to: "/company/jobs", label: "Back to Jobs" }}
+        >
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
+            <div className="min-w-0">
               {isInitialShellLoading ? (
                 <div className="animate-pulse space-y-3">
-                  <Link
-                    to="/company/jobs"
-                    className="app-back-link"
-                  >
-                    &larr; Back to Jobs
-                  </Link>
                   <div className="flex flex-wrap gap-2">
                     <div className="h-7 w-24 rounded-full bg-slate-200" />
                     <div className="h-7 w-28 rounded-full bg-slate-200" />
                     <div className="h-7 w-32 rounded-full bg-slate-200" />
                   </div>
-                  <div className="h-8 w-64 rounded bg-slate-200" />
-                  <div className="h-4 w-80 rounded bg-slate-100" />
+                  <div className="h-8 w-64 max-w-full rounded bg-slate-200" />
+                  <div className="h-4 w-80 max-w-full rounded bg-slate-100" />
                 </div>
               ) : (
                 <>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Link
-                      to="/company/jobs"
-                      className="app-back-link"
-                    >
-                      &larr; Back to Jobs
-                    </Link>
                     {job.internalId && (
                       <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
                         {displayReferenceValue(job.internalId, "Job")}
@@ -20140,7 +19993,7 @@ const JobDetailView = () => {
               )}
             </div>
           </div>
-        </div></WorkspaceRecordHeader>
+        </WorkspaceRecordHeader>
         {(() => { const progress=jobExecutionProgress({tasks:taskList,services:laborLineItems,products:shoppingList,offers:workOffers}); return <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4"><h2 className="font-bold">Remaining Work</h2><p className="mt-1 text-sm">{progress.remainingTasks} tasks · {progress.remainingServices} services · {progress.remainingProductUnits} product units</p><p className="mt-1 text-sm text-slate-600">{progress.stages.unassigned} unassigned · {progress.stages.offered} offered · {progress.stages.acceptedUnscheduled} assigned, unscheduled · {progress.stages.scheduled} scheduled · {progress.stages.blocked} waiting for parts</p></section>; })()}
 
         {!isInitialShellLoading && (
@@ -20442,7 +20295,7 @@ const JobDetailView = () => {
 	                    <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
 	                      <p className="text-base font-semibold text-slate-800">No plans saved yet.</p>
 	                      <p className="mx-auto mt-2 max-w-xl text-sm text-slate-500">
-	                        Add a plan, then build its tasks, operations stops, products, and pricing in Create Plans.
+	                        Add a plan, then build its tasks, operations stops, products, and pricing in Job Plan.
 	                      </p>
 	                      {canBuildJobEstimatePlan && (
 	                        <button
@@ -20934,7 +20787,7 @@ const JobDetailView = () => {
                               Customer Approval
                             </th>
                             <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Tech Labor</th>
-                            <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Billing Labor</th>
+                            <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Customer task price</th>
                             <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Time (Hr)</th>
                             <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"></th>
                           </tr>
@@ -21083,7 +20936,7 @@ const JobDetailView = () => {
                                           </label>
 
                                           <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                            Tech Labor Cost (USD)
+                                            Contracted task pay (USD)
                                             <input
                                               className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
                                               type="number"
@@ -21095,7 +20948,7 @@ const JobDetailView = () => {
                                           </label>
 
                                           <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                            Billing Labor Price (USD)
+                                            Customer task price (USD)
                                             <input
                                               className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
                                               type="number"
@@ -21301,7 +21154,7 @@ const JobDetailView = () => {
                             type="number"
                             min="0"
                             step="0.01"
-                            placeholder="Tech Labor Cost (USD)"
+                            placeholder="Contracted task pay (USD)"
                             value={taskLaborCost}
                             onChange={(e) => setTaskLaborCost(e.target.value)}
                           />
@@ -21311,7 +21164,7 @@ const JobDetailView = () => {
                             type="number"
                             min="0"
                             step="0.01"
-                            placeholder="Billing Labor Price (USD)"
+                            placeholder="Customer task price (USD)"
                             value={taskBillingLaborPrice}
                             onChange={(e) => setTaskBillingLaborPrice(e.target.value)}
                           />
@@ -21841,6 +21694,17 @@ const JobDetailView = () => {
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
+                        {approvedExtrasToReview.length > 0 && (
+                          <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-900">
+                            <p className="font-semibold">Approved parts missing from the accepted estimate</p>
+                            <p>{approvedExtrasToReview.map(getMaterialName).join(", ")}</p>
+                            {canBuildJobEstimatePlan && !linkedSalesInvoice?.id && (
+                              <button type="button" disabled={savingPlan} className="mt-1 font-semibold underline disabled:opacity-50" onClick={draftRevisionForApprovedParts}>
+                                Draft revision with approved parts
+                              </button>
+                            )}
+                          </div>
+                        )}
                         {jobIsFinished && !jobBillingIsInvoiced() && (
                           <button
                             type="button"
@@ -21854,7 +21718,8 @@ const JobDetailView = () => {
                         <button
                           type="button"
                           onClick={openScheduleServiceStopChooser}
-                          className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                          disabled={savingScheduledServiceStop}
+                          className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
                         >
                           Schedule Service Stop
                         </button>
@@ -22228,7 +22093,7 @@ const JobDetailView = () => {
                             disabled={!canBuildJobEstimatePlan}
 	                          className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition disabled:cursor-not-allowed disabled:opacity-50"
 	                        >
-	                          Create Plans
+	                          Job Plan
 	                        </button>
 
 	                        <button
@@ -22311,9 +22176,14 @@ const JobDetailView = () => {
                         subtitle={`${purchasedItems.length} purchased product item(s)`}
                         tone="red"
                       />
+                      {materialsWaitingForCost.length > 0 && (
+                        <p className="text-sm text-amber-800">
+                          {materialsWaitingForCost.length} installed material(s) awaiting purchase reconciliation
+                        </p>
+                      )}
 
                       <StatCard
-                        title="Earned Labor"
+                        title="Earned payroll"
                         value={moneyFromCents(actualLaborTotalCents)}
                         subtitle={`${moneyFromCents(scheduledStopLaborEstimateCents)} remaining visit estimate, separate from earned pay`}
                         tone="red"
@@ -22359,7 +22229,7 @@ const JobDetailView = () => {
                                 disabled={!canBuildJobEstimatePlan}
 	                              className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition disabled:cursor-not-allowed disabled:opacity-50"
 	                            >
-	                              Create Plans
+	                              Job Plan
 	                            </button>
 	                          </div>
 	                        ) : (
@@ -22441,7 +22311,7 @@ const JobDetailView = () => {
 	                                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 data-[focus]:bg-blue-50"
 	                                          >
 	                                            <PencilSquareIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
-	                                            <span>Create Plans</span>
+	                                            <span>Job Plan</span>
 	                                          </button>
 	                                        </MenuItem>
 	                                        <MenuItem disabled={!estimateRow.agreementId}>
@@ -23328,92 +23198,100 @@ const JobDetailView = () => {
         </div>
       )}
       {showScheduleServiceStopModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
-              <div>
-                <h3 className="text-xl font-bold text-slate-950">
-                  {scheduleServiceStopMode
-                    ? `Schedule ${getActualServiceStopScheduleMode(scheduleServiceStopMode).buttonLabel}`
-                    : "Schedule Service Stop"}
-                </h3>
-                <p className="mt-1 text-sm text-slate-600">
-                  {scheduleServiceStopMode
-                    ? getActualServiceStopScheduleMode(scheduleServiceStopMode).helper
-                    : "Choose whether this is an estimate visit or a service stop for performing the work."}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeScheduleServiceStopModal}
-                disabled={savingScheduledServiceStop || savingScheduleTask}
-                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Close schedule service stop form"
-              >
-                <XMarkIcon className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </div>
-
-            {!scheduleServiceStopMode ? (
-              <div className="grid gap-3 overflow-y-auto p-5 md:grid-cols-2">
-                {ACTUAL_SERVICE_STOP_SCHEDULE_MODES.map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => chooseScheduleServiceStopMode(mode.id)}
-                    className="rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50"
-                  >
-                    <span className="block text-base font-bold text-slate-950">{mode.buttonLabel}</span>
-                    <span className="mt-1 block text-sm text-slate-600">{mode.helper}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <form onSubmit={saveScheduledServiceStop} className="overflow-y-auto">
-                <div className="p-5">
-                  {renderActualServiceStopFormFields({
-                    form: scheduleServiceStopForm,
-                    updateForm: updateScheduleServiceStopForm,
-                    saving: savingScheduledServiceStop,
-                    onPlannedStopChange: applyPlannedStopToScheduleServiceStopForm,
-                    onTaskToggle: toggleScheduleServiceStopTask,
-                  })}
+        <Dialog open onClose={() => closeScheduleServiceStopModal()} className="relative z-50">
+          <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
+          <div className="fixed inset-0 flex items-center justify-center p-4">
+            <DialogPanel className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl ${scheduleServiceStopForm.plannedServiceStopId ? "max-w-2xl" : "max-w-4xl"}`}>
+              <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
+                <div>
+                  <DialogTitle className="text-xl font-bold text-slate-950">
+                    {scheduleServiceStopForm.plannedServiceStopId
+                      ? `Schedule ${plannedServiceStops.find((stop) => stop.id === scheduleServiceStopForm.plannedServiceStopId)?.name || "planned visit"}`
+                      : scheduleServiceStopMode
+                      ? `Schedule ${getActualServiceStopScheduleMode(scheduleServiceStopMode).buttonLabel}`
+                      : "Schedule Service Stop"}
+                  </DialogTitle>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {scheduleServiceStopForm.plannedServiceStopId
+                      ? "Choose a technician and day. The visit’s details come from the job plan."
+                      : scheduleServiceStopMode
+                      ? getActualServiceStopScheduleMode(scheduleServiceStopMode).helper
+                      : "Choose whether this is an estimate visit or a service stop for performing the work."}
+                  </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={closeScheduleServiceStopModal}
+                  disabled={savingScheduledServiceStop || savingScheduleTask}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Close schedule service stop form"
+                >
+                  <XMarkIcon className="h-5 w-5" aria-hidden="true" />
+                </button>
+              </div>
 
-                <div className="flex flex-col gap-2 border-t border-slate-200 p-5 sm:flex-row sm:justify-between">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setScheduleServiceStopMode("");
-                      resetScheduleTaskCreator();
-                    }}
-                    disabled={savingScheduledServiceStop || savingScheduleTask}
-                    className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Back
-                  </button>
-                  <div className="flex flex-col gap-2 sm:flex-row">
+              {!scheduleServiceStopMode ? (
+                <div className="grid gap-3 overflow-y-auto p-5 md:grid-cols-2">
+                  {ACTUAL_SERVICE_STOP_SCHEDULE_MODES.map((mode) => (
                     <button
+                      key={mode.id}
                       type="button"
-                      onClick={closeScheduleServiceStopModal}
+                      onClick={() => chooseScheduleServiceStopMode(mode.id)}
+                      className="rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50"
+                    >
+                      <span className="block text-base font-bold text-slate-950">{mode.buttonLabel}</span>
+                      <span className="mt-1 block text-sm text-slate-600">{mode.helper}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <form onSubmit={saveScheduledServiceStop} className="overflow-y-auto">
+                  <div className="p-5">
+                    {renderActualServiceStopFormFields({
+                      form: scheduleServiceStopForm,
+                      updateForm: updateScheduleServiceStopForm,
+                      saving: savingScheduledServiceStop,
+                      onPlannedStopChange: applyPlannedStopToScheduleServiceStopForm,
+                      onTaskToggle: toggleScheduleServiceStopTask,
+                    })}
+                  </div>
+
+                  <div className={`flex flex-wrap gap-2 border-t border-slate-200 p-5 ${scheduleLockedVisitId ? "justify-end" : "justify-between"}`}>
+                    {!scheduleLockedVisitId && <button
+                      type="button"
+                      onClick={() => {
+                        setScheduleServiceStopMode("");
+                        setScheduleServiceStopForm(createActualServiceStopForm());
+                        resetScheduleTaskCreator();
+                      }}
                       disabled={savingScheduledServiceStop || savingScheduleTask}
                       className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={savingScheduledServiceStop || savingScheduleTask}
-                      className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {savingScheduledServiceStop ? "Scheduling..." : `Schedule ${getActualServiceStopScheduleMode(scheduleServiceStopMode).buttonLabel}`}
-                    </button>
+                      Back
+                    </button>}
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={closeScheduleServiceStopModal}
+                        disabled={savingScheduledServiceStop || savingScheduleTask}
+                        className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={savingScheduledServiceStop || savingScheduleTask}
+                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {savingScheduledServiceStop ? "Scheduling..." : scheduleServiceStopForm.plannedServiceStopId ? "Schedule Visit" : `Schedule ${getActualServiceStopScheduleMode(scheduleServiceStopMode).buttonLabel}`}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </form>
-            )}
+                </form>
+              )}
+            </DialogPanel>
           </div>
-        </div>
+        </Dialog>
       )}
       {editingActualServiceStopId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -23531,7 +23409,27 @@ const JobDetailView = () => {
                       className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                     />
                   </label>
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Customer visit price
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      aria-describedby="planned-visit-price-help"
+                      value={plannedStopForm.customerPrice}
+                      onChange={(event) => updatePlannedStopForm("customerPrice", event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <p id="planned-visit-price-help" className="text-xs text-slate-600 sm:col-span-2">Leave customer visit price blank when it’s included in a service.</p>
                 </div>
+
+                <JobPayrollFields
+                  scope="stop"
+                  value={{ ...plannedStopForm, payTypeId: plannedStopForm.serviceStopTypeId }}
+                  showPayType={false}
+                  onChange={updatePlannedStopForm}
+                />
 
                 <label className="block text-sm font-semibold text-slate-700">
                   Description
@@ -23619,7 +23517,7 @@ const JobDetailView = () => {
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                 <h4 className="text-sm font-bold text-slate-900">Payroll Planning Snapshot</h4>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Profit planning uses the highest matching technician rate.
+                  Uses the selected visit pay and any additional task pay. Automatic pay uses the highest matching technician rate.
                 </p>
 
                 <div className="mt-3 space-y-2">
@@ -23684,7 +23582,7 @@ const JobDetailView = () => {
 	                  Add New Plan
 	                </h3>
 	                <p className="mt-1 text-sm text-slate-600">
-	                  Name the plan now, then build its tasks, operations stops, products, and pricing in Create Plans.
+	                  Name the plan now, then build its tasks, operations stops, products, and pricing in Job Plan.
 	                </p>
 	              </div>
               <button
@@ -23786,7 +23684,7 @@ const JobDetailView = () => {
                 <label className="flex gap-2 font-semibold"><input type="checkbox" checked={closeoutWholeJob} disabled={markingJobFinished} onChange={e=>setCloseoutWholeJob(e.target.checked)} />Finish the entire job</label>
                 {closeoutWholeJob && <label className="flex gap-2"><input type="checkbox" checked={closeoutCancelVisits} disabled={markingJobFinished} onChange={e=>setCloseoutCancelVisits(e.target.checked)} />Cancel unchecked visits, unscheduled planned visits, and unaccepted offers</label>}
                 <button type="button" disabled={markingJobFinished} className="rounded border px-3 py-2 font-semibold disabled:opacity-50" onClick={selectAllRemainingJobFinishWork}>Quick Finish All Remaining Work</button>
-                <p className="text-xs text-slate-600">Quick Finish selects all remaining work and service stops, marks products installed, and cancels unused plans and unaccepted offers when finishing the job.</p>
+                <p className="text-xs text-slate-600">Quick Finish selects remaining work and service stops and preselects Installed for purchased materials. When finishing the entire job, it also cancels unused plans and unaccepted offers.</p>
                 <h3 className="font-bold">Service items</h3>
                 {laborLineItems.map(line=><label key={line.id} className="flex gap-2"><input type="checkbox" checked={line.completionStatus === "Finished" || jobFinishServiceIds.includes(line.id)} disabled={markingJobFinished || line.completionStatus === "Finished"} onChange={e=>{setJobFinishServiceIds(ids=>e.target.checked?[...ids,line.id]:ids.filter(v=>v!==line.id));if(e.target.checked)setJobFinishTaskIds(ids=>[...new Set([...ids,...getLaborLineTaskIds(line)])]);}} />{line.name || "Service"}</label>)}
               </div>
@@ -23881,35 +23779,17 @@ const JobDetailView = () => {
 	              <div className="mt-4 rounded-lg border border-slate-200">
 	                <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
 	                  <div>
-	                    <p className="text-sm font-semibold text-slate-800">Clear connected shopping items</p>
+	                    <p className="text-sm font-semibold text-slate-800">Confirm installed materials</p>
 	                    <p className="mt-1 text-xs text-slate-500">
-	                      {jobFinishShoppingInstalledCount} installed, {jobFinishShoppingDeleteCount} deleted
+	                      {jobFinishShoppingInstalledCount} confirmed, {unfinishedJobFinishShoppingItems.length - jobFinishShoppingInstalledCount} left open
 	                    </p>
-	                  </div>
-	                  <div className="flex flex-wrap gap-2">
-	                    <button
-	                      type="button"
-	                      onClick={() => setAllJobFinishShoppingItems("installed")}
-	                      disabled={markingJobFinished}
-	                      className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-50"
-	                    >
-	                      Mark all installed
-	                    </button>
-	                    <button
-	                      type="button"
-	                      onClick={() => setAllJobFinishShoppingItems("delete")}
-	                      disabled={markingJobFinished}
-	                      className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
-	                    >
-	                      Delete all
-	                    </button>
 	                  </div>
 	                </div>
 
 	                <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
 	                  {unfinishedJobFinishShoppingItems.map((item) => {
 	                    const itemId = getFirestoreDocId(item);
-	                    const selectedAction = jobFinishShoppingItemActions[itemId] || "installed";
+	                    const selectedAction = jobFinishShoppingItemActions[itemId] || "open";
 	                    const linkedTaskName = item.linkedTaskName ||
 	                      taskList.find((task) => task.id === (item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.sourceTaskId))?.name ||
 	                      "";
@@ -23932,8 +23812,9 @@ const JobDetailView = () => {
 	                        <div className="grid grid-cols-2 gap-2 sm:w-[220px]">
 	                          <button
 	                            type="button"
+	                            aria-pressed={selectedAction === "installed"}
 	                            onClick={() => setJobFinishShoppingItemAction(itemId, "installed")}
-	                            disabled={markingJobFinished}
+	                            disabled={markingJobFinished || !canConfirmJobMaterialInstallation(item)}
 	                            className={[
 	                              "rounded-md border px-3 py-2 text-xs font-semibold transition disabled:opacity-50",
 	                              selectedAction === "installed"
@@ -23945,16 +23826,17 @@ const JobDetailView = () => {
 	                          </button>
 	                          <button
 	                            type="button"
-	                            onClick={() => setJobFinishShoppingItemAction(itemId, "delete")}
+	                            aria-pressed={selectedAction === "open"}
+	                            onClick={() => setJobFinishShoppingItemAction(itemId, "open")}
 	                            disabled={markingJobFinished}
 	                            className={[
 	                              "rounded-md border px-3 py-2 text-xs font-semibold transition disabled:opacity-50",
-	                              selectedAction === "delete"
-	                                ? "border-red-600 bg-red-600 text-white"
-	                                : "border-red-200 bg-white text-red-700 hover:bg-red-50",
+	                              selectedAction === "open"
+	                                ? "border-slate-600 bg-slate-600 text-white"
+	                                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
 	                            ].join(" ")}
 	                          >
-	                            Delete
+	                            Leave open
 	                          </button>
 	                        </div>
 	                      </div>
@@ -23968,11 +23850,6 @@ const JobDetailView = () => {
 	              </div>
 	            )}
 
-	            {jobFinishShoppingDeleteCount > 0 && (
-	              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-	                {jobFinishShoppingDeleteCount} planned product(s) will be deleted as unused when the job is finished.
-	              </div>
-	            )}
 
 	            {job.equipmentId && equipmentCompletionTypeFromJob(job) && (
 	              <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">

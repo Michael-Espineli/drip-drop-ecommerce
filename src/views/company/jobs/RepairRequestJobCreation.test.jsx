@@ -1,12 +1,13 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { getDoc, getDocs } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { createJobAtomically } from '../../../utils/createJobAtomically';
 import { appAlert } from '../../../utils/appDialog';
 import CreateNewJob from './CreateNewJob';
 import BasicWorkOrderCreate from './BasicWorkOrderCreate';
+import CreateJobFlowLauncher from './CreateJobFlowLauncher';
 
 jest.mock('../../../context/AuthContext', () => ({ Context: require('react').createContext() }));
 jest.mock('../../../utils/config', () => ({ db: {} }));
@@ -84,6 +85,47 @@ test('request priority can be adjusted before creating a job', async () => {
   expect(priority).toHaveValue('4');
 });
 
+test('From Template requires an explicit choice and blocks creation after clearing it', async () => {
+  render(<MemoryRouter initialEntries={['/company/jobs']}>
+    <Context.Provider value={{ recentlySelectedCompany: 'company-1', user: { uid: 'user-1', displayName: 'Alex' } }}>
+      <Routes>
+        <Route path="/company/jobs" element={<CreateJobFlowLauncher customerId="customer-1" serviceLocationId="location-1" />} />
+        <Route path="/company/jobs/createNew/:customerId/:locationId" element={<CreateNewJob />} />
+      </Routes>
+    </Context.Provider>
+  </MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'Create Job' }));
+  fireEvent.click(screen.getByRole('button', { name: /^From Template/ }));
+  const option = await screen.findByRole('button', { name: /^Pump repair/ });
+  expect(screen.getByRole('heading', { name: 'Choose Template' })).toBeInTheDocument();
+  expect(getDocs).not.toHaveBeenCalledWith('companies/company-1/jobTemplates/template-1/tasks');
+  expect(createJobAtomically).not.toHaveBeenCalled();
+
+  fireEvent.click(option);
+  fireEvent.click(await screen.findByRole('button', { name: /^Template/ }));
+  await screen.findByText('Template Applied: Pump repair');
+  const create = screen.getAllByRole('button', { name: 'Create Job' })[0];
+  await waitFor(() => expect(create).toHaveAttribute('aria-disabled', 'false'));
+
+  const picker = screen.getByRole('combobox', { name: 'Job Template' });
+  fireEvent.keyDown(picker, { key: 'Backspace' });
+  expect(screen.getByText('No template selected.')).toBeInTheDocument();
+  expect(create).toHaveAttribute('aria-disabled', 'true');
+  fireEvent.click(create);
+  expect(screen.getByRole('heading', { name: 'Missing Job Information' })).toBeInTheDocument();
+  expect(createJobAtomically).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  fireEvent.keyDown(picker, { key: 'ArrowDown' });
+  fireEvent.click(screen.getByRole('option', { name: 'Pump repair' }));
+  await waitFor(() => expect(create).toHaveAttribute('aria-disabled', 'false'));
+  fireEvent.click(create);
+  await waitFor(() => expect([...writes.entries()]).toContainEqual([
+    expect.stringMatching(/\/workOrders\/[^/]+$/),
+    expect.objectContaining({ sourceTemplateId: template.id }),
+  ]));
+});
+
 test.each(['custom', 'template'])('basic %s jobs inherit the request priority in the job and plan', async (mode) => {
   render(<MemoryRouter initialEntries={[{ pathname: '/company/jobs/basic-create', search: mode === 'template' ? '?templateId=template-1' : '', state: {
     repairRequest: { id: 'request-1', customerId: 'customer-1', locationId: 'location-1', issuePriorityLevel: 3, description: 'Maintain pump' },
@@ -120,6 +162,39 @@ test('an active office template can be created and scheduled by a full creator',
   const job = [...writes.entries()].find(([key]) => /\/workOrders\/[^/]+$/.test(key))[1];
   expect(job.sourceTemplateId).toBe('template-1');
   expect(appAlert).not.toHaveBeenCalled();
+});
+test.each([3500, 0])('scheduling the first template visit copies its approved %i cents and leaves the next visit planned', async (amount) => {
+  const previousGetDocs = getDocs.getMockImplementation();
+  getDocs.mockImplementation(async (path) => {
+    if (path.endsWith('/jobTemplates/template-1/plannedServiceStops')) return { docs: [
+      snapshot('first', { id: 'legacy-install-id', name: 'Install', payrollMode: 'custom', manualPayOverrideCents: amount, manualPayOverrideNotes: 'Approved visit amount', billingLaborPriceCents: 12500 }),
+      snapshot('second', { name: 'Follow-up', payrollMode: 'automatic' }),
+    ] };
+    if (path.endsWith('/jobTemplates/template-1/laborLineItems')) return { docs: [
+      snapshot('service', { name: 'Install service', quantity: 1, totalPriceCents: 12500, plannedServiceStopTemplateIds: ['legacy-install-id'] }),
+    ] };
+    return previousGetDocs(path);
+  });
+  const button = await openScheduled();
+  await waitFor(() => expect(button).toBeEnabled());
+  expect(screen.getByText('First visit fixed pay').parentElement).toHaveTextContent(amount === 0 ? '$0.00' : '$35.00');
+  await act(async () => fireEvent.click(button));
+  const scheduled = [...writes.entries()].filter(([key]) => /\/serviceStops\/[^/]+$/.test(key));
+  const planned = [...writes.entries()].filter(([key]) => /\/plannedServiceStops\/[^/]+$/.test(key));
+  expect(scheduled).toHaveLength(1);
+  expect(planned).toHaveLength(2);
+  expect(scheduled[0][1]).toMatchObject({
+    plannedServiceStopId: planned[0][1].id,
+    payrollMode: 'custom',
+    manualPayOverrideCents: amount,
+    manualPayOverrideNotes: 'Approved visit amount',
+  });
+  expect(planned[0][1]).toMatchObject({ sourceTemplatePlannedStopId: 'first', billingLaborPriceCents: 12500, scheduledServiceStopId: scheduled[0][1].id });
+  expect(planned[1][1]).toMatchObject({ sourceTemplatePlannedStopId: 'second' });
+  expect(planned[1][1].serviceStopId).toBeUndefined();
+  const customerLines = [...writes.entries()].filter(([key]) => /\/laborLineItems\/[^/]+$/.test(key));
+  expect(customerLines).toHaveLength(1);
+  expect(customerLines[0][1]).toMatchObject({ totalPriceCents: 12500, plannedServiceStopIds: [planned[0][1].id] });
 });
 test('a limited technician cannot select an office-only template through the same URL', async () => {
   mockTemplateFlags = { technicianCanAdd: false };

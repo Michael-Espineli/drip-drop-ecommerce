@@ -94,3 +94,7 @@ export const shoppingItemIsReadyToPurchase = (item = {}) => {
     canonicalShoppingListStatus(status) === SHOPPING_LIST_STATUS.needToPurchase &&
     shoppingItemApprovalIsReady(item, status);
 };
+
+export const shoppingBillingIsRecordedSeparately = (item = {}) => Boolean(
+  item.jobId || item.workOrderId || item.assignedJobId || item.salesInvoiceId || item.invoiceId || item.offlineBillingStatus
+);
