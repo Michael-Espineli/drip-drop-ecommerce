@@ -9,10 +9,10 @@ import { roleHasCompanyPermission } from '../utils/companyPermissionAccess';
 jest.mock('../utils/config',()=>({db:{}}));
 jest.mock('firebase/auth',()=>({getAuth:()=>({currentUser:{uid:'tech',emailVerified:true}})}));
 
-function mount({permissions=[],audience='company',subscription=null,loading=false,path='/company/payroll',routeConfig}={}) {
+function mount({permissions=[],audience='company',subscription=null,loading=false,path='/company/payroll',routeConfig,enabledFlags=['feature_flag_006']}={}) {
   const route=routeConfig || {path,role:audience};
   const context={user:{uid:'tech',emailVerified:true},accountType:'Company',recentlySelectedCompany:'company',companySubscription:subscription,
-    companyRoleLoading:loading,companyRoleLoaded:!loading,featureFlagsLoaded:true,isFeatureEnabled:id=>id==='feature_flag_006',
+    companyRoleLoading:loading,companyRoleLoaded:!loading,featureFlagsLoaded:true,isFeatureEnabled:id=>enabledFlags.includes(id),
     hasCompanyPermission:id=>roleHasCompanyPermission({permissionIdList:permissions},id)};
   return render(<Context.Provider value={context}><MemoryRouter initialEntries={[path]}><Routes>
     <Route path={path} element={<Protected route={route}>Authorized payroll</Protected>} />
@@ -34,4 +34,16 @@ test('My Pay remains reachable through its personal route without a sidebar entr
  expect(allNav.find(item=>item.path==='/company/payroll').permissionId).toBe('420');
  mount({path:personal.path,routeConfig:personal});
  expect(screen.getByText('Authorized payroll')).toBeInTheDocument();
+});
+
+test.each([
+  [['feature_flag_004'], ['420'], false],
+  [['feature_flag_016'], ['420'], false],
+  [['feature_flag_004', 'feature_flag_016'], ['400'], false],
+  [['feature_flag_004', 'feature_flag_016'], ['420'], true],
+])('PNL Viewer requires both flags and payroll read access (%j, %j)', (enabledFlags, permissions, allowed) => {
+  const path = '/company/sales/pnl-viewer';
+  const routeConfig = sellerRoutes.find((route) => route.path === path);
+  mount({ path, routeConfig, enabledFlags, permissions });
+  expect(screen.getByText(allowed ? 'Authorized payroll' : 'Dashboard')).toBeInTheDocument();
 });

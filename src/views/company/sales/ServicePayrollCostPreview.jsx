@@ -47,12 +47,12 @@ export default function ServicePayrollCostPreview({ data, tasks = [], inheritedP
         </div>}
         {estimate.usesCustomerPriceBase && <p className="text-xs text-slate-600">Percentage estimates use the entered customer price as the preview base. Actual work needs an explicit payroll base before pay is calculated.</p>}
         {!compact && available && price !== null && <p className="text-xs text-slate-700">Customer price {money(price)} · Price less technician pay {range(price - estimate.maxAmountCents, price - estimate.minAmountCents)} before other costs.</p>}
-        {!compact && available && cost !== null && cost < estimate.maxAmountCents && <p className="text-xs text-amber-800">The internal cost entered is below the high technician estimate.</p>}
+        {!compact && available && cost !== null && cost < estimate.maxAmountCents && <p className="text-xs text-amber-800">The internal cost is below the high technician estimate.</p>}
         {onUseHighCost && <><button type="button" disabled={!available || estimate.needsReview} onClick={() => onUseHighCost(estimate.maxAmountCents)}
           className="rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50">
           {compact ? "Use high estimate for task cost" : "Use high estimate for internal cost"}
         </button>
-          {!compact && <p className="text-xs text-slate-500">Replaces the internal cost with the high technician estimate. Add any other costs to that amount before saving. Changing pay settings does not update this budget automatically.</p>}
+          {!compact && <p className="text-xs text-slate-500">Replaces the internal cost with the high technician estimate. Apply an updated estimate after changing pay settings.</p>}
         </>}
         {!compact && estimate.summaries.length > 0 && <details className="text-xs text-slate-600"><summary className="cursor-pointer font-semibold">Technician estimates</summary>
           <ul className="mt-2 space-y-1">{estimate.summaries.map((summary) => <li key={summary.worker.userId} className="flex flex-wrap justify-between gap-2"><span>{summary.worker.userName}</span><span>{summary.needsReview ? "Needs review" : money(summary.totalAmountCents)}</span></li>)}</ul>

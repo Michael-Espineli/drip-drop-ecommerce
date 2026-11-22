@@ -10,10 +10,8 @@ import Select from 'react-select';
 import { Dialog, DialogPanel } from '@headlessui/react';
 import {
   FaArchive,
-  FaArrowLeft,
   FaCheckCircle,
   FaEdit,
-  FaEye,
   FaPlus,
   FaSave,
   FaSearch,
@@ -34,13 +32,15 @@ import {
 } from '../../../utils/sales/salesFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { appConfirm } from '../../../utils/appDialog';
-import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs } from '../../../utils/jobTaskTypes';
+import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs, taskTypeRequiresInstallItem } from '../../../utils/jobTaskTypes';
+import { buildTaskProductOptions, findTaskProduct } from '../../../utils/jobPlanProducts';
 import { jobPayFields } from '../../../utils/payroll/payCalculation';
 import JobPayrollFields from '../jobs/JobPayrollFields';
 import useServicePayrollData from '../../../hooks/useServicePayrollData';
 import useJobProductCatalog from '../../../hooks/useJobProductCatalog';
 import ServiceTaskProductFields from '../jobs/ServiceTaskProductFields';
-import ServicePayrollCostEditor from './ServicePayrollCostEditor';
+import ServicePayrollCostPreview from './ServicePayrollCostPreview';
+import ServicePriceSuggestion from './ServicePriceSuggestion';
 import ServicePayTypeField from './ServicePayTypeField';
 import { taskDefaultsFromPayItem, updateServiceTaskPayrollField } from '../../../utils/payroll/servicePayrollPreview';
 import {
@@ -52,6 +52,9 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
 });
+const catalogPath = '/company/sales/catalog-items';
+const primaryButtonClass = 'inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700';
+const editIconClass = 'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-700 transition hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600';
 
 const labelize = (value) => {
   if (!value) return 'Unknown';
@@ -97,13 +100,25 @@ const minutesToLabel = (minutes) => {
   return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
 };
 
+const defaultTaskMinutes = '15';
+
+// Leave a new task's duration unset so a pay item can supply its configured estimate.
+const taskWithEstimatedMinutes = (task) => ({ ...task, estimatedMinutes: task.estimatedMinutes ?? defaultTaskMinutes });
+
+const applyInheritedPayItem = (task, item, previousItem) => {
+  const updated = task.payTypeId ? task : taskDefaultsFromPayItem(task, item, previousItem);
+  const original = task.beforeEdit;
+  return original && !original.payTypeId
+    ? { ...updated, beforeEdit: taskDefaultsFromPayItem(original, item, previousItem) }
+    : updated;
+};
+
 const emptyTaskTemplate = () => ({
   ...jobPayFields({ payrollMode: "included" }),
   id: `service_task_template_${uuidv4()}`,
   name: '',
   type: 'General',
   description: '',
-  estimatedMinutes: '',
   laborCost: '',
   billingLaborPrice: '',
   customerApprovalRequired: false,
@@ -168,7 +183,7 @@ const normalizeTaskTemplatesForSave = (templates = []) => (
     .map((template) => {
       const name = String(template.name || '').trim();
       if (!name) return null;
-      const estimatedMinutes = Number(template.estimatedMinutes || 0);
+      const estimatedMinutes = Number(template.estimatedMinutes ?? defaultTaskMinutes);
 
       return {
         id: template.id || `service_task_template_${uuidv4()}`,
@@ -385,6 +400,11 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
   const [formModalOpen, setFormModalOpen] = useState(editorOnly);
   const servicePayrollData = useServicePayrollData(recentlySelectedCompany, formModalOpen);
   const productData = useJobProductCatalog(recentlySelectedCompany, formModalOpen);
+  const taskProductOptions = useMemo(() => buildTaskProductOptions({
+    products: productData.products,
+    databaseItems: productData.databaseItems,
+    equipmentOnly: true,
+  }), [productData.products, productData.databaseItems]);
   const [filterType, setFilterType] = useState('all');
   const [catalogSearchTerm, setCatalogSearchTerm] = useState('');
   const [taskTypeList, setTaskTypeList] = useState([]);
@@ -615,24 +635,29 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
         payTypeId,
         ...(usesPaySource ? { sourceType: payTypeId ? SalesCatalogSourceType.serviceStopType : SalesCatalogSourceType.manual, sourceId: payTypeId } : {}),
         name: current.name || item?.name || '',
-        taskTemplates: (current.taskTemplates || []).map((task) => task.payTypeId ? task : taskDefaultsFromPayItem(task, item, previous)),
+        taskTemplates: current.taskTemplates.map((task) => applyInheritedPayItem(task, item, previous)),
       };
     });
   };
 
-  const updateTaskTemplate = (templateId, field, value) => {
+  const updateFormTask = (templateId, update) => {
     setForm((current) => ({
       ...current,
-      taskTemplates: (current.taskTemplates || []).map((template) => (
-        template.id === templateId ? updateServiceTaskPayrollField(template, field, value, servicePayrollData.payTypes, current.payTypeId) : template
-      )),
+      taskTemplates: current.taskTemplates.map((task) => task.id === templateId ? update(task, current) : task),
     }));
   };
 
+  const updateTaskTemplate = (templateId, field, value) => {
+    updateFormTask(templateId, (task, current) => (
+      updateServiceTaskPayrollField(task, field, value, servicePayrollData.payTypes, current.payTypeId)
+    ));
+  };
+
   const addTaskTemplate = () => {
+    const template = { ...emptyTaskTemplate(), beforeEdit: null };
     setForm((current) => ({
       ...current,
-      taskTemplates: [...(current.taskTemplates || []), taskDefaultsFromPayItem(emptyTaskTemplate(), servicePayrollData.payTypes.find((type) => type.id === current.payTypeId))],
+      taskTemplates: [...current.taskTemplates, taskDefaultsFromPayItem(template, servicePayrollData.payTypes.find((type) => type.id === current.payTypeId))],
     }));
   };
 
@@ -682,8 +707,32 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
   const removeTaskTemplate = (templateId) => {
     setForm((current) => ({
       ...current,
-      taskTemplates: (current.taskTemplates || []).filter((template) => template.id !== templateId),
+      taskTemplates: current.taskTemplates.filter((template) => template.id !== templateId),
     }));
+  };
+
+  const cancelTaskEdit = (template) => {
+    if (template.beforeEdit === null) {
+      removeTaskTemplate(template.id);
+      return;
+    }
+
+    updateFormTask(template.id, (task) => task.beforeEdit);
+  };
+
+  const finishTaskEdit = (event, template) => {
+    if (!template.name.trim()) {
+      toast.error('Task name is required.');
+      return;
+    }
+
+    const invalidField = event.currentTarget.closest('fieldset').querySelector(':invalid');
+    if (invalidField) {
+      invalidField.reportValidity();
+      return;
+    }
+
+    updateFormTask(template.id, ({ beforeEdit, ...task }) => task);
   };
 
   const sourceNameFor = (source) => (
@@ -739,7 +788,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
         description: current.description || sourceDescription,
         unitAmount: current.unitAmount || centsToDollarsInput(unitAmountCents),
         unitCost: current.unitCost || centsToDollarsInput(unitCostCents),
-        taskTemplates: current.sourceType === SalesCatalogSourceType.serviceStopType ? (current.taskTemplates || []).map((task) => task.payTypeId ? task : taskDefaultsFromPayItem(task, source, servicePayrollData.payTypes.find((type) => type.id === current.sourceId))) : current.taskTemplates,
       };
     });
   };
@@ -886,7 +934,7 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
       if (editorOnly) {
         onSaved?.(savedItem);
       } else if (!editingItemId) {
-        navigate(`/company/sales/catalog-items/${item.id}`);
+        navigate(`${catalogPath}/${item.id}`);
       }
     } catch (error) {
       console.error('Unable to save service catalog item', error);
@@ -920,7 +968,7 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
         setSelectedTaskGroup(null);
         resetForm();
       }
-      if (catalogItemId === item.id) navigate('/company/sales/catalog-items');
+      if (catalogItemId === item.id) navigate(catalogPath);
     } catch (error) {
       console.error('Unable to archive service catalog item', error);
       toast.error(userFacingErrorMessage(error, 'Failed to archive service.'));
@@ -979,11 +1027,43 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
     );
   };
 
+  const renderTaskTemplateSummary = (template, index) => {
+    const title = template.name.trim() || `Task ${index + 1}`;
+    const product = taskTypeRequiresInstallItem(template.type) && findTaskProduct(template, taskProductOptions);
+    const payType = servicePayrollData.payTypes.find((type) => type.id === (template.payTypeId || form.payTypeId));
+
+    return (
+      <div key={template.id} className="flex items-start justify-between gap-3 rounded-md border border-slate-200 bg-white p-3">
+        <div className="min-w-0 space-y-1 break-words text-xs text-slate-600">
+          <p className="text-sm font-semibold text-slate-900">{title}</p>
+          <p>{template.type || 'General'} · {minutesToLabel(template.estimatedMinutes ?? defaultTaskMinutes)}</p>
+          {template.description && <p className="whitespace-pre-wrap">{template.description}</p>}
+          {template.taskGroupName && <p className="font-semibold text-blue-700">{template.taskGroupName}</p>}
+          {product && <p>{product.label} · Qty {template.productQuantity || '1'}</p>}
+          {template.billingLaborPrice && <p>Customer task price {formatCurrency(dollarsToCents(template.billingLaborPrice))}</p>}
+          {template.customerApprovalRequired && <p>Customer approval required</p>}
+          {template.payrollMode === 'automatic' && <p>Technician rate{payType ? ` · ${payType.name}` : ''} · Qty {template.payQuantity ?? 1}</p>}
+          {template.payrollMode === 'custom' && template.manualPayOverrideCents != null && <p>Fixed task pay {formatCurrency(template.manualPayOverrideCents)}</p>}
+          {!['included', 'unpaid'].includes(template.payrollMode) && template.laborCost && <p>Contracted task pay {formatCurrency(dollarsToCents(template.laborCost))}</p>}
+        </div>
+        <button
+          type="button"
+          aria-label={`Edit task ${title}`}
+          title="Edit task"
+          onClick={() => updateFormTask(template.id, (task) => ({ ...task, beforeEdit: task }))}
+          className={editIconClass}
+        >
+          <FaEdit aria-hidden="true" />
+        </button>
+      </div>
+    );
+  };
+
   const renderTaskTemplateEditor = () => (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-semibold text-slate-800">Task Building Blocks</p>
+          <h3 className="text-sm font-semibold text-slate-800">Tasks</h3>
           <p className="mt-1 text-xs text-slate-500">
             These seed job tasks when this service is added to a job or job template.
           </p>
@@ -1010,53 +1090,38 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
 
       {!(form.taskTemplates || []).length ? (
         <div className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-center text-sm text-slate-500">
-          No task building blocks yet.
+          No tasks yet.
         </div>
       ) : (
         <div className="mt-3 space-y-3">
-          {form.taskTemplates.map((template, index) => (
-            <div key={template.id} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Task {index + 1}</span>
-                  {template.taskGroupName && (
-                    <span className="ml-2 text-xs font-semibold text-blue-600">{template.taskGroupName}</span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeTaskTemplate(template.id)}
-                  className="inline-flex min-h-[38px] items-center justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                >
-                  Remove
-                </button>
-              </div>
-              <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)]">
-                <label className="block text-sm font-semibold text-slate-700">
-                  Task Name
-                  <input
-                    type="text"
-                    value={template.name}
-                    onChange={(event) => updateTaskTemplate(template.id, 'name', event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="Clean filter"
+          {form.taskTemplates.map((template, index) => template.beforeEdit === undefined ? renderTaskTemplateSummary(template, index) : (
+            <fieldset key={template.id} aria-label={template.name ? `Edit task ${template.name}` : 'New task'} className="min-w-0 space-y-3 rounded-md border border-slate-200 bg-white p-3">
+              {template.taskGroupName && <p className="text-xs font-semibold text-blue-600">{template.taskGroupName}</p>}
+              <label className="block text-sm font-semibold text-slate-700">
+                Task Name
+                <input
+                  type="text"
+                  value={template.name}
+                  autoFocus
+                  onChange={(event) => updateTaskTemplate(template.id, 'name', event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  placeholder="Clean filter"
+                />
+              </label>
+              <div className="block text-sm font-semibold text-slate-700">
+                Task Type
+                <div className="mt-1 font-normal">
+                  <Select
+                    aria-label="Task Type"
+                    value={taskTypeOptionFor(template.type)}
+                    options={taskTypeOptionsFor(template.type)}
+                    onChange={(option) => updateTaskTemplate(template.id, 'type', option?.value || '')}
+                    isSearchable
+                    placeholder="Select type"
+                    theme={selectTheme}
+                    styles={selectStyles}
+                    menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
                   />
-                </label>
-                <div className="block text-sm font-semibold text-slate-700">
-                  Task Type
-                  <div className="mt-1 font-normal">
-                    <Select
-                      aria-label="Task Type"
-                      value={taskTypeOptionFor(template.type)}
-                      options={taskTypeOptionsFor(template.type)}
-                      onChange={(option) => updateTaskTemplate(template.id, 'type', option?.value || '')}
-                      isSearchable
-                      placeholder="Select type"
-                      theme={selectTheme}
-                      styles={selectStyles}
-                      menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
-                    />
-                  </div>
                 </div>
               </div>
               <label className="block text-sm font-semibold text-slate-700">
@@ -1069,55 +1134,79 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                   placeholder="Spray grids, check grids, reassemble filter"
                 />
               </label>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:items-end">
-                <label className="block text-sm font-semibold text-slate-700">
-                  Estimated Minutes
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={template.estimatedMinutes}
-                    onChange={(event) => updateTaskTemplate(template.id, 'estimatedMinutes', event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
-                <label className="block text-sm font-semibold text-slate-700">
-                  Customer task price
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={template.billingLaborPrice}
-                    onChange={(event) => updateTaskTemplate(template.id, 'billingLaborPrice', event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
-                <div className="col-span-full"><ServiceTaskProductFields task={template} {...productData} onChange={(field, value) => updateTaskTemplate(template.id, field, value)} /></div>
-                <label className="flex min-h-[38px] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(template.customerApprovalRequired)}
-                    onChange={(event) => updateTaskTemplate(template.id, 'customerApprovalRequired', event.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  Customer approval
-                </label>
+              <label className="block text-sm font-semibold text-slate-700">
+                Estimated Minutes
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={template.estimatedMinutes ?? defaultTaskMinutes}
+                  onChange={(event) => updateTaskTemplate(template.id, 'estimatedMinutes', event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+              <ServiceTaskProductFields task={template} {...productData} onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
+              <details className="rounded-md border border-slate-200 px-3 py-2"
+                onInvalid={(event) => { event.currentTarget.open = true; }}>
+                <summary aria-label="Advanced task settings" className="cursor-pointer py-1 text-sm font-semibold text-slate-700">Advanced</summary>
+                <div className="mt-3 space-y-3">
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Customer task price
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={template.billingLaborPrice}
+                      onChange={(event) => updateTaskTemplate(template.id, 'billingLaborPrice', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </label>
+                  <label className="flex min-h-[38px] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(template.customerApprovalRequired)}
+                      onChange={(event) => updateTaskTemplate(template.id, 'customerApprovalRequired', event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Customer approval
+                  </label>
+                  <JobPayrollFields value={taskWithEstimatedMinutes(template)} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={form.unitAmount}
+                    singleColumn
+                    inheritedPayTypeId={form.payTypeId}
+                    taskCostField={<label className="block text-sm font-semibold text-slate-700">
+                      Contracted task pay
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={template.laborCost}
+                        onChange={(event) => updateTaskTemplate(template.id, 'laborCost', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </label>}
+                    onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
+                </div>
+              </details>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => removeTaskTemplate(template.id)}
+                  className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
+                >
+                  Remove Task
+                </button>
+                <button
+                  type="button"
+                  onClick={() => cancelTaskEdit(template)}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button type="button" onClick={(event) => finishTaskEdit(event, template)} className={primaryButtonClass}>
+                  Save Task
+                </button>
               </div>
-              <JobPayrollFields value={template} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={form.unitAmount}
-                inheritedPayTypeId={form.payTypeId}
-                taskCostField={<label className="block text-sm font-semibold text-slate-700">
-                  Contracted task pay
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={template.laborCost}
-                    onChange={(event) => updateTaskTemplate(template.id, 'laborCost', event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>}
-                onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
-            </div>
+            </fieldset>
           ))}
         </div>
       )}
@@ -1193,6 +1282,13 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
   const renderCatalogFormModal = () => {
     if (!formModalOpen) return null;
     const editingItem = catalogItems.find((item) => item.id === editingItemId) || editorItem;
+    const canEditInternalCost = form.sourceType === SalesCatalogSourceType.manual;
+    const isPayTypeSource = form.sourceType === SalesCatalogSourceType.serviceStopType;
+    const showPrimaryPayType = isPayTypeSource || Boolean(form.payTypeId);
+    const payTypeField = (
+      <ServicePayTypeField value={form.payTypeId} payTypes={servicePayrollData.payTypes} loading={servicePayrollData.loading}
+        onChange={handleServicePayTypeChange} showHelp={false} />
+    );
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
@@ -1318,23 +1414,11 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                     />
                   </div>
                 </div>
-
+                {renderTaskTemplateEditor()}
               </div>
 
               <div className="space-y-4">
-                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.taxable}
-                    onChange={(event) => handleFieldChange('taxable', event.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  Taxable
-                </label>
-
-                <details>
-                  <summary className="cursor-pointer text-sm font-semibold text-slate-700">Catalog source (optional)</summary>
-                <div className="mt-3">
+                <div>
                   <label htmlFor="sourceType" className="block text-sm font-semibold text-slate-700">
                     Source Type
                   </label>
@@ -1350,87 +1434,112 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                   </select>
                 </div>
 
-                {currentSourceConfig && form.sourceType !== SalesCatalogSourceType.serviceStopType && (
-                  <div>
-                    <label htmlFor="sourcePicker" className="block text-sm font-semibold text-slate-700">
-                      {currentSourceConfig.label}
-                    </label>
-                    <select
-                      id="sourcePicker"
-                      value={form.sourceId}
-                      onChange={(event) => handleSourceSelection(event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                      <option value="">
-                        {currentSourceOptions.length
-                          ? `Select ${currentSourceConfig.label}`
-                          : `No ${currentSourceConfig.label.toLowerCase()} records found`}
-                      </option>
-                      {currentSourceOptions.map((source) => (
-                        <option key={source.id} value={source.id}>
-                          {sourceNameFor(source)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-slate-500">{currentSourceConfig.helper}</p>
-                  </div>
+                {showPrimaryPayType && payTypeField}
+
+                {(canEditInternalCost || isPayTypeSource || form.unitCost) && (
+                  <section aria-label="Service internal cost" className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    {canEditInternalCost ? (
+                      <label className="block text-sm font-semibold text-slate-700">
+                        Internal Cost
+                        <input type="number" min="0" step="0.01" value={form.unitCost}
+                          onChange={(event) => handleFieldChange('unitCost', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900" />
+                      </label>
+                    ) : (
+                      <dl>
+                        <dt className="text-sm font-semibold text-slate-700">Internal Cost</dt>
+                        <dd className="mt-1 text-sm text-slate-900">{form.unitCost ? formatCurrency(dollarsToCents(form.unitCost)) : 'Not set'}</dd>
+                      </dl>
+                    )}
+                  </section>
                 )}
 
-                {form.sourceType === SalesCatalogSourceType.manual && (
-                  <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                    Use a manual source for custom services and package pricing. Technician pay is configured separately below.
-                  </p>
-                )}
-                </details>
+                <details className="rounded-md border border-slate-200 px-3 py-2"
+                  onInvalid={(event) => { event.currentTarget.open = true; }}>
+                  <summary aria-label="Advanced service settings" className="cursor-pointer py-1 text-sm font-semibold text-slate-700">Advanced</summary>
+                  <div className="mt-3 space-y-4">
+                    {currentSourceConfig && !isPayTypeSource && (
+                      <div>
+                        <label htmlFor="sourcePicker" className="block text-sm font-semibold text-slate-700">
+                          {currentSourceConfig.label}
+                        </label>
+                        <select
+                          id="sourcePicker"
+                          value={form.sourceId}
+                          onChange={(event) => handleSourceSelection(event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        >
+                          <option value="">
+                            {currentSourceOptions.length
+                              ? `Select ${currentSourceConfig.label}`
+                              : `No ${currentSourceConfig.label.toLowerCase()} records found`}
+                          </option>
+                          {currentSourceOptions.map((source) => (
+                            <option key={source.id} value={source.id}>
+                              {sourceNameFor(source)}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-xs text-slate-500">{currentSourceConfig.helper}</p>
+                      </div>
+                    )}
 
-                {form.billingBehavior === SalesCatalogBillingBehavior.recurring && (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="recurringInterval" className="block text-sm font-semibold text-slate-700">
-                        Recurs Every
-                      </label>
-                      <select
-                        id="recurringInterval"
-                        value={form.stripeRecurringInterval}
-                        onChange={(event) => handleFieldChange('stripeRecurringInterval', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      >
-                        {recurringIntervalOptions.map((option) => (
-                          <option key={option} value={option}>{labelize(option)}</option>
-                        ))}
-                      </select>
-                    </div>
+                    {!showPrimaryPayType && payTypeField}
 
-                    <div>
-                      <label htmlFor="recurringCount" className="block text-sm font-semibold text-slate-700">
-                        Interval Count
-                      </label>
+                    <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
                       <input
-                        id="recurringCount"
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={form.stripeRecurringIntervalCount}
-                        onChange={(event) => handleFieldChange('stripeRecurringIntervalCount', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        type="checkbox"
+                        checked={form.taxable}
+                        onChange={(event) => handleFieldChange('taxable', event.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                       />
-                    </div>
-                  </div>
-                )}
+                      Taxable
+                    </label>
 
-              <ServicePayTypeField value={form.payTypeId} payTypes={servicePayrollData.payTypes} loading={servicePayrollData.loading}
-                onChange={handleServicePayTypeChange} />
-              <ServicePayrollCostEditor data={servicePayrollData} tasks={form.taskTemplates}
-                onCostChange={(unitCost) => handleFieldChange('unitCost', unitCost)}
-                onUseSuggestedPrice={(cents) => handleFieldChange('unitAmount', (cents / 100).toFixed(2))}
-                inheritedPayTypeId={form.payTypeId}
-                priceInput={form.unitAmount} costInput={form.unitCost}
-                onUseHighCost={(cents) => handleFieldChange('unitCost', (cents / 100).toFixed(2))} />
-                {renderStripeReferencePanel(editingItem)}
+                    {form.billingBehavior === SalesCatalogBillingBehavior.recurring && (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <label htmlFor="recurringInterval" className="block text-sm font-semibold text-slate-700">
+                            Recurs Every
+                          </label>
+                          <select
+                            id="recurringInterval"
+                            value={form.stripeRecurringInterval}
+                            onChange={(event) => handleFieldChange('stripeRecurringInterval', event.target.value)}
+                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          >
+                            {recurringIntervalOptions.map((option) => (
+                              <option key={option} value={option}>{labelize(option)}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label htmlFor="recurringCount" className="block text-sm font-semibold text-slate-700">
+                            Interval Count
+                          </label>
+                          <input
+                            id="recurringCount"
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={form.stripeRecurringIntervalCount}
+                            onChange={(event) => handleFieldChange('stripeRecurringIntervalCount', event.target.value)}
+                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <ServicePriceSuggestion data={servicePayrollData} costInput={form.unitCost}
+                      onApply={(cents) => handleFieldChange('unitAmount', (cents / 100).toFixed(2))} />
+                    <ServicePayrollCostPreview data={servicePayrollData} tasks={form.taskTemplates.map(taskWithEstimatedMinutes)} inheritedPayTypeId={form.payTypeId}
+                      priceInput={form.unitAmount} costInput={form.unitCost}
+                      onUseHighCost={(cents) => handleFieldChange('unitCost', (cents / 100).toFixed(2))} />
+                    {renderStripeReferencePanel(editingItem)}
+                  </div>
+                </details>
               </div>
-            </div>
-            <div className="mt-5">
-              {renderTaskTemplateEditor()}
             </div>
           </div>
 
@@ -1494,9 +1603,9 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
     </section>
   );
 
-  const renderHeader = () => (
+  const renderListHeader = () => (
     <WorkspaceHeader
-      title={catalogItemId && selectedCatalogItem ? selectedCatalogItem.name : 'Service Catalog'}
+      title="Service Catalog"
       eyebrow="Company sales"
       description="Company-owned services for job estimates, service agreements, invoices, Stripe handoff, and technician task planning."
       titleAccessory={
@@ -1511,15 +1620,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
         </FeatureInfoButton>
       }
       actions={<>
-        {catalogItemId && (
-          <Link
-            to="/company/sales/catalog-items"
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-          >
-            <FaArrowLeft className="text-xs" />
-            Service Catalog
-          </Link>
-        )}
         <Link
           to="/company/settings/terms-templates"
           className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
@@ -1529,7 +1629,7 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
         <button
           type="button"
           onClick={openCreateModal}
-          className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+          className={primaryButtonClass}
         >
           <FaPlus className="text-xs" />
           Create Service
@@ -1616,8 +1716,8 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                   <tr key={item.id} className="hover:bg-slate-50/70">
                     <td className="px-5 py-4">
                       <Link
-                        to={`/company/sales/catalog-items/${item.id}`}
-                        className="font-semibold text-slate-900 transition hover:text-blue-700"
+                        to={`${catalogPath}/${item.id}`}
+                        className="font-semibold text-blue-700 hover:underline"
                       >
                         {item.name}
                       </Link>
@@ -1668,21 +1768,15 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
 	                      )}
 	                    </td>
                     <td className="px-5 py-4">
-                      <div className="flex justify-end gap-2">
-                        <Link
-                          to={`/company/sales/catalog-items/${item.id}`}
-                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                        >
-                          <FaEye />
-                          Details
-                        </Link>
+                      <div className="flex justify-end">
                         <button
                           type="button"
+                          aria-label={`Edit ${item.name}`}
+                          title="Edit service"
                           onClick={() => handleEdit(item)}
-                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                          className={editIconClass}
                         >
-                          <FaEdit />
-                          Edit
+                          <FaEdit aria-hidden="true" />
                         </button>
                       </div>
                     </td>
@@ -1694,6 +1788,21 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
         </div>
       )}
     </section>
+  );
+
+  const renderDetailHeader = () => (
+    <WorkspaceHeader
+      title={selectedCatalogItem?.name || 'Service Details'}
+      eyebrow="Service details"
+      description={selectedCatalogItem?.description}
+      backLink={{ to: catalogPath, label: 'Back to Service Catalog' }}
+      actions={selectedCatalogItem && (
+        <button type="button" onClick={() => handleEdit(selectedCatalogItem)} className={primaryButtonClass}>
+          <FaEdit className="text-xs" aria-hidden="true" />
+          Edit Service
+        </button>
+      )}
+    />
   );
 
   const renderDetailView = () => {
@@ -1711,13 +1820,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
           <FaTags className="mx-auto text-3xl text-slate-300" />
           <p className="mt-3 font-semibold text-slate-800">Service not found</p>
           <p className="mt-1 text-sm text-slate-500">It may have been archived or deleted.</p>
-          <Link
-            to="/company/sales/catalog-items"
-            className="mt-4 inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-          >
-            <FaArrowLeft className="text-xs" />
-            Back to Service Catalog
-          </Link>
         </section>
       );
     }
@@ -1728,22 +1830,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
     return (
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Service Detail</p>
-              <h2 className="mt-1 text-xl font-bold text-slate-950">{selectedCatalogItem.name}</h2>
-              <p className="mt-1 max-w-3xl text-sm text-slate-600">{selectedCatalogItem.description || 'No description'}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleEdit(selectedCatalogItem)}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              <FaEdit className="text-xs" />
-              Edit
-            </button>
-          </div>
-
           <div className="grid gap-4 p-5 md:grid-cols-2">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Billing</p>
@@ -1894,9 +1980,18 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-4 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-5">
-        {renderHeader()}
-        {renderStats()}
-        {catalogItemId ? renderDetailView() : renderCatalogList()}
+        {catalogItemId ? (
+          <>
+            {renderDetailHeader()}
+            {renderDetailView()}
+          </>
+        ) : (
+          <>
+            {renderListHeader()}
+            {renderStats()}
+            {renderCatalogList()}
+          </>
+        )}
       </div>
       {renderCatalogFormModal()}
       {renderTaskGroupPickerModal()}

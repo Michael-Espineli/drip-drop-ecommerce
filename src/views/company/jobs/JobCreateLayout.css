@@ -1,0 +1,100 @@
+.job-create-page {
+    min-height: 100vh;
+    padding: 1.5rem clamp(.75rem, 2vw, 2rem);
+    background: var(--color-page-bg);
+    color: var(--color-text);
+}
+
+.job-create-content {
+    max-width: 78rem;
+    margin-inline: auto;
+    container-type: inline-size;
+}
+
+.job-create-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+@container (min-width: 50rem) {
+    .job-create-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(16rem, .4fr);
+    }
+}
+
+.job-create-card {
+    min-width: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--app-card-radius, .5rem);
+    background: var(--color-surface);
+}
+
+.job-create-card .workspace-section-header,
+.job-create-card-body {
+    padding: 1rem;
+}
+
+.job-create-label {
+    display: block;
+    margin-bottom: .375rem;
+    color: var(--color-text-muted);
+    font-size: .875rem;
+    font-weight: 600;
+}
+
+.job-create-content .job-create-field {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: .5rem .75rem;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--app-control-radius, .375rem);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: .875rem;
+}
+
+.job-create-content :is(input, select).job-create-field { height: max(44px, 2.75rem); }
+.job-create-content textarea.job-create-field { min-height: 7rem; }
+
+.job-create-content .job-create-field:focus {
+    border-color: var(--workspace-blue-active);
+    outline: 1px solid var(--workspace-blue-active);
+}
+
+.job-create-content .job-create-field:disabled {
+    background: var(--color-surface-soft);
+    cursor: not-allowed;
+}
+
+.job-create-summary-row {
+    display: flex;
+    justify-content: space-between;
+    gap: .75rem;
+    padding-block: .625rem;
+    border-bottom: 1px solid var(--color-border);
+    font-size: .875rem;
+}
+
+.job-create-summary-row:first-child { padding-top: 0; }
+.job-create-summary-row:last-child { padding-bottom: 0; border-bottom: 0; }
+.job-create-summary-row dt { color: var(--color-text-subtle); }
+.job-create-summary-row dd { min-width: 0; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+
+.job-create-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: .5rem;
+}
+
+.job-create-dialog-header.workspace-header {
+    flex-shrink: 0;
+    border: 0;
+    border-radius: 0;
+}
+
+.job-create-dialog-header .workspace-header-title-row { justify-content: space-between; }

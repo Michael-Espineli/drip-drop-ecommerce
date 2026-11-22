@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createPayrollWorkflow } = require('./payrollWorkflow');
+const { createTechnicianRates } = require('./technicianRates');
+const { selectPayRate } = require('./payrollCalculation');
 
 const { MemoryFirestore } = require('./testSupport/memoryFirestore');
 
@@ -27,6 +29,95 @@ const lines = (db) => [...db.records].filter(([path]) => path.startsWith(payPath
 const active = (db) => lines(db).filter((line) => line.calculationStatus !== "voided");
 const event = (db, path, before, params, eventId = "event") => ({ id: eventId, params,
   data: { before: { exists: Boolean(before), data: () => before, ref: db.doc(path) }, after: db.read(db.doc(path)) } });
+
+test('date-only technician rate saves cover morning visits and same-day corrections', async () => {
+  const ratePath = `${companyPath}/technicianRates/a`;
+  const { db, workflow } = fixture({
+    [companyPath]: { ownerId: 'owner', timeZone: 'America/Los_Angeles' },
+    [stopPath]: { operationStatus: 'Finished', techId: 'a', typeId: 'filter', serviceDate: new Date('2026-11-21T16:00:00Z') },
+    [ratePath]: { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask', rateType: 'flatPerTask',
+      amountCents: 5000, status: 'active', effectiveStartDate: new Date('2026-11-21T20:00:00Z') },
+  });
+  await workflow.reconcileStop('company', 'stop');
+  assert.equal(active(db)[0].calculationStatus, 'needsReview');
+  const save = createTechnicianRates(db, () => new Date('2026-11-21T18:00:00Z'));
+  const update = async (requestId, technicianId, amountCents, existingId) => save({ auth: { uid: 'owner' }, data: {
+    companyId: 'company', requestId, timeZone: 'UTC',
+    rates: [{ existingId, technicianId, amountCents, payTypeId: 'filter', payBasis: 'serviceStopTask',
+      rateType: 'flatPerTask', effectiveStartDay: '2026-11-21' }],
+  } });
+  const before = db.records.get(ratePath);
+  const corrected = await update('correct-morning-rate', 'a', 5500, 'a');
+  assert.deepEqual(await update('correct-morning-rate', 'a', 5500, 'a'), corrected);
+  const correctedPath = `${companyPath}/technicianRates/${corrected.rateIds[0]}`;
+  assert.equal(db.records.get(correctedPath).effectiveStartDate.toISOString(), '2026-11-21T08:00:00.000Z');
+  assert.equal(db.records.get(correctedPath).effectiveEndDate, null);
+  assert.equal(db.records.get(ratePath).effectiveEndDate.toISOString(), '2026-11-21T07:59:59.999Z');
+  assert.equal(db.records.get(ratePath).amountCents, 5000);
+  await workflow.onRateWrite(event(db, ratePath, before, { companyId: 'company', rateId: 'a' }, 'old-rate'));
+  await workflow.onRateWrite(event(db, correctedPath, null, { companyId: 'company', rateId: corrected.rateIds[0] }, 'corrected-rate'));
+  await drain(db, workflow);
+  assert.equal(db.records.get(stopPath).estimatedPayCents, 5500);
+  assert.equal(active(db)[0].totalAmountCents, 5500);
+  const created = await update('new-morning-rate', 'new-tech', 7000);
+  db.set(stopPath, { techId: 'new-tech' }, { merge: true });
+  await workflow.reconcileStop('company', 'stop');
+  assert.equal(active(db)[0].rateId, created.rateIds[0]);
+  assert.equal(db.records.get(stopPath).estimatedPayCents, 7000);
+});
+
+test('matrix edits start on the current company day and preserve later scheduled changes', async () => {
+  const path = `${companyPath}/technicianRates/`;
+  const terms = { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask', rateType: 'flatPerTask' };
+  const clock = new Date('2026-11-21T17:00:00Z');
+  const { db } = fixture({
+    [companyPath]: { ownerId: 'owner', timeZone: 'America/Los_Angeles' },
+    [path + 'a']: { ...terms, amountCents: 5000, status: 'expired', replacedByRateId: 'noon',
+      effectiveStartDate: new Date('2026-11-01T07:00:00Z'), effectiveEndDate: new Date('2026-11-21T19:59:59.999Z') },
+    [path + 'noon']: { ...terms, amountCents: 5500, status: 'scheduled',
+      effectiveStartDate: new Date('2026-11-21T20:00:00Z'), effectiveEndDate: new Date('2026-11-22T07:59:59.999Z') },
+    [path + 'future']: { ...terms, amountCents: 7000, status: 'scheduled',
+      effectiveStartDate: new Date('2026-11-22T08:00:00Z') },
+  });
+  const save = createTechnicianRates(db, () => clock);
+  const request = { auth: { uid: 'owner' }, data: { companyId: 'company', requestId: 'matrix', timeZone: 'Pacific/Kiritimati',
+    rates: [{ ...terms, existingId: 'a', amountCents: 6000, effectiveToday: true }] } };
+  const result = await save(request);
+  assert.deepEqual(await save(request), result);
+  const change = db.records.get(path + result.rateIds[0]);
+  assert.equal(change.status, 'active');
+  assert.equal(change.effectiveStartDate.toISOString(), '2026-11-21T08:00:00.000Z');
+  assert.equal(change.effectiveEndDate.toISOString(), '2026-11-22T07:59:59.999Z');
+  const rates = [...db.records].filter(([key]) => key.startsWith(path)).map(([, rate]) => rate);
+  const amountAt = date => selectPayRate({ companyId: 'company', technicianId: 'a', workTypeId: 'filter', basis: 'serviceStopTask', rates, date }).amountCents;
+  assert.equal(amountAt('2026-11-21T07:59:59.999Z'), 5000);
+  assert.equal(amountAt('2026-11-21T20:00:00Z'), 6000);
+  assert.equal(amountAt('2026-11-22T08:00:00Z'), 7000);
+  await assert.rejects(save({ ...request, data: { ...request.data, requestId: 'stale-matrix' } }), /already changed/);
+});
+
+test('editing a scheduled rate moves its effective date without a gap or two scheduled versions', async () => {
+  const path = `${companyPath}/technicianRates/`;
+  const terms = { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask', rateType: 'flatPerTask' };
+  for (const [chosenDay, cutoff] of [['2026-11-21', '2026-11-21T08:00:00Z'], ['2026-11-24', '2026-11-24T08:00:00Z']]) {
+    const { db } = fixture({
+      [companyPath]: { ownerId: 'owner', timeZone: 'America/Los_Angeles' },
+      [path + 'a']: { ...terms, amountCents: 5000, status: 'expired', replacedByRateId: 'scheduled',
+        effectiveStartDate: new Date('2026-11-01T07:00:00Z'), effectiveEndDate: new Date('2026-11-23T07:59:59.999Z') },
+      [path + 'scheduled']: { ...terms, amountCents: 5500, status: 'scheduled',
+        effectiveStartDate: new Date('2026-11-23T08:00:00Z') },
+    });
+    const save = createTechnicianRates(db, () => new Date('2026-11-21T17:00:00Z'));
+    await save({ auth: { uid: 'owner' }, data: { companyId: 'company', requestId: 'move', rates: [
+      { ...terms, existingId: 'scheduled', amountCents: 6000, effectiveStartDay: chosenDay },
+    ] } });
+    const rates = [...db.records].filter(([key]) => key.startsWith(path)).map(([, rate]) => rate);
+    const amountAt = date => selectPayRate({ companyId: 'company', technicianId: 'a', workTypeId: 'filter', basis: 'serviceStopTask', rates, date }).amountCents;
+    assert.equal(amountAt(new Date(new Date(cutoff).getTime() - 1)), 5000);
+    assert.equal(amountAt(cutoff), 6000);
+    assert.equal(amountAt('2026-11-25T08:00:00Z'), 6000);
+  }
+});
 
 async function drain(db, workflow) {
   for (let i = 0; i < 300; i++) {

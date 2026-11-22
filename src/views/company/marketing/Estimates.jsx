@@ -1,4 +1,5 @@
-import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
+import SalesWorkflowHeader from '../sales/components/SalesWorkflowHeader';
+import { workspaceButtonClass } from '../../../components/workspace/workspaceStyles';
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -590,17 +591,16 @@ function Estimates() {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <WorkspaceHeader
+        <SalesWorkflowHeader
           title="Estimates"
-          eyebrow="Company sales"
-          description="Review one-time job estimates without service agreement or recurring agreement records."
+          description="Review one-time job estimates and track customer approval before invoicing."
           actions={can('622') && (
             <Link
               to="/company/jobs/createNew"
-              className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+              className={workspaceButtonClass()}
             >
-              <FaPlus className="text-xs" />
-              Job Estimate
+              <FaPlus aria-hidden="true" className="text-xs" />
+              New Job Estimate
             </Link>
           )}
         />
@@ -625,6 +625,7 @@ function Estimates() {
               <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="search"
+                aria-label="Search estimates"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 className="w-full rounded-md border border-slate-300 py-2 pl-10 pr-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
@@ -632,6 +633,7 @@ function Estimates() {
               />
             </div>
             <select
+              aria-label="Estimate status"
               value={statusFilter}
               onChange={handleStatusFilterChange}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"

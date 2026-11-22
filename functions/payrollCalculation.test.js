@@ -118,6 +118,32 @@ test('missing pay items, missing workers and missing rates survive as review rec
   assert.deepEqual(calculate({ serviceStop: { ...stop, payrollMode: 'unpaid' }, tasks: [{ ...task, payrollMode: 'included' }] }), []);
 });
 
+test('task pay can use legacy per-task rates saved with the visit basis', () => {
+  const legacyTaskRate = rate('tech-A', 5000, { id: 'legacy-task', payBasis: 'serviceStop' });
+  const visitRate = { ...legacyTaskRate, id: 'visit', rateType: 'flatPerStop', amountCents: 8000 };
+  const exactTaskRate = rate('tech-A', 6000, { id: 'exact-task' });
+  const setup = input({ workTypes: [{ ...type, category: 'serviceCall' }], tasks: [{ ...task, contractedRate: 0 }],
+    settings: { routePaySource: 'completedTasks', taskPaySource: 'technicianRate' } });
+  for (const engine of [server, browser]) for (const mode of ['actual', 'preview']) {
+    const run = rates => engine.calculatePayLines({ ...setup, rates, mode })[0];
+    assert.equal(run([legacyTaskRate, visitRate]).rateId, 'legacy-task');
+    assert.equal(run([legacyTaskRate, exactTaskRate]).rateId, 'exact-task');
+    assert.equal(run([visitRate]).calculationStatus, 'needsReview');
+    assert.equal(run([{ ...legacyTaskRate, isActive: false }]).calculationStatus, 'needsReview');
+  }
+});
+
+test('unscheduled completed tasks use their own work date for rate selection', () => {
+  const previous = rate('tech-A', 5000, { effectiveEndDate: '2026-10-20T23:59:59.999Z', status: 'expired' });
+  const current = rate('tech-A', 7000, { effectiveStartDate: '2026-10-21T00:00:00Z' });
+  const setup = input({ jobTaskSource: true, serviceStop: { id: 'job', jobId: 'job' }, date: '2026-10-23',
+    tasks: [{ ...task, workerId: 'tech-A', completedAt: '2026-10-20T22:00:00Z' }], rates: [current, previous] });
+  for (const engine of [server, browser]) {
+    assert.equal(sum(engine.calculatePayLines(setup)), 5000);
+    assert.equal(sum(engine.calculatePayLines({ ...setup, mode: 'preview' })), 7000);
+  }
+});
+
 test('explicit zero task pay creates no line and does not displace the visit payment', () => {
   const visitType = { ...type, category: 'route', defaultRateType: 'flatPerStop' };
   for (const policy of [{ payrollMode: 'included' }, { payrollMode: 'unpaid' },

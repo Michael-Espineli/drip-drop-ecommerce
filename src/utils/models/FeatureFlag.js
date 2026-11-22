@@ -3,6 +3,7 @@ export const CONFIRM_USER_EMAIL_ON_INVITE_FEATURE_FLAG_ID = 'feature_flag_013';
 export const APP_LIVE_FEATURE_FLAG_ID = 'feature_flag_000';
 export const CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID = 'feature_flag_014';
 export const POOL_EQUIPMENT_SCANNER_FEATURE_FLAG_ID = 'feature_flag_015';
+export const PNL_VIEWER_FEATURE_FLAG_ID = 'feature_flag_016';
 
 export class FeatureFlag {
   constructor({
@@ -50,6 +51,7 @@ export class FeatureFlag {
         13: 'Confirm user email on invite',
         14: 'Customer Area Filtering',
         15: 'Pool Equipment Scanner',
+        16: 'PNL Viewer',
       }[index] || ''
     );
   }
@@ -73,6 +75,7 @@ export class FeatureFlag {
         13: 'When on, invited company users must verify their signup email before selecting and accessing a company.',
         14: 'Enables customer area tags, the desktop area picker, user-level regional customer access, and area-aware customer/work filtering.',
         15: 'Enables the iOS pool equipment scanner for identifying equipment, mapping above-ground pipe pathways, and collecting technician-confirmed learning feedback.',
+        16: 'Shows the PNL Viewer in company Finance when Sales is enabled.',
       }[index] || ''
     );
   }

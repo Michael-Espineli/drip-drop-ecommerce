@@ -1,4 +1,4 @@
-import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
+import SalesWorkflowHeader from './components/SalesWorkflowHeader';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -1729,9 +1729,8 @@ const SalesAgreements = ({
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <WorkspaceHeader
+        <SalesWorkflowHeader
           title={routingQueueOnly ? 'Agreements Needing Routing' : 'Service Agreements'}
-          eyebrow="Company sales"
           description={routingQueueOnly
             ? 'Accepted recurring service agreements that still need a routed recurring stop.'
             : 'Search, review, and send customer service agreement snapshots.'}

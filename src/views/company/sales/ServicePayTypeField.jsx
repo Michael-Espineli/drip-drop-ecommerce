@@ -1,6 +1,6 @@
 import React from "react";
 
-export default function ServicePayTypeField({ value = "", payTypes = [], onChange, loading = false }) {
+export default function ServicePayTypeField({ value = "", payTypes = [], onChange, loading = false, showHelp = true }) {
   const active = payTypes.filter((type) => type.active !== false && type.isActive !== false && !type.archived);
   const selected = payTypes.find((type) => type.id === value);
   return <div>
@@ -12,6 +12,6 @@ export default function ServicePayTypeField({ value = "", payTypes = [], onChang
         {active.map((type) => <option key={type.id} value={type.id}>{type.name || "Pay type"}</option>)}
       </select>
     </label>
-    <p className="mt-1 text-xs font-normal text-slate-500">Sets the service-level technician pay and the default pay type for its tasks. Included tasks do not add a second payment. Apply the estimate below to update internal cost.</p>
+    {showHelp && <p className="mt-1 text-xs font-normal text-slate-500">Sets the service-level technician pay and the default pay type for its tasks. Included tasks do not add a second payment. Apply the estimate below to update internal cost.</p>}
   </div>;
 }

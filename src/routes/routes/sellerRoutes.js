@@ -5,6 +5,7 @@ import {
     FIELD_SERVICE_AGREEMENT_WORKFLOW_PERMISSION_ID,
     SERVICE_AGREEMENTS_PERMISSION_ID,
 } from "../../utils/companyPermissions";
+import { PNL_VIEWER_FEATURE_FLAG_ID } from "../../utils/models/FeatureFlag";
 
 const Home = lazy(() => import("../../views/Home"))
 const ProfilePage = lazy(() => import("../../views/company/ProfilePage"))
@@ -1485,6 +1486,7 @@ export const sellerRoutes = [
         role: 'Company',
         permissionId: '420',
         featureFlagId: 'feature_flag_004',
+        featureFlagIds: [PNL_VIEWER_FEATURE_FLAG_ID],
     }, {
         path: '/company/sales/catalog-items',
         element: <SalesCatalogItems />,
@@ -1497,7 +1499,7 @@ export const sellerRoutes = [
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/invoices',
-        element: <SalesFinanceBoard defaultView="invoices" />,
+        element: <SalesFinanceBoard key="invoices" defaultView="invoices" />,
         role: 'Company',
         featureFlagId: 'feature_flag_004',
     }, {
@@ -1512,12 +1514,12 @@ export const sellerRoutes = [
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/payments',
-        element: <SalesFinanceBoard defaultView="payments" />,
+        element: <SalesFinanceBoard key="payments" defaultView="payments" />,
         role: 'Company',
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/subscriptions',
-        element: <SalesFinanceBoard defaultView="subscriptions" />,
+        element: <SalesFinanceBoard key="subscriptions" defaultView="subscriptions" />,
         role: 'Company',
         featureFlagId: 'feature_flag_004',
     }, {

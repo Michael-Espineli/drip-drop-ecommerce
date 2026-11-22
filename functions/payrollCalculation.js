@@ -41,7 +41,7 @@ const selectPayRate = ({ companyId, technicianId, workTypeId, basis, rates = [],
   const on = dateValue(date) || new Date();
   const candidates = rates.filter((rate) => {
     if (rate.companyId && rate.companyId !== companyId) return false;
-    if (rate.technicianId !== technicianId) return false;
+    if (rate.technicianId !== technicianId || rate.active === false || rate.isActive === false) return false;
     if (["draft", "archived", "inactive", "deleted"].includes(text(rate.status).toLowerCase())) return false;
     const start = dateValue(rate.effectiveStartDate), end = dateValue(rate.effectiveEndDate);
     if (start && start > on || end && end < on) return false;
@@ -55,8 +55,12 @@ const selectPayRate = ({ companyId, technicianId, workTypeId, basis, rates = [],
     || text(a.id).localeCompare(text(b.id)))[0] || null;
 };
 
-const suggestedBasis = (type = {}) => type.defaultRateType === "hourly" ? "technicianHourly"
-  : ["route", "maintenance", "serviceCall", "commercial", "startup", "estimate"].includes(type.category) ? "serviceStop" : "serviceStopTask";
+const suggestedBasis = (type = {}) => {
+  if (type.defaultRateType === "hourly") return "technicianHourly";
+  if (type.defaultRateType === "flatPerTask") return "serviceStopTask";
+  return ["repair", "installation", "cleaning", "drainAndRefill", "extra", "custom"].includes(type.category)
+    ? "serviceStopTask" : "serviceStop";
+};
 
 // A task's own scope wins before inheriting the visit's scope. In particular,
 // one pool task must not multiply its pay by every pool/spa at the location.
@@ -168,9 +172,16 @@ const calculatePayLines = ({ companyId, settings = {}, serviceStop = {}, tasks =
     if (type.isActive === false || type.active === false || type.archived === true) return review("The selected payroll pay item is inactive.");
     const hourly = ["hourlyActualTime", "hourlyEstimatedTime", "hourlyServiceStopDuration"].includes(sourceSetting);
     const basis = hourly || type.defaultRateType === "hourly" ? "technicianHourly" : task ? "serviceStopTask" : "serviceStop";
-    const rateArgs = { companyId, technicianId: workerId, workTypeId: selectedPayId, rates: agreement && acceptedTask ? agreement.rates || rates : rates, date: agreement && acceptedTask ? dateValue(agreement.rateDate || agreement.acceptedAt) || on : on, hourlyFallback: basis === "technicianHourly" };
+    const workDate = mode !== "preview" && jobTaskSource ? dateValue(record.completedAt || record.finishedAt || record.endTime) || on : on;
+    const rateArgs = { companyId, technicianId: workerId, workTypeId: selectedPayId,
+      rates: agreement && acceptedTask ? agreement.rates || rates : rates,
+      date: agreement && acceptedTask ? dateValue(agreement.rateDate || agreement.acceptedAt) || workDate : workDate,
+      hourlyFallback: basis === "technicianHourly" };
     let rate = selectPayRate({ ...rateArgs, basis });
-    if (!rate && !task && ["serviceStop", "serviceStopTask"].includes(basis)) rate = selectPayRate({ ...rateArgs, basis: basis === "serviceStop" ? "serviceStopTask" : "serviceStop" });
+    if (!rate && basis === "serviceStop") rate = selectPayRate({ ...rateArgs, basis: "serviceStopTask" });
+    // Older setup could store a per-task rate under the visit basis.
+    if (!rate && basis === "serviceStopTask") rate = selectPayRate({ ...rateArgs, basis: "serviceStop",
+      rates: rateArgs.rates.filter((candidate) => candidate.rateType === "flatPerTask") });
     const contracted = amount(record.contractedRate);
     const useContract = task && (sourceSetting === "taskContractedRate" || sourceSetting === "taskContractedRateThenTechnicianRate" && contracted > 0
       || sourceSetting === "technicianRateThenTaskContractedRate" && !rate && contracted > 0);

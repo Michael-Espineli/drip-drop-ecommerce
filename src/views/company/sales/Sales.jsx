@@ -19,7 +19,9 @@ import {
   FaTags,
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { db } from '../../../utils/config';
+import { PNL_VIEWER_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
 import {
   SalesAgreementStatus,
   SalesBillingSubscriptionStatus,
@@ -192,7 +194,9 @@ const EmptyState = ({ title, body }) => (
 );
 
 const Sales = () => {
-  const { recentlySelectedCompany, stripeConnectedAccountId } = useContext(Context);
+  const { recentlySelectedCompany, stripeConnectedAccountId, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
+  const { can } = useCompanyPermissions();
+  const showPnlViewer = featureFlagsLoaded && isFeatureEnabled(PNL_VIEWER_FEATURE_FLAG_ID) && can('420');
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState([]);
   const [agreements, setAgreements] = useState([]);
@@ -395,13 +399,15 @@ const Sales = () => {
                 </p>
               </FeatureInfoButton>}
           actions={<div className="flex flex-wrap gap-2">
-            <Link
-              to="/company/sales/pnl-viewer"
-              className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
-            >
-              <FaChartLine className="text-xs" />
-              PNL Viewer
-            </Link>
+            {showPnlViewer && (
+              <Link
+                to="/company/sales/pnl-viewer"
+                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+              >
+                <FaChartLine className="text-xs" />
+                PNL Viewer
+              </Link>
+            )}
             <Link
               to="/company/sales/invoices/new"
               className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"

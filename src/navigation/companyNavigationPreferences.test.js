@@ -34,3 +34,11 @@ test('removes an empty category and restores the original grouping when preferen
     expect(splitSidebarNavigation({ Operations: [item] }, [item.path])).toEqual({ main: {}, allTheRest: [item] });
     expect(splitSidebarNavigation({ Operations: [item] }, [])).toEqual({ main: { Operations: [item] }, allTheRest: [] });
 });
+
+test('keeps the sales workflow together directly above the catalogs and payroll', () => {
+    const financeTitles = getNav('Company').Finance.map((item) => item.title);
+    expect(financeTitles.slice(-8)).toEqual([
+        'Estimates', 'Service Agreements', 'Billing Subscriptions', 'Invoices', 'Payment History',
+        'Product Catalog', 'Service Catalog', 'Payroll',
+    ]);
+});

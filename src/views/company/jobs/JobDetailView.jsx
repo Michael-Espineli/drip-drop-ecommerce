@@ -628,130 +628,6 @@ const JobLineActionMenu = ({
   );
 };
 
-const JobProgressTimeline = ({ steps = [], alternativeBillingStatus = "", responseBillingStatus = "", onStepClick }) => {
-  const safeSteps = steps.filter(Boolean);
-  const lastBillingIndex = safeSteps.reduce((lastIndex, step, index) => (step.billingReached ? index : lastIndex), -1);
-  const lastOperationIndex = safeSteps.reduce((lastIndex, step, index) => (step.operationReached ? index : lastIndex), -1);
-  const progressPercent = (index) => (
-    safeSteps.length > 1 && index > 0
-      ? (index / (safeSteps.length - 1)) * 100
-      : 0
-  );
-  const billingPercent = progressPercent(lastBillingIndex);
-  const operationPercent = progressPercent(lastOperationIndex);
-
-  if (!safeSteps.length) return null;
-
-  return (
-    <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-      <div className="overflow-x-auto pb-1">
-        <div className="relative min-w-[980px] px-10 py-2">
-          <div className="absolute left-14 right-14 top-[50px] h-2 overflow-hidden rounded-full bg-slate-200" aria-hidden="true">
-            <div className="h-1 rounded-full bg-blue-500 transition-all" style={{ width: `${billingPercent}%` }} />
-            <div className="h-1 rounded-full bg-emerald-500 transition-all" style={{ width: `${operationPercent}%` }} />
-          </div>
-          <div
-            className="relative z-10 grid"
-            style={{ gridTemplateColumns: `repeat(${safeSteps.length}, minmax(0, 1fr))` }}
-          >
-            {safeSteps.map((step) => {
-              const billingActive = Boolean(step.billingCurrent);
-              const operationActive = Boolean(step.operationCurrent);
-              const active = billingActive || operationActive;
-              const reached = Boolean(step.billingReached || step.operationReached);
-              const titleParts = [
-                step.billingLabel ? `Billing: ${step.billingLabel}` : "",
-                step.operationLabel ? `Operations: ${step.operationLabel}` : "",
-              ].filter(Boolean);
-
-              return (
-                <button
-                  key={step.id}
-                  type="button"
-                  onClick={() => onStepClick?.(step)}
-                  title={titleParts.join(" / ") || step.label}
-                  className={[
-                    "group flex min-w-0 flex-col items-center gap-2 px-1 text-center transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2",
-                    active ? "text-slate-950" : reached ? "text-slate-700" : "text-slate-400 hover:text-slate-700",
-                  ].join(" ")}
-                  aria-current={active ? "step" : undefined}
-                >
-                  <span className="flex h-8 items-end justify-center">
-                    {step.billingLabel ? (
-                      <span
-                        className={[
-                          "max-w-[100px] truncate rounded-md border px-2 py-1 text-[11px] font-bold",
-                          billingActive
-                            ? "border-blue-300 bg-blue-50 text-blue-800 shadow-sm"
-                            : step.billingReached
-                              ? "border-blue-100 bg-white text-blue-700"
-                              : "border-transparent text-slate-400 group-hover:text-slate-600",
-                        ].join(" ")}
-                      >
-                        {step.billingLabel}
-                      </span>
-                    ) : (
-                      <span className="h-7" aria-hidden="true" />
-                    )}
-                  </span>
-                  <span
-                    className={[
-                      "relative z-10 inline-flex h-6 w-6 shrink-0 overflow-hidden rounded-full border-4 bg-white transition",
-                      active
-                        ? "border-slate-900 shadow-sm ring-4 ring-slate-100"
-                        : reached
-                          ? "border-slate-400 shadow-sm"
-                          : "border-slate-300 group-hover:border-slate-400",
-                    ].join(" ")}
-                  >
-                    <span className={step.billingReached ? "absolute inset-x-0 top-0 h-1/2 bg-blue-500" : "absolute inset-x-0 top-0 h-1/2 bg-white"} aria-hidden="true" />
-                    <span className={step.operationReached ? "absolute inset-x-0 bottom-0 h-1/2 bg-emerald-500" : "absolute inset-x-0 bottom-0 h-1/2 bg-white"} aria-hidden="true" />
-                    <span className="sr-only">{active ? "Current" : reached ? "Reached" : "Pending"}</span>
-                  </span>
-                  <span className="flex h-8 items-start justify-center">
-                    {step.operationLabel ? (
-                      <span
-                        className={[
-                          "max-w-[116px] truncate rounded-md border px-2 py-1 text-[11px] font-bold",
-                          operationActive
-                            ? "border-emerald-300 bg-emerald-50 text-emerald-800 shadow-sm"
-                            : step.operationReached
-                              ? "border-emerald-100 bg-white text-emerald-700"
-                              : "border-transparent text-slate-400 group-hover:text-slate-600",
-                        ].join(" ")}
-                      >
-                        {step.operationLabel}
-                      </span>
-                    ) : (
-                      <span className="h-7" aria-hidden="true" />
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          {(alternativeBillingStatus || responseBillingStatus) && (
-            <div className="mt-2 flex justify-end">
-              <span
-                className={[
-                  "rounded-full border px-3 py-1 text-xs font-bold",
-                  alternativeBillingStatus
-                    ? "border-slate-300 bg-slate-50 text-slate-700"
-                    : "border-amber-200 bg-amber-50 text-amber-800",
-                ].join(" ")}
-              >
-                {alternativeBillingStatus
-                  ? `Billing ending: ${alternativeBillingStatus}`
-                  : `Billing response: ${responseBillingStatus}`}
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-};
-
 const createEmptyShoppingDbItemForm = (vendor = null) => ({
   name: "",
   rate: "",
@@ -17892,127 +17768,12 @@ const JobDetailView = () => {
     (item.installedAt || item.status === SHOPPING_LIST_STATUS.installed) && !item.purchasedItem && !item.purchasedItemId
   );
   const acceptedWorkflowIsReady = Boolean(acceptedPlan) || isJobAcceptedForMaterials();
-  const timelineStatusKey = (value = "") => String(value || "").trim().toLowerCase();
-  const billingStatusKey = timelineStatusKey(job.billingStatus || "Draft");
-  const operationStatusKey = timelineStatusKey(job.operationStatus || "Estimate Pending");
-  const customerResolvedKey = timelineStatusKey(JOB_BILLING_STATUS.customerResolved);
-  const canceledKey = timelineStatusKey(JOB_BILLING_STATUS.canceled);
-  const statusKeyMatches = (keys = [], key = "") => keys.includes(key);
-  const jobLifecycleStatusSteps = [
-    {
-      id: "draft",
-      label: "Draft",
-      billingLabel: "Draft",
-      billingKeys: ["draft"],
-      targetTab: "Planned",
-    },
-    {
-      id: "estimate",
-      label: "Estimate",
-      billingLabel: "Estimate",
-      billingKeys: ["estimate", "sent", "viewed", "revised"],
-      targetTab: "Billing",
-    },
-    {
-      id: "estimate-pending",
-      label: "Estimate Pending",
-      operationLabel: "Estimate Pending",
-      operationKeys: ["estimate pending"],
-      targetTab: "Planned",
-    },
-    {
-      id: "accepted",
-      label: "Accepted",
-      billingLabel: "Accepted",
-      billingKeys: ["accepted"],
-      targetTab: "Billing",
-    },
-    {
-      id: "unscheduled",
-      label: "Unscheduled",
-      operationLabel: "Unscheduled",
-      operationKeys: ["unscheduled"],
-      targetTab: "Actual",
-    },
-    {
-      id: "scheduled",
-      label: "Scheduled",
-      operationLabel: "Scheduled",
-      operationKeys: ["scheduled"],
-      targetTab: "Actual",
-    },
-    {
-      id: "in-progress",
-      label: "In Progress",
-      billingLabel: "In Progress",
-      billingKeys: ["in progress"],
-      operationLabel: "In Progress",
-      operationKeys: ["in progress"],
-      targetTab: "Actual",
-    },
-    {
-      id: "waiting-for-parts",
-      label: "Waiting For Parts",
-      operationLabel: "Waiting For Parts",
-      operationKeys: ["waiting for parts"],
-      targetTab: "Actual",
-    },
-    {
-      id: "finished",
-      label: "Finished",
-      operationLabel: "Finished",
-      operationKeys: ["finished"],
-      targetTab: "Actual",
-    },
-    {
-      id: "invoiced",
-      label: "Invoiced",
-      billingLabel: "Invoiced",
-      billingKeys: ["invoiced"],
-      targetTab: "Billing",
-    },
-    {
-      id: "paid",
-      label: "Paid",
-      billingLabel: "Paid",
-      billingKeys: ["paid"],
-      targetTab: "Billing",
-    },
-  ];
-  const alternativeBillingStatusKeys = new Set(["comped", customerResolvedKey, canceledKey, "expired"]);
-  const responseBillingStatusKeys = new Set(["rejected"]);
-  const fallbackBillingProgressIndex = (() => {
-    if (billingStatusKey === "comped" || billingStatusKey === customerResolvedKey) {
-      return jobLifecycleStatusSteps.findIndex((step) => step.id === "finished");
-    }
-    if (billingStatusKey === "expired" || billingStatusKey === "rejected") {
-      return jobLifecycleStatusSteps.findIndex((step) => step.id === "estimate");
-    }
-    if (billingStatusKey === canceledKey) {
-      return jobLifecycleStatusSteps.findIndex((step) => step.id === "estimate-pending");
-    }
-    return -1;
-  })();
-  const billingCurrentStepIndex = jobLifecycleStatusSteps.findIndex((step) => (
-    statusKeyMatches(step.billingKeys, billingStatusKey)
-  ));
-  const operationCurrentStepIndex = jobLifecycleStatusSteps.findIndex((step) => (
-    statusKeyMatches(step.operationKeys, operationStatusKey)
-  ));
-  const billingProgressIndex = billingCurrentStepIndex >= 0 ? billingCurrentStepIndex : fallbackBillingProgressIndex;
-  const jobProgressSteps = jobLifecycleStatusSteps.map((step, index) => ({
-    ...step,
-    billingCurrent: billingCurrentStepIndex === index,
-    operationCurrent: operationCurrentStepIndex === index,
-    billingReached: Boolean(step.billingLabel && billingProgressIndex >= index),
-    operationReached: Boolean(step.operationLabel && operationCurrentStepIndex >= index),
-  }));
-  const alternativeBillingStatus = alternativeBillingStatusKeys.has(billingStatusKey)
-    ? formatStatusLabel(job.billingStatus)
-    : "";
-  const responseBillingStatus = responseBillingStatusKeys.has(billingStatusKey)
-    ? formatStatusLabel(job.billingStatus)
-    : "";
+  const remainingWork = jobExecutionProgress({
+    tasks: taskList,
+    services: laborLineItems,
+    products: shoppingList,
+    offers: workOffers,
+  });
   const canUpdateJobs = canUpdateCurrentJob;
   const headerActionItems = [
     {
@@ -19994,16 +19755,21 @@ const JobDetailView = () => {
             </div>
           </div>
         </WorkspaceRecordHeader>
-        {(() => { const progress=jobExecutionProgress({tasks:taskList,services:laborLineItems,products:shoppingList,offers:workOffers}); return <section className="mb-4 rounded-lg border border-slate-200 bg-white p-4"><h2 className="font-bold">Remaining Work</h2><p className="mt-1 text-sm">{progress.remainingTasks} tasks · {progress.remainingServices} services · {progress.remainingProductUnits} product units</p><p className="mt-1 text-sm text-slate-600">{progress.stages.unassigned} unassigned · {progress.stages.offered} offered · {progress.stages.acceptedUnscheduled} assigned, unscheduled · {progress.stages.scheduled} scheduled · {progress.stages.blocked} waiting for parts</p></section>; })()}
-
-        {!isInitialShellLoading && (
-          <JobProgressTimeline
-            steps={jobProgressSteps}
-            alternativeBillingStatus={alternativeBillingStatus}
-            responseBillingStatus={responseBillingStatus}
-            onStepClick={(step) => handleJobTabChange(step.targetTab || "Plans")}
-          />
-        )}
+        <section aria-labelledby="job-remaining-work-heading" className="space-y-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 sm:px-4">
+          <div className="flex items-baseline justify-between gap-2 sm:justify-start sm:gap-4">
+            <h2 id="job-remaining-work-heading" className="shrink-0 text-sm font-bold text-slate-900">Remaining Work</h2>
+            <p className="text-xs text-slate-700 sm:text-sm">
+              {remainingWork.remainingTasks} tasks · {remainingWork.remainingServices} services · {remainingWork.remainingProductUnits} product units
+            </p>
+          </div>
+          <ul className="flex divide-x divide-slate-200 text-xs text-slate-600">
+            <li className="min-w-0 break-words pr-2">{remainingWork.stages.unassigned} unassigned</li>
+            <li className="min-w-0 break-words px-2">{remainingWork.stages.offered} offered</li>
+            <li className="min-w-0 break-words px-2">{remainingWork.stages.acceptedUnscheduled} assigned, unscheduled</li>
+            <li className="min-w-0 break-words px-2">{remainingWork.stages.scheduled} scheduled</li>
+            <li className="min-w-0 break-words pl-2">{remainingWork.stages.blocked} waiting for parts</li>
+          </ul>
+        </section>
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <aside className="space-y-4 lg:order-2">
@@ -20317,38 +20083,33 @@ const JobDetailView = () => {
             )}
 
             {activeTab === "Planned" && (
-              <section aria-labelledby="job-plan-selector-heading" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 id="job-plan-selector-heading" className="text-base font-bold text-slate-900">Plans</h3>
-                <p className="mt-1 text-xs text-slate-500">Select a plan to edit, or add another way to resolve this job.</p>
-                <div className="mt-4 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                  <label className="block min-w-0 flex-1 text-sm font-semibold text-slate-700">
-                    Editing plan
-                    <select
-                      value={selectedPlanEditorId}
-                      onChange={(event) => handlePlanEditorSelection(event.target.value)}
-                      disabled={!canBuildJobEstimatePlan || !jobPlans.length || savingPlanEditor || Boolean(loadingPlanEditorId)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      {!jobPlans.length && <option value="">No saved plans</option>}
-                      {jobPlans.map((solution) => {
-                        const tier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
-                        return (
-                          <option key={solution.id} value={solution.id}>
-                            {getJobPlanRecommendationDisplay(tier)} - {getJobPlanDisplayName(solution, "Untitled Plan")}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => openAddPlanModal()}
-                    disabled={!canBuildJobEstimatePlan || savingPlanEditor || Boolean(loadingPlanEditorId)}
-                    className="inline-flex shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Add New Plan
-                  </button>
-                </div>
+              <section aria-labelledby="job-plan-selector-heading" className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm sm:gap-3 sm:px-4">
+                <h3 id="job-plan-selector-heading" className="shrink-0 text-base font-bold text-slate-900">Plans</h3>
+                <select
+                  aria-label="Editing plan"
+                  value={selectedPlanEditorId}
+                  onChange={(event) => handlePlanEditorSelection(event.target.value)}
+                  disabled={!canBuildJobEstimatePlan || !jobPlans.length || savingPlanEditor || Boolean(loadingPlanEditorId)}
+                  className="min-h-[44px] min-w-0 flex-1 truncate rounded-md border border-slate-300 bg-white px-2 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400 sm:min-h-0 sm:px-3"
+                >
+                  {!jobPlans.length && <option value="">No saved plans</option>}
+                  {jobPlans.map((solution) => {
+                    const tier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
+                    return (
+                      <option key={solution.id} value={solution.id}>
+                        {getJobPlanRecommendationDisplay(tier)} - {getJobPlanDisplayName(solution, "Untitled Plan")}
+                      </option>
+                    );
+                  })}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => openAddPlanModal()}
+                  disabled={!canBuildJobEstimatePlan || savingPlanEditor || Boolean(loadingPlanEditorId)}
+                  className="inline-flex min-h-[44px] shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-blue-200 bg-blue-50 px-2 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:px-3"
+                >
+                  Add New Plan
+                </button>
               </section>
             )}
 

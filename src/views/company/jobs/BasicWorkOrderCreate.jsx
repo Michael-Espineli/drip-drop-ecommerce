@@ -1,15 +1,25 @@
 import { remapTemplateMaterialTasks } from "../../../utils/jobTemplateScope";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import { workspaceButtonClass, workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
+import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
 import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
-import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
+import {
+    CalendarDaysIcon, ClipboardDocumentListIcon, CurrencyDollarIcon, DocumentDuplicateIcon,
+    MapPinIcon, PencilSquareIcon, UserCircleIcon, XMarkIcon,
+} from "@heroicons/react/24/outline";
+import {
+    JobCreateActions,
+    JobCreateCard,
+    JobCreateHeader,
+    JobCreateSummaryRow,
+    jobCreateSelectStyles as selectStyles,
+} from "./JobCreateLayout";
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { completeJobLaborLines, jobLaborTotals, visitCustomerPriceCents } from "../../../utils/jobScopePricing";
 import { canUseJobTemplate } from "../../../utils/jobTemplateAvailability";
 import { createJobAtomically } from "../../../utils/createJobAtomically";
 import React, { useContext, useEffect, useMemo, useState, useRef } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
     arrayUnion,
     collection,
@@ -76,21 +86,8 @@ import {
 import { REPAIR_REQUEST_STATUS, getRepairRequestIssuePriority } from "../../../utils/models/RepairRequest";
 import { JOB_BILLING_STATUS, JOB_OPERATION_STATUS } from "../../../utils/jobStatusFilters";
 
-const selectStyles = workspaceSelectStyles({
-    control: (base, state) => ({
-        ...base,
-        minHeight: "42px",
-        borderColor: state.isFocused ? "#2563eb" : "#cbd5e1",
-        borderRadius: "0.5rem",
-        boxShadow: state.isFocused ? "0 0 0 3px rgba(37, 99, 235, 0.12)" : "none",
-        "&:hover": {
-            borderColor: state.isFocused ? "#2563eb" : "#94a3b8",
-        },
-    }),
-    menu: (base) => ({ ...base, zIndex: 40 }),
-});
-
-const inputBase = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100";
+const fieldLabelClasses = "job-create-label";
+const inputBase = "job-create-field";
 
 const moneyFromCents = (value) =>
     new Intl.NumberFormat("en-US", {
@@ -2197,76 +2194,55 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         ? templateDetails.plannedServiceStops[0] : null;
     const firstVisitPay = firstTemplateVisit ? jobPayFields(firstTemplateVisit) : null;
 
+    const title = scheduleLater ? "Create Job" : "Create and Schedule Job";
+    const descriptionText = scheduleLater
+        ? templateRequired ? "Choose a template. You can schedule the first visit after saving." : "Track customer approval and schedule the first visit when ready."
+        : "Choose the job scope, technician, and time for the first visit.";
+    const submitLabel = creating ? (scheduleLater ? "Creating..." : "Scheduling...")
+        : loadingTemplateDetails && !embedded ? "Loading Template..." : scheduleLater ? "Create Job" : "Create and Schedule";
+    const submitDisabled = !permissionsReady || loading || !hasAnyBasicPermission || !canCreate || creating || loadingTemplateDetails;
+
     const renderForm = () => {
-    if (!permissionsReady || loading) {
-        return (
-            <div className={`flex ${embedded ? "min-h-64" : "min-h-screen"} items-center justify-center bg-slate-50 px-4`}>
-                <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 text-sm font-semibold text-slate-700 shadow-sm">
+        if (!permissionsReady || loading) {
+            return (
+                <div role="status" className="job-create-card p-4 text-sm font-semibold text-theme-muted">
                     {scheduleLater ? "Loading job form..." : "Loading job scheduling form..."}
                 </div>
-            </div>
-        );
-    }
+            );
+        }
 
-    if (!hasAnyBasicPermission) {
+        if (!hasAnyBasicPermission) {
+            return (
+                <JobCreateCard title="Permission Required">
+                    <p className="text-sm text-theme-muted">
+                        {scheduleLater ? "Your role needs Create Jobs permission to create work before scheduling." : templateRequired ? "Your role needs permission to create and schedule jobs from a template." : "Your role needs a basic template or custom basic-job permission before you can use this form."}
+                    </p>
+                </JobCreateCard>
+            );
+        }
+
         return (
-            <div className={`mx-auto flex ${embedded ? "min-h-64" : "min-h-screen"} max-w-xl flex-col items-center justify-center bg-slate-50 px-4 text-center`}>
-                <h1 className="text-2xl font-bold text-slate-950">Permission Required</h1>
-                <p className="mt-2 text-sm text-slate-600">
-                    {scheduleLater ? "Your role needs Create Jobs permission to create work before scheduling." : templateRequired ? "Your role needs permission to create and schedule jobs from a template." : "Your role needs a basic template or custom basic-job permission before you can use this form."}
-                </p>
-                {!embedded && <Link to="/company/jobs" className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
-                    Back to Jobs
-                </Link>}
-            </div>
-        );
-    }
-
-    return (
-        <div className={embedded ? "bg-slate-50 p-4 text-slate-950 sm:p-5" : "min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8"}>
-            <div className="mx-auto max-w-6xl space-y-5">
-                {!embedded && <WorkspaceRecordHeader title={scheduleLater ? "Create Job" : "Create and Schedule Job"} eyebrow="Company operations"><div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                        <Link to="/company/jobs" className="text-sm font-semibold text-blue-700 hover:text-blue-900">
-                            Back to Jobs
-                        </Link>
-
-                        <p className="mt-1 text-sm text-slate-500">
-                            {scheduleLater ? "Track customer approval now and schedule the first visit when ready."
-                                : templateRequired ? "Choose a template, assign a technician, and schedule the first visit."
-                                : "Choose a template or custom scope, assign a technician, and schedule the first visit."}
-                        </p>
-                    </div>
-
-                    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-right shadow-sm">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated Price</p>
-                        <p className="mt-1 text-2xl font-bold text-slate-950">{moneyFromCents(generatedPriceCents)}</p>
-                    </div>
-                </div></WorkspaceRecordHeader>}
-
+            <>
                 {requestedTemplateUnavailable && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
                     The requested template is inactive or unavailable to your role. Choose another available template{canUseCustom ? " or create a custom job" : ""}.
                 </p>}
-                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-                    <div className="space-y-5">
-                        {!templateRequired && <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                            <div>
-                                <h2 className="text-base font-semibold text-slate-950">Job Setup</h2>
-                                <p className="mt-1 text-sm text-slate-500">{scheduleLater ? "Choose a template or basic job. The job will be saved as Unscheduled." : "Choose a template or custom scope, then schedule the first visit."}</p>
-                            </div>
-
-                            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="job-create-grid">
+                    <div className="min-w-0 space-y-4">
+                        {!templateRequired && <JobCreateCard title="Job Setup" icon={ClipboardDocumentListIcon}>
+                            <div className="grid grid-cols-2 gap-3">
                                 <button
                                     type="button"
                                     onClick={() => canUseTemplate && setMode("template")}
                                     disabled={!canUseTemplate}
-                                    className={[
-                                        "rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60",
-                                        mode === "template" ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
-                                    ].join(" ")}
+                                    aria-pressed={mode === "template"}
+                                    className={workspaceButtonClass({
+                                        tone: mode === "template" ? "blue" : "slate",
+                                        active: mode === "template",
+                                        className: "!block !p-3 !text-left",
+                                    })}
                                 >
                                     <p className="font-semibold">Template</p>
-                                    <p className="mt-1 text-sm">Use approved scope, tasks, stops, materials, and generated price.</p>
+                                    <p className="mt-1 text-sm font-normal">Use saved scope and pricing.</p>
                                 </button>
                                 <button
                                     type="button"
@@ -2276,43 +2252,43 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                         if (scheduleLater) setSelectedTemplate(null);
                                     }}
                                     disabled={!canUseCustom}
-                                    className={[
-                                        "rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60",
-                                        mode === "custom" ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
-                                    ].join(" ")}
+                                    aria-pressed={mode === "custom"}
+                                    className={workspaceButtonClass({
+                                        tone: mode === "custom" ? "blue" : "slate",
+                                        active: mode === "custom",
+                                        className: "!block !p-3 !text-left",
+                                    })}
                                 >
                                     <p className="font-semibold">{scheduleLater ? "Basic Job" : "Custom"}</p>
-                                    <p className="mt-1 text-sm">{scheduleLater ? "Create one simple job item with a basic price." : "Create one simple job item with a basic price and scheduled visit."}</p>
+                                    <p className="mt-1 text-sm font-normal">Enter the work and price.</p>
                                 </button>
                             </div>
-                        </section>}
+                        </JobCreateCard>}
 
                         {mode === "template" ? (
-                            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <JobCreateCard title="Template" icon={DocumentDuplicateIcon}>
                                 <label className="block" htmlFor="basic-work-order-template">
-                                    <span className="text-sm font-semibold text-slate-700">Job Template (required)</span>
-                                    <div className="mt-2">
-                                        <Select
-                                            inputId="basic-work-order-template"
-                                            required
-                                            value={selectedTemplate}
-                                            options={templateOptions}
-                                            onChange={setSelectedTemplate}
-                                            placeholder="Choose an available job template..."
-                                            styles={selectStyles}
-                                            isLoading={loadingTemplateDetails}
-                                        />
-                                    </div>
+                                    <span className={fieldLabelClasses}>Job Template (required)</span>
+                                    <Select
+                                        inputId="basic-work-order-template"
+                                        required
+                                        value={selectedTemplate}
+                                        options={templateOptions}
+                                        onChange={setSelectedTemplate}
+                                        placeholder="Choose an available job template..."
+                                        styles={selectStyles}
+                                        isLoading={loadingTemplateDetails}
+                                    />
                                 </label>
-	                                {selectedTemplate && (
-	                                    <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
-	                                        <Metric label="Tasks" value={templateDetails.tasks.length} />
-	                                        <Metric label="Stops" value={templateDetails.plannedServiceStops.length || 1} />
-	                                        <Metric label="Service Lines" value={templateDetails.laborLineItems.length} />
-	                                        <Metric label="Products" value={templateDetails.shoppingItems.length} />
-	                                        <Metric label="Price" value={moneyFromCents(templateGeneratedPriceCents)} />
-	                                    </div>
-	                                )}
+                                    {selectedTemplate && (
+                                        <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
+                                            <Metric label="Tasks" value={templateDetails.tasks.length} />
+                                            <Metric label="Stops" value={templateDetails.plannedServiceStops.length || 1} />
+                                            <Metric label="Service Lines" value={templateDetails.laborLineItems.length} />
+                                            <Metric label="Products" value={templateDetails.shoppingItems.length} />
+                                            <Metric label="Price" value={moneyFromCents(templateGeneratedPriceCents)} />
+                                        </div>
+                                    )}
                                     {selectedTemplate && loadingTemplateDetails && (
                                         <p className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
                                             Loading template services, tasks, stops, and materials...
@@ -2444,17 +2420,17 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                             Select default equipment before creating this job.
                                         </p>
                                     )}
-	                                {!selectedTemplate && templateOptions.length === 0 && (
-	                                    <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-	                                        No active templates are marked as technician-enabled yet.
-	                                    </p>
+                                    {!selectedTemplate && templateOptions.length === 0 && (
+                                        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                            No active templates are marked as technician-enabled yet.
+                                        </p>
                                 )}
-                            </section>
+                            </JobCreateCard>
                         ) : (
-                            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <JobCreateCard title="Plan Pricing" icon={CurrencyDollarIcon}>
                                 <div className="grid gap-4 sm:grid-cols-2">
                                     <label className="block">
-                                        <span className="text-sm font-semibold text-slate-700">Estimated Customer Price</span>
+                                        <span className={fieldLabelClasses}>Estimated Customer Price</span>
                                         <input
                                             value={customPrice}
                                             onChange={(event) => setCustomPrice(event.target.value)}
@@ -2465,7 +2441,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                         />
                                     </label>
                                     <label className="block">
-                                        <span className="text-sm font-semibold text-slate-700">Estimated Minutes</span>
+                                        <span className={fieldLabelClasses}>Estimated Minutes</span>
                                         <input
                                             value={customEstimatedMinutes}
                                             onChange={(event) => setCustomEstimatedMinutes(event.target.value)}
@@ -2476,93 +2452,88 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                         />
                                     </label>
                                 </div>
-                            </section>
+                            </JobCreateCard>
                         )}
 
-                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                            <div className="grid gap-4 md:grid-cols-2">
+                        <JobCreateCard title="Customer and Location" icon={MapPinIcon}>
+                            <div className="grid gap-4 sm:grid-cols-2">
                                 <label className="block">
-                                    <span className="text-sm font-semibold text-slate-700">Customer</span>
-                                    <div className="mt-2">
-                                        <Select
-                                            value={selectedCustomer}
-                                            options={customerOptions}
-                                            onChange={(option) => {
-                                                setSelectedCustomer(option);
-                                                setSelectedServiceLocation(null);
-                                                setSelectedBodyOfWater(null);
-                                                setSelectedEquipment(null);
-                                            }}
-                                            placeholder="Choose customer..."
-                                            styles={selectStyles}
-                                        />
-                                    </div>
+                                    <span className={fieldLabelClasses}>Customer</span>
+                                    <Select
+                                        value={selectedCustomer}
+                                        options={customerOptions}
+                                        onChange={(option) => {
+                                            setSelectedCustomer(option);
+                                            setSelectedServiceLocation(null);
+                                            setSelectedBodyOfWater(null);
+                                            setSelectedEquipment(null);
+                                        }}
+                                        placeholder="Choose customer..."
+                                        styles={selectStyles}
+                                    />
                                 </label>
-	                                <label className="block">
-	                                    <span className="text-sm font-semibold text-slate-700">Service Location</span>
-	                                    <div className="mt-2">
-	                                        <Select
-	                                            value={selectedServiceLocation}
-	                                            options={serviceLocationOptions}
-	                                            onChange={(option) => {
-                                                    setSelectedServiceLocation(option);
-                                                    setSelectedBodyOfWater(null);
-                                                    setSelectedEquipment(null);
-                                                }}
-	                                            placeholder="Choose service location..."
-	                                            styles={selectStyles}
-	                                            isDisabled={!selectedCustomer}
-	                                        />
-	                                    </div>
-	                                </label>
-                                    <label className="block">
-                                        <span className="text-sm font-semibold text-slate-700">
-                                            Body Of Water {selectedTemplateRequiresBodyOfWater ? <span className="text-rose-600">*</span> : null}
-                                        </span>
-                                        <div className="mt-2">
-                                            <Select
-                                                value={selectedBodyOfWater}
-                                                options={bodyOfWaterOptions}
-                                                onChange={setSelectedBodyOfWater}
-                                                placeholder="Choose body of water..."
-                                                styles={selectStyles}
-                                                isDisabled={!selectedServiceLocation || loadingLocationAssets}
-                                                isLoading={loadingLocationAssets}
-                                                isClearable={!selectedTemplateRequiresBodyOfWater}
-                                            />
-                                        </div>
-                                    </label>
-                                    <label className="block">
-                                        <span className="text-sm font-semibold text-slate-700">Default Equipment</span>
-                                        <div className="mt-2">
-                                            <Select
-                                                value={selectedEquipment}
-                                                options={equipmentOptions}
-                                                onChange={setSelectedEquipment}
-                                                placeholder="Choose equipment..."
-                                                styles={selectStyles}
-                                                isDisabled={!selectedServiceLocation || loadingLocationAssets}
-                                                isLoading={loadingLocationAssets}
-                                                isClearable
-                                            />
-                                        </div>
-                                    </label>
+                                <label className="block">
+                                    <span className={fieldLabelClasses}>Service Location</span>
+                                    <Select
+                                        value={selectedServiceLocation}
+                                        options={serviceLocationOptions}
+                                        onChange={(option) => {
+                                            setSelectedServiceLocation(option);
+                                            setSelectedBodyOfWater(null);
+                                            setSelectedEquipment(null);
+                                        }}
+                                        placeholder="Choose service location..."
+                                        styles={selectStyles}
+                                        isDisabled={!selectedCustomer}
+                                    />
+                                </label>
+                                <label className="block">
+                                    <span className={fieldLabelClasses}>
+                                        Body Of Water {selectedTemplateRequiresBodyOfWater ? <span className="text-rose-600">*</span> : null}
+                                    </span>
+                                    <Select
+                                        value={selectedBodyOfWater}
+                                        options={bodyOfWaterOptions}
+                                        onChange={setSelectedBodyOfWater}
+                                        placeholder="Choose body of water..."
+                                        styles={selectStyles}
+                                        isDisabled={!selectedServiceLocation || loadingLocationAssets}
+                                        isLoading={loadingLocationAssets}
+                                        isClearable={!selectedTemplateRequiresBodyOfWater}
+                                    />
+                                </label>
+                                <label className="block">
+                                    <span className={fieldLabelClasses}>Default Equipment</span>
+                                    <Select
+                                        value={selectedEquipment}
+                                        options={equipmentOptions}
+                                        onChange={setSelectedEquipment}
+                                        placeholder="Choose equipment..."
+                                        styles={selectStyles}
+                                        isDisabled={!selectedServiceLocation || loadingLocationAssets}
+                                        isLoading={loadingLocationAssets}
+                                        isClearable
+                                    />
+                                </label>
+                            </div>
+                        </JobCreateCard>
+
+                        <JobCreateCard title={scheduleLater ? "Assignment" : "First Visit"} icon={scheduleLater ? UserCircleIcon : CalendarDaysIcon}>
+                            <div className="grid gap-4 sm:grid-cols-2">
                                 {scheduleLater ? <>
                                     <label className="block">
-                                        <span className="text-sm font-semibold text-slate-700">Assigned Admin</span>
-                                        <div className="mt-2">
-                                            <Select
-                                                value={adminOptions.find((admin) => admin.userId === resolvedAdmin?.id || admin.id === resolvedAdmin?.id) || null}
-                                                options={adminOptions}
-                                                onChange={(admin) => setSelectedJobAdminId(admin?.userId || admin?.id || "")}
-                                                placeholder="Choose admin..."
-                                                styles={selectStyles}
-                                            />
-                                        </div>
+                                        <span className={fieldLabelClasses}>Assigned Admin</span>
+                                        <Select
+                                            value={adminOptions.find((admin) => admin.userId === resolvedAdmin?.id || admin.id === resolvedAdmin?.id) || null}
+                                            options={adminOptions}
+                                            onChange={(admin) => setSelectedJobAdminId(admin?.userId || admin?.id || "")}
+                                            placeholder="Choose admin..."
+                                            styles={selectStyles}
+                                        />
                                     </label>
                                     <label className="block">
-                                        <span className="text-sm font-semibold text-slate-700">Billing Status</span>
-                                        <select className={`mt-2 ${inputBase}`} value={jobBillingStatus} onChange={(event) => setJobBillingStatus(event.target.value)}>
+                                        <span className={fieldLabelClasses}>Billing Status</span>
+                                        <select className={inputBase} value={jobBillingStatus} onChange={(event) => setJobBillingStatus(event.target.value)}>
                                             <option value={JOB_BILLING_STATUS.accepted}>Accepted</option>
                                             <option value={JOB_BILLING_STATUS.estimate}>Estimate</option>
                                             <option value={JOB_BILLING_STATUS.draft}>Draft</option>
@@ -2570,9 +2541,8 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                         <p className="mt-1 text-xs text-slate-500">Use Accepted when the customer has approved the work.</p>
                                     </label>
                                 </> : <>
-	                                <label className="block">
-	                                    <span className="text-sm font-semibold text-slate-700">Technician</span>
-	                                    <div className="mt-2">
+                                    <label className="block">
+                                        <span className={fieldLabelClasses}>Technician</span>
                                         <Select
                                             value={selectedAssignee}
                                             options={assigneeOptions}
@@ -2581,116 +2551,103 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                                             styles={selectStyles}
                                             isDisabled={!canAssignForSelectedMode}
                                         />
-                                    </div>
-                                </label>
-                                <label className="block">
-                                    <span className="text-sm font-semibold text-slate-700">Scheduled Time</span>
-                                    <input
-                                        value={scheduledAt}
-                                        onChange={(event) => setScheduledAt(event.target.value)}
-                                        className={`mt-2 ${inputBase}`}
-                                        type="datetime-local"
-                                    />
-                                </label>
+                                    </label>
+                                    <label className="block">
+                                        <span className={fieldLabelClasses}>Scheduled Time</span>
+                                        <input
+                                            value={scheduledAt}
+                                            onChange={(event) => setScheduledAt(event.target.value)}
+                                            className={inputBase}
+                                            type="datetime-local"
+                                        />
+                                    </label>
                                 </>}
                             </div>
+                        </JobCreateCard>
 
-                            <label className="mt-4 block">
-                                <span className="text-sm font-semibold text-slate-700">Work Notes</span>
-                                <textarea
-                                    value={description}
-                                    onChange={(event) => setDescription(event.target.value)}
-                                    className={`mt-2 min-h-28 ${inputBase}`}
-                                    placeholder="What should the technician do?"
-                                />
-                            </label>
-                        </section>
+                        <JobCreateCard title="Scope Notes" icon={PencilSquareIcon}>
+                            <textarea
+                                aria-label="Work Notes"
+                                value={description}
+                                onChange={(event) => setDescription(event.target.value)}
+                                className={inputBase}
+                                placeholder="What should the technician do?"
+                            />
+                        </JobCreateCard>
                     </div>
 
-                    <aside className="space-y-5">
-                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                            <h2 className="text-base font-semibold text-slate-950">Assignment</h2>
-                            <div className="mt-4 space-y-3 text-sm">
-                                    <Detail label="Priority" value={`${newJobIssuePriority} - ${getIssuePriorityLabel(newJobIssuePriority)}`} />
-                                <Detail label="Technician" value={scheduleLater ? "Not assigned" : selectedAssignee?.userName || "Not selected"} />
-                                <Detail label="Assigned Admin" value={resolvedAdmin?.name || "Not assigned"} />
-                                <Detail label="Admin Source" value={resolvedAdmin?.source || "Set a user admin or company default"} />
-                                {scheduleLater ? <>
-                                    <Detail label="Operation Status" value={JOB_OPERATION_STATUS.unscheduled} />
-                                    <Detail label="Billing Status" value={jobBillingStatus} />
-                                </> : <Detail label="Regional Tags" value={selectedAssigneeRegionalTags.join(", ") || "Full access or no tags"} />}
-                            </div>
+                    <aside>
+                        <JobCreateCard title="Job Summary" icon={ClipboardDocumentListIcon}>
+                            <dl>
+                                <JobCreateSummaryRow label="Estimated Price" value={moneyFromCents(generatedPriceCents)} />
+                                <JobCreateSummaryRow label="Priority" value={`${newJobIssuePriority} - ${getIssuePriorityLabel(newJobIssuePriority)}`} />
+                                <JobCreateSummaryRow label="Assigned Admin" value={resolvedAdmin?.name || "Not assigned"} />
+                                <JobCreateSummaryRow label="Admin Source" value={resolvedAdmin?.source || "Set a user admin or company default"} />
+                                {scheduleLater ? (
+                                    <JobCreateSummaryRow label="Operation Status" value={JOB_OPERATION_STATUS.unscheduled} />
+                                ) : (
+                                    <JobCreateSummaryRow label="Regional Tags" value={selectedAssigneeRegionalTags.join(", ") || "Full access or no tags"} />
+                                )}
+                                <JobCreateSummaryRow label="Equipment" value={assignedEquipmentSummary.equipmentNames?.join(", ") || selectedEquipmentName || (selectedTemplateRequiresEquipment ? "Required" : "Not selected")} />
+                                {firstVisitPay?.payrollMode === "custom" && (
+                                    <JobCreateSummaryRow label="First visit fixed pay" value={(firstVisitPay.manualPayOverrideCents ?? -1) < 0
+                                        ? "Custom pay amount required" : moneyFromCents(firstVisitPay.manualPayOverrideCents)} />
+                                )}
+                            </dl>
                             {!resolvedAdmin?.id && (
                                 <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                                     {scheduleLater ? "Choose an assigned admin before creating the job." : "Assign a basic-job admin to this technician or set a company default admin before creating the job."}
                                 </p>
                             )}
-                        </section>
-
-                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                            <h2 className="text-base font-semibold text-slate-950">Summary</h2>
-                            <div className="mt-4 space-y-3 text-sm">
-	                                <Detail label="Mode" value={mode === "template" ? "Template" : scheduleLater ? "Basic Job" : "Custom"} />
-	                                <Detail label="Customer" value={selectedCustomer?.label || "Not selected"} />
-	                                <Detail label="Location" value={selectedServiceLocation?.label || "Not selected"} />
-                                    <Detail label="Body Of Water" value={resolvedJobBodyOfWaterName || (selectedTemplateRequiresBodyOfWater ? "Required" : "Not selected")} />
-                                    <Detail label="Equipment" value={assignedEquipmentSummary.equipmentNames?.join(", ") || selectedEquipmentName || (selectedTemplateRequiresEquipment ? "Required" : "Not selected")} />
-	                                <Detail label="Price" value={moneyFromCents(generatedPriceCents)} />
-                                    {firstVisitPay?.payrollMode === "custom" && (
-                                        <Detail label="First visit fixed pay" value={(firstVisitPay.manualPayOverrideCents ?? -1) < 0
-                                            ? "Custom pay amount required" : moneyFromCents(firstVisitPay.manualPayOverrideCents)} />
-                                    )}
-	                            </div>
-	                            {!embedded && <><button
-	                                type="button"
-	                                onClick={handleCreate}
-	                                disabled={!canCreate || creating || loadingTemplateDetails}
-	                                className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-	                            >
-	                                {creating ? scheduleLater ? "Creating..." : "Scheduling..." : loadingTemplateDetails ? "Loading Template..." : scheduleLater ? "Create Job" : "Create and Schedule"}
-	                            </button>
-                            <Link
-                                to="/company/jobs"
-                                className="mt-2 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-center text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                            >
-                                Cancel
-                            </Link></>}
-                        </section>
+                            {!embedded && (
+                                <div className="mt-4 border-t border-theme pt-4">
+                                    <JobCreateActions label={submitLabel} onSubmit={handleCreate} disabled={submitDisabled} />
+                                </div>
+                            )}
+                        </JobCreateCard>
                     </aside>
                 </div>
-            </div>
-        </div>
-    );
+            </>
+        );
     };
 
-    if (!embedded) return renderForm();
+    if (!embedded) {
+        return (
+            <div className="job-create-page">
+                <div className="job-create-content space-y-4">
+                    <JobCreateHeader title={title} description={descriptionText} />
+                    {renderForm()}
+                </div>
+            </div>
+        );
+    }
 
     return (
-        <Dialog open onClose={() => !creating && onCancel()} className="relative z-50">
+        <Dialog open onClose={() => !creating && onCancel()} className="company-theme relative z-50">
             <div className="fixed inset-0 bg-slate-950/60" aria-hidden="true" />
-            <div className="fixed inset-0 flex items-center justify-center p-4">
-                <DialogPanel className="flex max-h-[calc(100dvh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                    <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-5">
-                        <div>
-                            <DialogTitle className="text-xl font-bold text-slate-950">Create Job</DialogTitle>
-                            <p className="mt-1 text-sm text-slate-500">
-                                {templateRequired ? "Choose a template and schedule the first visit when ready." : "Create a job from a template or a basic job. Schedule the first visit when ready."}
-                            </p>
-                        </div>
-                        <button type="button" aria-label="Close create job" onClick={onCancel} disabled={creating}
-                            className={workspaceButtonClass({ tone: "slate", className: "shrink-0" })}>
-                            <span aria-hidden="true">×</span>
-                        </button>
+            <div className="fixed inset-0 flex items-center justify-center p-3 sm:p-4">
+                <DialogPanel className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-theme bg-surface shadow-lg sm:max-h-[calc(100dvh-2rem)]">
+                    <JobCreateHeader
+                        title={<DialogTitle as="span">{title}</DialogTitle>}
+                        description={descriptionText}
+                        closeAction={
+                            <button type="button" aria-label="Close create job" onClick={onCancel} disabled={creating}
+                                className={workspaceButtonClass({ tone: "slate", className: "shrink-0" })}>
+                                <XMarkIcon className="h-5 w-5" aria-hidden="true" />
+                            </button>
+                        }
+                    />
+                    <div className="min-h-0 overflow-y-auto bg-page p-3 sm:p-4">
+                        <div className="job-create-content space-y-4">{renderForm()}</div>
                     </div>
-                    <div className="min-h-0 overflow-y-auto">{renderForm()}</div>
-                    <div className="flex shrink-0 justify-end gap-3 border-t border-slate-200 p-4">
-                        <button type="button" onClick={onCancel} disabled={creating}
-                            className={workspaceButtonClass({ tone: "slate" })}>Cancel</button>
-                        <button type="button" onClick={handleCreate}
-                            disabled={!permissionsReady || loading || !hasAnyBasicPermission || !canCreate || creating || loadingTemplateDetails}
-                            className={workspaceButtonClass({ tone: "emerald" })}>
-                            {creating ? "Creating..." : "Create Job"}
-                        </button>
+                    <div className="shrink-0 border-t border-theme p-3 sm:p-4">
+                        <JobCreateActions
+                            label={submitLabel}
+                            onSubmit={handleCreate}
+                            disabled={submitDisabled}
+                            onCancel={onCancel}
+                            cancelDisabled={creating}
+                        />
                     </div>
                 </DialogPanel>
             </div>
@@ -2702,13 +2659,6 @@ const Metric = ({ label, value }) => (
     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
         <p className="mt-1 font-bold text-slate-950">{value}</p>
-    </div>
-);
-
-const Detail = ({ label, value }) => (
-    <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 last:border-b-0 last:pb-0">
-        <span className="text-slate-500">{label}</span>
-        <span className="max-w-[190px] text-right font-semibold text-slate-900">{value || "Not set"}</span>
     </div>
 );
 

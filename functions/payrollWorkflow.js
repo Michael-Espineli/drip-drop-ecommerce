@@ -229,14 +229,16 @@ function createPayrollWorkflow(db, options = {}) {
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], skippedHistoricalWork: true };
       }
       const tasksSnap = await transaction.get(jobRef.collection("tasks"));
-      if (!matchesScopes(job, rows(tasksSnap), scopes)) return { skippedUnchangedScope: true };
+      const jobTasks = rows(tasksSnap).filter(task => !id(task.serviceStopId));
+      // Unscheduled tasks can have different work dates from the job itself.
+      if (!matchesScopes({ ...job, serviceDate: null }, jobTasks, scopes)) return { skippedUnchangedScope: true };
       const ctx = await context(transaction, companyRef, loadBatchContext ? await loadBatchContext() : null);
       if (ctx.settings.payrollEnabled === false || ctx.settings.companyPayrollEnabled === false || ctx.settings.payrollDisabled === true) {
         if (job) saveSummary(transaction, jobRef, job, { payrollReconcileStatus: "disabled" });
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], payrollDisabled: true };
       }
       const agreementCache = new Map();
-      const tasks = await Promise.all(rows(tasksSnap).filter(task => !id(task.serviceStopId)).map(task => acceptedAgreement(transaction, companyRef, task, agreementCache, "job", jobId)));
+      const tasks = await Promise.all(jobTasks.map(task => acceptedAgreement(transaction, companyRef, task, agreementCache, "job", jobId)));
       const bodyOfWaterIdsByServiceLocation = await loadPayrollBodyOfWaterScope(transaction, companyRef, [job, ...tasks], ctx.rates);
       const offerPaySnaps = await Promise.all([...agreementCache.keys()].map(value=>transaction.get(companyRef.collection("technicianPayLineItems").where("workOfferId","==",value))));
       const generated = job ? calculatePayLines({ ...ctx, companyId, bodyOfWaterIdsByServiceLocation, jobTaskSource: true, payHistory:offerPaySnaps.flatMap(rows),

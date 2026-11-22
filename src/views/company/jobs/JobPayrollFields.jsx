@@ -29,7 +29,7 @@ const payItemDetails = (item) => {
   return { group, category: categoryDetail, rateLabel, label: item.name || item.label || item.id };
 };
 
-export default function JobPayrollFields({ value = {}, onChange, payTypes = [], inheritedPayTypeId = "", showPayType = true, previewData, previewPrice = "", scope = "task", taskCostField }) {
+export default function JobPayrollFields({ value = {}, onChange, payTypes = [], inheritedPayTypeId = "", showPayType = true, previewData, previewPrice = "", scope = "task", taskCostField, singleColumn = false }) {
   const payItemDetailsId = useId();
   const mode = value.payrollMode || (value.manualPayOverrideCents !== undefined && value.manualPayOverrideCents !== null ? "custom" : "automatic");
   const isTask = scope === "task";
@@ -52,7 +52,7 @@ export default function JobPayrollFields({ value = {}, onChange, payTypes = [], 
   return (
     <div className="space-y-2 rounded-md border border-blue-100 bg-blue-50/40 p-3 text-sm normal-case tracking-normal">
       <p className="font-semibold text-slate-800">{isTask ? "Technician pay" : "Service stop pay"}</p>
-      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+      <div className={`grid min-w-0 gap-3 ${singleColumn ? "" : "sm:grid-cols-2"}`}>
         {isTask && <label className="min-w-0 font-semibold text-slate-700">
           Task pay
           <select value={payable ? "additional" : "none"} onChange={(event) => {

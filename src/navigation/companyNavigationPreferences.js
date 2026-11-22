@@ -16,13 +16,15 @@ export const normalizeNavigationOrder = (savedOrder) => [...new Set([
 export const normalizeBookmarkPaths = (paths) => normalizePaths(paths, bookmarkPaths);
 export const normalizeAllTheRestPaths = (paths) => normalizePaths(paths, companyPaths);
 
-export const getCompanyNavigationCandidates = ({ companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled }) => (
-    companyItems.filter((item) => {
-        const permissions = [item.permissionId, ...(item.permissionIds || [])].filter(Boolean);
-        const featureFlags = [item.featureFlagId, ...(item.featureFlagIds || [])].filter(Boolean);
-        return (permissions.length === 0 || companyRoleLoading || permissions.some((id) => hasCompanyPermission(id))) &&
-            (featureFlags.length === 0 || (featureFlagsLoaded && featureFlags.every((id) => isFeatureEnabled(id))));
-    })
+export const canShowCompanyNavigationItem = (item, { companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled }) => {
+    const permissions = [item.permissionId, ...(item.permissionIds || [])].filter(Boolean);
+    const featureFlags = [item.featureFlagId, ...(item.featureFlagIds || [])].filter(Boolean);
+    return (permissions.length === 0 || companyRoleLoading || permissions.some((id) => hasCompanyPermission(id))) &&
+        (featureFlags.length === 0 || (featureFlagsLoaded && featureFlags.every((id) => isFeatureEnabled(id))));
+};
+
+export const getCompanyNavigationCandidates = (access) => (
+    companyItems.filter((item) => canShowCompanyNavigationItem(item, access))
 );
 
 // Work only with already permission/feature-filtered items. Preferences never grant access.

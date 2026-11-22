@@ -52,7 +52,15 @@ import {
     OFFERED_WORK_PERMISSION_ID,
     SERVICE_AGREEMENTS_PERMISSION_ID,
 } from "../utils/companyPermissions";
+import { PNL_VIEWER_FEATURE_FLAG_ID } from "../utils/models/FeatureFlag";
 
+export const companyBillingNav = [
+    { id: 66, title: 'Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/estimates', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
+    { id: 69, title: 'Service Agreements', icon: <FaFileContract />, role: 'Company', path: '/company/sales/agreements', category: 'Finance', permissionIds: ['400', SERVICE_AGREEMENTS_PERMISSION_ID], featureFlagId: 'feature_flag_004' },
+    { id: 72, title: 'Billing Subscriptions', icon: <FaCreditCard />, role: 'Company', path: '/company/sales/subscriptions', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
+    { id: 70, title: 'Invoices', icon: <MdReceiptLong />, role: 'Company', path: '/company/sales/invoices', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
+    { id: 71, title: 'Payment History', icon: <MdOutlinePayments />, role: 'Company', path: '/company/sales/payments', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
+];
 
 export const allNav = [
     // --- Admin Routes ---
@@ -92,15 +100,11 @@ export const allNav = [
 
     // Finance
     { id: 62, title: 'Sales Dashboard', icon: <FaFileInvoiceDollar />, role: 'Company', path: '/company/sales', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
-    { id: 124, title: 'PNL Viewer', icon: <MdOutlineCalculate />, role: 'Company', path: '/company/sales/pnl-viewer', category: 'Finance', permissionId: '420', featureFlagId: 'feature_flag_004' },
+    { id: 124, title: 'PNL Viewer', icon: <MdOutlineCalculate />, role: 'Company', path: '/company/sales/pnl-viewer', category: 'Finance', permissionId: '420', featureFlagId: 'feature_flag_004', featureFlagIds: [PNL_VIEWER_FEATURE_FLAG_ID] },
     { id: 63, title: 'Finished Jobs', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/jobs/billing', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
-    { id: 66, title: 'Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/estimates', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
+    ...companyBillingNav,
     { id: 119, title: 'Product Catalog', icon: <BiCategory />, role: 'Company', path: '/company/product-catalog', category: 'Finance', permissionId: '850' },
     { id: 125, title: 'Service Catalog', icon: <BiCategory />, role: 'Company', path: '/company/sales/catalog-items', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
-    { id: 69, title: 'Service Agreements', icon: <FaFileContract />, role: 'Company', path: '/company/sales/agreements', category: 'Finance', permissionIds: ['400', SERVICE_AGREEMENTS_PERMISSION_ID], featureFlagId: 'feature_flag_004' },
-    { id: 72, title: 'Billing Subscriptions', icon: <FaCreditCard />, role: 'Company', path: '/company/sales/subscriptions', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
-    { id: 70, title: 'Invoices', icon: <MdReceiptLong />, role: 'Company', path: '/company/sales/invoices', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
-    { id: 71, title: 'Payment History', icon: <MdOutlinePayments />, role: 'Company', path: '/company/sales/payments', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 117, title: 'Payroll', icon: <MdPayment />, role: 'Company', path: '/company/payroll', category: 'Finance', permissionId: '420', featureFlagId: 'feature_flag_006' },
 
     // Operations

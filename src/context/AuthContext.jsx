@@ -8,6 +8,7 @@ import { isCompanyAccessInactive } from "../utils/invites";
 import { FIREBASE_NETWORK_FALLBACK_MS, isFirebaseNetworkError } from "../utils/firebaseNetwork";
 import { normalizeCustomerTag } from "../utils/customerTags";
 import { normalizeAccountType } from "../utils/accountTypes";
+import { PNL_VIEWER_FEATURE_FLAG_ID } from "../utils/models/FeatureFlag";
 import {
     isCustomerBillingEnabled,
     isSalesBillingAutomationEnabled,
@@ -454,7 +455,7 @@ export function AuthContext({ children }) {
     }, [companyRole, companyUserAccess, companyOwnerId, user?.uid, companyRoleLoading, companyRoleLoaded]);
 
     const isFeatureEnabled = useCallback((featureFlagId) => {
-        if (featureFlagsOfflineFallback && !featureFlags[featureFlagId]) {
+        if (featureFlagsOfflineFallback && !featureFlags[featureFlagId] && featureFlagId !== PNL_VIEWER_FEATURE_FLAG_ID) {
             return true;
         }
 

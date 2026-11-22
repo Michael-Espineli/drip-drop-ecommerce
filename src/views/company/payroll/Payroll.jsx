@@ -8,7 +8,7 @@ import PayRequestsPanel from './PayRequestsPanel';
 import PayStatementDailySummary from "./PayStatementDailySummary";
 import PayrollStopCompletion from "./PayrollStopCompletion";
 import { buildStatementCandidateGroups, statementPreviewSummary, statementPreviewSummaryState } from "../../../utils/payroll/statementCandidates";
-import { canClearZeroTask } from "../../../utils/payroll/payCalculation";
+import { canClearZeroTask, suggestedBasis } from "../../../utils/payroll/payCalculation";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import usePayrollNotifications from "../../../hooks/usePayrollNotifications";
 import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -285,26 +285,24 @@ const normalizePaySettingsForIos = (settings = {}, companyId = "") => {
   return normalized;
 };
 
-const emptyRateForm = () => ({
+const emptyRateForm = (effectiveStartDate = "") => ({
   technicianId: "",
   workTypeId: "",
-  payBasis: "serviceStop",
-  rateType: "flatPerStop",
+  payBasis: "technicianHourly",
+  rateType: "hourly",
   amount: "",
-  effectiveStartDate: isoDate(new Date()),
-  status: "active",
+  effectiveStartDate,
   reason: "",
 });
 
 
-const payBasisOptions = ["serviceStop", "serviceStopTask", "technicianHourly", "manualAdjustment"];
+const payBasisOptions = ["serviceStop", "serviceStopTask", "technicianHourly"];
 const payModeOptions = ["productionOnly", "hourlyOnly", "hybrid"];
 const routePaySourceOptions = ["serviceStop", "completedTasks", "serviceStopAndCompletedTasks", "hourlyServiceStopDuration", "hourlyTaskActualTime", "none"];
 const taskPaySourceOptions = ["technicianRate", "taskContractedRate", "technicianRateThenTaskContractedRate", "taskContractedRateThenTechnicianRate", "hourlyActualTime", "hourlyEstimatedTime", "none"];
 const hourlyPaySourceOptions = ["workLogs", "activeRouteDuration", "activeRouteLogs", "serviceStopDuration", "taskActualTime", "none"];
 
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
-const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
 
 const payCategoryInfoItems = [
   {
@@ -624,48 +622,34 @@ const centsToInputDollars = (value) => {
   return Number.isFinite(amount) ? String(amount) : "";
 };
 
-const suggestedPayBasisForMatrixWorkType = (workType = {}) => {
-  if (workType.defaultRateType === "hourly") return "technicianHourly";
-
-  switch (workType.category) {
-    case "route":
-    case "maintenance":
-    case "serviceCall":
-    case "commercial":
-    case "startup":
-    case "estimate":
-      return "serviceStop";
-    case "repair":
-    case "installation":
-    case "cleaning":
-    case "drainAndRefill":
-    case "extra":
-    case "custom":
-      return "serviceStopTask";
-    default:
-      return "serviceStop";
+const rateMatrixCellKey = (technicianId, columnId) => `${technicianId || "unknown"}__${columnId || "general"}`;
+const ratePayTypeId = (rate) => rate.payTypeId || rate.payWorkTypeId || rate.workTypeId || "";
+const defaultRateTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
+const makeRateDateFormatter = (timeZone) => {
+  const options = { year: "numeric", month: "2-digit", day: "2-digit" };
+  try {
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: timeZone || defaultRateTimeZone() });
+  } catch {
+    return new Intl.DateTimeFormat("en-US", options);
   }
 };
+const rateDateKey = (formatter, date) => {
+  if (!date || !Number.isFinite(date.getTime())) return "";
+  const parts = Object.fromEntries(formatter.formatToParts(date).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
 
-const rateMatrixCellKey = (technicianId, columnId) => `${technicianId || "unknown"}__${columnId || "general"}`;
-
-const activeRateRank = (rate = {}) => {
+const effectiveRateStatus = (rate, now) => {
   const status = String(rate.status || "active").toLowerCase();
-  if (status === "active") return 0;
-  if (status === "scheduled") return 1;
-  if (status === "draft") return 2;
-  if (status === "expired") return 3;
-  if (status === "archived") return 4;
-  return 5;
+  if (["draft", "archived", "inactive", "deleted"].includes(status)) return status;
+  if (rate.active === false || rate.isActive === false) return "inactive";
+  const start = dateFromValue(rate.effectiveStartDate);
+  const end = dateFromValue(rate.effectiveEndDate);
+  if ((end && (end < now || (start && end < start))) || (status === "expired" && !end)) return "expired";
+  return start && start > now ? "scheduled" : "active";
 };
 
-const compareTechnicianRates = (left = {}, right = {}) => {
-  const statusDiff = activeRateRank(left) - activeRateRank(right);
-  if (statusDiff !== 0) return statusDiff;
-  return (dateFromValue(right.effectiveStartDate)?.getTime() || 0) - (dateFromValue(left.effectiveStartDate)?.getTime() || 0);
-};
-
-const sortedTechnicianRates = (rates = []) => [...rates].sort(compareTechnicianRates);
+const rateStartMillis = (rate) => dateFromValue(rate.effectiveStartDate)?.getTime() || 0;
 
 const displayWorkTitle = (item) => {
   if (item?.source === "workOfferIncentive") {
@@ -1111,6 +1095,13 @@ const Payroll = ({ mode = "payroll" }) => {
   const [workTypeMappings, setWorkTypeMappings] = useState([]);
   const [companyUsers, setCompanyUsers] = useState([]);
   const [technicianRates, setTechnicianRates] = useState([]);
+  const [companyRateTimeZone, setCompanyRateTimeZone] = useState("");
+  const rateDateFormatter = useMemo(() => makeRateDateFormatter(companyRateTimeZone), [companyRateTimeZone]);
+  const [advancedRatesOpen, setAdvancedRatesOpen] = useState(false);
+  const [rateFeedback, setRateFeedback] = useState(null);
+  const advancedRateAmountRef = useRef(null);
+  const rateCompanyRef = useRef(recentlySelectedCompany);
+  rateCompanyRef.current = recentlySelectedCompany;
   const [rateForm, setRateForm] = useState(emptyRateForm);
   const [workTypeForm, setWorkTypeForm] = useState(emptyWorkTypeForm);
   const [serviceStopTypeForm, setServiceStopTypeForm] = useState(emptyServiceStopTypeForm);
@@ -1165,6 +1156,17 @@ const Payroll = ({ mode = "payroll" }) => {
   const [hiddenRateMatrixBucketIds, setHiddenRateMatrixBucketIds] = useState([]);
   const [rateMatrixTechnicianFilterIds, setRateMatrixTechnicianFilterIds] = useState([]);
   const [rateMatrixWorkTypeFilterIds, setRateMatrixWorkTypeFilterIds] = useState([]);
+
+  useEffect(() => {
+    setAdvancedRatesOpen(false);
+    setRateFeedback(null);
+    setRateMatrixEditMode(false);
+    setRateMatrixDrafts({});
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (activeTab !== "rates") setAdvancedRatesOpen(false);
+  }, [activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1324,13 +1326,14 @@ const Payroll = ({ mode = "payroll" }) => {
             isSetupMode || activeTab === "requests" ? getDocs(payTypesRef) : Promise.resolve(emptyCollection),
             getDocs(companyUsersRef),
             isSetupMode ? getDocs(technicianRatesRef) : Promise.resolve(emptyCollection),
+            isSetupMode ? getDoc(doc(db, "companies", recentlySelectedCompany)) : Promise.resolve(emptyDocument),
           ]).catch(err => { payrollCatalogCache.current.delete(catalogKey); throw err; });
           payrollCatalogCache.current.set(catalogKey, catalogs);
         }
         const [
           lineItemsSnap,
           statementsSnap,
-          [settingsSnap, companyWideSettingsSnap, stopPayBucketsSnap, payTypesSnap, companyUsersSnap, technicianRatesSnap],
+          [settingsSnap, companyWideSettingsSnap, stopPayBucketsSnap, payTypesSnap, companyUsersSnap, technicianRatesSnap, companySnap],
         ] = await Promise.all([
           lineItemQueryStatus ? getDocs(lineItemsQuery) : Promise.resolve(emptyCollection),
           !isSetupMode && activeTab === "statements" ? getDocs(query(statementsRef,
@@ -1384,6 +1387,8 @@ const Payroll = ({ mode = "payroll" }) => {
             recentlySelectedCompany
           );
           setSettingsForm(nextPaySettings);
+          const company = companySnap.exists() ? companySnap.data() : {};
+          setCompanyRateTimeZone(company.timeZone || company.timezone || company.timeZoneId || "");
           setCompanyStopPayBuckets(
             stopPayBucketsSnap.docs
               .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
@@ -1410,17 +1415,7 @@ const Payroll = ({ mode = "payroll" }) => {
               companyUsersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
             )
           );
-          setTechnicianRates(
-            technicianRatesSnap.docs
-              .map((docSnap) => {
-                const data = { id: docSnap.id, ...docSnap.data() };
-                return {
-                  ...data,
-                  workTypeId: data.workTypeId || data.payTypeId || "",
-                };
-              })
-              .sort((a, b) => (dateFromValue(b.effectiveStartDate)?.getTime() || 0) - (dateFromValue(a.effectiveStartDate)?.getTime() || 0))
-          );
+          setTechnicianRates(technicianRatesSnap.docs.map((row) => ({ ...row.data(), id: row.id })));
           appliedCatalogKey.current = catalogKey;
         }
       } catch (err) {
@@ -1788,13 +1783,13 @@ const Payroll = ({ mode = "payroll" }) => {
           return {
             id: workType.id,
             label: workType.name || "Pay Type",
-            helper: statusLabel(workType.category || suggestedPayBasisForMatrixWorkType(workType)),
+            helper: statusLabel(workType.category || suggestedBasis(workType)),
             bucketId: bucket.id || "job",
             bucketLabel: bucket.label || "Job",
             bucketHelper: bucket.helper || "",
             bucketSortOrder: Number(bucket.sortOrder ?? 0),
             workTypeId: workType.id,
-            defaultPayBasis: suggestedPayBasisForMatrixWorkType(workType),
+            defaultPayBasis: suggestedBasis(workType),
             defaultRateType: workType.defaultRateType || "flatPerStop",
             isGeneralHourly: false,
           };
@@ -2336,23 +2331,38 @@ const Payroll = ({ mode = "payroll" }) => {
     }
   };
 
-  const editTechnicianRate = (rate) => {
-    setEditingRateId(rate.id);
-    setRateForm({
-      technicianId: rate.technicianId || "",
-      workTypeId: rate.payTypeId || rate.workTypeId || "",
-      payBasis: rate.payBasis || "serviceStop",
-      rateType: rate.rateType || "flatPerStop",
-      amount: String(Number(rate.amountCents || 0) / 100),
-      effectiveStartDate: isoDate(dateFromValue(rate.effectiveStartDate) || new Date()),
-      status: rate.status || "active",
-      reason: rate.reason || "",
-    });
-  };
-
+  const rateStatusTime = new Date();
+  const savingAdvancedRate = savingAction === "save-technician-rate";
   const resetRateForm = () => {
     setEditingRateId("");
-    setRateForm(emptyRateForm());
+    setRateForm(emptyRateForm(rateDateKey(rateDateFormatter, new Date())));
+    setRateFeedback(null);
+  };
+
+  const openAdvancedRates = () => {
+    resetRateForm();
+    setAdvancedRatesOpen(true);
+  };
+
+  const closeAdvancedRates = () => {
+    if (!savingAdvancedRate) setAdvancedRatesOpen(false);
+  };
+
+  const editTechnicianRate = (rate) => {
+    const today = rateDateKey(rateDateFormatter, new Date());
+    const scheduledDay = rateDateKey(rateDateFormatter, dateFromValue(rate.effectiveStartDate));
+    setEditingRateId(rate.id);
+    setRateFeedback(null);
+    setRateForm({
+      technicianId: rate.technicianId || "",
+      workTypeId: ratePayTypeId(rate),
+      payBasis: rate.payBasis || "serviceStop",
+      rateType: rate.rateType || "flatPerStop",
+      amount: centsToInputDollars(rate.amountCents),
+      effectiveStartDate: scheduledDay > today ? scheduledDay : today,
+      reason: rate.reason || "",
+    });
+    advancedRateAmountRef.current?.focus();
   };
 
   const toggleRateMatrixTechnicianFilter = (technicianId) => {
@@ -2382,46 +2392,34 @@ const Payroll = ({ mode = "payroll" }) => {
     setHiddenRateMatrixBucketIds([]);
   };
 
-  const rateForMatrixCell = (technicianId, column) => {
-    const matches = technicianRates.filter((rate) => {
-      if ((rate.technicianId || "") !== technicianId) return false;
-      if (column.isGeneralHourly) {
-        return rate.payBasis === "technicianHourly" && !(rate.payTypeId || rate.workTypeId);
-      }
-      return (rate.payTypeId || rate.workTypeId || "") === column.workTypeId;
-    });
-
-    return sortedTechnicianRates(matches)[0] || null;
-  };
-
   const matrixDraftForCell = (worker, column) => {
-    const rate = rateForMatrixCell(worker.matrixTechnicianId, column);
-    const effectiveStartDate = isoDate(dateFromValue(rate?.effectiveStartDate) || new Date());
-    const amount = rate ? centsToInputDollars(rate.amountCents) : "";
-    const isBaseTechnicianRate = worker.matrixTechnicianId === BASE_TECHNICIAN_RATE_ID;
+    const matches = technicianRates.filter((rate) =>
+      rate.technicianId === worker.matrixTechnicianId &&
+      ratePayTypeId(rate) === column.workTypeId &&
+      (!column.isGeneralHourly || rate.payBasis === "technicianHourly" && rate.rateType === "hourly")
+    );
+    const current = matches.filter((rate) => effectiveRateStatus(rate, rateStatusTime) === "active")
+      .sort((a, b) => Number(b.payBasis === column.defaultPayBasis) - Number(a.payBasis === column.defaultPayBasis) ||
+        rateStartMillis(b) - rateStartMillis(a) || a.id.localeCompare(b.id))[0];
+    const next = matches.filter((rate) => (!current || rate.payBasis === current.payBasis) &&
+      effectiveRateStatus(rate, rateStatusTime) === "scheduled")
+      .sort((a, b) => rateStartMillis(a) - rateStartMillis(b))[0];
+    const terms = current || next;
+    const amount = current ? centsToInputDollars(current.amountCents) : "";
 
     return {
       key: rateMatrixCellKey(worker.matrixTechnicianId, column.id),
-      rateId: rate?.id || "",
+      rateId: current?.id || "",
       technicianId: worker.matrixTechnicianId,
-      technicianName: worker.matrixName,
-      isBaseTechnicianRate,
       workTypeId: column.workTypeId,
-      workTypeName: column.label,
-      payBasis: rate?.payBasis || column.defaultPayBasis,
-      rateType: rate?.rateType || column.defaultRateType,
+      payBasis: terms?.payBasis || column.defaultPayBasis,
+      rateType: terms?.rateType || column.defaultRateType,
       amount,
-      status: rate?.status || "active",
-      effectiveStartDate,
-      reason: rate?.reason || "",
-      ratePlanId: rate?.ratePlanId || (isBaseTechnicianRate ? BASE_TECHNICIAN_RATE_PLAN_ID : "web_matrix_rate_plan"),
-      createdAt: rate?.createdAt || null,
-      createdByUserId: rate?.createdByUserId || "",
-      originalAmountCents: Number(rate?.amountCents || 0),
-      originalRateType: rate?.rateType || column.defaultRateType,
-      originalStatus: rate?.status || "active",
-      originalEffectiveStartDate: effectiveStartDate,
-      originalReason: rate?.reason || "",
+      originalAmount: amount,
+      nextEffectiveDay: next ? rateDateKey(rateDateFormatter, dateFromValue(next.effectiveStartDate)) : "",
+      reason: current?.reason || "",
+      ratePlanId: terms?.ratePlanId || (worker.isRateTemplate ? BASE_TECHNICIAN_RATE_PLAN_ID : "web_matrix_rate_plan"),
+      isBaseTechnicianRate: Boolean(worker.isRateTemplate),
     };
   };
 
@@ -2439,7 +2437,6 @@ const Payroll = ({ mode = "payroll" }) => {
   const startRateMatrixEditMode = () => {
     setRateMatrixDrafts(buildRateMatrixDrafts());
     setRateMatrixEditMode(true);
-    resetRateForm();
   };
 
   const cancelRateMatrixEditMode = () => {
@@ -2457,73 +2454,66 @@ const Payroll = ({ mode = "payroll" }) => {
     }));
   };
 
-  const hasRateMatrixDraftChange = (draft = {}) => {
-    const hasAmount = String(draft.amount || "").trim() !== "";
-    if (!draft.rateId && !hasAmount) return false;
-    return (
-      dollarsToCents(draft.amount) !== Number(draft.originalAmountCents || 0) ||
-      draft.rateType !== draft.originalRateType ||
-      draft.status !== draft.originalStatus ||
-      draft.effectiveStartDate !== draft.originalEffectiveStartDate ||
-      String(draft.reason || "") !== String(draft.originalReason || "")
-    );
+  const persistTechnicianRates = async (rates) => {
+    const companyId = recentlySelectedCompany;
+    await technicianWorkflow("manageTechnicianRates", { companyId, requestId: uuidv4(), timeZone: defaultRateTimeZone(), rates });
+    if (rateCompanyRef.current !== companyId) return "";
+    try {
+      const snapshot = await getDocs(collection(db, "companies", companyId, "technicianRates"));
+      if (rateCompanyRef.current === companyId) {
+        setTechnicianRates(snapshot.docs.map((row) => ({ ...row.data(), id: row.id })));
+      }
+      return "";
+    } catch (err) {
+      if (rateCompanyRef.current !== companyId) return "";
+      const catalogKey = `${companyId}:setup`;
+      payrollCatalogCache.current.delete(catalogKey);
+      if (appliedCatalogKey.current === catalogKey) appliedCatalogKey.current = null;
+      reloadProcessedPayroll();
+      return "Rates saved. Reloading the rate list.";
+    }
   };
 
   const saveRateMatrix = async () => {
-    if (!recentlySelectedCompany) return;
+    if (!recentlySelectedCompany || savingAction) return;
 
-    const draftsToSave = Object.values(rateMatrixDrafts).filter(hasRateMatrixDraftChange);
+    const draftsToSave = Object.values(rateMatrixDrafts).filter((draft) => {
+      if (!draft.amount.trim()) return Boolean(draft.originalAmount);
+      return !draft.originalAmount || dollarsToCents(draft.amount) !== dollarsToCents(draft.originalAmount);
+    });
     if (draftsToSave.length === 0) {
       cancelRateMatrixEditMode();
       setActionNotice("No technician rate changes to save.");
       return;
     }
+    if (draftsToSave.some((draft) => !draft.amount.trim() || !Number.isFinite(Number(draft.amount)) || Number(draft.amount) < 0)) {
+      setActionFailure("Enter a non-negative amount for each edited rate. Enter 0 for an intentional zero rate.");
+      return;
+    }
 
-    const actionKey = "save-rate-matrix";
-    setSavingAction(actionKey);
+    setSavingAction("save-rate-matrix");
     setActionNotice();
 
     try {
-      const batch = writeBatch(db);
-      const now = new Date();
-      const savedRates = draftsToSave.map((draft) => {
-        const rateId = draft.rateId || `comp_tech_rate_${uuidv4()}`;
-        const isBaseTechnicianRate = draft.technicianId === BASE_TECHNICIAN_RATE_ID;
-        const payload = {
-          id: rateId,
-          companyId: recentlySelectedCompany,
-          technicianId: draft.technicianId,
-          technicianName: draft.technicianName || null,
-          payBasis: draft.payBasis || "serviceStop",
-          payTypeId: draft.workTypeId || null,
-          payTypeName: draft.workTypeName || null,
-          amountCents: dollarsToCents(draft.amount),
-          rateType: draft.rateType || "flatPerStop",
-          effectiveStartDate: new Date(`${draft.effectiveStartDate || isoDate(new Date())}T12:00:00`),
-          effectiveEndDate: null,
-          status: draft.status || "active",
-          reason: String(draft.reason || "").trim() || null,
-          ratePlanId: draft.ratePlanId || (isBaseTechnicianRate ? BASE_TECHNICIAN_RATE_PLAN_ID : "web_matrix_rate_plan"),
-          isBaseTechnicianRate,
-          rateTemplate: isBaseTechnicianRate ? "baseTechnicianDefaults" : null,
-          createdAt: draft.createdAt || now,
-          createdByUserId: draft.createdByUserId || currentUserId,
-          updatedAt: now,
-          updatedByUserId: currentUserId,
-        };
-
-        return payload;
-      });
-
-      await technicianWorkflow("manageTechnicianRates", { companyId: recentlySelectedCompany, requestId: crypto.randomUUID(), rates: savedRates });
-      const rateSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates"));
-      setTechnicianRates(sortedTechnicianRates(rateSnapshot.docs.map(doc=>({...doc.data(), id:doc.id}))));
-      setRateMatrixEditMode(false);
-      setRateMatrixDrafts({});
-      setActionNotice(`Saved ${savedRates.length} technician rate cell${savedRates.length === 1 ? "" : "s"}.`);
+      const reloadNotice = await persistTechnicianRates(draftsToSave.map(draft => ({
+        existingId: draft.rateId || undefined,
+        technicianId: draft.technicianId,
+        payBasis: draft.payBasis,
+        payTypeId: draft.workTypeId || null,
+        amountCents: dollarsToCents(draft.amount),
+        rateType: draft.rateType,
+        effectiveToday: true,
+        reason: draft.reason,
+        ratePlanId: draft.ratePlanId,
+        isBaseTechnicianRate: draft.isBaseTechnicianRate,
+      })));
+      if (rateCompanyRef.current !== recentlySelectedCompany) return;
+      cancelRateMatrixEditMode();
+      setActionNotice(reloadNotice || `Saved ${draftsToSave.length} technician rate${draftsToSave.length === 1 ? "" : "s"} effective today.`);
     } catch (err) {
-      console.error("Error saving technician rate matrix:", err);
-      setActionFailure("Could not save technician rate matrix.");
+      if (rateCompanyRef.current === recentlySelectedCompany) {
+        setActionFailure(userFacingErrorMessage(err, err.message || "Could not save the technician rate matrix."));
+      }
     } finally {
       setSavingAction("");
     }
@@ -2531,53 +2521,36 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const saveTechnicianRate = async (event) => {
     event.preventDefault();
-    if (!recentlySelectedCompany) return;
-    if (!rateForm.technicianId) {
-      setActionFailure("Select a technician before saving a rate.");
-      return;
-    }
+    if (!recentlySelectedCompany || savingAction) return;
     if (rateForm.payBasis !== "technicianHourly" && !rateForm.workTypeId) {
-      setActionFailure("Select a pay type for non-hourly technician rates.");
+      setRateFeedback({ error: true, message: "Select a pay type for this rate." });
       return;
     }
-
-    const actionKey = "save-technician-rate";
-    setSavingAction(actionKey);
-    setActionNotice();
+    const isBaseTechnicianRate = rateForm.technicianId === BASE_TECHNICIAN_RATE_ID;
+    const existing = technicianRates.find((rate) => rate.id === editingRateId);
+    setSavingAction("save-technician-rate");
+    setRateFeedback(null);
 
     try {
-      const rateId = editingRateId || `comp_tech_rate_${uuidv4()}`;
-      const isBaseTechnicianRate = rateForm.technicianId === BASE_TECHNICIAN_RATE_ID;
-      const payload = {
-        id: rateId,
-        companyId: recentlySelectedCompany,
+      const reloadNotice = await persistTechnicianRates([{
+        existingId: editingRateId || undefined,
         technicianId: rateForm.technicianId,
-        technicianName: isBaseTechnicianRate ? "Base Technician Defaults" : workerName(rateForm.technicianId),
         payBasis: rateForm.payBasis,
-        payTypeId: rateForm.payBasis === "technicianHourly" ? null : rateForm.workTypeId,
-        payTypeName: rateForm.payBasis === "technicianHourly" ? null : workTypeName(rateForm.workTypeId),
+        payTypeId: rateForm.workTypeId || null,
         amountCents: dollarsToCents(rateForm.amount),
         rateType: rateForm.rateType,
-        effectiveStartDate: new Date(`${rateForm.effectiveStartDate || isoDate(new Date())}T12:00:00`),
-        effectiveEndDate: null,
-        status: rateForm.status,
-        reason: rateForm.reason.trim() || null,
-        ratePlanId: technicianRates.find((rate) => rate.id === editingRateId)?.ratePlanId || (isBaseTechnicianRate ? BASE_TECHNICIAN_RATE_PLAN_ID : "web_manual_rate_plan"),
+        effectiveStartDay: rateForm.effectiveStartDate,
+        reason: rateForm.reason.trim(),
+        ratePlanId: existing?.ratePlanId || (isBaseTechnicianRate ? BASE_TECHNICIAN_RATE_PLAN_ID : "web_manual_rate_plan"),
         isBaseTechnicianRate,
-        rateTemplate: isBaseTechnicianRate ? "baseTechnicianDefaults" : null,
-        createdAt: technicianRates.find((rate) => rate.id === editingRateId)?.createdAt || new Date(),
-        createdByUserId: technicianRates.find((rate) => rate.id === editingRateId)?.createdByUserId || currentUserId,
-        updatedAt: new Date(),
-        updatedByUserId: currentUserId,
-      };
-      await technicianWorkflow("manageTechnicianRates", { companyId: recentlySelectedCompany, requestId: crypto.randomUUID(), rates: [payload] });
-      const rateSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates"));
-      setTechnicianRates(sortedTechnicianRates(rateSnapshot.docs.map(doc=>({...doc.data(), id:doc.id}))));
+      }]);
+      if (rateCompanyRef.current !== recentlySelectedCompany) return;
       resetRateForm();
-      setActionNotice("Technician rate saved.");
+      setRateFeedback({ message: reloadNotice || "Technician rate saved." });
     } catch (err) {
-      console.error("Error saving technician rate:", err);
-      setActionFailure("Could not save technician rate.");
+      if (rateCompanyRef.current === recentlySelectedCompany) {
+        setRateFeedback({ error: true, message: userFacingErrorMessage(err, err.message || "Could not save the technician rate.") });
+      }
     } finally {
       setSavingAction("");
     }
@@ -4336,9 +4309,7 @@ const Payroll = ({ mode = "payroll" }) => {
       <div className="flex shrink-0 flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-900">Technician Rates</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            {rateMatrixFullscreen ? "Full-screen matrix view." : "Rate amounts by technician and pay type."}
-          </p>
+          <p className="mt-1 text-sm text-slate-600">Matrix edits take effect today. Use Advanced Rate Rows for a specific date.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -4356,6 +4327,14 @@ const Payroll = ({ mode = "payroll" }) => {
                 {activeRateMatrixFilterCount}
               </span>
             ) : null}
+          </button>
+          <button
+            type="button"
+            onClick={openAdvancedRates}
+            disabled={rateMatrixEditMode || Boolean(savingAction)}
+            className={payrollDetailButton()}
+          >
+            Advanced Rate Rows
           </button>
           <button
             type="button"
@@ -4596,6 +4575,7 @@ const Payroll = ({ mode = "payroll" }) => {
                                 Amount
                                 <input
                                   type="number"
+                                  min="0"
                                   step="0.01"
                                   value={draft.amount}
                                   onChange={(event) => updateRateMatrixDraft(key, "amount", event.target.value)}
@@ -4609,11 +4589,13 @@ const Payroll = ({ mode = "payroll" }) => {
                               <p className="text-base font-bold text-slate-900">{moneyFromCents(dollarsToCents(draft.amount))}</p>
                               <p className="text-[11px] font-semibold text-slate-600">{statusLabel(draft.rateType)}</p>
                               <p className="text-[11px] text-slate-500">{statusLabel(draft.payBasis)}</p>
-                              <StatusPill status={draft.status} />
+                              <StatusPill status="active" />
                             </div>
                           ) : (
-                            <span className="text-xs text-slate-400">No rate</span>
+                            <span className="text-xs text-slate-600">No active rate</span>
                           )}
+                          {!rateMatrixEditMode && draft.nextEffectiveDay &&
+                            <p className="mt-1 text-xs text-slate-600">Scheduled {draft.nextEffectiveDay}</p>}
                         </td>
                       );
                     })
@@ -4625,103 +4607,135 @@ const Payroll = ({ mode = "payroll" }) => {
         </div>
       )}
 
-      {!rateMatrixFullscreen ? <details className="mt-5 rounded-lg border border-slate-200 bg-slate-50">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-800">Advanced Rate Rows</summary>
-        <div className="border-t border-slate-200 bg-white p-4">
-          <form onSubmit={saveTechnicianRate} className="grid gap-4 lg:grid-cols-6">
-            <label className="text-sm font-semibold text-slate-700 lg:col-span-2">
-              Technician
-              <select value={rateForm.technicianId} onChange={(event) => setRateForm((form) => ({ ...form, technicianId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">Select technician</option>
-                <option value={BASE_TECHNICIAN_RATE_ID}>Base Technician Defaults</option>
-                {companyUsers.map((worker) => <option key={worker.id} value={worker.userId || worker.id}>{worker.userName || worker.name || "Technician"}</option>)}
-              </select>
-            </label>
-            <label className="text-sm font-semibold text-slate-700 lg:col-span-2">
-              Pay type
-              <select value={rateForm.workTypeId} onChange={(event) => setRateForm((form) => ({ ...form, workTypeId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">General / hourly</option>
-                {activeCompanyWorkTypes.map((workType) => <option key={workType.id} value={workType.id}>{workType.name}</option>)}
-              </select>
-            </label>
-            <label className="text-sm font-semibold text-slate-700">
-              Pay basis
-              <select value={rateForm.payBasis} onChange={(event) => setRateForm((form) => ({ ...form, payBasis: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                {payBasisOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
-              </select>
-            </label>
-            <label className="text-sm font-semibold text-slate-700">
-              Rate type
-              <select value={rateForm.rateType} onChange={(event) => setRateForm((form) => ({ ...form, rateType: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                {rateTypeOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
-              </select>
-            </label>
-            <label className="text-sm font-semibold text-slate-700">
-              Amount
-              <input type="number" step="0.01" value={rateForm.amount} onChange={(event) => setRateForm((form) => ({ ...form, amount: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-            </label>
-            <label className="text-sm font-semibold text-slate-700">
-              Effective
-              <input type="date" value={rateForm.effectiveStartDate} onChange={(event) => setRateForm((form) => ({ ...form, effectiveStartDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-            </label>
-            <label className="text-sm font-semibold text-slate-700">
-              Status
-              <select value={rateForm.status} onChange={(event) => setRateForm((form) => ({ ...form, status: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                {rateStatusOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
-              </select>
-            </label>
-            <label className="text-sm font-semibold text-slate-700 lg:col-span-3">
-              Notes
-              <input type="text" value={rateForm.reason} onChange={(event) => setRateForm((form) => ({ ...form, reason: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-            </label>
-            <div className="flex items-end gap-2 lg:col-span-2">
-              <button type="submit" disabled={savingAction === "save-technician-rate"} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
-                {savingAction === "save-technician-rate" ? "Saving" : editingRateId ? "Update Rate" : "Add Rate"}
-              </button>
-              {editingRateId ? (
-                <button type="button" onClick={resetRateForm} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                  Cancel
-                </button>
-              ) : null}
-            </div>
-          </form>
-
-          <div className="mt-5 overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-4 py-3">Technician</th>
-                  <th className="px-4 py-3">Pay Type</th>
-                  <th className="px-4 py-3">Basis</th>
-                  <th className="px-4 py-3">Rate</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {technicianRates.length === 0 ? (
-                  <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">No technician rates found.</td></tr>
-                ) : technicianRates.map((rate) => (
-                  <tr key={rate.id}>
-                    <td className="px-4 py-3 font-semibold text-slate-900">{workerName(rate.technicianId)}</td>
-                    <td className="px-4 py-3 text-slate-700">{workTypeName(rate.workTypeId)}</td>
-                    <td className="px-4 py-3 text-slate-600">{statusLabel(rate.payBasis)}</td>
-                    <td className="px-4 py-3 text-slate-700">{moneyFromCents(rate.amountCents)} / {statusLabel(rate.rateType)}</td>
-                    <td className="px-4 py-3"><StatusPill status={rate.status} /></td>
-                    <td className="px-4 py-3 text-right">
-                      <button type="button" onClick={() => editTechnicianRate(rate)} className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </details> : null}
     </section>
   );
+
+  const renderAdvancedRatesDialog = () => {
+    if (!advancedRatesOpen || !isSetupMode || activeTab !== "rates") return null;
+    const activePayTypeIds = new Set(activeCompanyWorkTypes.map((type) => type.id));
+    const rateRows = technicianRates.map((rate) => ({ ...rate, currentStatus: effectiveRateStatus(rate, rateStatusTime) }))
+      .sort((a, b) => Number(b.currentStatus === "active") - Number(a.currentStatus === "active") ||
+        Number(b.currentStatus === "scheduled") - Number(a.currentStatus === "scheduled") ||
+        (a.currentStatus === "scheduled" && b.currentStatus === "scheduled" ? rateStartMillis(a) - rateStartMillis(b) : rateStartMillis(b) - rateStartMillis(a)));
+    const controlClass = "mt-1 block min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100";
+    const hourly = rateForm.payBasis === "technicianHourly";
+
+    return (
+      <Dialog open onClose={closeAdvancedRates} className="relative z-[70]">
+        <div aria-hidden="true" className="fixed inset-0 bg-slate-950/60" />
+        <div className="fixed inset-0 flex items-center justify-center p-3 sm:p-6">
+          <DialogPanel className="company-theme flex max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl sm:max-h-[calc(100dvh-3rem)]">
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-6">
+              <div>
+                <DialogTitle className="text-xl font-bold text-slate-900">Advanced Rate Rows</DialogTitle>
+                <Description className="mt-1 text-sm text-slate-600">Add or edit a dated technician rate and review its history.</Description>
+              </div>
+              <button type="button" onClick={closeAdvancedRates} disabled={savingAdvancedRate} className={payrollDetailButton()}>Close</button>
+            </header>
+            <div className="min-h-0 space-y-5 overflow-y-auto overscroll-contain p-4 sm:px-6">
+              <form onSubmit={saveTechnicianRate} aria-busy={savingAdvancedRate} className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <h3 className="font-bold text-slate-900">{editingRateId ? "Edit rate" : "New rate"}</h3>
+                <fieldset disabled={savingAdvancedRate} className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="text-sm font-semibold text-slate-700">
+                    Technician
+                    <select required disabled={Boolean(editingRateId)} value={rateForm.technicianId} onChange={(event) => setRateForm((form) => ({ ...form, technicianId: event.target.value }))} className={controlClass}>
+                      <option value="">Select technician</option>
+                      <option value={BASE_TECHNICIAN_RATE_ID}>Base Technician Defaults</option>
+                      {companyUsers.map((worker) => <option key={worker.id} value={worker.userId || worker.id}>{workerName(worker.userId || worker.id)}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Pay type
+                    <select disabled={Boolean(editingRateId)} value={rateForm.workTypeId} onChange={(event) => {
+                      const workTypeId = event.target.value;
+                      const type = activeCompanyWorkTypes.find((item) => item.id === workTypeId);
+                      setRateForm((form) => ({
+                        ...form, workTypeId,
+                        payBasis: type ? suggestedBasis(type) : "technicianHourly",
+                        rateType: type ? type.defaultRateType || "flatPerStop" : "hourly",
+                      }));
+                    }} className={controlClass}>
+                      <option value="">General hourly</option>
+                      {activeCompanyWorkTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Pay basis
+                    <select disabled={Boolean(editingRateId) || !rateForm.workTypeId} value={rateForm.payBasis} onChange={(event) => {
+                      const payBasis = event.target.value;
+                      setRateForm((form) => ({
+                        ...form, payBasis,
+                        rateType: payBasis === "technicianHourly" ? "hourly" : form.rateType !== "hourly" ? form.rateType
+                          : payBasis === "serviceStopTask" ? "flatPerTask" : "flatPerStop",
+                      }));
+                    }} className={controlClass}>
+                      {payBasisOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Rate type
+                    <select disabled={hourly} value={rateForm.rateType} onChange={(event) => setRateForm((form) => ({ ...form, rateType: event.target.value }))} className={controlClass}>
+                      {rateTypeOptions.filter((option) => (option === "hourly") === hourly)
+                        .map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Amount
+                    <input ref={advancedRateAmountRef} required type="number" min="0" step="0.01" value={rateForm.amount} onChange={(event) => setRateForm((form) => ({ ...form, amount: event.target.value }))} className={controlClass} />
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Effective date
+                    <input required type="date" value={rateForm.effectiveStartDate} onChange={(event) => setRateForm((form) => ({ ...form, effectiveStartDate: event.target.value }))} className={controlClass} />
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700 sm:col-span-2 lg:col-span-3">
+                    Notes
+                    <input type="text" value={rateForm.reason} onChange={(event) => setRateForm((form) => ({ ...form, reason: event.target.value }))} className={controlClass} />
+                  </label>
+                </fieldset>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="submit" disabled={savingAdvancedRate} className={workspaceButtonClass({ active: true })}>
+                    {savingAdvancedRate ? "Saving…" : editingRateId ? "Update Rate" : "Add Rate"}
+                  </button>
+                  {editingRateId && <button type="button" onClick={resetRateForm} disabled={savingAdvancedRate} className={payrollDetailButton()}>Cancel edit</button>}
+                  <p className="text-xs text-slate-600">Future effective dates are scheduled.</p>
+                </div>
+                {rateFeedback && <p role={rateFeedback.error ? "alert" : "status"} className={rateFeedback.error ? "text-sm text-red-700" : "text-sm text-slate-700"}>{rateFeedback.message}</p>}
+              </form>
+              <section aria-label="Technician rate history" className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full divide-y divide-slate-200 text-left text-sm">
+                  <thead className="bg-slate-50 text-xs font-semibold text-slate-700">
+                    <tr>
+                      {["Technician", "Pay Type", "Basis", "Rate", "Effective date", "Status", "Actions"].map(label => <th key={label} scope="col" className="whitespace-nowrap px-3 py-2">{label}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {rateRows.length === 0 && <tr><td colSpan={7} className="px-3 py-5 text-center text-slate-600">No technician rates found.</td></tr>}
+                    {rateRows.map((rate) => {
+                      const payTypeId = ratePayTypeId(rate);
+                      const payTypeName = payTypeId ? rate.payTypeName || workTypeName(payTypeId) : "General hourly";
+                      const canEdit = ["active", "scheduled"].includes(rate.currentStatus) && payBasisOptions.includes(rate.payBasis) &&
+                        (payTypeId ? activePayTypeIds.has(payTypeId) : rate.payBasis === "technicianHourly");
+                      return (
+                        <tr key={rate.id}>
+                          <td className="px-3 py-2 font-semibold text-slate-900">{workerName(rate.technicianId)}</td>
+                          <td className="px-3 py-2 text-slate-700">{payTypeName}</td>
+                          <td className="px-3 py-2 text-slate-600">{statusLabel(rate.payBasis)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-slate-700">{rate.rateType === "percentage" ? `${Number(rate.amountCents) / 100}%` : moneyFromCents(rate.amountCents)} <span className="block text-xs text-slate-600">{statusLabel(rate.rateType)}</span></td>
+                          <td className="whitespace-nowrap px-3 py-2 text-slate-700">{rateDateKey(rateDateFormatter, dateFromValue(rate.effectiveStartDate)) || "—"}</td>
+                          <td className="px-3 py-2"><StatusPill status={rate.currentStatus} /></td>
+                          <td className="px-3 py-2">{canEdit && <button type="button" onClick={() => editTechnicianRate(rate)} disabled={savingAdvancedRate} aria-label={`Edit ${workerName(rate.technicianId)} ${payTypeName} rate`} className={payrollDetailButton()}>Edit</button>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </section>
+            </div>
+          </DialogPanel>
+        </div>
+      </Dialog>
+    );
+  };
 
   const tabItems = isSetupMode
     ? [
@@ -4854,6 +4868,7 @@ const Payroll = ({ mode = "payroll" }) => {
         {!loading && !error && isSetupMode && activeTab === "settings" ? renderSettings() : null}
       </div>
       {renderStopPayEditorModal()}
+      {renderAdvancedRatesDialog()}
       {renderStatementDetailModal()}
       <PayrollProgressDialog progress={payrollActionProgress} />
       {paymentModal ? (

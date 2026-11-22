@@ -19,6 +19,8 @@ function Probe(){const value=useContext(Context);return <div>
   <span data-testid="access">{String(value.hasCompanyPermission('10'))}</span>
   <span data-testid="account">{value.accountType||'none'}</span>
   <span data-testid="ready">{String(value.companyRoleLoaded)}</span>
+  <span data-testid="sales-enabled">{String(value.isFeatureEnabled('feature_flag_004'))}</span>
+  <span data-testid="pnl-enabled">{String(value.isFeatureEnabled('feature_flag_016'))}</span>
 </div>;}
 const emit=async(path,data)=>{await act(async()=>{await mockListeners.get(path).next(snapshot(path.split('/').pop(),data));});};
 test('role changes apply live and revoked access clears authority, including late role callbacks',async()=>{
@@ -35,4 +37,20 @@ test('role changes apply live and revoked access clears authority, including lat
   await act(async()=>oldRole.next(snapshot('viewer',{name:'Manager',permissionIdList:['10']})));
   expect(screen.getByTestId('access')).toHaveTextContent('false');
   await emit('users/tech',{...mockProfile,accountType:'Admin'});expect(screen.getByTestId('account')).toHaveTextContent('none');
+});
+
+test('a missing flag 16 stays off when the offline fallback enables legacy features', async () => {
+  window.localStorage.removeItem('dripdrop.featureFlags.v1');
+  render(<AuthContext><Probe /></AuthContext>);
+  await act(async () => { await mockAuthCallback(mockUser); });
+  await act(async () => {
+    mockListeners.get('featureFlags').next({ docs: [], metadata: { fromCache: true } });
+  });
+  expect(screen.getByTestId('sales-enabled')).toHaveTextContent('true');
+  expect(screen.getByTestId('pnl-enabled')).toHaveTextContent('false');
+  await act(async () => {
+    mockListeners.get('featureFlags').next({ docs: [snapshot('feature_flag_016', { enabled: true })] });
+  });
+  expect(screen.getByTestId('pnl-enabled')).toHaveTextContent('true');
+  window.localStorage.removeItem('dripdrop.featureFlags.v1');
 });

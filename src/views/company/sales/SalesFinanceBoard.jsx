@@ -1,4 +1,4 @@
-import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
+import SalesWorkflowHeader from './components/SalesWorkflowHeader';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { netPaymentCents, hasPostedPayment, monthlyRecurringCents } from '../../../utils/sales/financialMetrics';
 import PaymentAdjustmentNote from '../../../components/billing/PaymentAdjustmentNote';
@@ -728,9 +728,8 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <WorkspaceHeader
+        <SalesWorkflowHeader
           title={pageMeta.title}
-          eyebrow="Company finance"
           description={`${recentlySelectedCompanyName || 'Selected company'} · ${pageMeta.helper}`}
           backLink={{ to: "/company/sales", label: "Back to Sales Dashboard" }}
           titleAccessory={

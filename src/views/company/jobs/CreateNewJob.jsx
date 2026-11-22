@@ -1,8 +1,18 @@
 import { remapTemplateMaterialTasks } from "../../../utils/jobTemplateScope";
 import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
-import { workspaceSelectStyles } from '../../../components/workspace/workspaceStyles';
-import WorkspaceRecordHeader from '../../../components/workspace/WorkspaceRecordHeader';
+import { workspaceButtonClass } from "../../../components/workspace/workspaceStyles";
+import {
+    CalendarDaysIcon, ClipboardDocumentListIcon, CurrencyDollarIcon, DocumentDuplicateIcon,
+    ListBulletIcon, MapPinIcon, PencilSquareIcon, UserCircleIcon, WrenchScrewdriverIcon,
+} from "@heroicons/react/24/outline";
+import {
+    JobCreateActions,
+    JobCreateCard as SectionCard,
+    JobCreateHeader,
+    JobCreateSummaryRow,
+    jobCreateSelectStyles as selectStyles,
+} from "./JobCreateLayout";
 import { resolveJobCreator } from "../../../utils/jobHistory";
 import JobPayrollFields from "./JobPayrollFields";
 import useServicePayrollData from "../../../hooks/useServicePayrollData";
@@ -12,7 +22,7 @@ import { completeJobLaborLines, jobLaborTotals, visitCustomerPriceCents } from "
 import { createJobAtomically } from "../../../utils/createJobAtomically";
 import { isActiveJobTemplate } from "../../../utils/jobTemplateAvailability";
 import React, { useState, useEffect, useContext, useMemo } from "react";
-import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
     query,
     collection,
@@ -112,18 +122,8 @@ const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     );
 };
 
-const SectionCard = ({ title, subtitle, children, action }) => (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-3">
-            <div>
-                <h3 className="text-base font-semibold text-slate-950">{title}</h3>
-                {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
-            </div>
-            {action}
-        </div>
-        <div className="mt-4">{children}</div>
-    </section>
-);
+const fieldLabelClasses = "job-create-label";
+const fieldInputClasses = "job-create-field";
 
 const buildEquipmentDatabaseItemOption = (data = {}, docId = "") => {
     const id = data.id || docId;
@@ -637,45 +637,14 @@ const CreateNewJob = () => {
         selectedTemplateRequiresEquipment,
     ]);
 
-    const createJobSectionDetails = {
-        Info: {
-            label: "Job Info",
-            helper: "Assignment, customer, location, asset context, and pricing",
-            count: missingJobInfo.length ? String(missingJobInfo.length) : "Ready",
-        },
-        Template: {
-            label: "Template",
-            helper: "Reusable job scope, services, tasks, and planned products",
-            count: selectedTemplate ? "1" : "",
-        },
-        Tasks: {
-            label: "Tasks",
-            helper: "Labor tasks and task-specific pool or equipment context",
-            count: String(taskList.length),
-        },
-        Materials: {
-            label: "Materials",
-            helper: "Planned shopping list items and material pricing",
-            count: String(shoppingList.length),
-        },
-        Schedule: {
-            label: "Schedule",
-            helper: "Planned service stops copied or staged for this job",
-            count: String(plannedServiceStops.length),
-        },
-        Review: {
-            label: "Review",
-            helper: "Confirm the job before creating it",
-            count: canCreateJob ? "Ready" : String(missingJobInfo.length),
-        },
+    const sectionCounts = {
+        Info: missingJobInfo.length || "Ready",
+        Template: selectedTemplate ? 1 : null,
+        Tasks: taskList.length,
+        Materials: shoppingList.length,
+        Schedule: plannedServiceStops.length,
+        Review: canCreateJob ? "Ready" : missingJobInfo.length,
     };
-    const createJobSectionMeta = createJobSections.map((sectionName) => ({
-        id: sectionName,
-        ...createJobSectionDetails[sectionName],
-    }));
-    const activeCreateSectionMeta =
-        createJobSectionMeta.find((section) => section.id === activeCreateSection) ||
-        createJobSectionMeta[0];
     const activeCreateSectionIndex = createJobSections.indexOf(activeCreateSection);
     const previousCreateSection =
         activeCreateSectionIndex > 0 ? createJobSections[activeCreateSectionIndex - 1] : "";
@@ -683,29 +652,6 @@ const CreateNewJob = () => {
         activeCreateSectionIndex >= 0 && activeCreateSectionIndex < createJobSections.length - 1
             ? createJobSections[activeCreateSectionIndex + 1]
             : "";
-
-    const selectStyles = workspaceSelectStyles({
-        control: (provided, state) => ({
-            ...provided,
-            backgroundColor: "white",
-            border: state.isFocused ? "1px solid #2563eb" : "1px solid #d1d5db",
-            borderRadius: "0.375rem",
-            minHeight: 42,
-            boxShadow: state.isFocused ? "0 0 0 2px rgba(37,99,235,0.18)" : "none",
-            "&:hover": {
-                borderColor: state.isFocused ? "#2563eb" : "#9ca3af",
-            },
-        }),
-        menu: (provided) => ({
-            ...provided,
-            zIndex: 50,
-            borderRadius: "0.375rem",
-            overflow: "hidden",
-        }),
-    });
-
-    const fieldLabelClasses = "mb-2 block text-sm font-semibold text-slate-700";
-    const fieldInputClasses = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
     const getCustomerDisplayName = (customer) => {
         if (!customer) return "";
@@ -2517,8 +2463,8 @@ const CreateNewJob = () => {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-                <div className="w-full">
+            <div className="job-create-page">
+                <div className="job-create-content">
                     <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm animate-pulse">
                         <div className="h-7 bg-gray-200 rounded w-1/3" />
                         <div className="h-4 bg-gray-200 rounded w-1/2 mt-4" />
@@ -2533,202 +2479,198 @@ const CreateNewJob = () => {
         switch (sectionName) {
             case "Info":
                 return (
-                    <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-                        <div className="space-y-6">
-                            <SectionCard
-                                title="Assignment"
-                                subtitle="Choose who owns the job, the issue priority, and the starter plan recommendation rank."
-                            >
-                                <div className="grid gap-4 lg:grid-cols-2">
-                                    <div className="lg:col-span-2">
-                                        <label className={fieldLabelClasses}>Admin</label>
-                                        <Select
-                                            options={adminList}
-                                            value={selectedAdmin}
-                                            onChange={setSelectedAdmin}
-                                            placeholder="Select Admin"
-                                            styles={selectStyles}
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <label htmlFor="job-issue-priority" className={fieldLabelClasses}>Issue Priority</label>
-                                        <select
-                                            id="job-issue-priority"
-                                            value={issuePriorityLevel}
-                                            onChange={(e) => setIssuePriorityLevel(normalizeIssuePriority(e.target.value))}
-                                            className={fieldInputClasses}
-                                        >
-                                            {ISSUE_PRIORITY_OPTIONS.map((option) => (
-                                                <option key={option.value} value={option.value}>
-                                                    {option.value} - {option.label}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-                                    <div>
-                                        <label htmlFor="job-starter-plan-tier" className={fieldLabelClasses}>Starter Plan Recommendation Rank</label>
-                                        <select
-                                            id="job-starter-plan-tier"
-                                            value={starterPlanTier}
-                                            onChange={(e) => setStarterPlanTier(normalizeJobPlanTier(e.target.value))}
-                                            className={fieldInputClasses}
-                                        >
-                                            {JOB_PLAN_TIER_OPTIONS.map((option) => (
-                                                <option key={option.value} value={option.value}>
-                                                    {getJobPlanRecommendationDisplay(option.value)}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                </div>
-                            </SectionCard>
-
-                            <SectionCard
-                                title="Customer and Location"
-                                subtitle="Choose the customer, service location, and any related pool or equipment."
-                            >
-                                <div className="grid gap-4 lg:grid-cols-2">
-                                    <div>
-                                        <label htmlFor="create-job-customer" className={fieldLabelClasses}>Customer</label>
-                                        <Select
-                                            inputId="create-job-customer"
-                                            options={customerList}
-                                            value={selectedCustomer}
-                                            onChange={(option) => {
-                                                setSelectedCustomer(option);
-                                                setSelectedServiceLocation(null);
-                                                setSelectedBodyOfWater(null);
-                                                setSelectedEquipment(null);
-                                            }}
-                                            placeholder="Select Customer"
-                                            styles={selectStyles}
-                                            isDisabled={!!customerIdParam || !!repairRequest?.customerId}
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <label className={fieldLabelClasses}>Service Location</label>
-	                                        <Select
-	                                            options={serviceLocationList}
-	                                            value={selectedServiceLocation}
-	                                            onChange={(option) => {
-                                                    setSelectedServiceLocation(option);
-                                                    setSelectedBodyOfWater(null);
-                                                    setSelectedEquipment(null);
-                                                }}
-	                                            placeholder="Select Service Location"
-	                                            styles={selectStyles}
-                                            isDisabled={
-                                                !selectedCustomer ||
-                                                !!locationIdParam ||
-                                                !!repairRequest?.locationId ||
-                                                !!repairRequest?.serviceLocationId
-                                            }
-                                        />
-                                    </div>
-
-                                    <div>
-	                                        <label className={fieldLabelClasses}>
-                                                Body Of Water {selectedTemplateRequiresBodyOfWater ? <span className="text-rose-600">*</span> : null}
-                                            </label>
-	                                        <Select
-	                                            options={bodyOfWaterList}
-	                                            value={selectedBodyOfWater}
-	                                            onChange={setSelectedBodyOfWater}
-	                                            placeholder="Select Body Of Water"
-	                                            styles={selectStyles}
-	                                            isDisabled={!selectedServiceLocation}
-	                                            isClearable={!selectedTemplateRequiresBodyOfWater}
-	                                        />
-	                                    </div>
-
-	                                    <div>
-	                                        <label className={fieldLabelClasses}>
-                                                Default Equipment
-                                            </label>
-	                                        <Select
-	                                            options={equipmentList}
-	                                            value={selectedEquipment}
-	                                            onChange={setSelectedEquipment}
-	                                            placeholder="Select Equipment"
-	                                            styles={selectStyles}
-	                                            isDisabled={!selectedServiceLocation}
-	                                            isClearable
-	                                        />
-	                                    </div>
-	                                </div>
-                                    {selectedTemplate && (selectedTemplateRequiresEquipment || selectedTemplateRequiresBodyOfWater) && (
-                                        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                                            This template needs {[
-                                                selectedTemplateRequiresEquipment ? "equipment" : "",
-                                                selectedTemplateRequiresBodyOfWater ? "body of water" : "",
-                                            ].filter(Boolean).join(" and ")}. Use default equipment for one-piece jobs, or assign equipment per service/task row.
-                                        </p>
-                                    )}
-	                            </SectionCard>
-
-                            <SectionCard
-                                title="Plan Pricing"
-                                subtitle="Calculated from planned labor, visits, and billable materials."
-                            >
-                                <div className="grid gap-4 lg:grid-cols-3">
-                                    <StatCard
-                                        title="Estimated Price"
-                                        value={moneyFromCents(calculatedPlanPriceCents)}
-                                        subtitle="Labor plus billable materials"
-                                        tone="blue"
-                                    />
-                                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-gray-800">
-                                        <p className="text-xs font-semibold uppercase tracking-wider opacity-70">Internal Cost</p>
-                                        <table className="mt-3 w-full text-sm">
-                                            <caption className="sr-only">Internal cost breakdown</caption>
-                                            <tbody>
-                                                <tr>
-                                                    <th scope="row" className="pb-2 pr-3 text-left font-normal">Material Cost</th>
-                                                    <td className="pb-2 text-right font-semibold tabular-nums">{moneyFromCents(plannedMaterialCostCents)}</td>
-                                                </tr>
-                                                <tr>
-                                                    <th scope="row" className="pb-3 pr-3 text-left font-normal"><span aria-hidden="true">+ </span>Planned Labor</th>
-                                                    <td className="pb-3 text-right font-semibold tabular-nums">{moneyFromCents(plannedTotalLaborCents)}</td>
-                                                </tr>
-                                            </tbody>
-                                            <tfoot>
-                                                <tr className="border-t border-gray-200">
-                                                    <th scope="row" className="pt-3 pr-3 text-left font-semibold">Total</th>
-                                                    <td className="pt-3 text-right text-xl font-bold tabular-nums">{moneyFromCents(calculatedPlanInternalCostCents)}</td>
-                                                </tr>
-                                            </tfoot>
-                                        </table>
-                                    </div>
-                                    <StatCard
-                                        title="Projected Profit"
-                                        value={moneyFromCents(projectedProfitCents)}
-                                        subtitle="Calculated"
-                                        tone={projectedProfitCents < 0 ? "red" : "green"}
+                    <div className="space-y-4">
+                        <SectionCard
+                            title="Assignment"
+                            icon={UserCircleIcon}
+                            subtitle="Choose who owns the job, the issue priority, and the starter plan recommendation rank."
+                        >
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="sm:col-span-2">
+                                    <label htmlFor="create-job-admin" className={fieldLabelClasses}>Admin</label>
+                                    <Select
+                                        inputId="create-job-admin"
+                                        options={adminList}
+                                        value={selectedAdmin}
+                                        onChange={setSelectedAdmin}
+                                        placeholder="Select Admin"
+                                        styles={selectStyles}
                                     />
                                 </div>
 
-                            </SectionCard>
+                                <div>
+                                    <label htmlFor="job-issue-priority" className={fieldLabelClasses}>Issue Priority</label>
+                                    <select
+                                        id="job-issue-priority"
+                                        value={issuePriorityLevel}
+                                        onChange={(e) => setIssuePriorityLevel(normalizeIssuePriority(e.target.value))}
+                                        className={fieldInputClasses}
+                                    >
+                                        {ISSUE_PRIORITY_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.value} - {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
 
-                        </div>
+                                <div>
+                                    <label htmlFor="job-starter-plan-tier" className={fieldLabelClasses}>Starter Plan Recommendation Rank</label>
+                                    <select
+                                        id="job-starter-plan-tier"
+                                        value={starterPlanTier}
+                                        onChange={(e) => setStarterPlanTier(normalizeJobPlanTier(e.target.value))}
+                                        className={fieldInputClasses}
+                                    >
+                                        {JOB_PLAN_TIER_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {getJobPlanRecommendationDisplay(option.value)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        </SectionCard>
 
-                        <section className="flex min-h-[24rem] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:sticky xl:top-6 xl:min-h-[calc(100vh-20rem)]">
-                            <div className="border-b border-slate-200 pb-4">
-                                <h3 className="text-xl font-bold text-slate-950">Scope Notes</h3>
-                                <p className="mt-1 text-sm text-slate-600">
-                                    Add the job description and anything the crew should know.
+                        <SectionCard
+                            title="Customer and Location"
+                            icon={MapPinIcon}
+                            subtitle="Choose the customer, service location, and any related pool or equipment."
+                        >
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div>
+                                    <label htmlFor="create-job-customer" className={fieldLabelClasses}>Customer</label>
+                                    <Select
+                                        inputId="create-job-customer"
+                                        options={customerList}
+                                        value={selectedCustomer}
+                                        onChange={(option) => {
+                                            setSelectedCustomer(option);
+                                            setSelectedServiceLocation(null);
+                                            setSelectedBodyOfWater(null);
+                                            setSelectedEquipment(null);
+                                        }}
+                                        placeholder="Select Customer"
+                                        styles={selectStyles}
+                                        isDisabled={!!customerIdParam || !!repairRequest?.customerId}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label htmlFor="create-job-location" className={fieldLabelClasses}>Service Location</label>
+                                    <Select
+                                        inputId="create-job-location"
+                                        options={serviceLocationList}
+                                        value={selectedServiceLocation}
+                                        onChange={(option) => {
+                                            setSelectedServiceLocation(option);
+                                            setSelectedBodyOfWater(null);
+                                            setSelectedEquipment(null);
+                                        }}
+                                        placeholder="Select Service Location"
+                                        styles={selectStyles}
+                                        isDisabled={
+                                            !selectedCustomer ||
+                                            !!locationIdParam ||
+                                            !!repairRequest?.locationId ||
+                                            !!repairRequest?.serviceLocationId
+                                        }
+                                    />
+                                </div>
+
+                                <div>
+                                    <label htmlFor="create-job-body-of-water" className={fieldLabelClasses}>
+                                        Body Of Water {selectedTemplateRequiresBodyOfWater ? <span className="text-rose-600">*</span> : null}
+                                    </label>
+                                    <Select
+                                        inputId="create-job-body-of-water"
+                                        options={bodyOfWaterList}
+                                        value={selectedBodyOfWater}
+                                        onChange={setSelectedBodyOfWater}
+                                        placeholder="Select Body Of Water"
+                                        styles={selectStyles}
+                                        isDisabled={!selectedServiceLocation}
+                                        isClearable={!selectedTemplateRequiresBodyOfWater}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label htmlFor="create-job-equipment" className={fieldLabelClasses}>Default Equipment</label>
+                                    <Select
+                                        inputId="create-job-equipment"
+                                        options={equipmentList}
+                                        value={selectedEquipment}
+                                        onChange={setSelectedEquipment}
+                                        placeholder="Select Equipment"
+                                        styles={selectStyles}
+                                        isDisabled={!selectedServiceLocation}
+                                        isClearable
+                                    />
+                                </div>
+                            </div>
+                            {selectedTemplate && (selectedTemplateRequiresEquipment || selectedTemplateRequiresBodyOfWater) && (
+                                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                    This template needs {[
+                                        selectedTemplateRequiresEquipment ? "equipment" : "",
+                                        selectedTemplateRequiresBodyOfWater ? "body of water" : "",
+                                    ].filter(Boolean).join(" and ")}. Use default equipment for one-piece jobs, or assign equipment per service/task row.
                                 </p>
+                            )}
+                        </SectionCard>
+
+                        <SectionCard
+                            title="Plan Pricing"
+                            icon={CurrencyDollarIcon}
+                            subtitle="Calculated from planned labor, visits, and billable materials."
+                        >
+                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                                <StatCard
+                                    title="Estimated Price"
+                                    value={moneyFromCents(calculatedPlanPriceCents)}
+                                    subtitle="Labor plus billable materials"
+                                    tone="blue"
+                                />
+                                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-gray-800">
+                                    <p className="text-xs font-semibold uppercase tracking-wider opacity-70">Internal Cost</p>
+                                    <table className="mt-3 w-full text-sm">
+                                        <caption className="sr-only">Internal cost breakdown</caption>
+                                        <tbody>
+                                            <tr>
+                                                <th scope="row" className="pb-2 pr-3 text-left font-normal">Material Cost</th>
+                                                <td className="pb-2 text-right font-semibold tabular-nums">{moneyFromCents(plannedMaterialCostCents)}</td>
+                                            </tr>
+                                            <tr>
+                                                <th scope="row" className="pb-3 pr-3 text-left font-normal"><span aria-hidden="true">+ </span>Planned Labor</th>
+                                                <td className="pb-3 text-right font-semibold tabular-nums">{moneyFromCents(plannedTotalLaborCents)}</td>
+                                            </tr>
+                                        </tbody>
+                                        <tfoot>
+                                            <tr className="border-t border-gray-200">
+                                                <th scope="row" className="pt-3 pr-3 text-left font-semibold">Total</th>
+                                                <td className="pt-3 text-right text-xl font-bold tabular-nums">{moneyFromCents(calculatedPlanInternalCostCents)}</td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                                <StatCard
+                                    title="Projected Profit"
+                                    value={moneyFromCents(projectedProfitCents)}
+                                    subtitle="Calculated"
+                                    tone={projectedProfitCents < 0 ? "red" : "green"}
+                                />
                             </div>
 
+                        </SectionCard>
+
+                        <SectionCard title="Scope Notes" icon={PencilSquareIcon}>
                             <textarea
+                                aria-label="Job description"
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
                                 placeholder="Job description..."
-                                className="mt-5 min-h-[18rem] flex-1 resize-none rounded-md border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 xl:min-h-0"
+                                className={fieldInputClasses}
                             />
-                        </section>
+                        </SectionCard>
                     </div>
                 );
 
@@ -2736,9 +2678,11 @@ const CreateNewJob = () => {
                 return (
                     <SectionCard
                         title="Template"
+                        icon={DocumentDuplicateIcon}
                         subtitle={templateRequired ? "Choose a job template before creating this job." : "Optional. Start this job from a saved job template."}
                     >
                         <Select
+                            inputId="create-job-template"
                             aria-label="Job Template"
                             required={templateRequired}
                             options={jobTemplateList}
@@ -2774,6 +2718,7 @@ const CreateNewJob = () => {
                 return (
                     <SectionCard
                         title="Tasks"
+                        icon={ListBulletIcon}
                         subtitle="Plan the labor scope. Values save as cents to match iOS."
                         action={
                             <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
@@ -3018,7 +2963,7 @@ const CreateNewJob = () => {
                                             value={taskDescription}
                                             onChange={(e) => setTaskDescription(e.target.value)}
                                             placeholder="Task description"
-                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            className={`mt-1 normal-case tracking-normal ${fieldInputClasses}`}
                                         />
                                     </label>
 
@@ -3100,7 +3045,7 @@ const CreateNewJob = () => {
                                             type="number"
                                             min="0"
                                             step="0.01"
-                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            className={`mt-1 normal-case tracking-normal ${fieldInputClasses}`}
                                         />
                                     </label>
 
@@ -3112,7 +3057,7 @@ const CreateNewJob = () => {
                                             type="number"
                                             min="0"
                                             step="0.01"
-                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            className={`mt-1 normal-case tracking-normal ${fieldInputClasses}`}
                                         />
                                     </label>
 
@@ -3124,7 +3069,7 @@ const CreateNewJob = () => {
                                             type="number"
                                             min="0"
                                             step="1"
-                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            className={`mt-1 normal-case tracking-normal ${fieldInputClasses}`}
                                         />
                                     </label>
                                 </div>
@@ -3152,7 +3097,7 @@ const CreateNewJob = () => {
                                 <button
                                     type="button"
                                     onClick={handleAddTask}
-                                    className="mt-4 w-full rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                                    className={workspaceButtonClass({ className: "mt-4 w-full" })}
                                 >
                                     Add Task
                                 </button>
@@ -3165,6 +3110,7 @@ const CreateNewJob = () => {
                 return (
                     <SectionCard
                         title="Materials"
+                        icon={WrenchScrewdriverIcon}
                         subtitle="Template materials are copied as planned shopping list items."
                         action={
                             <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
@@ -3215,6 +3161,7 @@ const CreateNewJob = () => {
                 return (
                     <SectionCard
                         title="Schedule"
+                        icon={CalendarDaysIcon}
                         subtitle="Scheduling from web can happen after the job is created."
                     >
                         <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
@@ -3238,9 +3185,10 @@ const CreateNewJob = () => {
                 return (
                     <SectionCard
                         title="Review"
+                        icon={ClipboardDocumentListIcon}
                         subtitle="Confirm the job before creating it."
                     >
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                             <StatCard
                                 title="Estimated Price"
                                 value={moneyFromCents(calculatedPlanPriceCents)}
@@ -3332,180 +3280,93 @@ const CreateNewJob = () => {
     };
 
     return (
-        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-950 sm:px-3 lg:px-4">
-            <div className="w-full space-y-5">
-                <WorkspaceRecordHeader title={<>Create New Job</>} eyebrow="Company operations"><div className="workspace-record-toolbar">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                            <Link
-                                to="/company/jobs"
-                                className="app-back-link"
-                            >
-                                &larr; Back to Jobs
-                            </Link>
+        <div className="job-create-page">
+            <div className="job-create-content space-y-4">
+                <JobCreateHeader
+                    title="Create New Job"
+                    description={selectedTemplate ? `Started from template: ${selectedTemplate.name}` : "Build the job scope, price, and plan."}
+                />
 
-
-                            <p className="mt-1 max-w-3xl text-sm text-slate-500">
-                                {selectedTemplate
-                                    ? `Started from template: ${selectedTemplate.name}`
-                                    : "Build the job scope, materials, pricing, and review before submitting."}
-                            </p>
-                        </div>
-
-                        <div className="flex flex-col gap-2 sm:items-end">
-                            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-right shadow-sm">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Estimated Price</p>
-                                <p className="mt-1 text-2xl font-bold text-slate-950">{moneyFromCents(calculatedPlanPriceCents)}</p>
-                            </div>
-                        </div>
+                <nav aria-label="Job creation sections" className="job-create-card flex flex-wrap items-center justify-between gap-3 p-3">
+                    <div className="flex flex-wrap gap-2">
+                        {createJobSections.map((section) => {
+                            const active = section === activeCreateSection;
+                            return (
+                                <button
+                                    key={section}
+                                    type="button"
+                                    onClick={() => setActiveCreateSection(section)}
+                                    aria-current={active ? "step" : undefined}
+                                    className={workspaceButtonClass({ tone: active ? "blue" : "slate", active })}
+                                >
+                                    {section === "Info" ? "Job Info" : section}
+                                    {sectionCounts[section] !== null && (
+                                        <span className="rounded-full bg-surface px-1.5 text-xs text-theme-muted">
+                                            {sectionCounts[section]}
+                                        </span>
+                                    )}
+                                </button>
+                            );
+                        })}
                     </div>
-                </div></WorkspaceRecordHeader>
-
-                <section className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
-                    <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-                        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
-                            <div className="mt-3 space-y-2">
-                                {createJobSectionMeta.map((sectionOption) => {
-                                    const active = sectionOption.id === activeCreateSection;
-                                    return (
-                                        <button
-                                            key={sectionOption.id}
-                                            type="button"
-                                            onClick={() => setActiveCreateSection(sectionOption.id)}
-                                            className={[
-                                                "w-full rounded-md border px-3 py-2 text-left transition",
-                                                active
-                                                    ? "border-blue-200 bg-blue-50 text-blue-800"
-                                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-                                            ].join(" ")}
-                                        >
-                                            <span className="flex items-center justify-between gap-3">
-                                                <span className="text-sm font-semibold">{sectionOption.label}</span>
-                                                <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-500">
-                                                    {sectionOption.count}
-                                                </span>
-                                            </span>
-                                            <span className="mt-1 block text-xs text-slate-500">{sectionOption.helper}</span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
-                        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
-                            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Job Snapshot</h2>
-                            <dl className="mt-3 space-y-3">
-                                <div>
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Admin</dt>
-                                    <dd className="mt-0.5 font-semibold text-slate-800">{getAdminNameForJob(selectedAdmin) || "Not set"}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Customer</dt>
-                                    <dd className="mt-0.5 font-semibold text-slate-800">{getCustomerDisplayName(selectedCustomer) || "Not set"}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Site</dt>
-                                    <dd className="mt-0.5 font-semibold text-slate-800">{selectedServiceLocation?.label || "Not set"}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Template</dt>
-                                    <dd className="mt-0.5 font-semibold text-slate-800">{selectedTemplate?.name || "None"}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Price</dt>
-                                    <dd className="mt-0.5 text-lg font-bold text-slate-950">{moneyFromCents(calculatedPlanPriceCents)}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Projected Profit</dt>
-                                    <dd className={projectedProfitCents < 0 ? "mt-0.5 font-bold text-rose-700" : "mt-0.5 font-bold text-emerald-700"}>
-                                        {moneyFromCents(projectedProfitCents)}
-                                    </dd>
-                                </div>
-                            </dl>
-                        </div>
-
-                        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="ml-auto flex flex-wrap gap-2">
+                        {previousCreateSection && (
                             <button
                                 type="button"
-                                onClick={createNewJob}
-                                disabled={creating}
-                                aria-disabled={!canCreateJob || creating}
-                                className={[
-                                    "w-full rounded-md px-4 py-2.5 text-sm font-semibold shadow-sm transition",
-                                    canCreateJob && !creating
-                                        ? "bg-blue-600 text-white hover:bg-blue-700"
-                                        : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
-                                ].join(" ")}
+                                onClick={() => setActiveCreateSection(previousCreateSection)}
+                                className={workspaceButtonClass({ tone: "slate" })}
                             >
-                                {creating ? "Creating..." : "Create Job"}
+                                Previous
                             </button>
-                            <Link
-                                to="/company/jobs"
-                                className="mt-2 block w-full rounded-md border border-slate-200 bg-white px-4 py-2.5 text-center text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                        )}
+                        {nextCreateSection && (
+                            <button
+                                type="button"
+                                onClick={() => setActiveCreateSection(nextCreateSection)}
+                                className={workspaceButtonClass()}
                             >
-                                Cancel
-                            </Link>
-                        </section>
-                    </aside>
-
-                    <div className="min-w-0 space-y-4">
-                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <div>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <h2 className="text-sm font-bold text-slate-900">
-                                            {activeCreateSectionMeta?.label || "Job Info"}
-                                        </h2>
-                                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
-                                            New Job
-                                        </span>
-                                    </div>
-                                    <p className="mt-0.5 text-xs text-slate-500">{activeCreateSectionMeta?.helper}</p>
-                                </div>
-
-                                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                    {previousCreateSection && (
-                                        <button
-                                            type="button"
-                                            onClick={() => setActiveCreateSection(previousCreateSection)}
-                                            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                                        >
-                                            Previous
-                                        </button>
-                                    )}
-                                    {nextCreateSection && (
-                                        <button
-                                            type="button"
-                                            onClick={() => setActiveCreateSection(nextCreateSection)}
-                                            className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
-                                        >
-                                            Next
-                                        </button>
-                                    )}
-                                    <button
-                                        type="button"
-                                        onClick={createNewJob}
-                                        disabled={creating}
-                                        aria-disabled={!canCreateJob || creating}
-                                        className={[
-                                            "rounded-md px-3 py-2 text-xs font-semibold shadow-sm transition",
-                                            canCreateJob && !creating
-                                                ? "bg-blue-600 text-white hover:bg-blue-700"
-                                                : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
-                                        ].join(" ")}
-                                    >
-                                        {creating ? "Creating..." : "Create Job"}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div id={`create-job-${activeCreateSection.toLowerCase()}`}>
-                            {renderStepContent(activeCreateSection)}
-                        </div>
+                                Next
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={createNewJob}
+                            disabled={creating}
+                            aria-disabled={!canCreateJob || creating}
+                            className={workspaceButtonClass()}
+                        >
+                            {creating ? "Creating..." : "Create Job"}
+                        </button>
                     </div>
-                </section>
+                </nav>
+
+                <div className="job-create-grid">
+                    <div id={`create-job-${activeCreateSection.toLowerCase()}`} className="min-w-0">
+                        {renderStepContent(activeCreateSection)}
+                    </div>
+
+                    <aside>
+                        <SectionCard title="Job Summary" icon={ClipboardDocumentListIcon}>
+                            <dl>
+                                <JobCreateSummaryRow label="Estimated Price" value={moneyFromCents(calculatedPlanPriceCents)} />
+                                <JobCreateSummaryRow label="Projected Profit" value={moneyFromCents(projectedProfitCents)}
+                                    valueClassName={projectedProfitCents < 0 ? "text-rose-700" : "text-emerald-700"} />
+                                <JobCreateSummaryRow label="Admin" value={getAdminNameForJob(selectedAdmin)} />
+                                <JobCreateSummaryRow label="Customer" value={getCustomerDisplayName(selectedCustomer)} />
+                                <JobCreateSummaryRow label="Location" value={selectedServiceLocation?.label} />
+                                <JobCreateSummaryRow label="Template" value={selectedTemplate?.name || "None"} />
+                            </dl>
+                            <div className="mt-4 border-t border-theme pt-4">
+                                <JobCreateActions
+                                    label={creating ? "Creating..." : "Create Job"}
+                                    onSubmit={createNewJob}
+                                    disabled={creating}
+                                    submitUnavailable={!canCreateJob || creating}
+                                />
+                            </div>
+                        </SectionCard>
+                    </aside>
+                </div>
             </div>
 
             {showMissingJobInfoModal && (
@@ -3529,7 +3390,7 @@ const CreateNewJob = () => {
                             <button
                                 type="button"
                                 onClick={() => setShowMissingJobInfoModal(false)}
-                                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                className={workspaceButtonClass({ tone: "slate" })}
                             >
                                 Cancel
                             </button>
@@ -3539,7 +3400,7 @@ const CreateNewJob = () => {
                                     setShowMissingJobInfoModal(false);
                                     window.scrollTo({ top: 0, behavior: "smooth" });
                                 }}
-                                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                                className={workspaceButtonClass()}
                             >
                                 Review Info
                             </button>
