@@ -56,7 +56,7 @@ test('adding an item from group details writes taskItems and updates the canonic
   renderPage(<TaskGroupDetails />); await screen.findByText('Brush');
   fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Skim' } });
   fireEvent.change(screen.getByPlaceholderText('Description'), { target: { value: 'Skim pool' } });
-  fireEvent.change(screen.getByPlaceholderText('Contracted Rate'), { target: { value: '0' } });
+  expect(screen.queryByPlaceholderText('Contracted Rate')).not.toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText('Estimated Time'), { target: { value: '5' } });
   fireEvent.change(screen.getByLabelText('Task type'), { target: { value: 'Clean' } });
   fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
@@ -69,7 +69,7 @@ test('creating a group writes its header and items to the historical canonical c
   fireEvent.change(screen.getByPlaceholderText('e.g. Weekly Pool Service'), { target: { value: 'Routine' } });
   fireEvent.change(screen.getByPlaceholderText('Task name'), { target: { value: 'Brush' } });
   fireEvent.change(screen.getByPlaceholderText('Task description'), { target: { value: 'Brush walls' } });
-  fireEvent.change(screen.getByPlaceholderText('Labor cost'), { target: { value: '0' } });
+  expect(screen.queryByPlaceholderText('Labor cost')).not.toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText('Estimated time (min)'), { target: { value: '5' } });
   fireEvent.change(screen.getByLabelText('Task type'), { target: { value: 'Clean' } });
   fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));

@@ -14,6 +14,7 @@ const { title } = require("process");
 const sgMail = require("@sendgrid/mail");
 const { ensureCustomerAccountInvite } = require("../customerAccountInvites");
 const { linkedId } = require("../homeownerServicePublishing");
+const { hasDraftTaskCharges, draftTaskChargeMessage } = require("../jobScopePricing");
 const {
     resolveEmailDeliveryRecipient,
     resolveCompanyEmailDeliveryRecipient,
@@ -1967,6 +1968,9 @@ const sendSalesInvoiceEmailCore = async ({
         throw new HttpsError("permission-denied", "Invoice does not belong to the selected company.");
     }
 
+    if (hasDraftTaskCharges(invoice)) {
+        throw new HttpsError("failed-precondition", draftTaskChargeMessage);
+    }
     if (invoice.stripeInvoiceId && invoice.status === "draft") {
         throw new HttpsError("failed-precondition", "Stripe is still preparing this recurring invoice. Wait until it is issued before sending it.");
     }

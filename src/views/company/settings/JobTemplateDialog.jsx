@@ -83,9 +83,8 @@ export default function JobTemplateDialog({ mode, form, setForm, services, produ
                     <Field label={`Task ${index + 1} name`}><input required value={task.name} onChange={(event) => updateItem("tasks", task.id, { name: event.target.value })} className={input} /></Field>
                     <Field label={`Task ${index + 1} type`}><select value={task.type} onChange={(event) => updateItem("tasks", task.id, { type: event.target.value })} className={input}>{JOB_TASK_TYPE_NAMES.map((type) => <option key={type}>{type}</option>)}</select></Field>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="grid gap-3 sm:grid-cols-[1fr_2fr]">
                     <Field label={`Task ${index + 1} minutes`}><input type="number" min="0" value={task.estimatedTime} onChange={(event) => updateItem("tasks", task.id, { estimatedTime: Number(event.target.value) })} className={input} /></Field>
-                    <Field label={`Task ${index + 1} customer price`} helper="Included tasks use their service’s price."><input type="number" min="0" step="0.01" value={task.billingLaborPriceCents / 100} onChange={(event) => updateItem("tasks", task.id, { billingLaborPriceCents: amount(event.target.value) })} className={input} /></Field>
                     <Field label={`Task ${index + 1} notes`}><input value={task.description} onChange={(event) => updateItem("tasks", task.id, { description: event.target.value })} className={input} /></Field>
                   </div>
                 </div>)}

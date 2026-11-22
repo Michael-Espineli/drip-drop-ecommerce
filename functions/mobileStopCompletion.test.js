@@ -18,8 +18,8 @@ async function fixture(paySource = 'Offered Amount', extra = {}) {
     [company + '/roles/tech']: { permissionIdList: ['322', '326', '334'] },
     [company + '/companyUsers/tech']: { userId: 'tech', userName: 'Alex', workerType: 'Employee' },
     [company + '/settings/companyWide']: { workOffersAutoAssignOnAcceptance: true },
-    [company + '/companyPayTypes/repair']: { name: 'Repair', category: 'repair', defaultRateType: 'flatPerTask' },
-    [company + '/technicianRates/rate']: { technicianId: 'tech', payTypeId: 'repair', payBasis: 'serviceStopTask', rateType: 'flatPerTask', amountCents: 5000, status: 'active' },
+    [company + '/companyPayTypes/repair']: { name: 'Repair', category: 'repair', defaultRateType: 'flatPerStop' },
+    [company + '/technicianRates/rate']: { technicianId: 'tech', payTypeId: 'repair', payBasis: 'serviceStop', rateType: 'flatPerStop', amountCents: 5000, status: 'active' },
     [company + '/workOrders/job']: { internalId: 'J1', customerId: 'customer', serviceLocationId: 'site', operationStatus: 'In Progress' },
     [company + '/workOrders/job/tasks/task']: { name: 'Repair', status: 'Draft', payTypeId: 'repair', estimatedTime: 60 },
     ...extra,
@@ -29,7 +29,7 @@ async function fixture(paySource = 'Offered Amount', extra = {}) {
   await command('admin', { action: 'save', offer: {
     id: 'offer', title: 'Repair', jobId: 'job', jobTaskIds: ['task'],
     offerType: 'Internal Board', postedToBoard: true, boardVisibility: 'Employees & Contractors',
-    paySource, offeredAmountCents: 10000, incentive: { type: 'flat', amountCents: 1000 }, allowsTechnicianSelfScheduling: true,
+    paySource, serviceStopTypeId: 'repair', offeredAmountCents: 10000, incentive: { type: 'flat', amountCents: 1000 }, allowsTechnicianSelfScheduling: true,
   } });
   await command('tech', { action: 'accept', offerId: 'offer', claimId: 'claim' });
   const { serviceStopId } = await createTechnicianExecution(db, () => at).schedule({
@@ -70,7 +70,7 @@ for (const [source, expected] of [['Offered Amount', 11000], ['Technician Rate',
     const f = await fixture(source);
     await f.finishStop();
     assert.equal(f.db.records.get(company + '/workOrders/job').operationStatus, 'In Progress');
-    assert.equal(f.earned().length, 0, 'unfinished accepted tasks are not silently performed or paid');
+    assert.equal(f.earned().length, source === 'Offered Amount' ? 0 : 1, 'only a completed visit may have earnings');
     await f.review();
     assert.equal(f.db.records.get(company + '/workOrders/job').operationStatus, 'Finished');
     assert.equal(f.db.records.get(company + '/workOffers/offer').claims[0].status, 'Completed');
@@ -117,7 +117,7 @@ test('retrying native offered work preserves an approved base line and its singl
   assert.equal(f.earned().reduce((sum, row) => sum + row.totalAmountCents, 0), 11000);
 });
 
-test('legacy duplicate scheduled copies of one job task still produce one accepted task payment', async () => {
+test('legacy duplicate scheduled tasks do not alter a single visit payment', async () => {
   const f = await fixture('Technician Rate');
   const [, original] = [...f.db.records].find(([path]) => path.startsWith(f.stopPath + '/tasks/'));
   f.db.set(f.stopPath + '/tasks/legacy-copy', { ...original, id: 'legacy-copy' });

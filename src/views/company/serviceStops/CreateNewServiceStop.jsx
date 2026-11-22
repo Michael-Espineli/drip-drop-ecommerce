@@ -1,3 +1,4 @@
+import { operationalTask } from "../../../utils/taskFields";
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { fetchRecurringTaskGroupOptions, fetchTaskGroupTasks } from "../../../utils/recurringServiceStopTasks";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
@@ -6,9 +7,7 @@ import React, { useState, useEffect, useContext, useMemo, useCallback } from "re
 import { Navigate, useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion, where, serverTimestamp } from "firebase/firestore";
 import { db } from "../../../utils/config";
-import JobPayrollFields from "../jobs/JobPayrollFields";
 import { syncShoppingItemsForScheduledJobTasks } from "../../../utils/scheduledJobMaterials";
-import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
@@ -221,8 +220,6 @@ const CreateNewServiceStopForm = () => {
     const [selectedTaskType, setSelectedTaskType] = useState(null);
     const [selectedTaskGroup, setSelectedTaskGroup] = useState(null);
     const [taskDescription, setTaskDescription] = useState("");
-    const [taskLaborCost, setTaskLaborCost] = useState("");
-    const [taskPayroll, setTaskPayroll] = useState({ payrollMode: "included" });
     const [taskEstimatedTime, setTaskEstimatedTime] = useState("");
     const [addingTask, setAddingTask] = useState(false);
     const [applyingTaskGroup, setApplyingTaskGroup] = useState(false);
@@ -698,8 +695,6 @@ const CreateNewServiceStopForm = () => {
         description: task.description || "",
         typeId: task.typeId || task.taskTypeId || "",
         type: canonicalJobTaskType(task.type || task.taskType || selectedTaskType?.value || selectedTaskType?.name || "Task"),
-        contractedRate: Number(task.contractedRate || task.rate || task.laborCostCents || 0),
-        ...jobPayFields(task),
         estimatedTime: Number(task.estimatedTime || task.estimatedMinutes || 0),
         status: task.status || "Unassigned",
         customerApproval: task.customerApproval ?? false,
@@ -788,8 +783,6 @@ const CreateNewServiceStopForm = () => {
                     description: taskDescription.trim(),
                     typeId: selectedTaskType.id || "",
                     type: canonicalJobTaskType(selectedTaskType.value || selectedTaskType.name),
-                    contractedRate: dollarsToCents(taskLaborCost),
-                    ...jobPayFields(taskPayroll),
                     estimatedTime: Number(taskEstimatedTime || 0),
                     status: "Unassigned",
                 },
@@ -803,8 +796,6 @@ const CreateNewServiceStopForm = () => {
                 toast.success("Task added and selected.");
                 setTaskDescription("");
                 setSelectedTaskType(null);
-                setTaskLaborCost("");
-                setTaskPayroll({ payrollMode: "included" });
                 setTaskEstimatedTime("");
             }
         } catch (error) {
@@ -905,7 +896,6 @@ const CreateNewServiceStopForm = () => {
         console.log(
             `[][] RSS Count: ${String(updatedRecurringServiceStopCount)}`
         );
-        let rate = 0
 
         const internalId = "SS" + String(serviceStopCount)
         const payTypeId = selectedPayWorkType?.id || selectedServiceStopType?.id || "";
@@ -972,7 +962,6 @@ const CreateNewServiceStopForm = () => {
                 ? (manualPayOverrideNotes.trim() || "Manual payroll amount set while scheduling this service stop.")
                 : "",
             plannedServiceStopId: selectedPlannedStop?.id || "",
-            rate: rate ?? 0,
             recurringServiceStopId: "",
             type: resolvedTypeFields.type,
             typeId: resolvedTypeFields.typeId,
@@ -997,7 +986,7 @@ const CreateNewServiceStopForm = () => {
             const taskId = 'comp_ss_tas_' + uuidv4();
             const taskRef = doc(db, "companies", recentlySelectedCompany, 'serviceStops', serviceStopId, 'tasks', taskId);
             await setDoc(taskRef, {
-                ...task,
+                ...operationalTask(task),
                 id: taskId,
                 workerId: selectedUser.userId,
                 workerName: selectedUser.userName,
@@ -1015,10 +1004,8 @@ const CreateNewServiceStopForm = () => {
                     internalId: "",
                 },
                 jobTaskId: task.id,
-                ...jobPayFields(task),
                 workOrderTaskId: jobId ? task.id : "",
             });
-            rate += Number(task.rate || task.contractedRate || 0)
             if (jobId) {
                 const workOrderTaskRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId, 'tasks', task.id);
                 await updateDoc(workOrderTaskRef, {
@@ -1046,7 +1033,6 @@ const CreateNewServiceStopForm = () => {
             customerId: activeCustomer?.id || job?.customerId || "",
             serviceLocationId: activeServiceLocation?.id || job?.serviceLocationId || "",
         });
-        await updateDoc(serviceStopRef, { rate: rate });
 
         //Update Job to have ids
         if (jobId && job) {
@@ -1259,11 +1245,7 @@ const CreateNewServiceStopForm = () => {
                                 setSelectedTaskType={setSelectedTaskType}
                                 taskDescription={taskDescription}
                                 setTaskDescription={setTaskDescription}
-                                taskPayroll={taskPayroll}
-                                setTaskPayroll={setTaskPayroll}
                                 payTypes={workTypeOptions}
-                                taskLaborCost={taskLaborCost}
-                                setTaskLaborCost={setTaskLaborCost}
                                 taskEstimatedTime={taskEstimatedTime}
                                 setTaskEstimatedTime={setTaskEstimatedTime}
                                 addInlineTask={addInlineTask}
@@ -1690,7 +1672,7 @@ const AssignTechTab = ({
                 <span>
                     <span className="block text-sm font-semibold text-gray-800">Manual pay amount</span>
                     <span className="mt-1 block text-sm text-gray-600">
-                        Set the service stop pay amount. Additional Task pay is added separately.
+                        Set a fixed amount for this service stop.
                     </span>
                 </span>
             </label>
@@ -1740,11 +1722,7 @@ const TasksTab = ({
     setSelectedTaskType,
     taskDescription,
     setTaskDescription,
-    taskPayroll,
-    setTaskPayroll,
     payTypes,
-    taskLaborCost,
-    setTaskLaborCost,
     taskEstimatedTime,
     setTaskEstimatedTime,
     addInlineTask,
@@ -1812,52 +1790,7 @@ const TasksTab = ({
                     </div>
                 </div>
 
-                <div className="mb-3"><JobPayrollFields value={taskPayroll} payTypes={payTypes} onChange={(field, value) => setTaskPayroll((current) => ({ ...current, [field]: value }))} /></div>
 
-                <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)_120px_120px_auto]">
-                    <input
-                        value={taskDescription}
-                        onChange={(e) => setTaskDescription(e.target.value)}
-                        placeholder="Task description"
-                        className="w-full rounded-lg border border-gray-300 p-2.5 text-sm"
-                    />
-
-                    <Select
-                        options={taskTypeList}
-                        value={selectedTaskType}
-                        onChange={setSelectedTaskType}
-                        placeholder="Task type"
-                        styles={{ control: (p) => ({ ...p, minHeight: 42 }) }}
-                    />
-
-                    <input
-                        value={taskLaborCost}
-                        onChange={(e) => setTaskLaborCost(e.target.value)}
-                        placeholder="Labor $"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        className="w-full rounded-lg border border-gray-300 p-2.5 text-sm"
-                    />
-
-                    <input
-                        value={taskEstimatedTime}
-                        onChange={(e) => setTaskEstimatedTime(e.target.value)}
-                        placeholder="Mins"
-                        type="number"
-                        min="0"
-                        className="w-full rounded-lg border border-gray-300 p-2.5 text-sm"
-                    />
-
-                    <button
-                        type="button"
-                        onClick={addInlineTask}
-                        disabled={addingTask}
-                        className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                        {addingTask ? "Adding..." : "Add & Select"}
-                    </button>
-                </div>
             </div>
 
             <div className="overflow-hidden rounded-lg border border-gray-200">

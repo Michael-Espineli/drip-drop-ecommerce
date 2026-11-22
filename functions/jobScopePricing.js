@@ -1,51 +1,42 @@
 const cents = (value) => Math.round(Number(value) || 0);
-const ids = (values) => (Array.isArray(values) ? values : []).map((v) => typeof v === "string" ? v : v?.id).filter(Boolean);
+const ids = (values) => (Array.isArray(values) ? values : []).map((value) => typeof value === "string" ? value : value?.id).filter(Boolean);
 
-const taskCustomerPriceCents = (task = {}) => {
-  const explicit = [task.billingLaborPriceCents, task.customerLaborPriceCents, task.billingLaborRateCents,
-    task.laborBillingRateCents, task.billableLaborCents].find((value) => value !== undefined && value !== null && value !== "");
-  return cents(explicit ?? task.contractedRate);
+const isTaskChargeLine = (line = {}) => Boolean(line.generatedFromTaskId || line.metadata?.generatedFromTaskId || line.metadata?.legacyTaskCharge ||
+  [line.id, line.laborLineId, line.sourceId, line.metadata?.laborLineId].some((value) => String(value || "").startsWith("scope_task_")) ||
+  [line.sourceType, line.type].some((value) => /^(job|servicestop)?task$/i.test(String(value || "").replace(/[^a-z]/gi, ""))) ||
+  (line.metadata?.generatedFromPlannedWork && (line.taskIds?.length || line.metadata.taskIds?.length)));
+
+const hasDraftTaskCharges = (invoice = {}) => String(invoice.status || "").toLowerCase() === "draft" &&
+  Array.isArray(invoice.lineItems) && invoice.lineItems.some(isTaskChargeLine);
+const draftTaskChargeMessage = "Remove legacy task charges from this draft invoice before issuing it.";
+
+const visitCustomerPriceCents = (stop = {}) => {
+  const explicit = [stop.billingLaborPriceCents, stop.customerLaborPriceCents]
+    .find((value) => value !== undefined && value !== null && value !== "");
+  return cents(explicit ?? stop.plannedLaborCostCents ?? stop.cost);
 };
 
-// Generated lines are derived again so task edits and service assignments cannot
-// leave stale charges behind. A service covering a visit also covers its tasks.
-const completeJobLaborLines = ({ laborLineItems = [], tasks = [], plannedServiceStops = [], plannedStopCost = (stop) => cents(stop.plannedLaborCostCents), taskCost } = {}) => {
-  const taskIdsFor = (stop) => ids(stop.taskIds?.length ? stop.taskIds : stop.taskTemplateIds);
-  const visitTaskIds = new Set(plannedServiceStops.flatMap(taskIdsFor));
-  const costForTask = (task) => visitTaskIds.has(task.id) ? 0 : cents(taskCost ? taskCost(task) : task.contractedRate);
-  const lines = laborLineItems.filter((line) => !line.generatedFromTaskId && !line.generatedFromPlannedStopId).map((line) => {
-    if (!taskCost || line.internalCostMode === "fixed") return line;
-    const linkedTasks = new Set(ids(line.taskIds?.length ? line.taskIds : line.laborLineTaskIds?.length ? line.laborLineTaskIds : line.taskTemplateIds));
-    const linkedStops = new Set(ids(line.plannedServiceStopIds?.length ? line.plannedServiceStopIds : line.laborLinePlannedServiceStopIds?.length ? line.laborLinePlannedServiceStopIds : line.plannedServiceStopTemplateIds));
-    if (!linkedTasks.size && !linkedStops.size) return line;
-    return { ...line, internalCostMode: "payroll", internalCostCents: tasks.filter((task) => linkedTasks.has(task.id)).reduce((sum, task) => sum + costForTask(task), 0)
-      + plannedServiceStops.filter((stop) => linkedStops.has(stop.id)).reduce((sum, stop) => sum + cents(plannedStopCost(stop)), 0) };
+const completeJobLaborLines = ({ laborLineItems = [], plannedServiceStops = [], plannedStopCost = (stop) => cents(stop.plannedLaborCostCents) } = {}) => {
+  const linkedStops = (line) => ids(line.plannedServiceStopIds?.length ? line.plannedServiceStopIds
+    : line.laborLinePlannedServiceStopIds?.length ? line.laborLinePlannedServiceStopIds : line.plannedServiceStopTemplateIds);
+  const lines = laborLineItems.filter((line) => !isTaskChargeLine(line) && !line.generatedFromPlannedStopId).map((line) => {
+    const stopIds = linkedStops(line);
+    const taskIds = ids(line.taskIds?.length ? line.taskIds : line.laborLineTaskIds?.length ? line.laborLineTaskIds : line.taskTemplateIds);
+    if (line.internalCostMode === "fixed" || (!stopIds.length && !taskIds.length)) return line;
+    const internalCostCents = plannedServiceStops.filter((stop) => stopIds.includes(stop.id))
+      .reduce((sum, stop) => sum + cents(plannedStopCost(stop)), 0);
+    return { ...line, internalCostMode: "payroll", internalCostCents };
   });
-  const coveredTasks = new Set(lines.flatMap((line) => ids(line.taskIds?.length ? line.taskIds : line.laborLineTaskIds?.length ? line.laborLineTaskIds : line.taskTemplateIds)));
-  const coveredStops = new Set(lines.flatMap((line) => ids(line.plannedServiceStopIds?.length ? line.plannedServiceStopIds : line.laborLinePlannedServiceStopIds?.length ? line.laborLinePlannedServiceStopIds : line.plannedServiceStopTemplateIds)));
-  plannedServiceStops.filter((stop) => coveredStops.has(stop.id)).forEach((stop) => {
-    ids(stop.taskIds?.length ? stop.taskIds : stop.taskTemplateIds).forEach((id) => coveredTasks.add(id));
-  });
-  const generated = (scope, kind, price, cost) => ({
-    id: `scope_${kind}_${scope.id}`, laborLineId: `scope_${kind}_${scope.id}`,
-    name: scope.name || scope.description || (kind === "task" ? "Additional task" : "Additional visit"),
-    description: scope.description || "", quantity: 1, unitPriceCents: price,
-    totalPriceCents: price, internalCostCents: cost, taxable: Boolean(scope.taxable),
-    taskIds: kind === "task" ? [scope.id] : [],
-    plannedServiceStopIds: kind === "visit" ? [scope.id] : [],
-    ...(kind === "task" ? { generatedFromTaskId: scope.id } : { generatedFromPlannedStopId: scope.id }),
-  });
-  const extraTasks = tasks.filter((task) => !coveredTasks.has(task.id)).map((task) => (
-    generated(task, "task", taskCustomerPriceCents(task), costForTask(task))
-  ));
+  const coveredStops = new Set(lines.flatMap(linkedStops));
   const extraStops = plannedServiceStops.filter((stop) => !coveredStops.has(stop.id)).map((stop) => {
     const cost = cents(plannedStopCost(stop));
-    const explicit = [stop.billingLaborPriceCents, stop.customerLaborPriceCents]
-      .find((value) => value !== undefined && value !== null && value !== "");
-    const price = cents(explicit ?? stop.plannedLaborCostCents ?? stop.cost);
-    return generated(stop, "visit", price, cost);
+    const price = visitCustomerPriceCents(stop);
+    const id = `scope_visit_${stop.id}`;
+    return { id, laborLineId: id, name: stop.name || stop.description || "Additional visit",
+      description: stop.description || "", quantity: 1, unitPriceCents: price, totalPriceCents: price,
+      internalCostCents: cost, taxable: Boolean(stop.taxable), taskIds: [], plannedServiceStopIds: [stop.id], generatedFromPlannedStopId: stop.id };
   });
-  return [...lines, ...extraTasks, ...extraStops].filter((line) => !line.generatedFromTaskId && !line.generatedFromPlannedStopId || line.totalPriceCents || line.internalCostCents);
+  return [...lines, ...extraStops.filter((line) => line.totalPriceCents || line.internalCostCents)];
 };
 
 const jobLaborTotals = (scope) => completeJobLaborLines(scope).reduce((totals, line) => ({
@@ -53,4 +44,4 @@ const jobLaborTotals = (scope) => completeJobLaborLines(scope).reduce((totals, l
   costCents: totals.costCents + cents(line.internalCostCents ?? line.internalLaborCostCents ?? line.unitCostCents),
 }), { priceCents: 0, costCents: 0 });
 
-module.exports = { taskCustomerPriceCents, completeJobLaborLines, jobLaborTotals };
+module.exports = { isTaskChargeLine, hasDraftTaskCharges, draftTaskChargeMessage, visitCustomerPriceCents, completeJobLaborLines, jobLaborTotals };

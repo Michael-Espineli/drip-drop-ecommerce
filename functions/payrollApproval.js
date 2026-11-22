@@ -1,6 +1,6 @@
 const { HttpsError } = require('./appErrors');
 const { Timestamp } = require("firebase-admin/firestore");
-const { canClearZeroTask } = require("./payrollCalculation");
+const { canClearZeroTask, isTaskPayLine } = require("./payrollCalculation");
 
 const PAGE_SIZE = 200;
 const fail = (code, message) => { throw new HttpsError(code, message); };
@@ -55,6 +55,7 @@ function createPayrollApproval(db) {
         if (line.calculationStatus === "needsReview") needsReviewCount += 1;
         if (!eligible(line)) return;
         const clear = canClearZeroTask(line);
+        if (isTaskPayLine(line) && !clear) { needsReviewCount += 1; return; }
         const payload = clear ? {
           calculationStatus: "voided", voidReason: "adminVoided", autoReconciled: false, zeroDollarTaskCleared: true,
           voidedAt: now, voidedByUserId: uid,

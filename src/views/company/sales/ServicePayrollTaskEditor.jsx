@@ -3,7 +3,6 @@ import { v4 as uuidv4 } from "uuid";
 import useServicePayrollData from "../../../hooks/useServicePayrollData";
 import { JOB_TASK_TYPE_NAMES } from "../../../utils/jobTaskTypes";
 import { taskDefaultsFromPayItem, updateServiceTaskPayrollField } from "../../../utils/payroll/servicePayrollPreview";
-import JobPayrollFields from "../jobs/JobPayrollFields";
 import ServicePayrollCostPreview from "./ServicePayrollCostPreview";
 import ServicePayrollCostEditor from "./ServicePayrollCostEditor";
 import ServicePayTypeField from "./ServicePayTypeField";
@@ -35,7 +34,7 @@ export default function ServicePayrollTaskEditor({ companyId, form, setForm, sho
       } : {})}
       onUseHighCost={(cents) => setForm((current) => ({ ...current, unitCost: (cents / 100).toFixed(2) }))} />
     <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-800">Task Building Blocks</p>
-      <button type="button" className="rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700" onClick={() => setForm((current) => ({ ...current, taskTemplates: [...(current.taskTemplates || []), taskDefaultsFromPayItem({ payrollMode: "included", id: `service_task_template_${uuidv4()}`, name: "", type: "General", description: "", estimatedMinutes: "", laborCost: "", billingLaborPrice: "" }, data.payTypes.find((type) => type.id === current.payTypeId))] }))}>Add Task</button>
+      <button type="button" className="rounded-md border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700" onClick={() => setForm((current) => ({ ...current, taskTemplates: [...(current.taskTemplates || []), taskDefaultsFromPayItem({ id: `service_task_template_${uuidv4()}`, name: "", type: "General", description: "", estimatedMinutes: "" }, data.payTypes.find((type) => type.id === current.payTypeId))] }))}>Add Task</button>
     </div>
     {tasks.map((task, index) => <div key={task.id} className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
       <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold text-slate-500">Task {index + 1}</p><button type="button" className="text-xs font-semibold text-red-700" onClick={() => setForm((current) => ({ ...current, taskTemplates: current.taskTemplates.filter((item) => item.id !== task.id) }))}>Remove task {index + 1}</button></div>
@@ -46,9 +45,6 @@ export default function ServicePayrollTaskEditor({ companyId, form, setForm, sho
       </div>
       <label className="block text-sm font-semibold text-slate-700">Task notes<textarea className={fieldClass} value={task.description} onChange={(event) => updateTask(task.id, "description", event.target.value)} /></label>
       <ServiceTaskProductFields task={task} {...productData} onChange={(field, value) => updateTask(task.id, field, value)} />
-      <JobPayrollFields value={task} payTypes={data.payTypes} inheritedPayTypeId={form.payTypeId} previewData={data} previewPrice={form.unitAmount}
-        taskCostField={<label className="block text-sm font-semibold text-slate-700">Contracted task pay<input className={fieldClass} type="number" min="0" step="0.01" value={task.laborCost} onChange={(event) => updateTask(task.id, "laborCost", event.target.value)} /></label>}
-        onChange={(field, value) => updateTask(task.id, field, value)} />
     </div>)}
   </div>;
 }

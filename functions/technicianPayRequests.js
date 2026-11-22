@@ -24,7 +24,7 @@ function createTechnicianPayRequests(db,now=()=>new Date()) {
     let payType=null,source=null;
     if(type==='rateChange') {
      if((d.payBasis==='technicianHourly')!==(d.rateType==='hourly'))fail('invalid-argument','Hourly rates require the hourly pay basis.');
-     if(!['serviceStop','serviceStopTask','technicianHourly'].includes(d.payBasis) || !['flatPerStop','flatPerTask','hourly','perBodyOfWater','perServiceLocation','percentage'].includes(d.rateType)) fail('invalid-argument','Choose a valid pay basis and rate type.');
+     if(!['serviceStop','technicianHourly'].includes(d.payBasis) || !['flatPerStop','hourly','perBodyOfWater','perServiceLocation','percentage'].includes(d.rateType)) fail('invalid-argument','Choose a valid pay basis and rate type.');
      payType=d.payTypeId?record(await t.get(c.collection('companyPayTypes').doc(id(d.payTypeId)))):null;
      if(d.payBasis!=='technicianHourly' && (!payType || payType.isActive===false)) fail('invalid-argument','Choose an active pay item.');
      if(!Number.isFinite(date(d.effectiveStartMillis).getTime()) || date(d.effectiveStartMillis)<new Date(now().toISOString().slice(0,10)+'T00:00:00Z')) fail('invalid-argument','Choose a current or future effective date.');

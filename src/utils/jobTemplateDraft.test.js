@@ -11,7 +11,7 @@ test('a new template stages a service, its tasks, and canonical product links wi
   const scope = addServiceToTemplateDraft(emptyJobTemplateScope(), service, [product]);
   const ready = prepareJobTemplateScope({ ...scope, plannedServiceStops: [{ ...newTemplateVisit(), name: 'Installation visit', taskTemplateIds: [scope.tasks[0].id] }] }, 'company', 'template');
   expect(ready.laborLineItems[0]).toEqual(expect.objectContaining({ taskTemplateIds: [ready.tasks[0].id], totalPriceCents: 10000, taxable: false, templateId: 'template' }));
-  expect(ready.tasks[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', shoppingListItemIds: [ready.shoppingItems[0].id], manualPayOverrideCents: 0 }));
+  expect(ready.tasks[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', shoppingListItemIds: [ready.shoppingItems[0].id] }));
   expect(ready.shoppingItems[0]).toEqual(expect.objectContaining({ genericItemId: 'sell-pump', dbItemId: 'supplier-pump', linkedTaskIds: [ready.tasks[0].id], plannedTotalPriceCents: 30000 }));
   expect(ready.tasks[0].equipmentId).toBeUndefined();
   expect(jobLaborTotals(ready).priceCents).toBe(10000);
@@ -29,7 +29,8 @@ test('new template service lines retain the technician pay type and budget for t
     metadata: { taskTemplates: [{ name: 'Custom cleaning', payrollMode: 'custom', manualPayOverrideCents: 1500, estimatedMinutes: 30 }] },
   });
   expect(scope.laborLineItems[0]).toEqual(expect.objectContaining({ payTypeId: 'service-pay', quantity: 2, internalCostCents: 4000 }));
-  expect(scope.tasks[0]).toEqual(expect.objectContaining({ manualPayOverrideCents: 3000, payQuantity: 2, estimatedTime: 60 }));
+  expect(scope.tasks[0].estimatedTime).toBe(60);
+  expect(scope.tasks[0]).not.toHaveProperty('manualPayOverrideCents');
 });
 test('removing a staged task cleans the service, visit, and product links', () => {
   const scope = addServiceToTemplateDraft(emptyJobTemplateScope(), service, [product]);

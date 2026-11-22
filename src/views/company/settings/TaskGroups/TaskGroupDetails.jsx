@@ -40,7 +40,6 @@ const TaskGroupDetails = () => {
 
   const [taskToEdit, setTaskToEdit] = useState([]);
 
-  const [taskLaborCost, setTaskLaborCost] = useState();
 
   const [taskTime, setTaskTime] = useState();
 
@@ -83,7 +82,6 @@ const TaskGroupDetails = () => {
             description: taskData.description,
             typeId: taskData.typeId,
             type: taskData.type,
-            contractedRate: taskData.contractedRate,
             estimatedTime: taskData.estimatedTime,
           };
           setTaskList((taskList) => [...taskList, taskType]);
@@ -127,8 +125,6 @@ const TaskGroupDetails = () => {
     try {
       let taskId = "com_set_tg_tas_" + uuidv4();
 
-      let labor = parseFloat(taskLaborCost);
-      labor = labor * 100;
       let time = parseFloat(taskTime);
 
       await setDoc(
@@ -139,7 +135,6 @@ const TaskGroupDetails = () => {
           description: taskDescription,
           typeId: selectedTaskType.id,
           type: canonicalJobTaskType(selectedTaskType.name),
-          contractedRate: labor,
           estimatedTime: time,
         }
       );
@@ -180,7 +175,6 @@ const TaskGroupDetails = () => {
           description: taskData.description,
           typeId: taskData.typeId,
           type: taskData.type,
-          contractedRate: taskData.contractedRate,
           estimatedTime: taskData.estimatedTime,
         };
         setTaskList((taskList) => [...taskList, taskType]);
@@ -190,7 +184,6 @@ const TaskGroupDetails = () => {
       setTaskDescription("");
       setTaskName("");
       setTaskTime("");
-      setTaskLaborCost("");
     } catch (error) {
       console.log("Error : " + error);
     }
@@ -239,7 +232,6 @@ const TaskGroupDetails = () => {
           description: taskData.description,
           typeId: taskData.typeId,
           type: taskData.type,
-          contractedRate: taskData.contractedRate,
           estimatedTime: taskData.estimatedTime,
         };
         setTaskList((taskList) => [...taskList, taskType]);
@@ -294,7 +286,6 @@ const TaskGroupDetails = () => {
     e.preventDefault();
     setSelectedTaskType({});
     setTaskDescription("");
-    setTaskLaborCost("");
   }
 
   return (
@@ -342,7 +333,6 @@ const TaskGroupDetails = () => {
                 <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <th className="py-3 px-5 border-b border-slate-200">Name</th>
                   <th className="py-3 px-5 border-b border-slate-200">Type</th>
-                  <th className="py-3 px-5 border-b border-slate-200">Contracted Rate</th>
                   <th className="py-3 px-5 border-b border-slate-200">Estimated Time</th>
                   <th className="py-3 px-5 border-b border-slate-200">Description</th>
                   <th className="py-3 px-5 border-b border-slate-200 text-right"></th>
@@ -360,18 +350,6 @@ const TaskGroupDetails = () => {
                       </span>
                     </td>
 
-                    <td className="py-3 px-5 text-sm text-slate-700 whitespace-nowrap">
-                      ${(task.contractedRate / 100).toFixed(2)}
-                      <input
-                        className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                        onChange={(e) => {
-                          setTaskDescription(e.target.value);
-                        }}
-                        type="text"
-                        placeholder="Rate"
-                        value={taskDescription}
-                      />
-                    </td>
 
                     <td className="py-3 px-5 text-sm text-slate-700 whitespace-nowrap">{task.estimatedTime}</td>
 
@@ -477,15 +455,6 @@ const TaskGroupDetails = () => {
                 />
               </div>
 
-              <input
-                onChange={(e) => {
-                  setTaskLaborCost(e.target.value);
-                }}
-                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                type="text"
-                placeholder="Contracted Rate"
-                value={taskLaborCost}
-              />
 
               <input
                 onChange={(e) => {

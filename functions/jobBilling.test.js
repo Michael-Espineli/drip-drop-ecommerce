@@ -21,3 +21,51 @@ test('separate active parts block combined collection even if another job invoic
  const f=setup(),invoice=await f.worker.create(request());f.db.set('salesInvoices/part',{companyId:'company',customerId:'customer',jobId:'job',billingScope:'approvedPart',status:'open',amountPaidCents:0});await assert.rejects(f.worker.create(request()),{code:'failed-precondition'});
  f.db.set('salesInvoices/part',{status:'void'},{merge:true});assert.equal((await f.worker.create(request())).id,invoice.id);
 });
+
+test('a job draft bills services and products while dropping retired task charges', async () => {
+  const f = setup();
+  f.db.set('companies/company/workOrders/job', {
+    estimateTotalCents: 15000,
+    estimateLineItems: [
+      { id: 'service', type: 'service', taskIds: ['inspect'], unitAmountCents: 7000, totalAmountCents: 7000 },
+      { id: 'part', type: 'material', unitAmountCents: 3000, totalAmountCents: 3000 },
+      { id: 'scope_task_inspect', unitAmountCents: 5000, totalAmountCents: 5000 },
+    ],
+  }, { merge: true });
+  const payload = request({ agreementId: '', contractId: '' });
+  const invoice = await f.worker.create(payload);
+  assert.deepEqual(invoice.lineItems.map(line => line.id), ['service', 'part']);
+  assert.equal(invoice.totalAmountCents, 10000);
+  assert.equal((await f.worker.create(payload)).id, invoice.id);
+});
+
+test('job invoices require revised acceptance for saved task charges and reject task-only drafts', async () => {
+  const task = { id: 'inspection', sourceType: 'task', unitAmountCents: 5000, totalAmountCents: 5000 };
+  const f = setup();
+  f.db.set('salesAgreements/agreement', { totalAmountCents: 5000, lineItems: [task] }, { merge: true });
+  await assert.rejects(f.worker.create(request()), /accept a revised estimate/);
+  f.db.set('companies/company/workOrders/job', { estimateLineItems: [task], estimateTotalCents: 5000 }, { merge: true });
+  await assert.rejects(f.worker.create(request({ agreementId: '', contractId: '' })), /priced service, visit, or product/);
+  assert.equal((await f.db.collection('salesInvoices').get()).size, 0);
+});
+
+test('conversion rejects an existing task-priced draft and preserves an issued invoice', async () => {
+  const f = setup();
+  const path = 'salesInvoices/legacy';
+  f.db.set(path, { companyId: 'company', jobId: 'job', status: 'draft', totalAmountCents: 5000,
+    lineItems: [{ id: 'task', type: 'Task', name: 'Legacy checklist work', totalAmountCents: 5000 }] });
+  await assert.rejects(f.worker.create(request()), /Remove legacy task charges/);
+  f.db.set(path, { status: 'open' }, { merge: true });
+  const issued = await f.worker.create(request());
+  assert.equal(issued.id, 'legacy');
+  assert.equal(issued.totalAmountCents, 5000);
+});
+
+test('a legacy job total cannot carry forward task prices through a fallback invoice line', async () => {
+  const f = setup();
+  f.db.set('companies/company/workOrders/job', { rateAmountCents: 5000 }, { merge: true });
+  f.db.set('companies/company/workOrders/job/tasks/inspection', { billableLaborCents: 5000 });
+  const invoiceDraft = { lineItems: [{ id: 'legacy-total', unitAmountCents: 5000, totalAmountCents: 5000 }] };
+  await assert.rejects(f.worker.create(request({ agreementId: '', contractId: '', invoiceDraft })), /Save a revised estimate/);
+  assert.equal((await f.db.collection('salesInvoices').get()).size, 0);
+});

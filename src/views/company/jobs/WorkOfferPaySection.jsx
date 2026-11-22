@@ -2,17 +2,7 @@ import React from "react";
 import { jobPayFields } from "../../../utils/payroll/payCalculation";
 
 const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format((Number(value) || 0) / 100);
-const paySourceLabels = {
-  technicianRate: "Technician rate",
-  taskContractedRate: "Task contracted amount",
-  taskContractedRateThenTechnicianRate: "Task contracted amount, then technician rate",
-  technicianRateThenTaskContractedRate: "Technician rate, then task contracted amount",
-  hourlyActualTime: "Hourly actual time",
-  hourlyEstimatedTime: "Hourly estimated time",
-  none: "No automatic task pay",
-};
-
-export default function WorkOfferPaySection({ form, onChange, tasks, services = [], payTypes, paySettings, canIncentivize, quote, quoteError }) {
+export default function WorkOfferPaySection({ form, onChange, services = [], payTypes, canIncentivize, quote, quoteError }) {
   const diagnostic = form.workPurpose === "diagnostic";
   const incentiveEnabled = form.incentiveType !== "none";
   const fieldClass = "mt-2 w-full rounded-lg border border-gray-300 bg-white p-3 font-normal text-gray-900";
@@ -23,7 +13,7 @@ export default function WorkOfferPaySection({ form, onChange, tasks, services = 
           <h4 id="work-offer-pay-heading" className="font-bold text-gray-800">Technician pay</h4>
           <p className="mt-1 text-sm text-gray-600">{diagnostic
             ? "Estimate visits use the job estimate pay type and company pay rules."
-            : "Uses the pay items already saved on the selected planned services and their tasks. Amounts follow company pay rules for the selected technician."}</p>
+            : "Visit or hourly pay follows company rules for the selected technician."}</p>
         </div>
         {!diagnostic && !form.overridePay && (
           <div className="rounded-lg bg-gray-50 p-3 text-sm">
@@ -35,19 +25,7 @@ export default function WorkOfferPaySection({ form, onChange, tasks, services = 
                 return <li key={service.id} className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:gap-4"><span className="text-gray-700">{service.name || "Service"} · visit pay item</span><span className="text-gray-600">{type?.name || fields.payTypeName || "Saved service pay item"}</span></li>;
               })}
             </ul>}
-            <p className="mt-1 text-gray-600">{paySourceLabels[paySettings.taskPaySource || "technicianRateThenTaskContractedRate"] || "Company pay rules"}</p>
-            <ul className="mt-3 divide-y divide-gray-200">
-              {tasks.map((task) => {
-                const fields = jobPayFields(task);
-                const type = payTypes.find((item) => item.id === fields.payTypeId);
-                const pay = fields.payrollMode === "custom" ? fields.manualPayOverrideCents == null ? "Custom pay amount needs setup" : `Custom pay: ${money(fields.manualPayOverrideCents)}`
-                  : fields.payrollMode === "included" ? "No additional task pay"
-                    : fields.payrollMode === "unpaid" ? "Unpaid work"
-                      : type?.name || fields.payTypeName || "Pay item needs setup in the plan";
-                return <li key={task.id} className="flex flex-col gap-1 py-2 sm:flex-row sm:justify-between sm:gap-4"><span className="text-gray-700">{task.name || "Task"}</span><span className="text-gray-600">{pay}</span></li>;
-              })}
-              {!tasks.length && <li className="py-2 text-gray-600">Select planned tasks to see their pay setup.</li>}
-            </ul>
+            {!services.some((service) => jobPayFields(service).payTypeId) && <p className="mt-1 text-gray-600">Uses the job visit pay type.</p>}
           </div>
         )}
         <label className="flex items-center gap-3 text-sm font-semibold text-gray-700">
@@ -57,18 +35,17 @@ export default function WorkOfferPaySection({ form, onChange, tasks, services = 
         </label>
         {form.overridePay && (
           <div id="work-offer-pay-overrides" className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-            <p className="text-sm text-amber-900">These settings apply to this offer. A visit pay type uses company rules alongside the tasks’ saved pay items. A fixed amount or unpaid offer replaces the base pay for the selected work.</p>
+            <p className="text-sm text-amber-900">Choose a visit pay type, a fixed visit amount, or unpaid work.</p>
             <div className="grid gap-4 md:grid-cols-2">
               <label className="text-sm font-semibold text-gray-700">Visit pay type override
                 <select value={form.serviceStopTypeId} onChange={(event) => onChange("serviceStopTypeId", event.target.value)} className={fieldClass}>
-                  <option value="">{diagnostic ? "Use job estimate pay type" : "Use planned task pay only"}</option>
+                  <option value="">{diagnostic ? "Use job estimate pay type" : "Use job visit pay type"}</option>
                   {payTypes.map((type) => <option key={type.id} value={type.id}>{type.name || type.type || "Pay item"}</option>)}
                 </select>
               </label>
               <label className="text-sm font-semibold text-gray-700">Pay source override
                 <select value={form.paySource} onChange={(event) => onChange("paySource", event.target.value)} className={fieldClass}>
                   <option value="Technician Rate">Use company pay rules</option>
-                  <option value="Task Contracted Rates">Task contracted amounts</option>
                   <option value="Offered Amount">Fixed offered amount</option>
                   <option value="Unpaid">Unpaid work</option>
                 </select>

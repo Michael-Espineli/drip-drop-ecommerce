@@ -1,4 +1,4 @@
-import { calculatePayLines, jobPayFields, selectPayRate } from "./payCalculation";
+import { calculatePayLines, selectPayRate } from "./payCalculation";
 import { canonicalJobTaskType, JOB_TASK_TYPE_NAMES } from "../jobTaskTypes";
 
 export const moneyInputCents = (value) => value === "" || value === null || value === undefined || !Number.isFinite(Number(value))
@@ -24,11 +24,9 @@ export function taskDefaultsFromPayItem(task, item, previousItem = null) {
   if (!task.type || ["General", "Basic"].includes(task.type) || (previousItem && task.type === suggestedTaskType(previousItem))) {
     next.type = suggestedTaskType(item);
   }
-  if (!task.payTypeId) next.payTypeName = item.name || "";
   const minutes = item.estimatedMinutes ?? item.defaultEstimatedMinutes ?? item.estimatedTime;
   const previousMinutes = previousItem?.estimatedMinutes ?? previousItem?.defaultEstimatedMinutes ?? previousItem?.estimatedTime;
   if (present(minutes) && (!present(task.estimatedMinutes) || (present(previousMinutes) && Number(task.estimatedMinutes) === Number(previousMinutes)))) next.estimatedMinutes = String(minutes);
-  if (!present(task.payQuantity) && present(item.defaultPayQuantity)) next.payQuantity = Number(item.defaultPayQuantity);
   return next;
 }
 
@@ -41,19 +39,17 @@ export function updateServiceTaskPayrollField(task, field, value, payTypes = [],
 
 export function serializeServiceTasks(tasks = []) {
   return tasks.filter((task) => String(task.name || "").trim()).map((task) => ({
-    ...jobPayFields(task), id: task.id, name: task.name.trim(), title: task.name.trim(),
+    id: task.id, name: task.name.trim(), title: task.name.trim(),
     type: canonicalJobTaskType(task.type || "General"), taskType: canonicalJobTaskType(task.type || "General"),
     description: String(task.description || "").trim(),
     estimatedMinutes: Math.max(Number(task.estimatedMinutes || 0), 0),
-    laborCostCents: moneyInputCents(task.laborCost) || 0,
-    billingLaborPriceCents: moneyInputCents(task.billingLaborPrice) || 0,
     customerApprovalRequired: Boolean(task.customerApprovalRequired),
     genericItemId: task.genericItemId || "", dataBaseItemId: task.dataBaseItemId || "",
     productQuantity: Math.max(Number(task.productQuantity || 1), 0.01),
   }));
 }
 
-export function estimateServicePayroll({ companyId, companyUsers = [], payTypes = [], rates = [], settings = {}, tasks = [], inheritedPayTypeId = "", customerPriceCents = null, date = new Date(), includeServiceStopPay = false, serviceQuantity = 1 }) {
+export function estimateServicePayroll({ companyId, companyUsers = [], payTypes = [], rates = [], settings = {}, tasks = [], inheritedPayTypeId = "", customerPriceCents = null, date = new Date(), includeServiceStopPay = false }) {
   const people = new Map();
   companyUsers.forEach((worker) => {
     const id = workerId(worker);
@@ -62,37 +58,26 @@ export function estimateServicePayroll({ companyId, companyUsers = [], payTypes 
     people.set(id, { ...worker, userId: id, userName: workerName(worker) });
   });
   const workers = [...people.values()];
-  const activeRates = rates.filter((rate) => rate.active !== false && rate.isActive !== false);
-  const sourceTasks = tasks.length || includeServiceStopPay ? tasks : inheritedPayTypeId ? [{ id: "service-pay-preview", name: "Service", payTypeId: inheritedPayTypeId }] : [];
-  const normalizedTasks = sourceTasks.map((task, index) => ({
-    ...jobPayFields(task, { payTypeId: inheritedPayTypeId }),
-    id: task.id || `service-task-${index}`, name: task.name || `Task ${index + 1}`,
-    estimatedTime: Number(task.estimatedMinutes ?? task.estimatedTime ?? 0),
-    contractedRate: present(task.laborCost) ? moneyInputCents(task.laborCost) : Number(task.contractedRate ?? task.laborCostCents ?? 0),
-    payrollBaseAmountCents: task.payrollBaseAmountCents ?? customerPriceCents,
-    bodyOfWaterId: task.bodyOfWaterId || "", bodyOfWaterIds: task.bodyOfWaterIds || [], bodyOfWaterCount: task.bodyOfWaterCount,
-    serviceLocationId: task.serviceLocationId || "", serviceLocationIds: task.serviceLocationIds || [], serviceLocationCount: task.serviceLocationCount,
-  }));
+  const activeRates = rates.filter((rate) => rate.active !== false && rate.isActive !== false && rate.rateType !== "flatPerTask"
+    && ["serviceStop", "technicianHourly"].includes(rate.payBasis));
   const disabled = settings.payrollEnabled === false || settings.companyPayrollEnabled === false || settings.payrollDisabled === true;
   const clockBased = settings.payMode === "hourlyOnly" && ["workLogs", "activeRouteDuration", "activeRouteLogs"].includes(settings.hourlyPaySource);
-  const summaries = workers.map((worker) => {
+  const hasScope = Boolean(includeServiceStopPay && inheritedPayTypeId);
+  const estimatedMinutes = tasks.reduce((total, task) => total + Number(task.estimatedMinutes ?? task.estimatedTime ?? 0), 0);
+  const summaries = hasScope ? workers.map((worker) => {
     const lines = calculatePayLines({
-      companyId, settings, workTypes: payTypes, rates: activeRates, workers, date, mode: "preview", jobTaskSource: !includeServiceStopPay,
+      companyId, settings, workTypes: payTypes, rates: activeRates, workers, date, mode: "preview",
       serviceStop: { id: "service-cost-preview", techId: worker.userId, serviceDate: date,
-        payTypeId: inheritedPayTypeId, payQuantity: serviceQuantity, payrollBaseAmountCents: customerPriceCents,
-        estimatedMinutes: normalizedTasks.reduce((sum, task) => sum + task.estimatedTime, 0) },
-      tasks: normalizedTasks.map((task) => ({ ...task, workerId: worker.userId, workerName: worker.userName })),
+        payTypeId: inheritedPayTypeId, payrollBaseAmountCents: customerPriceCents, estimatedMinutes },
     });
     const reasons = [...new Set(lines.filter((line) => line.calculationStatus === "needsReview").map((line) => line.notes))];
-    if (clockBased) reasons.push("Pay is based on tracked work time; service tasks do not provide those hours.");
-    const calculated = lines.filter((line) => line.calculationStatus !== "needsReview");
-    const sum = (items) => items.reduce((total, line) => total + Number(line.totalAmountCents || 0), 0);
-    return { worker, lines, reasons, needsReview: reasons.length > 0, totalAmountCents: sum(calculated),
-      stopPayCents: sum(calculated.filter((line) => line.source === "serviceStop")),
-      taskPayCents: sum(calculated.filter((line) => line.source === "serviceStopTask")) };
-  });
+    if (clockBased) reasons.push("Pay is based on tracked work time.");
+    const totalAmountCents = lines.filter((line) => line.calculationStatus !== "needsReview")
+      .reduce((total, line) => total + Number(line.totalAmountCents || 0), 0);
+    return { worker, lines, reasons, needsReview: reasons.length > 0, totalAmountCents };
+  }) : [];
   const complete = summaries.filter((summary) => !summary.needsReview);
-  const selectedPayIds = [...new Set([...normalizedTasks.filter((task) => !["included", "unpaid"].includes(task.payrollMode)).map((task) => task.payTypeId), includeServiceStopPay ? inheritedPayTypeId : ""].filter(Boolean))];
+  const selectedPayIds = hasScope ? [inheritedPayTypeId] : [];
   const rateGroups = new Map();
   selectedPayIds.forEach((payTypeId) => {
     const payType = payTypes.find((type) => type.id === payTypeId);
@@ -109,15 +94,11 @@ export function estimateServicePayroll({ companyId, companyUsers = [], payTypes 
     }));
   });
   const configuredRates = [...rateGroups.values()].map(({ amounts, ...group }) => ({ ...group, minAmountCents: Math.min(...amounts), maxAmountCents: Math.max(...amounts), technicianCount: amounts.length }));
-  const hasScope = sourceTasks.length > 0 || Boolean(includeServiceStopPay && inheritedPayTypeId);
   return {
     disabled, hasScope, summaries, configuredRates,
-    usesCustomerPriceBase: configuredRates.some((rate) => rate.rateType === "percentage" &&
-      ((includeServiceStopPay && rate.payTypeId === inheritedPayTypeId) || normalizedTasks.some((task, index) => !present(sourceTasks[index].payrollBaseAmountCents) && rate.payTypeId === task.payTypeId))),
+    usesCustomerPriceBase: configuredRates.some((rate) => rate.rateType === "percentage"),
     minAmountCents: !disabled && hasScope && complete.length ? Math.min(...complete.map((summary) => summary.totalAmountCents)) : null,
     maxAmountCents: !disabled && hasScope && complete.length ? Math.max(...complete.map((summary) => summary.totalAmountCents)) : null,
-    stopPayRange: complete.length ? [Math.min(...complete.map((summary) => summary.stopPayCents)), Math.max(...complete.map((summary) => summary.stopPayCents))] : null,
-    taskPayRange: complete.length ? [Math.min(...complete.map((summary) => summary.taskPayCents)), Math.max(...complete.map((summary) => summary.taskPayCents))] : null,
     completeCount: complete.length, technicianCount: workers.length, missingCount: summaries.length - complete.length,
     needsReview: !hasScope || !workers.length || summaries.some((summary) => summary.needsReview),
     noSeparatePay: !disabled && hasScope && summaries.length > 0 && summaries.every((summary) => !summary.lines.length && !summary.needsReview),

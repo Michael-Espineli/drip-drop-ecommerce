@@ -8,7 +8,7 @@ const source=fs.readFileSync(path.join(__dirname,'../src/views/company/jobs/JobD
 const begin=source.indexOf('  const ensureJobSalesInvoice = async '),end=source.indexOf('  const activeWorkOfferTaskIds',begin);
 function fixture(existing=null){
  const rows=new Map(),batches=[];
- const context={exports:{},getCustomerEmail:()=> 'homeowner@example.test',findLinkedSalesInvoice:async()=>existing || [...rows].find(([key])=>key.startsWith('salesInvoices/'))?.[1] || null,
+ const context={exports:{},...require("./jobScopePricing"),getCustomerEmail:()=> 'homeowner@example.test',findLinkedSalesInvoice:async()=>existing || [...rows].find(([key])=>key.startsWith('salesInvoices/'))?.[1] || null,
   selectedSalesAgreement:{id:'agreement',totalAmountCents:10000},selectedContract:null,linkedSalesAgreement:null,getSalesLineItemsFromSnapshot:()=>[{id:'service',name:'Service',totalAmountCents:10000}],
   cents:value=>Number(value)||0,job:{rate:10000,customerId:'customer'},customer:{id:'customer'},jobId:'job',recentlySelectedCompany:'company',authCtx:{},
   getCustomerUserId:()=> 'homeowner',getCustomerDisplayName:()=> 'Homeowner',salesDueDateForTerms:()=>new Date('2026-11-02'),Timestamp:{fromDate:v=>v},

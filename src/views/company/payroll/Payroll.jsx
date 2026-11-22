@@ -3,12 +3,12 @@ import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { workspaceButtonClass } from '../../../components/workspace/workspaceStyles';
 import { technicianWorkflow } from "../../../utils/technicianWorkflow";
-import { buildCompanyPayType, defaultStopPayCategories, emptyWorkTypeForm, rateTypeOptions, resolveStopPayCategories, stackBehaviorOptions, workCategoryOptions } from "../../../utils/payroll/payTypeSetup";
+import { buildCompanyPayType, defaultStopPayCategories, emptyWorkTypeForm, rateTypeOptions, resolveStopPayCategories, stackBehaviorOptions, supportedRateType, workCategoryOptions } from "../../../utils/payroll/payTypeSetup";
 import PayRequestsPanel from './PayRequestsPanel';
 import PayStatementDailySummary from "./PayStatementDailySummary";
 import PayrollStopCompletion from "./PayrollStopCompletion";
 import { buildStatementCandidateGroups, statementPreviewSummary, statementPreviewSummaryState } from "../../../utils/payroll/statementCandidates";
-import { canClearZeroTask, suggestedBasis } from "../../../utils/payroll/payCalculation";
+import { canClearZeroTask, isTaskPayLine, normalizePaySources, suggestedBasis } from "../../../utils/payroll/payCalculation";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import usePayrollNotifications from "../../../hooks/usePayrollNotifications";
 import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -236,8 +236,7 @@ const defaultPaySettings = (companyId) => ({
   companyId,
   payrollEnabled: true,
   payMode: "productionOnly",
-  routePaySource: "serviceStopAndCompletedTasks",
-  taskPaySource: "technicianRateThenTaskContractedRate",
+  routePaySource: "serviceStop",
   hourlyPaySource: "none",
   allowMultipleWorkTypesPerStop: false,
   defaultStackBehavior: "stackable",
@@ -255,7 +254,6 @@ const hourlyPaySettings = (companyId) => ({
   ...defaultPaySettings(companyId),
   payMode: "hourlyOnly",
   routePaySource: "none",
-  taskPaySource: "none",
   hourlyPaySource: "activeRouteDuration",
   allowMultipleWorkTypesPerStop: false,
   payCommercialAsSeparateWorkType: false,
@@ -282,7 +280,7 @@ const normalizePaySettingsForIos = (settings = {}, companyId = "") => {
     normalized.hourlyPaySource = "activeRouteLogs";
   }
 
-  return normalized;
+  return normalizePaySources(normalized);
 };
 
 const emptyRateForm = (effectiveStartDate = "") => ({
@@ -296,11 +294,10 @@ const emptyRateForm = (effectiveStartDate = "") => ({
 });
 
 
-const payBasisOptions = ["serviceStop", "serviceStopTask", "technicianHourly"];
+const payBasisOptions = ["serviceStop", "technicianHourly"];
 const payModeOptions = ["productionOnly", "hourlyOnly", "hybrid"];
-const routePaySourceOptions = ["serviceStop", "completedTasks", "serviceStopAndCompletedTasks", "hourlyServiceStopDuration", "hourlyTaskActualTime", "none"];
-const taskPaySourceOptions = ["technicianRate", "taskContractedRate", "technicianRateThenTaskContractedRate", "taskContractedRateThenTechnicianRate", "hourlyActualTime", "hourlyEstimatedTime", "none"];
-const hourlyPaySourceOptions = ["workLogs", "activeRouteDuration", "activeRouteLogs", "serviceStopDuration", "taskActualTime", "none"];
+const routePaySourceOptions = ["serviceStop", "hourlyServiceStopDuration", "none"];
+const hourlyPaySourceOptions = ["workLogs", "activeRouteDuration", "activeRouteLogs", "serviceStopDuration", "none"];
 
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
 
@@ -356,7 +353,6 @@ const payCategoryInfoItems = [
 ];
 const rateTypeInfoItems = [
   { label: "Flat Per Stop", description: "One fixed amount for the completed visit." },
-  { label: "Flat Per Task", description: "One fixed amount for each completed payable task." },
   { label: "Hourly", description: "Amount is multiplied by minutes or hours, depending on the pay source." },
   { label: "Per Body of Water", description: "Amount is multiplied by the number of bodies of water." },
   { label: "Per Service Location", description: "Amount is multiplied by the number of service locations." },
@@ -364,7 +360,7 @@ const rateTypeInfoItems = [
   { label: "Manual", description: "Used for manually entered or reviewed payroll amounts." },
 ];
 const stackBehaviorInfoItems = [
-  { label: "Stackable", description: "Intended to pay alongside other matching stop or task pay." },
+  { label: "Stackable", description: "Intended to pay alongside other matching visit or hourly pay." },
   { label: "Exclusive", description: "Intended for cases where only one matching pay type should win." },
   { label: "Replaces Base", description: "Intended for pay that replaces the normal base stop pay." },
   { label: "Modifier", description: "Intended for pay that adjusts another pay amount." },
@@ -1790,7 +1786,7 @@ const Payroll = ({ mode = "payroll" }) => {
             bucketSortOrder: Number(bucket.sortOrder ?? 0),
             workTypeId: workType.id,
             defaultPayBasis: suggestedBasis(workType),
-            defaultRateType: workType.defaultRateType || "flatPerStop",
+            defaultRateType: supportedRateType(workType.defaultRateType),
             isGeneralHourly: false,
           };
         })
@@ -1943,7 +1939,7 @@ const Payroll = ({ mode = "payroll" }) => {
       stopPayCategoryId: category.id,
       category: workType.category || category.defaultWorkCategory,
       iconName: workType.iconName || "",
-      defaultRateType: workType.defaultRateType || category.defaultRateType,
+      defaultRateType: supportedRateType(workType.defaultRateType || category.defaultRateType),
       defaultStackBehavior: workType.defaultStackBehavior || "stackable",
     });
     setStopPayModal("workType");
@@ -2396,6 +2392,7 @@ const Payroll = ({ mode = "payroll" }) => {
     const matches = technicianRates.filter((rate) =>
       rate.technicianId === worker.matrixTechnicianId &&
       ratePayTypeId(rate) === column.workTypeId &&
+      payBasisOptions.includes(rate.payBasis) && rateTypeOptions.includes(rate.rateType) &&
       (!column.isGeneralHourly || rate.payBasis === "technicianHourly" && rate.rateType === "hourly")
     );
     const current = matches.filter((rate) => effectiveRateStatus(rate, rateStatusTime) === "active")
@@ -3042,10 +3039,12 @@ const Payroll = ({ mode = "payroll" }) => {
       : isLineItemPaid(item) ? "This line item has already been paid."
       : isLineItemVoided(item) ? "This line item has been voided and cannot be approved."
       : isLineItemApproved(item) ? "This line item has already been approved."
+      : isTaskPayLine(item) ? "Task earnings were retired. Review this historical line before making any adjustment."
       : lockReason || (item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before approving it.${reviewDetail}` : ""));
     const payment = unavailable || (isLineItemPaid(item) ? "This line item has already been paid."
       : isLineItemVoided(item) ? "This line item has been voided and cannot be marked paid."
       : canClear ? "$0 tasks do not require payment. Use Clear $0 to remove this task from the queue."
+      : !isLineItemApproved(item) && isTaskPayLine(item) ? "Task earnings were retired. Review this historical line before making any adjustment."
       : lockReason || (item.calculationStatus === "needsReview" ? `Resolve this line item's payroll review before marking it paid.${reviewDetail}` : ""));
     return { approvalDisabledReason: approval, paymentDisabledReason: payment };
   };
@@ -3214,7 +3213,7 @@ const Payroll = ({ mode = "payroll" }) => {
             <h2 className="text-lg font-bold text-slate-900">Clear $0 payroll tasks</h2>
             <p className="mt-1 font-semibold text-slate-900">{clearableZeroTasks.length} $0 task line(s) on this page</p>
             <p className="mt-2 text-sm text-slate-700">Click the button below, then confirm, to remove these $0 pay lines from the payroll queue. Completed tasks and payroll history stay saved.</p>
-            <p className="mt-1 text-sm text-slate-700">For Needs Review items, first confirm that the service payment covers the task or that no extra task pay is owed.</p>
+            <p className="mt-1 text-sm text-slate-700">Use this review for historical zero-dollar task entries.</p>
             <div className="mt-4">
               <PayrollActionButton type="button" onClick={() => clearZeroTasks(clearableZeroTasks)}
                 disabledReason={zeroTaskDisabledReason}
@@ -3792,7 +3791,7 @@ const Payroll = ({ mode = "payroll" }) => {
         <label className="text-sm font-semibold text-slate-700">
           Route pay source
           <select
-            value={settingsForm.routePaySource || "serviceStopAndCompletedTasks"}
+            value={normalizePaySources(settingsForm).routePaySource}
             onChange={(event) => setSettingsForm((form) => ({ ...form, routePaySource: event.target.value }))}
             className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
           >
@@ -3800,19 +3799,9 @@ const Payroll = ({ mode = "payroll" }) => {
           </select>
         </label>
         <label className="text-sm font-semibold text-slate-700">
-          Task pay source
-          <select
-            value={settingsForm.taskPaySource || "technicianRateThenTaskContractedRate"}
-            onChange={(event) => setSettingsForm((form) => ({ ...form, taskPaySource: event.target.value }))}
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-          >
-            {taskPaySourceOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
-          </select>
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
           Hourly pay source
           <select
-            value={settingsForm.hourlyPaySource || "none"}
+            value={normalizePaySources(settingsForm).hourlyPaySource || "none"}
             onChange={(event) => setSettingsForm((form) => ({ ...form, hourlyPaySource: event.target.value }))}
             className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
           >
@@ -3883,11 +3872,6 @@ const Payroll = ({ mode = "payroll" }) => {
         title: "Technician Rate",
         subtitle: "Worker-specific pay for that type",
         example: "Example: Michael · $80",
-      },
-      {
-        title: "Task Pay",
-        subtitle: "Optional extra pay types on finished tasks",
-        example: "Example: Maintenance · $20",
       },
       {
         title: "Payroll Line",
@@ -4652,7 +4636,7 @@ const Payroll = ({ mode = "payroll" }) => {
                       setRateForm((form) => ({
                         ...form, workTypeId,
                         payBasis: type ? suggestedBasis(type) : "technicianHourly",
-                        rateType: type ? type.defaultRateType || "flatPerStop" : "hourly",
+                        rateType: type ? supportedRateType(type.defaultRateType) : "hourly",
                       }));
                     }} className={controlClass}>
                       <option value="">General hourly</option>
@@ -4666,7 +4650,7 @@ const Payroll = ({ mode = "payroll" }) => {
                       setRateForm((form) => ({
                         ...form, payBasis,
                         rateType: payBasis === "technicianHourly" ? "hourly" : form.rateType !== "hourly" ? form.rateType
-                          : payBasis === "serviceStopTask" ? "flatPerTask" : "flatPerStop",
+                          : "flatPerStop",
                       }));
                     }} className={controlClass}>
                       {payBasisOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
@@ -4713,7 +4697,7 @@ const Payroll = ({ mode = "payroll" }) => {
                     {rateRows.map((rate) => {
                       const payTypeId = ratePayTypeId(rate);
                       const payTypeName = payTypeId ? rate.payTypeName || workTypeName(payTypeId) : "General hourly";
-                      const canEdit = ["active", "scheduled"].includes(rate.currentStatus) && payBasisOptions.includes(rate.payBasis) &&
+                      const canEdit = ["active", "scheduled"].includes(rate.currentStatus) && payBasisOptions.includes(rate.payBasis) && rateTypeOptions.includes(rate.rateType) &&
                         (payTypeId ? activePayTypeIds.has(payTypeId) : rate.payBasis === "technicianHourly");
                       return (
                         <tr key={rate.id}>

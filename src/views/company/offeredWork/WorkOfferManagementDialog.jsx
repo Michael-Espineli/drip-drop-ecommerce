@@ -235,7 +235,7 @@ export default function WorkOfferManagementDialog({ companyId, offer, workers = 
                     </OfferSection>
                     <OfferSection title="Pay & incentive" icon={FiDollarSign}>
                       {editTerms ? <>
-                        <Field label="Pay source"><select value={form.paySource} onChange={event => change("paySource", event.target.value)} className={inputClass}>{["Technician Rate", "Task Contracted Rates", "Offered Amount", "Unpaid"].map(value => <option key={value}>{value}</option>)}</select></Field>
+                        <Field label="Pay source"><select value={form.paySource} onChange={event => change("paySource", event.target.value)} className={inputClass}>{["Technician Rate", "Offered Amount", "Unpaid"].map(value => <option key={value}>{value}</option>)}</select></Field>
                         {form.paySource === "Offered Amount" && <Field label="Offered amount"><input type="number" min="0" step="0.01" required value={form.offeredAmount} onChange={event => change("offeredAmount", event.target.value)} className={inputClass} /></Field>}
                       </> : <dl className="space-y-4"><Detail label={details.pay ? "Agreed pay" : "Offered pay"}>{details.pay?.totalCents != null ? money(details.pay.totalCents) : current.paySource === "Offered Amount" ? money(current.offeredAmountCents) : current.paySource || "Technician Rate"}</Detail><Detail label="Pay source">{current.paySource || "Technician Rate"}</Detail></dl>}
                       <dl><Detail label="Incentive">{bonusLabel}</Detail></dl>

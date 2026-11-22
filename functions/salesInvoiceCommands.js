@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { billingActor } = require('./billingAccess');
 const { documentId, fail } = require('./companyActor');
 const { getStripe } = require('./stripe/stripeClient');
+const { isTaskChargeLine, draftTaskChargeMessage } = require('./jobScopePricing');
 
 const text = value => String(value ?? '').trim();
 const normalized = value => text(value).replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -211,9 +212,16 @@ function createSalesInvoiceCommands(db, stripeProvider = getStripe, now = () => 
           const nextStatus = changes.status === 'draft' && paid === 0 ? 'draft' : nextDue === 0
             ? paid > 0 ? 'paid' : changes.writeOffAmountCents > 0 || changes.status === 'uncollectible' ? 'uncollectible' : 'paid'
             : paid > 0 ? 'partiallyPaid' : changes.status;
+          const lineItems = changes.lineItems.map(line => {
+            const previous = oldLines.get(line.id);
+            const metadata = previous?.metadata || {};
+            return {...line, metadata: previous && isTaskChargeLine(previous) ? {...metadata, legacyTaskCharge: true} : metadata};
+          });
+          if (normalized(invoice.status) === 'draft' && nextStatus !== 'draft' && lineItems.some(isTaskChargeLine)) {
+            fail('failed-precondition', draftTaskChargeMessage);
+          }
           patch = {...fields,...common,dueDate:dueDateMillis === null ? null:admin.firestore.Timestamp.fromMillis(dueDateMillis),
-            lineItems:changes.lineItems.map(line=>({...line,metadata:oldLines.get(line.id)?.metadata || {}})),
-            amountDueCents:nextDue,status:nextStatus,
+            lineItems,amountDueCents:nextDue,status:nextStatus,
             paidAt:nextStatus === 'paid' ? invoice.paidAt || timestamp:null};
           result={invoiceId,status:patch.status,amountDueCents:nextDue};
         } else if (action === 'void') {

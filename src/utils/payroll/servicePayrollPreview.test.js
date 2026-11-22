@@ -2,9 +2,9 @@ import { estimateServicePayroll, serializeServiceTasks, taskDefaultsFromPayItem,
 
 const date = new Date("2026-10-28T12:00:00Z");
 const workers = [{ id: "company-a", userId: "a", userName: "Alex", status: "Active" }, { id: "company-b", userId: "b", userName: "Blair", status: "Active" }];
-const clean = { id: "clean", name: "Filter clean", category: "maintenance", defaultRateType: "flatPerTask", defaultStackBehavior: "stackable", description: "Open, clean, and inspect", defaultEstimatedMinutes: 30 };
-const rate = (technicianId, amountCents, extra = {}) => ({ id: `rate-${technicianId}`, companyId: "company", technicianId, payTypeId: "clean", payBasis: "serviceStopTask", rateType: "flatPerTask", amountCents, status: "Active", ...extra });
-const args = (overrides = {}) => ({ companyId: "company", date, companyUsers: workers, payTypes: [clean], rates: [rate("a", 2000), rate("b", 4000)], settings: { taskPaySource: "technicianRate", routePaySource: "completedTasks" }, tasks: [{ id: "task", payTypeId: "clean", estimatedMinutes: 30 }], ...overrides });
+const clean = { id: "clean", name: "Filter clean", category: "maintenance", defaultRateType: "flatPerStop", defaultStackBehavior: "stackable", description: "Open, clean, and inspect", defaultEstimatedMinutes: 30 };
+const rate = (technicianId, amountCents, extra = {}) => ({ id: `rate-${technicianId}`, companyId: "company", technicianId, payTypeId: "clean", payBasis: "serviceStop", rateType: "flatPerStop", amountCents, status: "Active", ...extra });
+const args = (overrides = {}) => ({ companyId: "company", date, companyUsers: workers, payTypes: [clean], rates: [rate("a", 2000), rate("b", 4000)], settings: { routePaySource: "serviceStop" }, includeServiceStopPay: true, inheritedPayTypeId: "clean", tasks: [{ id: "task", payTypeId: "clean", estimatedMinutes: 30 }], ...overrides });
 
 test("uses current workers, effective rates, and the lowest/highest complete technician totals", () => {
   const estimate = estimateServicePayroll(args({ companyUsers: [...workers, { userId: "inactive", active: false }, { userId: "base", isRateTemplate: true }], rates: [
@@ -15,16 +15,16 @@ test("uses current workers, effective rates, and the lowest/highest complete tec
   expect(estimate.configuredRates[0]).toEqual(expect.objectContaining({ minAmountCents: 2000, maxAmountCents: 4000, technicianCount: 2 }));
 });
 
-test("totals the same service for each worker before finding the range", () => {
+test("estimates each worker against the chosen visit rate instead of totaling linked rates", () => {
   const other = { ...clean, id: "repair", name: "Repair" };
   const estimate = estimateServicePayroll(args({ payTypes: [clean, other], tasks: [{ id: "one", payTypeId: "clean" }, { id: "two", payTypeId: "repair" }],
     rates: [rate("a", 1000), rate("b", 10000), rate("a", 10000, { id: "a-repair", payTypeId: "repair" }), rate("b", 1000, { id: "b-repair", payTypeId: "repair" })],
   }));
-  expect(estimate.minAmountCents).toBe(11000);
-  expect(estimate.maxAmountCents).toBe(11000);
+  expect(estimate.minAmountCents).toBe(1000);
+  expect(estimate.maxAmountCents).toBe(10000);
 });
 
-test("stop pay and selected task extras are forecast separately without balancing checklist amounts", () => {
+test("service forecasts ignore both rated and fixed task extras", () => {
   const visit = { id: "visit", name: "Service stop", category: "repair", defaultRateType: "flatPerStop" };
   const setup = args({ includeServiceStopPay: true, inheritedPayTypeId: "visit",
     settings: { routePaySource: "serviceStopAndCompletedTasks", taskPaySource: "technicianRate" }, payTypes: [visit, clean],
@@ -32,14 +32,14 @@ test("stop pay and selected task extras are forecast separately without balancin
     tasks: Array.from({ length: 10 }, (_, index) => ({ id: `routine-${index}`, payrollMode: "included", laborCost: "0" })),
   });
   const ordinary = estimateServicePayroll(setup);
-  expect(ordinary).toEqual(expect.objectContaining({ minAmountCents: 5000, maxAmountCents: 6000, needsReview: false, stopPayRange: [5000, 6000], taskPayRange: [0, 0] }));
+  expect(ordinary).toEqual(expect.objectContaining({ minAmountCents: 5000, maxAmountCents: 6000, needsReview: false }));
   const extra = estimateServicePayroll({ ...setup, tasks: [...setup.tasks, { id: "extra", payTypeId: "clean", payrollMode: "automatic", payrollStackBehavior: "stackable" }] });
-  expect(extra).toEqual(expect.objectContaining({ minAmountCents: 6500, maxAmountCents: 8000, stopPayRange: [5000, 6000], taskPayRange: [1500, 2000] }));
+  expect(extra).toEqual(expect.objectContaining({ minAmountCents: 5000, maxAmountCents: 6000 }));
   const custom = estimateServicePayroll({ ...setup, tasks: [...setup.tasks, { id: "extra", payrollMode: "custom", manualPayOverrideCents: 1200, payrollStackBehavior: "stackable" }] });
-  expect(custom).toEqual(expect.objectContaining({ minAmountCents: 6200, maxAmountCents: 7200, taskPayRange: [1200, 1200] }));
+  expect(custom).toEqual(expect.objectContaining({ minAmountCents: 5000, maxAmountCents: 6000 }));
 });
 
-test("hourly rate ranges are distinct from the cost of the estimated task minutes", () => {
+test("hourly rates apply to the estimated visit duration", () => {
   const estimate = estimateServicePayroll(args({ payTypes: [{ ...clean, defaultRateType: "hourly" }], rates: [rate("a", 6000, { payBasis: "technicianHourly", rateType: "hourly" }), rate("b", 9000, { payBasis: "technicianHourly", rateType: "hourly" })] }));
   expect(estimate).toEqual(expect.objectContaining({ minAmountCents: 3000, maxAmountCents: 4500, needsReview: false }));
   expect(estimate.configuredRates[0]).toEqual(expect.objectContaining({ minAmountCents: 6000, maxAmountCents: 9000, rateType: "hourly" }));
@@ -48,10 +48,10 @@ test("hourly rate ranges are distinct from the cost of the estimated task minute
   expect(noMinutes.needsReview).toBe(true);
 });
 
-test("service-line quantity scales flat service pay while percentage pay uses the entered line total once", () => {
+test("flat pay is estimated per visit and percentage pay uses the entered line total once", () => {
   const setup = args({ includeServiceStopPay: true, inheritedPayTypeId: "clean", serviceQuantity: 2, tasks: [],
     settings: { routePaySource: "serviceStopAndCompletedTasks", taskPaySource: "technicianRate" } });
-  expect(estimateServicePayroll(setup)).toEqual(expect.objectContaining({ minAmountCents: 4000, maxAmountCents: 8000 }));
+  expect(estimateServicePayroll(setup)).toEqual(expect.objectContaining({ minAmountCents: 2000, maxAmountCents: 4000 }));
   const percentage = estimateServicePayroll({ ...setup, customerPriceCents: 20000,
     rates: [rate("a", 1000, { rateType: "percentage" }), rate("b", 1500, { rateType: "percentage" })] });
   expect(percentage).toEqual(expect.objectContaining({ minAmountCents: 2000, maxAmountCents: 3000, usesCustomerPriceBase: true }));
@@ -63,11 +63,11 @@ test("missing rates are review cases, and inactive items cannot supply an estima
   expect(estimateServicePayroll(args({ payTypes: [{ ...clean, isActive: false }] }))).toEqual(expect.objectContaining({ minAmountCents: null, maxAmountCents: null, needsReview: true }));
 });
 
-test("custom, included, unpaid, quantity, and disabled modes follow the shared calculator", () => {
-  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payrollMode: "custom", manualPayOverrideCents: 0 }] })).maxAmountCents).toBe(0);
-  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payrollMode: "included" }] })).maxAmountCents).toBe(0);
-  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payrollMode: "unpaid" }] })).maxAmountCents).toBe(0);
-  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payQuantity: 2 }] })).maxAmountCents).toBe(8000);
+test("legacy task policies do not change the forecast and disabled payroll suppresses it", () => {
+  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payrollMode: "custom", manualPayOverrideCents: 0 }] })).maxAmountCents).toBe(4000);
+  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payrollMode: "included" }] })).maxAmountCents).toBe(4000);
+  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payrollMode: "unpaid" }] })).maxAmountCents).toBe(4000);
+  expect(estimateServicePayroll(args({ tasks: [{ payTypeId: "clean", payQuantity: 2 }] })).maxAmountCents).toBe(4000);
   expect(estimateServicePayroll(args({ settings: { payrollEnabled: false } }))).toEqual(expect.objectContaining({ disabled: true, maxAmountCents: null }));
   expect(estimateServicePayroll(args({ settings: { payMode: "hourlyOnly", hourlyPaySource: "workLogs" } }))).toEqual(expect.objectContaining({ needsReview: true, maxAmountCents: null }));
 });
@@ -79,9 +79,9 @@ test("percentage pay uses the explicit customer-price base and does not invent o
   expect(estimateServicePayroll(args({ ...setup, customerPriceCents: 0 })).maxAmountCents).toBe(0);
 });
 
-test("per-body pay requires actual scope counts and inherited service pay items work", () => {
+test("visit body rates require visit scope rather than a task budget", () => {
   const setup = { rates: [rate("a", 2000, { rateType: "perBodyOfWater" }), rate("b", 4000, { rateType: "perBodyOfWater" })], inheritedPayTypeId: "clean" };
-  expect(estimateServicePayroll(args({ ...setup, tasks: [{ bodyOfWaterCount: 2 }] })).maxAmountCents).toBe(8000);
+  expect(estimateServicePayroll(args({ ...setup, tasks: [{ bodyOfWaterCount: 2 }] })).maxAmountCents).toBeNull();
   expect(estimateServicePayroll(args({ ...setup, tasks: [{}] })).minAmountCents).toBeNull();
   expect(estimateServicePayroll(args({ tasks: [], inheritedPayTypeId: "clean" })).maxAmountCents).toBe(4000);
 });
@@ -97,7 +97,10 @@ test("pay items fill blank task details and refresh generated details without re
   expect(blank.name).toBe("");
 });
 
-test("saved task metadata keeps the selected pay policy and explicit zero override", () => {
+test("saved service task metadata omits pay and price fields", () => {
   const [saved] = serializeServiceTasks([{ id: "task", name: " Filter clean ", payTypeId: "clean", payrollMode: "custom", manualPayOverrideCents: 0, payQuantity: 2, estimatedMinutes: "30", laborCost: "25.00", billingLaborPrice: "60.00" }]);
-  expect(saved).toEqual(expect.objectContaining({ name: "Filter clean", payTypeId: "clean", manualPayOverrideCents: 0, payQuantity: 2, estimatedMinutes: 30, laborCostCents: 2500, billingLaborPriceCents: 6000 }));
+  expect(saved).toEqual(expect.objectContaining({ name: "Filter clean", estimatedMinutes: 30 }));
+  for (const field of ["payTypeId", "manualPayOverrideCents", "payQuantity", "laborCostCents", "billingLaborPriceCents"]) {
+    expect(saved).not.toHaveProperty(field);
+  }
 });

@@ -37,7 +37,7 @@ const seeded = (async () => {
   await batch.commit();
 })();
 let sequence = 0;
-async function create(uid, { template = 'field', worker = uid, visit = true, task = false, taskCount = 1, rate = 2000, taskSource = 'source', taskPay = {}, extraWorker, plannedPay, scheduledPay, jobId = `new-${++sequence}` } = {}) {
+async function create(uid, { template = 'field', worker = uid, visit = true, task = false, taskCount = 1, rate = 0, taskSource = 'source', taskPay = {}, extraWorker, plannedPay, scheduledPay, jobId = `new-${++sequence}` } = {}) {
   await seeded;
   const db = users[uid].db, batch = writeBatch(db), stopId = `visit-${jobId}`;
   const job = { id: jobId, sourceTemplateId: template, customerId: 'customer', serviceLocationId: 'site', createdByUserId: uid, operationStatus: 'Scheduled', billingStatus: 'Draft', serviceStopIds: visit ? [stopId] : [], ...(visit ? { scheduledServiceStopId: stopId } : {}) };
@@ -64,7 +64,7 @@ test('company membership and standalone stop permissions cannot grant job creati
   await denied(() => create('none', { template: '' }));
   await denied(() => create('stopOnly', { template: '' }));
 });
-test('technicians can atomically copy approved template pay and self-schedule', async () => {
+test('technicians can atomically copy operational tasks from a priced legacy template and self-schedule', async () => {
   const id = await create('self', { task: true });
   const snapshot = await getDoc(doc(users.self.db, p + `workOrders/${id}`));
   assert.equal(snapshot.data().scheduledServiceStopId, `visit-${id}`);
@@ -80,8 +80,9 @@ test('template self/others permissions apply to every initial visit', async () =
   await create('others', { worker: 'someone-else', task: true });
   await denied(() => create('others', { worker: 'outside-company' }));
 });
-test('approved template overrides including zero survive copying without allowing forged pay', async () => {
-  await create('self', { task: true, taskSource: 'zero', rate: 0, taskPay: { payTypeId: '', payrollMode: 'custom', manualPayOverrideCents: 0 } });
+test('template tasks retain scope and cannot carry forward legacy task overrides', async () => {
+  await create('self', { task: true, taskSource: 'zero', rate: 0 });
+  await denied(() => create('self', { task: true, taskSource: 'source', rate: 2000 }));
   await denied(() => create('self', { task: true, taskSource: 'zero', rate: 0, taskPay: { payTypeId: '', payrollMode: 'custom', manualPayOverrideCents: 5000 } }));
   await denied(() => create('self', { task: true, taskPay: { payrollAgreement: { offerId: 'forged' } } }));
 });

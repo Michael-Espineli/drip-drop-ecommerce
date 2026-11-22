@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { parse } from "@babel/parser";
-import { completeJobLaborLines, taskCustomerPriceCents } from "./jobScopePricing";
+import { completeJobLaborLines, visitCustomerPriceCents } from "./jobScopePricing";
 import { SalesCatalogItemType, SalesCatalogBillingBehavior, SalesCatalogSourceType } from "./models/Sales";
 import { jobPayFields } from "./payroll/payCalculation";
 
@@ -22,8 +22,7 @@ const screenBuilder = (file, name, context) => {
 const context = {
   completeJobLaborLines, SalesCatalogItemType, SalesCatalogBillingBehavior, SalesCatalogSourceType,
   normalizeJobLaborLineItems: (lines) => lines,
-  getTaskBillingLaborPriceCents: taskCustomerPriceCents,
-  getTaskCostCents: (task) => task.contractedRate || 0,
+  visitCustomerPriceCents,
   getPlannedStopCostCents: (stop) => stop.plannedLaborCostCents || 0,
   getLaborLineTaskIds: (line) => line.taskIds || [],
   getLaborLinePlannedStopIds: (line) => line.plannedServiceStopIds || [],
@@ -41,16 +40,16 @@ const cases = [
   ["jobs/JobDetailView.jsx", "buildContractSnapshotFromScope"],
 ];
 
-test.each(cases)("%s preserves taxable services and adds uncovered work in estimates", (file, name) => {
+test.each(cases)("%s preserves taxable services and excludes task charges from estimates", (file, name) => {
   const tasks = [{ id: "included", contractedRate: 0, billingLaborPriceCents: 2500 }, { id: "extra", name: "Extra", contractedRate: 0, billingLaborPriceCents: 5000, taxable: false }];
   const laborLines = [{ id: "service", name: "Taxable service", quantity: 1, unitPriceCents: 10000, totalPriceCents: 10000, internalCostCents: 0, taskIds: ["included"], taxable: true, stripeProductId: "prod", stripePriceId: "price" }];
   const build = screenBuilder(file, name, context);
   const result = name === "buildContractSnapshotFromScope"
     ? build({ tasks, laborLines, plannedStops: [], materials: [] })
     : build({ planId: "plan", normalizedTasks: tasks, normalizedPlannedStops: [], normalizedShoppingItems: [], normalizedLaborLineItems: completeJobLaborLines({ tasks, laborLineItems: laborLines }) });
-  expect(result.map((line) => [line.totalAmountCents, line.taxable])).toEqual([[10000, true], [5000, false]]);
+  expect(result.map((line) => [line.totalAmountCents, line.taxable])).toEqual([[10000, true]]);
   expect(result[0]).toEqual(expect.objectContaining({ stripeProductId: "prod", stripePriceId: "price" }));
-  expect(result.reduce((sum, line) => sum + line.totalAmountCents, 0)).toBe(15000);
+  expect(result.reduce((sum, line) => sum + line.totalAmountCents, 0)).toBe(10000);
 });
 
 test("creating a job from a template retains its service pay link and explicitly applied internal budget", () => {

@@ -159,22 +159,6 @@ const getTemplateDefaultIssuePriority = (template = {}) => normalizeIssuePriorit
     DEFAULT_ISSUE_PRIORITY
 );
 
-const getTaskBillingLaborPriceCents = (task = {}) => {
-    const explicitBillingValue =
-        task.billingLaborPriceCents ??
-        task.customerLaborPriceCents ??
-        task.billingLaborRateCents ??
-        task.laborBillingRateCents ??
-        task.billableLaborCents;
-
-    if (explicitBillingValue !== undefined && explicitBillingValue !== null && explicitBillingValue !== "") {
-        const amount = Number(explicitBillingValue || 0);
-        return Number.isFinite(amount) ? amount : 0;
-    }
-
-    return Number(task.contractedRate || 0);
-};
-
 const plannedMaterialTotalCostCents = (item = {}) => {
     if (item.plannedTotalCostCents !== undefined && item.plannedTotalCostCents !== null) {
         return Number(item.plannedTotalCostCents || 0);
@@ -672,7 +656,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         );
         const generatedTotal = jobLaborTotals(templateDetails).priceCents + materialTotal;
 
-        return templateDetails.laborLineItems.length || generatedTotal !== 0 ? generatedTotal : Number(selectedTemplate.defaultRateCents ?? selectedTemplate.rate ?? 0);
+        return templateDetails.tasks.length || templateDetails.laborLineItems.length || generatedTotal !== 0 ? generatedTotal : Number(selectedTemplate.defaultRateCents ?? selectedTemplate.rate ?? 0);
     }, [selectedTemplate, templateDetails]);
 
     const customPriceCents = useMemo(() => centsFromMoney(customPrice), [customPrice]);
@@ -681,10 +665,9 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         if (mode === "custom") return 0;
 
         const laborLineCost = templateDetails.laborLineItems.reduce((total, line) => total + laborLineInternalCostCents(line), 0);
-        const taskCost = templateDetails.tasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0);
         const stopCost = templateDetails.plannedServiceStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
         const materialCost = templateDetails.shoppingItems.reduce((total, item) => total + plannedMaterialTotalCostCents(item), 0);
-        return (templateDetails.laborLineItems.length ? laborLineCost : taskCost + stopCost) + materialCost;
+        return (templateDetails.laborLineItems.length ? laborLineCost : stopCost) + materialCost;
     }, [mode, templateDetails]);
 
     const selectedModeAllowed = mode === "template" ? canUseTemplate : canUseCustom;
@@ -1093,9 +1076,6 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         name: task.name || task.description || "Task",
         type: canonicalJobTaskType(task.type || "General"),
         description: task.description || "",
-        contractedRate: Number(task.contractedRate || 0),
-        ...jobPayFields(task),
-        billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
         estimatedTime: Number(task.estimatedTime || 0),
         status: "Draft",
         customerApproval: Boolean(task.customerApproval || false),
@@ -1123,7 +1103,6 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         name: scheduleLater && jobIntent === "maintenance" ? "Maintenance" : "Custom Work",
         type: scheduleLater && jobIntent === "maintenance" ? "Maintenance" : "General",
         description: description.trim(),
-        contractedRate: 0,
         billingLaborPriceCents: customPriceCents,
         estimatedTime: Number(customEstimatedMinutes || 0),
         status: "Draft",
@@ -1247,7 +1226,6 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             sourceSolutionId: planId,
             sourceTemplateId: selectedTemplate?.id || "",
             sourceTemplateLaborLineId: line.id || "",
-            generatedFromTaskId: taskIdMap[line.generatedFromTaskId] || "",
             generatedFromPlannedStopId: plannedStopIdMap[line.generatedFromPlannedStopId] || "",
             name: line.name || line.title || `Service ${index + 1}`,
             description: line.description || "",
@@ -1394,30 +1372,6 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                         displayAmount: moneyFromCents(amount),
                     };
                 }),
-                ...normalizedTasks.map((task) => {
-                    const amount = getTaskBillingLaborPriceCents(task);
-                    return {
-                        id: `${planId}_${task.id}`,
-                        sourceType: "task",
-                        sourceId: task.id,
-                        salesItemType: "labor",
-                        billingBehavior: "oneTime",
-                        type: "Task",
-                        name: task.name || "Task",
-                        description: task.description || task.type || "",
-                        quantity: 1,
-                        unitAmountCents: amount,
-                        totalAmountCents: amount,
-                        amount,
-                        billingLaborPriceCents: amount,
-                        internalLaborCostCents: Number(task.contractedRate || 0),
-                        equipmentId: task.equipmentId || "",
-                        serviceLocationId: task.serviceLocationId || "",
-                        bodyOfWaterId: task.bodyOfWaterId || "",
-                        taxable: false,
-                        displayAmount: moneyFromCents(amount),
-                    };
-                }),
             ]),
         ...normalizedShoppingItems.map((item) => {
             const quantity = quantityNumber(item.quantity) || 1;
@@ -1472,12 +1426,10 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
         const totalAmountCents = subtotalAmountCents || generatedPriceCents;
         const plannedLaborCostCents = normalizedLaborLineItems.length
             ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.internalCostCents || 0), 0)
-            : normalizedTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0)
-                + normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+            : normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
         const plannedLaborPriceCents = normalizedLaborLineItems.length
             ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.totalPriceCents || 0), 0)
-            : normalizedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0)
-                + normalizedPlannedStops.reduce((total, stop) => total + visitCustomerPriceCents(stop), 0);
+            : normalizedPlannedStops.reduce((total, stop) => total + visitCustomerPriceCents(stop), 0);
         const materialCostCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalCostCents(item), 0);
         const materialPriceCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalPriceCents(item), 0);
         const internalCostCents = plannedLaborCostCents + materialCostCents;
@@ -1563,8 +1515,6 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                     name: task.name || `Task ${index + 1}`,
                     type: task.type || "",
                     estimatedMinutes: Number(task.estimatedTime || 0),
-                    plannedLaborCostCents: Number(task.contractedRate || 0),
-                    billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
                     equipmentId: task.equipmentId || "",
                     serviceLocationId: task.serviceLocationId || "",
                     bodyOfWaterId: task.bodyOfWaterId || "",
@@ -1730,7 +1680,7 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
             includeReadings: true,
             ...pay,
             plannedServiceStopId: selectedPlannedStop?.id || "",
-            rate: scheduledTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0),
+            rate: 0,
             recurringServiceStopId: "",
             type: selectedPlannedStop?.serviceStopTypeName || "Job Visit",
             typeId: selectedPlannedStop?.serviceStopTypeId || "system_job_service_stop",
@@ -1765,7 +1715,6 @@ const BasicWorkOrderCreate = ({ embedded = false, initialContext = null, onCance
                     internalId: "",
                 },
                 jobTaskId: task.id,
-                ...jobPayFields(task),
                 workOrderTaskId: task.id,
             });
 

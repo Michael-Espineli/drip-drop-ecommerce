@@ -874,7 +874,6 @@ const CompanyOverview = ({ overview, currentUserId }) => {
           <OverviewRow label="Payroll enabled" value={onOffLabel(payrollEnabled)} />
           <OverviewRow label="Pay mode" value={labelize(paySettings.payMode)} />
           <OverviewRow label="Route pay source" value={labelize(paySettings.routePaySource)} />
-          <OverviewRow label="Task pay source" value={labelize(paySettings.taskPaySource)} />
           <OverviewRow label="Lock after approval" value={onOffLabel(paySettings.lockPayAfterApproval === true)} />
           {!payrollConfigured ? <OverviewRow label="Pay rules" value="Default rules" muted /> : null}
         </OverviewCard>

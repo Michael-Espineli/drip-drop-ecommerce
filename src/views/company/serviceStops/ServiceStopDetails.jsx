@@ -717,7 +717,7 @@ const buildPrintableServiceReportHtml = ({
         status: task.status || "—",
         worker: task.workerName || serviceStop.tech || "—",
         time: formatReportMinutes(firstPresent(task.actualTime, task.estimatedTime)),
-        rate: centsCurrency(task.contractedRate),
+
     }));
 
     const stopDataRows = stopDataRecords.map((record) => {
@@ -1073,7 +1073,7 @@ const ServiceStopDetails = () => {
         name: "",
         type: "",
         status: "Not Finished",
-        contractedRate: "",
+
         estimatedTime: "",
         customerApproval: false,
         actualTime: "",
@@ -2193,8 +2193,7 @@ const ServiceStopDetails = () => {
             status: task.status || "",
             estimatedTime: Number(task.estimatedTime || 0),
             estimatedMinutes: Number(task.estimatedTime || 0),
-            contractedRate: Number(task.contractedRate || 0),
-            plannedLaborCostCents: Number(task.contractedRate || 0),
+
             customerApproval: Boolean(task.customerApproval),
             bodyOfWaterId: task.bodyOfWaterId || "",
             equipmentId: task.equipmentId || "",
@@ -2221,7 +2220,7 @@ const ServiceStopDetails = () => {
         });
         const materialPriceCents = materialSnapshots.reduce((total, item) => total + Number(item.plannedTotalPriceCents || 0), 0);
         const materialCostCents = materialSnapshots.reduce((total, item) => total + Number(item.plannedTotalCostCents || 0), 0);
-        const taskLaborCostCents = taskSnapshots.reduce((total, task) => total + Number(task.plannedLaborCostCents || 0), 0);
+        const visitLaborCostCents = Number(serviceStop.estimatedPayCents ?? serviceStop.manualPayOverrideCents ?? 0);
         const laborPriceCents = Math.max(totalAmountCents - materialPriceCents, 0);
         const estimatedMinutes = Number(serviceStop.estimatedDuration || serviceStop.duration || 0) ||
             taskSnapshots.reduce((total, task) => total + Number(task.estimatedMinutes || 0), 0);
@@ -2231,7 +2230,7 @@ const ServiceStopDetails = () => {
             name: serviceStop.serviceStopTypeName || serviceStop.type || "Job Estimate Visit",
             serviceStopTypeName: serviceStop.serviceStopTypeName || serviceStop.type || "",
             estimatedMinutes,
-            plannedLaborCostCents: taskLaborCostCents,
+            plannedLaborCostCents: visitLaborCostCents,
             taskIds: taskSnapshots.map((task) => task.id).filter(Boolean),
         };
         const laborLineItems = [
@@ -2242,7 +2241,7 @@ const ServiceStopDetails = () => {
                 quantity: 1,
                 unitPriceCents: laborPriceCents,
                 totalPriceCents: laborPriceCents,
-                internalCostCents: taskLaborCostCents,
+                internalCostCents: visitLaborCostCents,
                 taskIds: taskSnapshots.map((task) => task.id).filter(Boolean),
             },
         ];
@@ -2269,7 +2268,7 @@ const ServiceStopDetails = () => {
                 },
             },
         ];
-        const projectedProfitCents = totalAmountCents - taskLaborCostCents - materialCostCents;
+        const projectedProfitCents = totalAmountCents - visitLaborCostCents - materialCostCents;
         const profitMarginPercent = totalAmountCents > 0
             ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
             : 0;
@@ -2303,11 +2302,11 @@ const ServiceStopDetails = () => {
             rateAmountCents: totalAmountCents,
             totalAmountCents,
             subtotalAmountCents: totalAmountCents,
-            laborCostCents: taskLaborCostCents,
-            plannedLaborCostCents: taskLaborCostCents,
+            laborCostCents: visitLaborCostCents,
+            plannedLaborCostCents: visitLaborCostCents,
             materialCostCents,
             materialPriceCents,
-            internalCostCents: taskLaborCostCents + materialCostCents,
+            internalCostCents: visitLaborCostCents + materialCostCents,
             projectedProfitCents,
             profitMarginPercent,
             scopeOfWork: {
@@ -2327,14 +2326,14 @@ const ServiceStopDetails = () => {
                 },
             },
             costSummary: {
-                plannedLaborCostCents: taskLaborCostCents,
-                plannedLaborLineCostCents: taskLaborCostCents,
+                plannedLaborCostCents: visitLaborCostCents,
+                plannedLaborLineCostCents: visitLaborCostCents,
                 plannedLaborLinePriceCents: laborPriceCents,
                 plannedLaborPriceCents: laborPriceCents,
-                plannedTaskLaborCents: taskLaborCostCents,
+                plannedTaskLaborCents: visitLaborCostCents,
                 plannedMaterialCostCents: materialCostCents,
                 plannedMaterialPriceCents: materialPriceCents,
-                internalCostCents: taskLaborCostCents + materialCostCents,
+                internalCostCents: visitLaborCostCents + materialCostCents,
             },
             billingSummary: {
                 pricingSource: "fieldTechnicianRecommendation",
@@ -3018,7 +3017,7 @@ const ServiceStopDetails = () => {
             name: "",
             type: "",
             status: "Not Finished",
-            contractedRate: "",
+
             estimatedTime: "",
             customerApproval: false,
             actualTime: "",
@@ -3444,7 +3443,7 @@ const ServiceStopDetails = () => {
                 name: newTask.name.trim(),
                 type: newTaskType,
                 status: newTask.status || "Not Finished",
-                contractedRate: Number(newTask.contractedRate || 0),
+
                 estimatedTime: Number(newTask.estimatedTime || 0),
                 customerApproval: !!newTask.customerApproval,
                 actualTime: Number(newTask.actualTime || 0),
@@ -3534,7 +3533,7 @@ const ServiceStopDetails = () => {
                     id: `comp_rss_task_${crypto.randomUUID()}`,
                     name: newTask.name.trim(),
                     type: newTaskType,
-                    contractedRate: Number(newTask.contractedRate || 0),
+
                     estimatedTime: Number(newTask.estimatedTime || 0),
                     status: newTask.status || "Not Finished",
                     bodyOfWaterId: needsBodyOfWater ? resolvedBodyOfWaterId : "",
@@ -5157,22 +5156,6 @@ const ServiceStopDetails = () => {
 
                                         <div>
                                             <label className="block text-sm font-semibold text-slate-600 mb-1">
-                                                Contracted Rate (cents)
-                                            </label>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                value={newTask.contractedRate}
-                                                onChange={(e) =>
-                                                    handleTaskFieldChange("contractedRate", e.target.value)
-                                                }
-                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
-                                                placeholder="2500"
-                                            />
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Estimated Time (mins)
                                             </label>
                                             <input
@@ -5330,12 +5313,6 @@ const ServiceStopDetails = () => {
                                             )}
 
                                             <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                                                <div className="rounded-lg bg-slate-50 px-3 py-2">
-                                                    <p className="text-slate-500">Contracted Rate</p>
-                                                    <p className="font-medium text-slate-800">
-                                                        {formatCurrencyFromCents(task.contractedRate)}
-                                                    </p>
-                                                </div>
 
                                                 <div className="rounded-lg bg-slate-50 px-3 py-2">
                                                     <p className="text-slate-500">Estimated Time</p>

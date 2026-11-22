@@ -9,7 +9,7 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "test:payroll": "node --test payrollCalculation.test.js payrollWorkflow.test.js payrollApproval.test.js payrollStatements.test.js payrollRefreshQueue.test.js",
+    "test:payroll": "node --test taskMoneyRetirement.test.js payrollCalculation.test.js payrollWorkflow.test.js payrollApproval.test.js payrollStatements.test.js payrollRefreshQueue.test.js",
     "test:payroll-emulator": "node --test payrollRefresh.emulator.test.js",
     "test:technician-work": "node --test technicianWork.test.js workOfferManagement.test.js workOfferRouteSummary.test.js jobCloseout.test.js mobileStopCompletion.test.js equipmentCompletion.test.js",
     "test:workflow-rules": "node --test firestoreWorkflow.rules.test.js",

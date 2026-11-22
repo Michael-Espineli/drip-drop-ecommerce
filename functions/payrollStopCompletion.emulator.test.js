@@ -150,7 +150,7 @@ test("real callable and mobile completion trigger agree on actual pay and route 
   ] });
   const selected = preview.items.filter(row => !row.blockedReason);
   const buy = selected.find(row => row.stopId === "bulk");
-  assert.equal(buy.pay.lineItems.reduce((sum, line) => sum + line.totalAmountCents, 0), 6200);
+  assert.equal(buy.pay.lineItems.reduce((sum, line) => sum + line.totalAmountCents, 0), 5000);
   assert.match(selected.find(row => row.stopId === "hourly").pay.lineItems[0].notes, /work minutes/i);
   assert.deepEqual(selected.find(row => row.stopId === "unpaid").pay.lineItems, []);
   const pick = row => ({ stopId: row.stopId, version: row.version, taskIds: row.selectedTaskIds });
@@ -187,7 +187,8 @@ test("real callable and mobile completion trigger agree on actual pay and route 
   const ledger = id => company.collection("technicianPayLineItems").where("serviceStopId", "==", id).get();
   const details = snap => snap.docs.map(doc => comparablePay(doc.data())).sort();
   const [mobileLedger, bulkLedger] = await Promise.all([ledger("mobile"), ledger("bulk")]);
-  assert.equal(bulkLedger.size, 2);
+  assert.equal(bulkLedger.size, 1);
+  assert.equal(bulkLedger.docs[0].data().source, "serviceStop");
   assert.deepEqual(details(mobileLedger), details(bulkLedger));
   assert.deepEqual(details(bulkLedger), row("bulk").pay.lineItems.map(comparablePay).sort());
   for (const id of ["mobile", "bulk"]) {
@@ -195,7 +196,7 @@ test("real callable and mobile completion trigger agree on actual pay and route 
   }
 
   await owner.call("finish", payload);
-  assert.equal((await ledger("bulk")).size, 2);
+  assert.equal((await ledger("bulk")).size, 1);
   const finishedStop = (await stops.doc("bulk").get()).data();
   await workRef.update({ status: "completedWithErrors", result: { payroll: { message: "Injected transient emulator failure" } },
     errorMessages: ["payroll: Injected transient emulator failure"], attempts: 2 });
@@ -207,5 +208,5 @@ test("real callable and mobile completion trigger agree on actual pay and route 
   }, "retry receipt");
   assert.deepEqual(retried.pay.lineItems.map(comparablePay).sort(), details(bulkLedger));
   assert.equal((await stops.doc("bulk").get()).data().completedAt.toMillis(), finishedStop.completedAt.toMillis());
-  assert.equal((await ledger("bulk")).size, 2);
+  assert.equal((await ledger("bulk")).size, 1);
 });

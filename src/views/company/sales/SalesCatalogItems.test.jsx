@@ -9,7 +9,7 @@ import { SalesCatalogItem } from "../../../utils/models/Sales";
 
 let mockItems;
 let mockCompanySettings;
-const payItem = { id: "clean", name: "Filter clean", category: "maintenance", description: "Open, clean, and inspect", defaultEstimatedMinutes: 30, defaultRateType: "flatPerTask" };
+const payItem = { id: "clean", name: "Filter clean", category: "maintenance", description: "Open, clean, and inspect", defaultEstimatedMinutes: 30, defaultRateType: "flatPerStop" };
 jest.mock("../../../context/AuthContext", () => ({ Context: require("react").createContext() }));
 jest.mock("../../../utils/config", () => ({ db: {}, functions: {} }));
 jest.mock("../../../components/FeatureInfoButton", () => () => null);
@@ -45,7 +45,7 @@ beforeEach(() => {
     else callback({ docs: (path.endsWith("/salesCatalogItems") ? mockItems
       : path.endsWith("/companyPayTypes") ? [payItem]
         : path.endsWith("/companyUsers") ? [{ id: "a", userId: "a", userName: "Alex" }, { id: "b", userId: "b", userName: "Blair" }]
-          : path.endsWith("/technicianRates") ? [2000, 4000].map((amountCents, index) => ({ id: `rate-${index}`, technicianId: index ? "b" : "a", payTypeId: "clean", payBasis: "serviceStopTask", rateType: "flatPerTask", amountCents, status: "Active" })) : []).map(doc) });
+          : path.endsWith("/technicianRates") ? [2000, 4000].map((amountCents, index) => ({ id: `rate-${index}`, technicianId: index ? "b" : "a", payTypeId: "clean", payBasis: "serviceStop", rateType: "flatPerStop", amountCents, status: "Active" })) : []).map(doc) });
     return () => {};
   });
 });
@@ -80,9 +80,8 @@ test("catalog creation saves pay-item task defaults and an explicitly applied in
   fireEvent.change(fields.getByLabelText("Customer Price", { exact: true }), { target: { value: "100" } });
   fireEvent.click(fields.getByRole("button", { name: "Add Task", exact: true }));
   expect(fields.getByLabelText("Estimated Minutes")).toHaveValue(15);
-  toggleTaskAdvanced();
-  fireEvent.change(fields.getByLabelText("Task pay"), { target: { value: "additional" } });
-  fireEvent.change(fields.getByLabelText("Payroll pay item"), { target: { value: "clean" } });
+  fireEvent.change(fields.getByLabelText("Source Type"), { target: { value: "serviceStopType" } });
+  fireEvent.change(fields.getByLabelText("Technician pay type"), { target: { value: "clean" } });
   expect(fields.getByLabelText("Task Name")).toHaveValue("Filter clean");
   expect(fields.getByLabelText("Estimated Minutes")).toHaveValue(30);
   expect(fields.getByLabelText("Notes")).toHaveValue("Open, clean, and inspect");
@@ -99,7 +98,7 @@ test("catalog creation saves pay-item task defaults and an explicitly applied in
   await waitFor(() => expect(form).not.toBeInTheDocument());
   const saved = saveSalesCatalogItem.mock.calls[0][2];
   expect(saved).toEqual(expect.objectContaining({ name: "Standard filter service", unitAmountCents: 10000, unitCostCents: 4000 }));
-  expect(saved.metadata.taskTemplates[0]).toEqual(expect.objectContaining({ name: "Filter clean", type: "Maintenance", payTypeId: "clean", estimatedMinutes: 30 }));
+  expect(saved.metadata.taskTemplates[0]).toEqual(expect.objectContaining({ name: "Filter clean", type: "Maintenance", estimatedMinutes: 30 }));
 });
 
 test("a new task starts at 15 minutes and Cancel discards its draft", async () => {
@@ -112,13 +111,13 @@ test("a new task starts at 15 minutes and Cancel discards its draft", async () =
   fireEvent.click(fields.getByRole("button", { name: "Add Task", exact: true }));
   const draft = within(fields.getByRole("group", { name: "New task" }));
   expect(draft.getByLabelText("Estimated Minutes")).toHaveValue(15);
-  expect(draft.getByLabelText("Customer task price")).not.toBeVisible();
+  expect(draft.queryByLabelText("Customer task price")).not.toBeInTheDocument();
   expect(draft.getByLabelText("Customer approval")).not.toBeVisible();
-  expect(draft.getByLabelText("Task pay")).not.toBeVisible();
+  expect(draft.queryByLabelText("Task pay")).not.toBeInTheDocument();
   toggleTaskAdvanced();
-  expect(draft.getByLabelText("Customer task price")).toBeVisible();
+  expect(draft.queryByLabelText("Customer task price")).not.toBeInTheDocument();
   expect(draft.getByLabelText("Customer approval")).toBeVisible();
-  expect(draft.getByLabelText("Task pay")).toBeVisible();
+  expect(draft.queryByLabelText("Task pay")).not.toBeInTheDocument();
   fireEvent.change(draft.getByLabelText("Task Name"), { target: { value: "Canceled task" } });
   fireEvent.click(draft.getByRole("button", { name: "Cancel" }));
   expect(fields.getByText("No tasks yet.")).toBeInTheDocument();
@@ -134,8 +133,8 @@ test("a new task starts at 15 minutes and Cancel discards its draft", async () =
   ]);
 });
 
-test("catalog editing updates the quantity-dependent pay range and retains custom task details", async () => {
-  mockItems = [{ id: "existing", name: "Existing service", type: "service", sourceType: "manual", billingBehavior: "oneTime", unitAmountCents: 12500, unitCostCents: 3500, defaultQuantity: 1,
+test("catalog editing updates the visit pay range and retains custom task details", async () => {
+  mockItems = [{ id: "existing", name: "Existing service", type: "service", sourceType: "manual", billingBehavior: "oneTime", unitAmountCents: 12500, unitCostCents: 3500, payTypeId: "clean", defaultQuantity: 1,
     metadata: { retained: "value", taskTemplates: [{ id: "task", name: "Custom inspection", description: "Keep my instructions", type: "Inspection", payTypeId: "clean", estimatedMinutes: 45 }] } }];
   openPage();
   fireEvent.click(await screen.findByRole("button", { name: "Edit Existing service", exact: true }));
@@ -148,29 +147,25 @@ test("catalog editing updates the quantity-dependent pay range and retains custo
   fireEvent.change(fields.getByLabelText("Notes"), { target: { value: "Canceled instructions" } });
   fireEvent.change(fields.getByLabelText("Estimated Minutes"), { target: { value: "20" } });
   toggleTaskAdvanced();
-  fireEvent.change(fields.getByLabelText("Payroll quantity"), { target: { value: "5" } });
   fireEvent.click(within(fields.getByRole("group", { name: "Edit task Custom inspection" })).getByRole("button", { name: "Cancel" }));
   expect(fields.getByText("Keep my instructions")).toBeVisible();
   expect(fields.getByText("Inspection · 45 min")).toBeVisible();
 
   fireEvent.click(fields.getByRole("button", { name: "Edit task Custom inspection" }));
-  expect(fields.getByLabelText("Payroll quantity")).not.toBeVisible();
   toggleTaskAdvanced();
-  expect(fields.getByLabelText("Payroll quantity")).toHaveValue(1);
-  fireEvent.change(fields.getByLabelText("Payroll quantity"), { target: { value: "2" } });
   fireEvent.click(fields.getByRole("button", { name: "Save Task" }));
   expect(fields.queryByLabelText("Payroll quantity")).not.toBeInTheDocument();
   toggleAdvanced();
   const estimate = fields.getByRole("region", { name: "Service technician pay preview" });
-  expect(within(estimate).getByText("$40.00 – $80.00")).toBeInTheDocument();
+  expect(within(estimate).getByText("$20.00 – $40.00")).toBeInTheDocument();
   fireEvent.click(within(estimate).getByRole("button", { name: "Use high estimate for internal cost" }));
   fireEvent.submit(form);
   await waitFor(() => expect(saveSalesCatalogItem).toHaveBeenCalled());
   await waitFor(() => expect(form).not.toBeInTheDocument());
   const saved = saveSalesCatalogItem.mock.calls[0][2];
-  expect(saved).toEqual(expect.objectContaining({ id: "existing", unitAmountCents: 12500, unitCostCents: 8000 }));
+  expect(saved).toEqual(expect.objectContaining({ id: "existing", unitAmountCents: 12500, unitCostCents: 4000 }));
   expect(saved.metadata.retained).toBe("value");
-  expect(saved.metadata.taskTemplates[0]).toEqual(expect.objectContaining({ name: "Custom inspection", description: "Keep my instructions", type: "Inspection", payTypeId: "clean", payQuantity: 2 }));
+  expect(saved.metadata.taskTemplates[0]).toEqual(expect.objectContaining({ name: "Custom inspection", description: "Keep my instructions", type: "Inspection" }));
 });
 
 test("an independent pay type preserves the legacy database source and its read-only cost", async () => {
@@ -241,7 +236,7 @@ test("catalog model round trips canonical pay links and reads legacy pay sources
   expect(canonical.toFirestore()).toEqual(expect.objectContaining({ sourceId: 'product', payTypeId: 'clean', payTypeName: 'Filter clean' }));
 });
 
-test("catalog task pay controls keep each estimate with its cost and hide task costs when additional pay is off", async () => {
+test("catalog estimates are scoped to visits and task forms contain no money fields", async () => {
   openPage();
   fireEvent.click(screen.getByRole('button', { name: 'Create Service', exact: true }));
   const fields = within(screen.getByRole('form', { name: 'Create Service' }));
@@ -256,21 +251,11 @@ test("catalog task pay controls keep each estimate with its cost and hide task c
   expect(fields.queryByRole('region', { name: 'Task technician pay preview' })).not.toBeInTheDocument();
   expect(fields.getByLabelText('Estimated Minutes')).toBeInTheDocument();
   toggleTaskAdvanced();
-  expect(fields.getByLabelText('Customer task price')).toBeVisible();
-  fireEvent.change(fields.getByLabelText('Task pay'), { target: { value: 'additional' } });
-  const taskCost = fields.getByRole('group', { name: 'Contracted task pay and payroll estimate' });
-  expect(within(taskCost).getByLabelText('Contracted task pay')).toHaveValue(null);
-  expect(within(taskCost).getByRole('region', { name: 'Task technician pay preview' })).toBeInTheDocument();
-  expect(within(taskCost).queryByRole('button', { name: 'Use high estimate for task cost' })).not.toBeInTheDocument();
-  expect(within(taskCost).getByLabelText('Contracted task pay')).toHaveValue(null);
-  expect(serviceCost.getByText('Not set')).toBeVisible();
-  fireEvent.change(fields.getByLabelText('Task pay'), { target: { value: 'none' } });
-  expect(fields.queryByLabelText('Contracted task pay')).not.toBeInTheDocument();
-  expect(fields.queryByRole('region', { name: 'Task technician pay preview' })).not.toBeInTheDocument();
-  fireEvent.change(fields.getByLabelText('Task pay'), { target: { value: 'additional' } });
-  expect(fields.getByLabelText('Contracted task pay')).toHaveValue(null);
+  expect(fields.queryByLabelText('Customer task price')).not.toBeInTheDocument();
+  expect(fields.queryByLabelText('Task pay')).not.toBeInTheDocument();
+  expect(preview.getByText('$20.00 – $40.00')).toBeInTheDocument();
   fireEvent.click(preview.getByRole('button', { name: 'Use high estimate for internal cost' }));
-  expect(serviceCost.getByText('$80.00')).toBeVisible();
+  expect(serviceCost.getByText('$40.00')).toBeVisible();
 });
 
 test("an install service saves its reusable product and database requirement separately from service pricing", async () => {

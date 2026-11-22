@@ -2,7 +2,6 @@ import WorkspaceHeader from '../../../components/workspace/WorkspaceHeader';
 import { displayReferenceValue } from '../../../utils/displayReferences';
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import { resolveJobCreator } from "../../../utils/jobHistory";
-import { jobPayFields } from "../../../utils/payroll/payCalculation";
 import { completeJobLaborLines, jobLaborTotals } from "../../../utils/jobScopePricing";
 import { createJobAtomically } from "../../../utils/createJobAtomically";
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from "react";
@@ -228,22 +227,6 @@ const defaultScheduledAt = () => {
   const value = new Date();
   value.setHours(value.getHours() + 1, 0, 0, 0);
   return toDateTimeLocalValue(value);
-};
-
-const getTaskBillingLaborPriceCents = (task = {}) => {
-  const explicitBillingValue =
-    task.billingLaborPriceCents ??
-    task.customerLaborPriceCents ??
-    task.billingLaborRateCents ??
-    task.laborBillingRateCents ??
-    task.billableLaborCents;
-
-  if (explicitBillingValue !== undefined && explicitBillingValue !== null && explicitBillingValue !== "") {
-    const amount = Number(explicitBillingValue || 0);
-    return Number.isFinite(amount) ? amount : 0;
-  }
-
-  return Number(task.contractedRate || 0);
 };
 
 const plannedMaterialTotalCostCents = (item = {}) => {
@@ -1791,7 +1774,7 @@ export default function EquipmentList() {
     );
 
     const generatedPrice = jobLaborTotals(scheduleTemplateDetails).priceCents + materialPrice;
-    return scheduleTemplateDetails.laborLineItems.length || generatedPrice !== 0 ? generatedPrice : Number(selectedScheduleTemplate?.defaultRateCents ?? selectedScheduleTemplate?.rate ?? 0);
+    return scheduleTemplateDetails.tasks.length || scheduleTemplateDetails.laborLineItems.length || generatedPrice !== 0 ? generatedPrice : Number(selectedScheduleTemplate?.defaultRateCents ?? selectedScheduleTemplate?.rate ?? 0);
   }, [scheduleTemplateDetails, selectedScheduleTemplate]);
 
   const selectedQuickEquipmentServiceLocation = useMemo(() => (
@@ -2771,30 +2754,6 @@ export default function EquipmentList() {
             displayAmount: moneyFromCents(amount),
           };
         }),
-        ...normalizedTasks.map((task) => {
-          const amount = getTaskBillingLaborPriceCents(task);
-          return {
-            id: `${planId}_${task.id}`,
-            sourceType: SalesCatalogSourceType.task,
-            sourceId: task.id,
-            salesItemType: SalesCatalogItemType.labor,
-            billingBehavior: SalesCatalogBillingBehavior.oneTime,
-            type: "Task",
-            name: task.name || "Task",
-            description: task.description || task.type || "",
-            quantity: 1,
-            unitAmountCents: amount,
-            totalAmountCents: amount,
-            amount,
-            billingLaborPriceCents: amount,
-            internalLaborCostCents: Number(task.contractedRate || 0),
-            equipmentId: task.equipmentId || "",
-            serviceLocationId: task.serviceLocationId || "",
-            bodyOfWaterId: task.bodyOfWaterId || "",
-            taxable: false,
-            displayAmount: moneyFromCents(amount),
-          };
-        }),
       ]),
     ...normalizedShoppingItems.map((item) => {
       const quantity = quantityNumber(item.quantity) || 1;
@@ -2912,9 +2871,6 @@ export default function EquipmentList() {
               name: task.name || task.description || "Task",
               type: canonicalJobTaskType(task.type || scheduleJobIntentConfig.jobType || "General"),
               description: task.description || "",
-              contractedRate: Number(task.contractedRate || 0),
-              ...jobPayFields(task),
-              billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
               estimatedTime: Number(task.estimatedTime || 0),
               status: "Draft",
               customerApproval: Boolean(task.customerApproval || false),
@@ -3050,7 +3006,6 @@ export default function EquipmentList() {
               sourceSolutionId: planId,
               sourceTemplateId: selectedScheduleTemplate.id,
               sourceTemplateLaborLineId: line.id || "",
-              generatedFromTaskId: taskIdMap[line.generatedFromTaskId] || "",
               generatedFromPlannedStopId: plannedStopIdMap[line.generatedFromPlannedStopId] || "",
               name: line.name || line.title || `Service ${index + 1}`,
               description: line.description || "",
@@ -3177,12 +3132,10 @@ export default function EquipmentList() {
           const totalAmountCents = subtotalAmountCents || scheduleGeneratedPriceCents;
           const plannedLaborCostCents = normalizedLaborLineItems.length
             ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.internalCostCents || 0), 0)
-            : normalizedTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0) +
-              normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+            : normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
           const plannedLaborPriceCents = normalizedLaborLineItems.length
             ? normalizedLaborLineItems.reduce((total, line) => total + Number(line.totalPriceCents || 0), 0)
-            : normalizedTasks.reduce((total, task) => total + getTaskBillingLaborPriceCents(task), 0) +
-              normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
+            : normalizedPlannedStops.reduce((total, stop) => total + Number(stop.plannedLaborCostCents || 0), 0);
           const materialCostCents = normalizedShoppingItems.reduce(
             (total, item) => total + plannedMaterialTotalCostCents(item),
             0
@@ -3273,8 +3226,6 @@ export default function EquipmentList() {
                 name: task.name || `Task ${index + 1}`,
                 type: task.type || "",
                 estimatedMinutes: Number(task.estimatedTime || 0),
-                plannedLaborCostCents: Number(task.contractedRate || 0),
-                billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
                 equipmentId: task.equipmentId || "",
                 serviceLocationId: task.serviceLocationId || "",
                 bodyOfWaterId: task.bodyOfWaterId || "",
@@ -3538,7 +3489,7 @@ export default function EquipmentList() {
             manualPayOverrideCents: null,
             manualPayOverrideNotes: "",
             plannedServiceStopId: selectedPlannedStop?.id || "",
-            rate: scheduledTasks.reduce((total, task) => total + Number(task.contractedRate || 0), 0),
+            rate: 0,
             recurringServiceStopId: "",
             type: selectedPlannedStop?.serviceStopTypeName || scheduleJobIntentConfig.label,
             typeId: selectedPlannedStop?.serviceStopTypeId || "system_job_service_stop",
@@ -3584,7 +3535,6 @@ export default function EquipmentList() {
                 internalId: "",
               },
               jobTaskId: task.id,
-              ...jobPayFields(task),
               workOrderTaskId: task.id,
             });
 

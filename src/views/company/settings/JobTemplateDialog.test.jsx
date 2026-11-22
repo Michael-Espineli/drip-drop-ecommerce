@@ -16,6 +16,7 @@ test('the first popup can build and submit all template components in one pass',
   fireEvent.change(within(dialog).getByLabelText('Template name'), { target: { value: 'Filter service' } });
   fireEvent.change(screen.getByLabelText('Add a catalog service'), { target: { value: 'service' } });
   expect(screen.getByLabelText('Task 1 name')).toHaveValue('Clean cartridges');
+  expect(screen.queryByLabelText('Task 1 customer price')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '+ Add visit' }));
   fireEvent.change(screen.getByLabelText('Visit 1 name'), { target: { value: 'Service visit' } });
   // The second task checkbox belongs to the visit; the first controls service coverage.

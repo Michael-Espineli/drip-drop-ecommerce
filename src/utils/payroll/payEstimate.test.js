@@ -16,13 +16,13 @@ test.each(['preview', 'actual'])('%s BOW estimates use active distinct bodies at
   expect(summary.lines[0]).toEqual(expect.objectContaining({ quantity: 2, quantityUnit: 'bodyOfWater', rateAmountCents: 2500 }));
 });
 
-test('explicit BOW task pay stays separate and only pays its own BOW', () => {
+test('visit forecasts count BOW scope without adding task earnings', () => {
   const summary = estimateServiceStopPaySummary(args({
     rates: [rate, { ...rate, id: 'task-rate', payBasis: 'serviceStopTask', amountCents: 1000 }],
     tasks: [{ id: 'task', status: 'Finished', payTypeId: 'route', bodyOfWaterId: 'pool', payrollStackBehavior: 'stackable' }],
   }));
-  expect(summary.totalAmountCents).toBe(6000);
-  expect(summary.lines.map(line => [line.source, line.quantity])).toEqual([['serviceStop', 2], ['serviceStopTask', 1]]);
+  expect(summary.totalAmountCents).toBe(5000);
+  expect(summary.lines.map(line => [line.source, line.quantity])).toEqual([['serviceStop', 2]]);
 });
 
 test('missing or failed BOW data stays reviewable and custom pay replaces the automatic BOW total', () => {
@@ -35,7 +35,7 @@ test('missing or failed BOW data stays reviewable and custom pay replaces the au
 });
 
 test.each([
-  ['flatPerStop', 2500], ['flatPerTask', 2500], ['perServiceLocation', 2500], ['manual', 2500], ['percentage', 5000],
+  ['flatPerStop', 2500], ['perServiceLocation', 2500], ['manual', 2500], ['percentage', 5000],
 ])('%s keeps its own quantity rules beside location BOW data', (rateType, expected) => {
   const input = args({ rates: [{ ...rate, rateType }] });
   const summary = estimateServiceStopPaySummary({ ...input, serviceStop: { ...input.serviceStop, payrollBaseAmountCents: 20000 } });
@@ -47,4 +47,9 @@ test('hourly previews use planned minutes and earned pay uses actual minutes', (
     workTypes: [{ ...type, defaultRateType: 'hourly' }] });
   expect(estimateServiceStopPaySummary(input).totalAmountCents).toBe(9000);
   expect(estimateServiceStopPaySummary({ ...input, mode: 'actual' }).totalAmountCents).toBe(6000);
+});
+
+test('a task rate cannot provide a visit forecast', () => {
+  const summary = estimateServiceStopPaySummary(args({ rates: [{ ...rate, rateType: 'flatPerTask' }] }));
+  expect(summary).toEqual(expect.objectContaining({ totalAmountCents: 0, needsReview: true }));
 });

@@ -1,4 +1,4 @@
-import { taskCustomerPriceCents, visitCustomerPriceCents } from "../../../utils/jobScopePricing";
+import { isTaskChargeLine, visitCustomerPriceCents } from "../../../utils/jobScopePricing";
 import { userFacingErrorMessage } from '../../../utils/permissionErrors';
 import "./JobTemplateTheme.css";
 import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
@@ -69,11 +69,11 @@ const emptyTemplateForm = () => ({
 });
 
 const emptyTaskForm = () => ({
-  ...jobPayFields({ payrollMode: "included" }),
+
   name: "",
   type: "Basic",
   description: "",
-  contractedRate: "0.00",
+
   estimatedTime: "0",
   customerApproval: false,
   sortOrder: "0",
@@ -250,21 +250,16 @@ const catalogTaskType = (template = {}) => (
 );
 
 // Catalog tasks are per service unit. Use the same scope for the unsaved preview and saved tasks.
-const catalogTasksForLaborLine = (catalogItem, payTypeId, quantity) => (
-  (catalogServiceTaskTemplates(catalogItem).length ? catalogServiceTaskTemplates(catalogItem) : [{ name: serviceCatalogItemLabel(catalogItem), type: "Basic", payrollMode: "included" }])
+const catalogTasksForLaborLine = (catalogItem, quantity) => (
+  (catalogServiceTaskTemplates(catalogItem).length ? catalogServiceTaskTemplates(catalogItem) : [{ name: serviceCatalogItemLabel(catalogItem), type: "Basic" }])
     .map((template, index) => {
-      const pay = jobPayFields(template, { payTypeId });
       return {
-        ...pay,
         id: template.id || template.templateId || `catalog-task-${index}`,
         name: String(template.name || template.title || template.description || `Task ${index + 1}`).trim(),
         type: catalogTaskType(template),
         description: template.description || "",
-        contractedRate: catalogCents(template.laborCostCents, template.contractRateCents, template.contractedRateCents, template.contractedRate, template.costCents),
-        billingLaborPriceCents: catalogCents(template.billingLaborPriceCents, template.unitAmountCents, template.priceCents, template.rateCents),
+
         estimatedTime: catalogTaskMinutes(template) * quantity,
-        payQuantity: pay.payQuantity * quantity,
-        manualPayOverrideCents: pay.manualPayOverrideCents === null ? null : Math.round(pay.manualPayOverrideCents * quantity),
         customerApproval: Boolean(template.customerApproval || template.customerApprovalRequired),
         genericItemId: template.genericItemId || "",
         dataBaseItemId: template.dataBaseItemId || "",
@@ -367,8 +362,6 @@ const laborLineInternalCostCents = (line = {}) => cents(
 );
 
 const plannedStopCostCents = (stop = {}) => cents(stop.plannedLaborCostCents ?? stop.cost);
-
-const taskInternalCostCents = (task = {}) => cents(task.contractedRate);
 
 const productTotalCostCents = (item = {}) => {
   if (item.plannedTotalCostCents !== undefined && item.plannedTotalCostCents !== null) return cents(item.plannedTotalCostCents);
@@ -625,19 +618,19 @@ const JobTemplates = () => {
 
   const servicePriceCents = useMemo(() => {
     if (details.laborLineItems.length) {
-      return details.laborLineItems.reduce((total, line) => total + laborLineTotalPriceCents(line), 0);
+      return details.laborLineItems.filter((line) => !isTaskChargeLine(line)).reduce((total, line) => total + laborLineTotalPriceCents(line), 0);
     }
 
-    return details.tasks.reduce((total, task) => total + taskCustomerPriceCents(task), 0) +
+    return
       details.plannedServiceStops.reduce((total, stop) => total + visitCustomerPriceCents(stop), 0);
   }, [details.laborLineItems, details.plannedServiceStops, details.tasks]);
 
   const serviceCostCents = useMemo(() => {
     if (details.laborLineItems.length) {
-      return details.laborLineItems.reduce((total, line) => total + laborLineInternalCostCents(line), 0);
+      return details.laborLineItems.filter((line) => !isTaskChargeLine(line)).reduce((total, line) => total + laborLineInternalCostCents(line), 0);
     }
 
-    return details.tasks.reduce((total, task) => total + taskInternalCostCents(task), 0) +
+    return
       details.plannedServiceStops.reduce((total, stop) => total + plannedStopCostCents(stop), 0);
   }, [details.laborLineItems, details.plannedServiceStops, details.tasks]);
 
@@ -768,8 +761,7 @@ const JobTemplates = () => {
         name: item.name || "",
         type: canonicalJobTaskType(item.type || "Basic"),
         description: item.description || "",
-        contractedRate: dollarsFromCents(item.contractedRate || 0),
-        customerPrice: dollarsFromCents(taskCustomerPriceCents(item)),
+
         estimatedTime: String(item.estimatedTime || 0),
         customerApproval: Boolean(item.customerApproval),
         sortOrder: String(item.sortOrder || 0),
@@ -1078,9 +1070,7 @@ const JobTemplates = () => {
         name: itemForm.name.trim(),
         type: canonicalJobTaskType(itemForm.type.trim() || "Basic"),
         description: itemForm.description.trim(),
-        contractedRate: centsFromMoney(itemForm.contractedRate),
-        billingLaborPriceCents: centsFromMoney(itemForm.customerPrice),
-            ...jobPayFields(itemForm),
+
         estimatedTime: Number(itemForm.estimatedTime || 0),
         customerApproval: Boolean(itemForm.customerApproval),
         sortOrder: Number(itemForm.sortOrder || 0),
@@ -1191,7 +1181,7 @@ const JobTemplates = () => {
 	  };
 
   const buildTaskPayloadsFromCatalogItem = (catalogItem, laborLineId) => (
-    catalogTasksForLaborLine(catalogItem, itemForm.payTypeId || "", Math.max(Number(itemForm.quantity || 1), 1))
+    catalogTasksForLaborLine(catalogItem, Math.max(Number(itemForm.quantity || 1), 1))
       .map((task, index) => ({
         ...task,
         id: `comp_job_template_task_${uuidv4()}`,
@@ -2431,7 +2421,7 @@ const JobTemplates = () => {
               {rows.map((item) => {
                 const taskIds = type === "plannedServiceStops" ? normalizeIdList(item.taskTemplateIds) : getLaborLineTaskIds(item);
                 const billingSummary = type === "tasks"
-                  ? moneyFromCents(taskCustomerPriceCents(item))
+                  ? ""
                   : type === "plannedServiceStops"
                     ? moneyFromCents(plannedStopCostCents(item))
                     : type === "laborLineItems"
@@ -2829,7 +2819,6 @@ const JobTemplates = () => {
 
 	              {itemModal.type === "tasks" ? (
 	                <>
-                      <JobPayrollFields value={itemForm} payTypes={payTypes} onChange={(field, value) => setItemForm((form) => ({ ...form, [field]: value }))} />
 	                  <div className="grid gap-4 sm:grid-cols-3">
                     <label className="text-sm font-semibold text-slate-700">
                       Type
@@ -2840,19 +2829,10 @@ const JobTemplates = () => {
                       </select>
                     </label>
                     <label className="text-sm font-semibold text-slate-700">
-                      Contracted task pay
-                      <input aria-describedby="template-contracted-pay-help" type="number" min="0" step="0.01" value={itemForm.contractedRate || "0.00"} onChange={(event) => setItemForm((form) => ({ ...form, contractedRate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Customer price
-                      <input type="number" min="0" step="0.01" value={itemForm.customerPrice ?? ""} onChange={(event) => setItemForm((form) => ({ ...form, customerPrice: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
                       Minutes
                       <input type="number" min="0" value={itemForm.estimatedTime || "0"} onChange={(event) => setItemForm((form) => ({ ...form, estimatedTime: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                   </div>
-                  <p id="template-contracted-pay-help" className="text-xs text-slate-600">Payroll uses contracted task pay when the task rate source calls for it. Leave customer price blank when this task is included in a service.</p>
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
                     <input type="checkbox" checked={Boolean(itemForm.customerApproval)} onChange={(event) => setItemForm((form) => ({ ...form, customerApproval: event.target.checked }))} />
                     Customer approval required
@@ -2949,13 +2929,13 @@ const JobTemplates = () => {
 	                  </div>
                       <ServicePayTypeField value={itemForm.payTypeId} payTypes={payTypes}
                         onChange={(payTypeId) => setItemForm((form) => ({ ...form, payTypeId }))} />
-	                  <ServicePayrollCostEditor data={servicePayrollData} scopeLabel="For this service line, including linked tasks"
+	                  <ServicePayrollCostEditor data={servicePayrollData} scopeLabel="For one service visit"
                         costLabel="Internal cost" onCostChange={(internalCost) => setItemForm((form) => ({ ...form, internalCost }))}
                         onUseSuggestedPrice={(cents) => setItemForm((form) => ({ ...form, totalPrice: dollarsFromCents(cents), unitPrice: dollarsFromCents(cents / Math.max(Number(form.quantity || 1), 1)) }))}
                         tasks={[
                           ...details.tasks.filter((task) => (itemForm.taskTemplateIds || []).includes(task.id)),
                           ...(itemModal.mode === "create" && serviceCatalogItemById.has(itemForm.selectedSalesCatalogItemId)
-                            ? catalogTasksForLaborLine(serviceCatalogItemById.get(itemForm.selectedSalesCatalogItemId), itemForm.payTypeId || "", Math.max(Number(itemForm.quantity || 1), 1)) : []),
+                            ? catalogTasksForLaborLine(serviceCatalogItemById.get(itemForm.selectedSalesCatalogItemId), Math.max(Number(itemForm.quantity || 1), 1)) : []),
                         ]}
                         serviceQuantity={Math.max(Number(itemForm.quantity || 1), 1)}
                         inheritedPayTypeId={itemForm.payTypeId || ""} priceInput={itemForm.totalPrice} costInput={itemForm.internalCost}

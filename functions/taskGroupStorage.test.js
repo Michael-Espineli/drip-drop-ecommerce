@@ -13,7 +13,8 @@ test('setup writes a native-compatible group and its items only to canonical sto
   assert.equal(db.records.get(canonical).name, 'Weekly Service');
   assert.equal(db.records.get(canonical).createdByUserId, 'owner');
   assert.equal(db.records.get(canonical).estimatedMinutes, 5);
-  assert.equal(db.records.get(canonical).estimatedLaborCents, 250);
+  assert.equal(db.records.get(canonical).estimatedLaborCents, undefined);
+  assert.equal(db.records.get(`${canonical}/taskItems/brush`).contractedRate, undefined);
   assert.equal(db.records.get(canonical).canDelete, false);
 });
 test('canonical tasks beat both plural variants and document IDs beat stale embedded IDs', async () => {

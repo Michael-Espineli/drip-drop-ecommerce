@@ -1,3 +1,5 @@
+const { operationalTask } = require("./taskFields");
+
 // taskGroup/taskGroup/taskItems is canonical. Plural paths are read-only compatibility.
 const DEFAULT_RECURRING_TASK_GROUP_ID = 'com_set_tg_recurring_service_stops';
 
@@ -25,10 +27,9 @@ async function seedDefaultRecurringTaskGroup(db, companyId, tasks, { createdAt, 
     id: groupId, name: 'Weekly Service', description: 'Default tasks for recurring service stops',
     numberOfTasks: tasks.length, canDelete: false, isActive: true,
     estimatedMinutes: tasks.reduce((sum, task) => sum + Number(task.estimatedTime || 0), 0),
-    estimatedLaborCents: tasks.reduce((sum, task) => sum + Number(task.contractedRate || 0), 0),
     createdAt, createdByUserId,
   });
-  for (const task of tasks) await group.collection('taskItems').doc(task.id).set(task);
+  for (const task of tasks) await group.collection('taskItems').doc(task.id).set(operationalTask(task));
 }
 
 module.exports = { DEFAULT_RECURRING_TASK_GROUP_ID, loadTaskGroupItems, seedDefaultRecurringTaskGroup };

@@ -149,6 +149,25 @@ test('invoice edits derive totals from lines and preserve saved money/provenance
  const f=fixture();await f.worker.manage(request());const req=edit(f);await f.worker.manage(req);assert.equal(invoice(f).totalAmountCents,9600);assert.equal(invoice(f).amountPaidCents,2500);assert.equal(invoice(f).amountDueCents,7100);assert.equal(invoice(f).status,'partiallyPaid');assert.equal(invoice(f).lineItems[0].metadata.source,'accepted');
  await f.worker.manage(req);assert.equal(invoice(f).billingRevision,2);
 });
+test('a draft must drop task charges before it can be issued', async () => {
+ const f = fixture();
+ const service = invoice(f).lineItems[0];
+ f.db.set('salesInvoices/invoice', { status: 'draft', jobId: 'job', lineItems: [
+   service, { id: 'old-task', sourceType: 'job_task', name: 'Checklist task', quantity: 1, unitAmountCents: 500 },
+ ] }, { merge: true });
+ const retained = edit(f);
+ retained.data.changes.lineItems.push({ id: 'old-task', name: 'Checklist task', quantity: 1, unitAmountCents: 500 });
+ await assert.rejects(f.worker.manage(retained), /Remove legacy task charges/);
+ retained.data.requestId = 'keep-draft';
+ retained.data.changes.status = 'draft';
+ await f.worker.manage(retained);
+ assert.equal(invoice(f).lineItems[1].metadata.legacyTaskCharge, true);
+ const corrected = edit(f);
+ corrected.data.requestId = 'issue-with-services';
+ await f.worker.manage(corrected);
+ assert.equal(invoice(f).status, 'open');
+ assert.deepEqual(invoice(f).lineItems.map(line => line.id), [service.id]);
+});
 test('stale edits, closed invoices, protected fields and receipt-destroying totals are rejected',async()=>{
  for(const scenario of ['revision','timestamp','closed','identity','too-low']){
   const f=fixture();await f.worker.manage(request());const req=edit(f);

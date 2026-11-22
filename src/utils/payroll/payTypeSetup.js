@@ -1,4 +1,5 @@
-export const rateTypeOptions = ["flatPerStop", "flatPerTask", "hourly", "perBodyOfWater", "perServiceLocation", "percentage", "manual"];
+export const rateTypeOptions = ["flatPerStop", "hourly", "perBodyOfWater", "perServiceLocation", "percentage", "manual"];
+export const supportedRateType = (value) => rateTypeOptions.includes(value) ? value : "flatPerStop";
 
 export const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifier"];
 
@@ -92,7 +93,7 @@ export function resolveStopPayCategories(companyStopPayBuckets = []) {
       category,
       helper: bucket.helper || base.helper || "",
       defaultWorkCategory: bucket.defaultWorkCategory || base.defaultWorkCategory || "serviceCall",
-      defaultRateType: bucket.defaultRateType || base.defaultRateType || "flatPerStop",
+      defaultRateType: supportedRateType(bucket.defaultRateType || base.defaultRateType),
       defaultIconName: bucket.defaultIconName || bucket.iconName || base.defaultIconName || "briefcase",
       sourceId: bucket.sourceId || base.sourceId || bucket.id,
       isActive: bucket.isActive !== false,
@@ -115,7 +116,7 @@ export function buildCompanyPayType({ id, companyId, form, bucket, existing = {}
     iconName: form.iconName.trim() || bucket.defaultIconName,
     isActive: existing.isActive !== false,
     status: existing.status || "Active",
-    defaultRateType: form.defaultRateType || bucket.defaultRateType,
+    defaultRateType: supportedRateType(form.defaultRateType || bucket.defaultRateType),
     defaultStackBehavior: form.defaultStackBehavior || "stackable",
     sortOrder: existing.sortOrder ?? sortOrder,
     bucketId: bucket.id,

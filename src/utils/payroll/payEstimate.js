@@ -1,5 +1,5 @@
 import { normalizeWorkOfferIncentive } from "../workOffers";
-import { calculatePayLines } from "./payCalculation";
+import { calculatePayLines, isTaskPayLine } from "./payCalculation";
 
 const cents = (value) => Math.round(Number(value) || 0);
 const userIdForRate = (worker) => worker?.userId || worker?.id || "";
@@ -60,7 +60,7 @@ export const estimateServiceStopPay = ({ companyId, settings, serviceStop = {}, 
   workTypes = [], mappings = [], rates = [], bodiesOfWater = null, date = new Date(), mode = "preview" }) => {
   const stop = serviceStop || {};
   // Accepted terms are private server data; use the authoritative projection on the stop.
-  if (stop.workOfferId && stop.payrollAgreement && !Array.isArray(stop.payrollAgreement.rates) && Array.isArray(stop.estimatedPayLines)) return stop.estimatedPayLines;
+  if (stop.workOfferId && stop.payrollAgreement && !Array.isArray(stop.payrollAgreement.rates) && Array.isArray(stop.estimatedPayLines)) return stop.estimatedPayLines.filter((line) => !isTaskPayLine(line));
   const mappedStop = mappings.find((mapping) => mapping.sourceType === "serviceStopType" &&
     [serviceStopType?.id, serviceStopUseCaseSourceId].includes(mapping.sourceId))?.workTypeId;
   const stopPayId = Array.isArray(serviceStopWorkTypeIds) ? serviceStopWorkTypeIds[0] || ""
@@ -78,8 +78,7 @@ export const estimateServiceStopPay = ({ companyId, settings, serviceStop = {}, 
     serviceStop: { ...stop, id: stop.id || "preview", payTypeId: stopPayId,
       type: stop.type || serviceStopType?.name || "Work pay", techId: selectedWorkerId || stop.techId || "",
       tech: worker ? userNameForRate(worker) : stop.tech || "", serviceDate: stop.serviceDate || date },
-    tasks: tasks.map((task) => ({ ...task, payTypeId: task.payTypeId || task.payWorkTypeId || task.workTypeId ||
-      mappings.find((mapping) => mapping.sourceType === "jobTaskType" && mapping.sourceId === task.type)?.workTypeId || "" })),
+    tasks,
   });
   // Legacy offers retain their existing incentive preview.
   if (settings?.payrollEnabled === false || settings?.companyPayrollEnabled === false || settings?.payrollDisabled === true) return lines;

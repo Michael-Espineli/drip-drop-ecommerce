@@ -36,7 +36,7 @@ function createTechnicianTime(db,now=()=>new Date()) {
    if(uniqueHourly.length>1) fail('failed-precondition','This offer has mixed hourly rates. Record time against its individual tasks instead.');
    const agreedRate=accepted?.agreement.rates?.find(v=>v.id===uniqueHourly[0]) || (accepted ? selectPayRate({companyId,technicianId:uid,workTypeId:'',basis:'technicianHourly',hourlyFallback:true,rates:accepted.agreement.rates || [],date:date(accepted.agreement.acceptedAt)}):null);
    const shiftRate=shift?.hourlyRateSnapshot || selectPayRate({companyId,technicianId:uid,workTypeId:'',basis:'technicianHourly',hourlyFallback:true,rates:ctx.rates,date:when});
-   const allocation={workOfferClaimId:accepted?.id || null,workOfferId:linkedOfferId || null,jobId:linkedOffer?.jobId || null,hourlyRateSnapshot:agreedRate || shiftRate || null,timePayIncluded:!!accepted && ['Offered Amount','Unpaid'].includes(accepted.agreement.paySource)};
+   const allocation={workOfferClaimId:accepted?.id || null,workOfferId:linkedOfferId || null,jobId:linkedOffer?.jobId || null,hourlyRateSnapshot:agreedRate || shiftRate || null,timePayIncluded:!!accepted && ['Offered Amount','Task Contracted Rates','Unpaid'].includes(accepted.agreement.paySource)};
    staleShifts.forEach((stale,index)=>{
      const ends=rows(staleLogs[index]).filter(v=>v.endTime).map(v=>date(v.endTime).getTime()).filter(Number.isFinite);
      t.set(c.collection('shifts').doc(stale.id),{isCurrent:false,endTime:ends.length?new Date(Math.max(...ends)):stale.date,closedByReconciliation:true,payrollHistoricalRepairOnly:true,repairReason:'Legacy shift left open after its work logs closed.'},{merge:true});
@@ -90,7 +90,7 @@ function createTechnicianTime(db,now=()=>new Date()) {
          const terms=claim.agreement,hourly=(terms.quotedPayLines || []).filter(v=>v.rateType==='hourly'),rateIds=[...new Set(hourly.map(v=>v.rateId))];
          const rate=terms.rates?.find(v=>v.id===rateIds[0]) || selectPayRate({companyId,technicianId:parent.techId,workTypeId:'',basis:'technicianHourly',hourlyFallback:true,rates:terms.rates || [],date:date(terms.rateDate || terms.acceptedAt)});
          if(rateIds.length>1) allocationReview='This route has multiple accepted hourly rates. Allocate time before approving pay.';
-         routeAllocation={offerId:offer.id,claimId:claim.id,jobId:offer.jobId || null,rate:rate || null,included:['Offered Amount','Unpaid'].includes(terms.paySource)};
+         routeAllocation={offerId:offer.id,claimId:claim.id,jobId:offer.jobId || null,rate:rate || null,included:['Offered Amount','Task Contracted Rates','Unpaid'].includes(terms.paySource)};
        } else allocationReview='This route mixes accepted scopes or fixed-pay work. Review and allocate route time before approving pay; do not add hourly pay already included in a fixed offer.';
      }
    }

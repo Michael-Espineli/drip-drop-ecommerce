@@ -1,6 +1,6 @@
 const { HttpsError } = require('./appErrors');
 const { createHash, randomUUID } = require('node:crypto');
-const { calculatePayLines, jobPayFields } = require('./payrollCalculation');
+const { calculatePayLines, normalizePaySources } = require('./payrollCalculation');
 const { loadPayrollBodyOfWaterScope } = require('./payrollBodyOfWaterScope');
 const { started:workStarted, newActiveRoute } = require('./routeState');
 const { workOfferRouteSummary } = require('./workOfferRouteSummary');
@@ -32,12 +32,7 @@ const presentScope = scope => Object.fromEntries(Object.entries(scope).map(([nam
 const stopIds = o => unique([o.serviceStopId, ...list(o.routeServiceStopIds), ...list(o.serviceStopIds), ...list(o.serviceStopsIds)]);
 const routeIds = r => unique([...list(r.serviceStopsIds), ...list(r.serviceStopIds), ...list(r.rssIds), ...list(r.order).map(v => v.serviceStopId || v.recurringServiceStopId)]);
 const agreementReference = a => { const {rates,settings,workTypes,quotedPayLines,baseCents,totalCents,...reference}=a; return reference; };
-// Keep the preview and accepted payroll rules aligned when job task pay is used
-// without adding a separate visit pay item.
-const paySettingsForOffer = (offer, settings) => offer.paySource === 'Task Contracted Rates'
-  ? { ...settings, routePaySource:'completedTasks', taskPaySource:'taskContractedRate' }
-  : offer.jobId && !offer.routeId && !stopIds(offer).length && offer.workPurpose !== 'diagnostic' && !offer.serviceStopTypeId
-    ? { ...settings, routePaySource:'completedTasks' } : settings;
+const paySettingsForOffer = (_offer, settings) => normalizePaySources(settings);
 const allocation = (amount, scope, selected) => selected.reduce((n, value) => { const at = scope.indexOf(value); return n + (at < 0 ? 0 : Math.floor(amount / scope.length) + (at < amount % scope.length ? 1 : 0)); }, 0);
 const coverageMode = s => ['review','notify','automatic'].includes(s.routeCoverageMode) ? s.routeCoverageMode : s.workOffersRequireApprovalBeforeAssignment || s.workOffersAutoAssignOnAcceptance === false ? 'review' : 'automatic';
 const timestampFields = v => { const result = { ...v }; for (const k of ['serviceDate','proposedStartDate','proposedEndDate','completionDeadlineAt','routeDate','createdAt']) if (result[k] != null && !(result[k] instanceof Date)) { const d = date(result[k]); if (Number.isFinite(d.getTime())) result[k] = d; else delete result[k]; } return result; };
@@ -85,23 +80,28 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
 
     return { job:job?.exists ? record(job) : null, scope };
   }
-  async function estimate({t, c, companyId, offer, scope, ctx, actor}) {
+  async function estimate({t, c, companyId, offer, scope, job, ctx, actor}) {
     if(ctx.settings.payrollEnabled===false || ctx.settings.companyPayrollEnabled===false || ctx.settings.payrollDisabled===true)return {lines:[],baseCents:0,incentiveCents:0,totalCents:0,needsReview:offer.paySource!=='Unpaid' || Number(offer.incentive?.amountCents || 0)>0 || Number(offer.incentive?.percentage || 0)>0};
-    ctx = { ...ctx, bodyOfWaterIdsByServiceLocation: await loadPayrollBodyOfWaterScope(t, c, [...scope.stops, ...scope.tasks], ctx.rates) };
+    ctx = { ...ctx, bodyOfWaterIdsByServiceLocation: await loadPayrollBodyOfWaterScope(t, c, [job, ...scope.stops], ctx.rates) };
     const selectedIds = unique(scope.stops.map(v=>v.id));
     ctx={...ctx,settings:paySettingsForOffer(offer,ctx.settings)};
     const allIds = selectedIds.length ? selectedIds : ['job'];
     const fixed = offer.paySource === 'Offered Amount';
     const incentive = offer.incentive || {};
     const lines = allIds.flatMap(stopId => {
-      const stop = scope.stops.find(v=>v.id===stopId) || { id:'offer_preview', jobId:offer.jobId, typeId:offer.serviceStopTypeId, payTypeId:offer.serviceStopTypeId, serviceDate:offer.proposedStartDate || now(), estimatedDuration:offer.estimatedMinutes };
-      const tasks = fixed || offer.paySource==='Unpaid' ? [] : selectedIds.length ? scope.tasks.filter(v=>v.sourceStopId===stopId).map(v=>({...v,workerId:actor.uid,workerName:actor.name,payrollAgreement:null})) : scope.tasks.map(v=>({...v,workerId:actor.uid,workerName:actor.name,payrollAgreement:null}));
+      const typeId = offer.serviceStopTypeId || (offer.workPurpose === "diagnostic" ? "system_job_estimate_service_stop" : "system_job_service_stop");
+      const tasks = selectedIds.length ? scope.tasks.filter(task => task.sourceStopId === stopId) : scope.tasks;
+      const estimatedMinutes = Number(offer.estimatedMinutes || tasks.reduce((sum, task) => sum + Number(task.estimatedTime || 0), 0));
+      const stop = scope.stops.find(value => value.id === stopId) || {
+        id: "offer_preview", jobId: offer.jobId, typeId, payTypeId: typeId,
+        serviceDate: offer.proposedStartDate || now(), serviceLocationId: job?.serviceLocationId || "", estimatedMinutes,
+      };
       if (ctx.settings.payMode==='hourlyOnly' && ['workLogs','activeRouteDuration','activeRouteLogs'].includes(ctx.settings.hourlyPaySource) && !fixed && offer.paySource!=='Unpaid') {
-        const minutes=Number(stop.estimatedDuration || stop.estimatedMinutes || offer.estimatedMinutes || tasks.reduce((n,v)=>n+Number(v.estimatedTime || 0),0));
-        return calculatePayLines({...ctx,companyId,mode:'preview',tasks:[],serviceStop:{...stop,techId:actor.uid,payTypeId:'offer_hourly',estimatedDuration:minutes},workTypes:[{id:'offer_hourly',name:'Hourly work',defaultRateType:'hourly'}],settings:{payMode:'hourlyOnly',hourlyPaySource:'serviceStopDuration'}});
+        const minutes = Number(stop.estimatedMinutes || stop.estimatedDuration || estimatedMinutes);
+        return calculatePayLines({...ctx,companyId,mode:'preview',tasks:[],serviceStop:{...stop,techId:actor.uid,payTypeId:'offer_hourly',estimatedMinutes:minutes},workTypes:[{id:'offer_hourly',name:'Hourly work',defaultRateType:'hourly'}],settings:{payMode:'hourlyOnly',hourlyPaySource:'serviceStopDuration'}});
       }
-      return calculatePayLines({ ...ctx, settings:!selectedIds.length && !offer.serviceStopTypeId ? {...ctx.settings,routePaySource:'completedTasks'} : ctx.settings, companyId, mode:'preview', serviceStop:{...stop, techId:actor.uid, tech:actor.name,
-        ...(fixed || offer.paySource === 'Unpaid' ? { payrollMode:'custom', manualPayOverrideCents:fixed ? allocation(cents(offer.offeredAmountCents),allIds,[stopId]) : 0 } : {}) }, tasks });
+      return calculatePayLines({ ...ctx, companyId, mode:'preview', serviceStop:{...stop, techId:actor.uid, tech:actor.name,
+        ...(fixed || offer.paySource === 'Unpaid' ? { payrollMode:'custom', manualPayOverrideCents:fixed ? allocation(cents(offer.offeredAmountCents),allIds,[stopId]) : 0 } : { payrollMode: 'automatic', manualPayOverrideCents: null }) }, tasks });
     });
     if(ctx.settings.payMode==='hybrid' && ctx.settings.hourlyPaySource==='workLogs' && !fixed && offer.paySource!=='Unpaid') {
       for(const stopId of allIds) {
@@ -153,16 +153,16 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
     if (tasks.some(v=>!v || workStarted(v) || (v.claimedWorkOfferId && v.claimedWorkOfferId !== offer.id))) fail('failed-precondition','Some tasks have already been started, completed or claimed.');
     if (stops.length + tasks.length + routes.length + linkedJobTasks.length + stopTasks.reduce((n,v)=>n+v.docs.length,0) > 350) fail('resource-exhausted','Split this offer into smaller scopes.');
     return () => {
-      stopTasks.forEach((snap,index)=>rows(snap).filter(task=>(claim.agreement.stopTasks || []).some(v=>v.stopId===stops[index].id && v.taskId===task.id)).forEach(task=>t.set(c.collection('serviceStops').doc(stops[index].id).collection('tasks').doc(task.id),{workerId:claim.workerId,workerName:claim.workerName,workerType:claim.workerType,workerAssignmentMode:'stop',payrollAgreement:agreementReference(claim.agreement)},{merge:true})));
+      stopTasks.forEach((snap,index)=>rows(snap).filter(task=>(claim.agreement.stopTasks || []).some(v=>v.stopId===stops[index].id && v.taskId===task.id)).forEach(task=>t.set(c.collection('serviceStops').doc(stops[index].id).collection('tasks').doc(task.id),{workerId:claim.workerId,workerName:claim.workerName,workerType:claim.workerType,workerAssignmentMode:'stop'},{merge:true})));
       transfers.forEach(previous=>t.set(c.collection('workOffers').doc(previous.id),{claims:previous.claims,transferredStopIds:previous.transferredStopIds,transferHistory:previous.transferHistory,status:previous.claims.every(v=>['Transferred','Cancelled','Rejected'].includes(v.status))?'Cancelled':previous.status,updatedAt:now()},{merge:true}));
-      linkedJobTasks.forEach(doc=>t.set(doc.ref,{claimedWorkOfferId:offer.id,workerId:claim.workerId,workerName:claim.workerName,workerType:claim.workerType,workerAssignmentMode:'stop',payrollAgreement:agreementReference(claim.agreement)},{merge:true}));
+      linkedJobTasks.forEach(doc=>t.set(doc.ref,{claimedWorkOfferId:offer.id,workerId:claim.workerId,workerName:claim.workerName,workerType:claim.workerType,workerAssignmentMode:'stop'},{merge:true}));
       const scopeIds = stopIds(offer).length ? stopIds(offer) : claim.stopIds;
       stops.forEach(stop=> {
         const fixed = claim.agreement.paySource === 'Offered Amount';
         const agreement = { ...claim.agreement, fixedAmountCents:allocation(cents(offer.offeredAmountCents),scopeIds,[stop.id]), incentiveCents:claim.agreement.incentive.type === 'flat' ? allocation(cents(claim.agreement.incentive.amountCents),scopeIds,[stop.id]) : 0 };
         t.set(c.collection('serviceStops').doc(stop.id), { techId:claim.workerId, tech:claim.workerName, workOfferId:offer.id, workOfferClaimId:claim.id, payrollAgreement:agreementReference({...agreement,claimId:claim.id}), assignedFromWorkOffer:true, pendingWorkOfferId:null, originalTechnicianId:stop.originalTechnicianId || stop.techId || '', updatedAt:now(), ...(['Offered Amount','Unpaid'].includes(claim.agreement.paySource) ? { payrollMode:'custom', manualPayOverrideCents:fixed?agreement.fixedAmountCents:0 } : {payrollMode:'automatic',manualPayOverrideCents:null}) }, {merge:true});
       });
-      tasks.forEach(task=>t.set(c.collection('workOrders').doc(id(offer.jobId)).collection('tasks').doc(task.id), { claimedWorkOfferId:offer.id, workerId:claim.workerId, workerName:claim.workerName, workerType:claim.workerType, workerAssignmentMode:'task', payrollAgreement:agreementReference({...claim.agreement,claimId:claim.id}) }, {merge:true}));
+      tasks.forEach(task=>t.set(c.collection('workOrders').doc(id(offer.jobId)).collection('tasks').doc(task.id), { claimedWorkOfferId:offer.id, workerId:claim.workerId, workerName:claim.workerName, workerType:claim.workerType, workerAssignmentMode:'task' }, {merge:true}));
       const moved = new Set(claim.stopIds);
       const changedRoutes = new Map();
       const destinationIds = new Set();
@@ -213,7 +213,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
       }
       if (action === 'quote') {
         if(!can(actor,'322')) fail('permission-denied','You cannot prepare offered work.');
-        const draft=timestampFields(data.offer || {}),{scope}=await scopeFor(t,c,draft);
+        const draft=timestampFields(data.offer || {}),{job, scope}=await scopeFor(t,c,draft);
         const routeSummary=await workOfferRouteSummary(t,c,draft,scope.stops,now());
         if(draft.paySource==='Technician Rate' && !data.technicianId) return {lines:[],baseCents:0,incentiveCents:0,totalCents:null,needsReview:false,personal:false,routeSummary};
         const targetId=id(data.technicianId) || uid;
@@ -221,7 +221,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         const targetUser=targetId===uid?actor.user:rows(await t.get(c.collection('companyUsers').where('userId','==',targetId)))[0];
         if(!targetUser) fail('not-found','Select an active company technician.');
         const target={...actor,uid:targetId,user:targetUser,name:targetUser.userName || targetId};
-        const quote=await estimate({t,c,companyId,offer:draft,scope,ctx:targetId===uid?ctx:await context(t,c,target),actor:target});
+        const quote=await estimate({t,c,companyId,offer:draft,scope,job,ctx:targetId===uid?ctx:await context(t,c,target),actor:target});
         return {...quote,routeSummary,personal:true,lines:quote.lines.map(v=>({...v,title:v.taskName || v.workTypeName || 'Work Pay',sourceTaskId:v.jobTaskId || v.serviceStopTaskId || null}))};
       }
       if (action === 'save' || action === 'update') {
@@ -258,7 +258,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (existing && (list(existing.claims).length || existing.acceptedByUserId || ['Accepted','Scheduled','In Progress','Completed'].includes(existing.status))) fail('failed-precondition','Accepted terms are locked. Create an offer for additional work.');
         incoming.workPurpose=incoming.workPurpose || (key(incoming.serviceStopTypeUseCaseRawValue).includes('estimate')?'diagnostic':'execution');
         incoming.paySource=incoming.paySource || 'Technician Rate';
-        if(!['Technician Rate','Task Contracted Rates','Offered Amount','Unpaid'].includes(incoming.paySource) || cents(incoming.offeredAmountCents)<0 || !['none','flat','percentage'].includes(incoming.incentive?.type || 'none') || Number(incoming.incentive?.amountCents || 0)<0 || Number(incoming.incentive?.percentage || 0)<0)fail('invalid-argument','Choose a valid pay source and non-negative pay and incentive.');
+        if(!['Technician Rate','Offered Amount','Unpaid'].includes(incoming.paySource) || cents(incoming.offeredAmountCents)<0 || !['none','flat','percentage'].includes(incoming.incentive?.type || 'none') || Number(incoming.incentive?.amountCents || 0)<0 || Number(incoming.incentive?.percentage || 0)<0)fail('invalid-argument','Choose a valid pay source and non-negative pay and incentive.');
         if(incoming.proposedStartDate && (incoming.completionDeadlineAt || incoming.proposedEndDate) && date(incoming.proposedStartDate)>date(incoming.completionDeadlineAt || incoming.proposedEndDate))fail('invalid-argument','The deadline must follow the available date.');
         const {job,scope} = await scopeFor(t,c,incoming);
         const management = can(actor,'324');
@@ -279,7 +279,7 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
           if (!str(offer.title) || !Number.isFinite(Number(offer.estimatedMinutes || 0)) || Number(offer.estimatedMinutes || 0)<0) fail('invalid-argument','Enter a title and a valid estimated duration.');
           if (offer.offerType==='Direct User' && !offer.offeredToUserId) fail('invalid-argument','Select the technician receiving this offer.');
           for (const field of ['proposedStartDate','proposedEndDate','completionDeadlineAt']) if (offer[field] && !Number.isFinite(date(offer[field]).getTime())) fail('invalid-argument','Enter valid offer dates.');
-          const base=offer.paySource==='Offered Amount' ? cents(offer.offeredAmountCents) : offer.paySource==='Unpaid' ? 0 : offer.paySource==='Task Contracted Rates' ? (await estimate({t,c,companyId,offer,scope,ctx,actor})).baseCents : null;
+          const base=offer.paySource==='Offered Amount' ? cents(offer.offeredAmountCents) : offer.paySource==='Unpaid' ? 0 : null;
           const bonus=offer.incentive?.type==='flat' ? cents(offer.incentive.amountCents) : base!==null && offer.incentive?.type==='percentage' ? Math.round(base*Number(offer.incentive.percentage || 0)/100) : 0;
           Object.assign(offer,{estimatedBasePayCents:base,basePayCents:base,estimatedPayCents:base,estimatedPayTotalCents:base===null?null:base+bonus,estimatedPayWithIncentiveCents:base===null?null:base+bonus,totalPayWithIncentiveCents:base===null?null:base+bonus,estimatedLaborCents:base || 0,updatedByUserId:uid,updatedByUserName:actor.name});
         }
@@ -405,10 +405,10 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
       }
       if (action === 'preview') {
         await checkEligibility(t,c,actor,offer);
-        const {scope} = await scopeFor(t,c,offer);
+        const {job, scope} = await scopeFor(t,c,offer);
         const all=scope.stops.map(v=>v.id), reserved=new Set([...unavailableStopIds(offer),...claims.filter(v=>!['Rejected','Cancelled','Transferred'].includes(v.status)).flatMap(v=>v.stopIds || [])]), available=all.filter(v=>!reserved.has(v)), selected=data.stopIds ? unique(data.stopIds).filter(v=>available.includes(v)) : available;
         const quotedOffer=all.length ? {...offer,offeredAmountCents:allocation(cents(offer.offeredAmountCents),all,selected),incentive:offer.incentive?.type==='flat'?{...offer.incentive,amountCents:allocation(cents(offer.incentive.amountCents),all,selected)}:offer.incentive} : offer;
-        const preview = await estimate({t,c,companyId,offer:quotedOffer,scope:{...scope,stops:scope.stops.filter(v=>selected.includes(v.id))},ctx,actor});
+        const preview = await estimate({t,c,companyId,offer:quotedOffer,job,scope:{...scope,stops:scope.stops.filter(v=>selected.includes(v.id))},ctx,actor});
         const availableScope={...scope,stops:scope.stops.filter(v=>available.includes(v.id)),tasks:scope.tasks.filter(v=>!v.sourceStopId || selected.includes(v.sourceStopId)),products:scope.products.filter(v=>!v.sourceStopId || selected.includes(v.sourceStopId))};
         return { ...preview, routeSummary:await routeSummaryFor(t,c,offer,scope.stops.filter(v=>selected.includes(v.id))), hourlyPaySource:ctx.settings.hourlyPaySource || null,scope:presentScope(availableScope), revision:offer.revision || 1 };
       }
@@ -422,7 +422,8 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (data.revision != null && Number(data.revision)!==Number(offer.revision || 1)) fail('failed-precondition','This offer changed. Review its latest scope and pay.');
 
         if (!['posted','sent','viewed','accepted'].includes(key(offer.status))) fail('failed-precondition','This offer is no longer open.');
-        const {scope} = await scopeFor(t,c,offer);
+        if (offer.paySource === 'Task Contracted Rates') fail('failed-precondition','Ask management to update this offer to use visit or hourly pay.');
+        const {job, scope} = await scopeFor(t,c,offer);
         if (offer.scopeSignature && offer.scopeSignature!==scopeSignature({...scope,stops:scope.stops.map(stop=>unavailableStopIds(offer).includes(stop.id) || claims.some(claim=>!['Rejected','Cancelled','Transferred'].includes(claim.status)&&(claim.stopIds || []).includes(stop.id)) ? offer.scopeSnapshot?.stops?.find(original=>original.id===stop.id) || stop : stop)})) fail('failed-precondition','The job scope changed. Ask management to refresh this offer before accepting it.');
         const all = scope.stops.map(v=>v.id), reserved = new Set([...unavailableStopIds(offer),...claims.filter(v=>!['Rejected','Cancelled','Transferred'].includes(v.status)).flatMap(v=>v.stopIds)]);
         if (!all.length && claims.some(v=>!['Rejected','Cancelled'].includes(v.status)) || !all.length && offer.acceptedByUserId) fail('already-exists','Another technician already claimed this work.');
@@ -431,10 +432,10 @@ function createTechnicianWorkWorkflow(db, now = () => new Date()) {
         if (all.length && offer.routeSplitAllowed !== true && (requested.length!==all.length || reserved.size)) fail('failed-precondition','This route must stay together.');
         const scoped = { ...scope, stops:scope.stops.filter(v=>requested.includes(v.id)) };
         const mode = all.length ? coverageMode(ctx.wide) : ctx.wide.workOffersRequireApprovalBeforeAssignment || ctx.wide.workOffersAutoAssignOnAcceptance === false ? 'review' : 'automatic';
-        const preview = await estimate({t,c,companyId,offer:{...offer,offeredAmountCents:all.length ? allocation(cents(offer.offeredAmountCents),all,requested) : offer.offeredAmountCents,incentive:all.length && offer.incentive?.type==='flat'?{...offer.incentive,amountCents:allocation(cents(offer.incentive.amountCents),all,requested)}:offer.incentive},scope:scoped,ctx,actor});
+        const preview = await estimate({t,c,companyId,offer:{...offer,offeredAmountCents:all.length ? allocation(cents(offer.offeredAmountCents),all,requested) : offer.offeredAmountCents,incentive:all.length && offer.incentive?.type==='flat'?{...offer.incentive,amountCents:allocation(cents(offer.incentive.amountCents),all,requested)}:offer.incentive},scope:scoped,job,ctx,actor});
         if (preview.needsReview && (ctx.settings.payrollEnabled===false || ctx.settings.companyPayrollEnabled===false || ctx.settings.payrollDisabled===true))fail('failed-precondition','Enable company payroll before accepting paid work.');
         if (!['Offered Amount','Unpaid'].includes(offer.paySource) && preview.needsReview) fail('failed-precondition','A manager must resolve missing pay setup before this work can be accepted.');
-        const selectedTypes = new Set([...scope.tasks.map(v=>jobPayFields(v).payTypeId),...scope.stops.flatMap(v=>[v.payTypeId || v.typeId,...(v.defaultWorkTypeIds || [])]),offer.serviceStopTypeId].filter(Boolean));
+        const selectedTypes = new Set([...preview.lines.map(line=>line.payTypeId), ...scope.stops.flatMap(v=>[v.payTypeId || v.typeId,...(v.defaultWorkTypeIds || [])]), offer.serviceStopTypeId].filter(Boolean));
         const agreement = { offerId, revision:offer.revision || 1, workerId:uid, workerName:actor.name, taskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), stopTasks:scope.tasks.filter(v=>requested.includes(v.sourceStopId)).map(v=>({stopId:v.sourceStopId,taskId:v.id})), scopeStopIds:all, paySource:offer.paySource, rateDate:offer.proposedStartDate || scope.stops[0]?.serviceDate || now(), fixedAmountCents:cents(offer.offeredAmountCents), incentive:offer.incentive || {type:'none'}, rates:ctx.rates, settings:paySettingsForOffer(offer,ctx.settings), workTypes:ctx.workTypes.filter(v=>selectedTypes.has(v.id)), quotedPayLines:preview.lines, acceptedAt:now(), baseCents:preview.baseCents, totalCents:preview.totalCents };
         const claim = { id:id(data.claimId) || stable(offerId+'_'+uid+'_'+claims.length), workerId:uid, workerName:actor.name, workerType:actor.workerType, stopIds:requested, taskIds:scope.tasks.filter(v=>!v.sourceStopId).map(v=>v.id), status:mode==='review' ? 'Acceptance Pending Approval' : 'Accepted', agreement, createdAt:now() };
         agreement.claimId=claim.id;

@@ -58,4 +58,25 @@ test('client edits cannot rewrite a reviewed occurrence or its generation revisi
  await denied(()=>updateDoc(doc(operator,p+'serviceStops/stop'),{routeScheduleException:{action:'keep'}}));
  await updateDoc(doc(operator,p+'recurringServiceStop/reviewed'),{description:'Allowed detail edit'});
 });
+test('pay managers can maintain visit pay but cannot create or approve new task earnings', async () => {
+ await seeded;
+ const base = { technicianId: 'tech', serviceStopId: 'stop', calculationStatus: 'calculated', totalAmountCents: 3500 };
+ await setDoc(doc(manager, p + 'technicianPayLineItems/new-visit'), { ...base, source: 'serviceStop' });
+ await denied(() => setDoc(doc(manager, p + 'technicianPayLineItems/forged-task'), { ...base, source: 'serviceStopTask' }));
+ await denied(() => updateDoc(doc(manager, p + 'technicianPayLineItems/new-visit'), { jobTaskId: 'task' }));
+ await db.doc(p + 'technicianPayLineItems/legacy-task').set({ ...base, source: 'serviceStopTask' });
+ const oldTask = doc(manager, p + 'technicianPayLineItems/legacy-task');
+ await denied(() => updateDoc(oldTask, { calculationStatus: 'approved' }));
+ await updateDoc(oldTask, { calculationStatus: 'voided' });
+});
+test('pay managers can add visit rates while legacy task rates stay historical', async () => {
+ await seeded;
+ const base = { technicianId: 'tech', amountCents: 3500, payBasis: 'serviceStop', rateType: 'flatPerStop' };
+ await setDoc(doc(manager, p + 'technicianRates/new-visit'), base);
+ await denied(() => setDoc(doc(manager, p + 'technicianRates/new-task'), { ...base, payBasis: 'serviceStopTask' }));
+ await denied(() => updateDoc(doc(manager, p + 'technicianRates/new-visit'), { rateType: 'flatPerTask' }));
+ await db.doc(p + 'technicianRates/legacy-task').set({ ...base, payBasis: 'serviceStopTask' });
+ await denied(() => updateDoc(doc(manager, p + 'technicianRates/legacy-task'), { amountCents: 6000 }));
+ await updateDoc(doc(manager, p + 'technicianRates/legacy-task'), { status: 'archived' });
+});
 after(async()=>{for(const item of clients){await terminate(item.firestore);await deleteApp(item.app);}await admin.app().delete();});

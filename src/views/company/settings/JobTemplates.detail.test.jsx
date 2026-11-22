@@ -137,7 +137,7 @@ test('creating an inactive product from a template saves it without selecting it
   }));
 });
 
-test('a new service line previews catalog service pay and task extras before saving, and only applies cost on click', async () => {
+test('a new service line previews visit pay before saving, and only applies cost on click', async () => {
   await openTemplate();
   fireEvent.click(screen.getByRole('button', { name: 'Service Line', exact: true }));
   const form = screen.getByRole('form', { name: 'Add Template Service Line' });
@@ -148,30 +148,32 @@ test('a new service line previews catalog service pay and task extras before sav
   const preview = fields.getByRole('region', { name: 'Service technician pay preview' });
   expect(within(fields.getByRole('region', { name: 'Service internal cost' })).getByRole('region', { name: 'Service technician pay preview' })).toBe(preview);
   expect(within(fields.getByRole('region', { name: 'Service internal cost' })).getByLabelText('Internal cost')).toHaveValue(35);
-  expect(within(preview).getByText('$65.00 – $80.00')).toBeInTheDocument();
+  expect(within(preview).getByText('$50.00 – $60.00')).toBeInTheDocument();
   expect(fields.getByLabelText('Internal cost')).toHaveValue(35);
   fireEvent.change(fields.getByLabelText('Quantity'), { target: { value: '2' } });
-  expect(within(preview).getByText('$130.00 – $160.00')).toBeInTheDocument();
+  expect(within(preview).getByText('$50.00 – $60.00')).toBeInTheDocument();
   expect(fields.getByLabelText('Internal cost')).toHaveValue(35);
   fireEvent.click(within(preview).getByRole('button', { name: 'Use high estimate for internal cost' }));
-  expect(fields.getByLabelText('Internal cost')).toHaveValue(160);
+  expect(fields.getByLabelText('Internal cost')).toHaveValue(60);
   // Applying again is idempotent and does not add the same labor twice.
   fireEvent.click(within(preview).getByRole('button', { name: 'Use high estimate for internal cost' }));
-  expect(fields.getByLabelText('Internal cost')).toHaveValue(160);
+  expect(fields.getByLabelText('Internal cost')).toHaveValue(60);
   expect(fields.getByLabelText('Total price')).toHaveValue(300);
   fireEvent.click(fields.getByRole('button', { name: 'Save', exact: true }));
   await waitFor(() => expect(setDoc).toHaveBeenCalledWith(expect.stringMatching(/\/laborLineItems\//), expect.objectContaining({
-    internalCostCents: 16000, totalPriceCents: 30000, quantity: 2, payTypeId: 'visit', sourceId: 'visit',
+    internalCostCents: 6000, totalPriceCents: 30000, quantity: 2, payTypeId: 'visit', sourceId: 'visit',
   }), { merge: true }));
   const savedTasks = setDoc.mock.calls.filter(([path]) => path.includes('/tasks/')).map(([, payload]) => payload);
   expect(savedTasks).toEqual(expect.arrayContaining([
-    expect.objectContaining({ name: 'Routine checklist', payTypeId: 'visit', payrollMode: 'included', payQuantity: 2, estimatedTime: 60 }),
-    expect.objectContaining({ name: 'Additional cleaning', payTypeId: 'extra', payrollStackBehavior: 'stackable', payQuantity: 2 }),
+    expect.objectContaining({ name: 'Routine checklist', estimatedTime: 60 }),
+    expect.objectContaining({ name: 'Additional cleaning' }),
   ]));
   savedTasks.forEach((task) => {
     expect(task.equipmentId).toBeUndefined();
     expect(task.serviceLocationId).toBeUndefined();
     expect(task.estimatedMinutes).toBeUndefined();
+    expect(task.payTypeId).toBeUndefined();
+    expect(task.payrollMode).toBeUndefined();
   });
 });
 
@@ -201,18 +203,11 @@ test('the template inline service creator groups costs with previews and hides c
   expect(within(serviceCost).getByLabelText('Internal Cost')).toHaveValue(0);
   expect(within(serviceCost).getByRole('region', { name: 'Service technician pay preview' })).toBeInTheDocument();
   fireEvent.click(creator.getByRole('button', { name: 'Add Task', exact: true }));
-  expect(creator.getByLabelText('Task pay')).toHaveValue('none');
+  expect(creator.getByLabelText('Task name')).toBeInTheDocument();
+  expect(creator.queryByLabelText('Task pay')).not.toBeInTheDocument();
   expect(creator.queryByLabelText('Contracted task pay')).not.toBeInTheDocument();
   expect(creator.queryByRole('region', { name: 'Task technician pay preview' })).not.toBeInTheDocument();
-  fireEvent.change(creator.getByLabelText('Task pay'), { target: { value: 'additional' } });
-  fireEvent.change(creator.getByLabelText('Payroll pay item'), { target: { value: 'extra' } });
-  const taskCost = creator.getByRole('group', { name: 'Contracted task pay and payroll estimate' });
-  expect(within(taskCost).queryByRole('button', { name: 'Use high estimate for task cost' })).not.toBeInTheDocument();
-  expect(within(taskCost).getByLabelText('Contracted task pay')).toHaveValue(null);
   expect(within(serviceCost).getByLabelText('Internal Cost')).toHaveValue(0);
-  fireEvent.change(creator.getByLabelText('Task pay'), { target: { value: 'none' } });
-  expect(creator.queryByLabelText('Contracted task pay')).not.toBeInTheDocument();
-  expect(creator.queryByRole('region', { name: 'Task technician pay preview' })).not.toBeInTheDocument();
 });
 
 test('a template service line applies a suggested total price and keeps unit price consistent with quantity', async () => {

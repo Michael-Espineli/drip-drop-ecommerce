@@ -1,4 +1,4 @@
-import { completeJobLaborLines, jobLaborTotals } from "./jobScopePricing";
+import { completeJobLaborLines, isTaskChargeLine, jobLaborTotals } from "./jobScopePricing";
 
 const scope = () => ({
   laborLineItems: [{ id: "service", totalPriceCents: 10000, internalCostCents: 2000, taxable: true, taskIds: ["included"] }],
@@ -6,30 +6,31 @@ const scope = () => ({
   plannedServiceStops: [],
 });
 
-test("a $100 service plus an uncovered $50 task totals $150, with each cost counted once", () => {
-  expect(jobLaborTotals(scope())).toEqual({ priceCents: 15000, costCents: 3000 });
-  expect(completeJobLaborLines(scope()).map((line) => [line.totalPriceCents, line.taxable])).toEqual([[10000, true], [5000, true]]);
+test("a $100 service keeps its charge when a linked or uncovered task has a saved price", () => {
+  expect(jobLaborTotals(scope())).toEqual({ priceCents: 10000, costCents: 0 });
+  expect(completeJobLaborLines(scope()).map((line) => [line.totalPriceCents, line.taxable])).toEqual([[10000, true]]);
 });
 
 test("a service covering a visit includes its tasks; independent visits remain billable", () => {
   const input = scope();
   input.laborLineItems[0].plannedServiceStopIds = ["visit"];
   input.plannedServiceStops = [{ id: "visit", taskIds: ["included", "extra"], plannedLaborCostCents: 2500 }, { id: "other", plannedLaborCostCents: 1500 }];
-  expect(jobLaborTotals(input)).toEqual({ priceCents: 11500, costCents: 3500 });
+  expect(jobLaborTotals(input)).toEqual({ priceCents: 11500, costCents: 4000 });
 });
 
-test("explicit zero customer prices and false tax flags survive internal cost fallback", () => {
+test("task-only scope produces no labor lines and explicit zero service prices are retained", () => {
   const lines = completeJobLaborLines({ tasks: [{ id: "free", billingLaborPriceCents: 0, contractedRate: 5000, taxable: false }] });
-  expect(lines[0]).toEqual(expect.objectContaining({ totalPriceCents: 0, internalCostCents: 5000, taxable: false }));
+  expect(lines).toEqual([]);
   expect(jobLaborTotals({ laborLineItems: [{ id: "free-service", totalPriceCents: 0, taxable: false }] }).priceCents).toBe(0);
 });
 
-test("generated lines follow task price edits, reassignment, deletion, and repeated snapshots", () => {
+test("legacy generated task lines are removed even after the task price changes", () => {
   const input = scope();
-  input.laborLineItems = completeJobLaborLines(input);
-  expect(jobLaborTotals(input).priceCents).toBe(15000);
+  input.laborLineItems.push({ id: "scope_task_extra", generatedFromTaskId: "extra", totalPriceCents: 5000 });
+  expect(isTaskChargeLine(input.laborLineItems[1])).toBe(true);
+  expect(jobLaborTotals(input).priceCents).toBe(10000);
   input.tasks[1].billingLaborPriceCents = 6000;
-  expect(jobLaborTotals(input).priceCents).toBe(16000);
+  expect(jobLaborTotals(input).priceCents).toBe(10000);
   input.laborLineItems[0].taskIds.push("extra");
   expect(jobLaborTotals(input).priceCents).toBe(10000);
   input.tasks = [];
@@ -46,14 +47,14 @@ test("computed visit pay changes internal cost without changing the customer cha
 });
 
 
-test("empty legacy task price fields retain their fallback instead of becoming a free task", () => {
-  expect(jobLaborTotals({ tasks: [{ id: "legacy", billingLaborPriceCents: "", contractedRate: 5000 }] }).priceCents).toBe(5000);
+test("legacy task budgets never become an implicit customer charge", () => {
+  expect(jobLaborTotals({ tasks: [{ id: "legacy", billingLaborPriceCents: "", contractedRate: 5000 }] }).priceCents).toBe(0);
 });
 
 
 test("assigned technician costs refresh service margins without changing prices or counting visit tasks twice", () => {
   const input = scope();
-  expect(jobLaborTotals({ ...input, taskCost: () => 8000 })).toEqual({ priceCents: 15000, costCents: 16000 });
+  expect(jobLaborTotals({ ...input, taskCost: () => 8000 })).toEqual({ priceCents: 10000, costCents: 0 });
   input.plannedServiceStops = [{ id: "visit", taskIds: ["included", "extra"], billingLaborPriceCents: 0 }];
   input.laborLineItems[0].plannedServiceStopIds = ["visit"];
   expect(jobLaborTotals({ ...input, taskCost: () => 8000, plannedStopCost: () => 9000 })).toEqual({ priceCents: 10000, costCents: 9000 });

@@ -38,11 +38,11 @@ function rateScopes(before, after) {
   return mergeScopes([before, after].filter(eligible).map(window));
 }
 
-function matchesScopes(record, tasks, scopes) {
+function matchesScopes(record, scopes) {
   if (!scopes?.length || scopes.some(s => s.kind === 'company' || s.kind === 'stop' && s.stopId === record?.id)) return true;
   const when = millis(record?.serviceDate);
-  const workers = new Set([record?.techId, record?.technicianId, ...tasks.map(t => t.workerId)].filter(Boolean));
-  return scopes.some(s => s.kind === 'rate' && workers.has(s.technicianId) &&
+  const technicianId = record?.techId || record?.technicianId;
+  return scopes.some(s => s.kind === 'rate' && technicianId === s.technicianId &&
     (when === null || (s.fromMillis === null || when >= s.fromMillis) && (s.toMillis === null || when <= s.toMillis)));
 }
 
@@ -66,8 +66,6 @@ function plansFor(scopes) {
     if (worker.fromMillis != null || worker.toMillis != null) {
       plans.push({ collection: 'serviceStops', technicianId: worker.technicianId, missingDateOnly: true });
     }
-    // Independently assigned tasks can belong to another technician's visit.
-    plans.push({ collection: 'tasks', technicianId: worker.technicianId });
   }
   return plans;
 }
@@ -112,22 +110,14 @@ function createPayrollRefreshQueue(db, handlers, options = {}) {
     });
   }
   function queryFor(companyId, plan, cursor) {
-    const c = company(companyId);
-    let query;
-    if (plan.collection === 'tasks') {
-      query = db.collectionGroup('tasks').where('workerId', '==', plan.technicianId)
-        .where('__name__', '>=', c).where('__name__', '<', db.doc(`${c.path}/\uf8ff/\uf8ff`)).orderBy('__name__');
-      if (cursor) query = query.startAfter(db.doc(cursor.path));
-    } else {
-      query = c.collection(plan.collection);
-      if (plan.technicianId) query = query.where(plan.workerField || 'techId', '==', plan.technicianId);
-      const byDate = plan.fromMillis != null || plan.toMillis != null;
-      if (plan.fromMillis != null) query = query.where('serviceDate', '>=', new Date(plan.fromMillis));
-      if (plan.toMillis != null) query = query.where('serviceDate', '<=', new Date(plan.toMillis));
-      if (byDate) query = query.orderBy('serviceDate');
-      query = query.orderBy('__name__');
-      if (cursor) query = byDate ? query.startAfter(new Date(cursor.dateMillis), cursor.id) : query.startAfter(cursor.id);
-    }
+    let query = company(companyId).collection(plan.collection);
+    if (plan.technicianId) query = query.where(plan.workerField || 'techId', '==', plan.technicianId);
+    const byDate = plan.fromMillis != null || plan.toMillis != null;
+    if (plan.fromMillis != null) query = query.where('serviceDate', '>=', new Date(plan.fromMillis));
+    if (plan.toMillis != null) query = query.where('serviceDate', '<=', new Date(plan.toMillis));
+    if (byDate) query = query.orderBy('serviceDate');
+    query = query.orderBy('__name__');
+    if (cursor) query = byDate ? query.startAfter(new Date(cursor.dateMillis), cursor.id) : query.startAfter(cursor.id);
     return query.limit(PAGE_SIZE);
   }
   async function process(event) {
@@ -154,22 +144,15 @@ function createPayrollRefreshQueue(db, handlers, options = {}) {
     if (!work) return;
     try {
       const plan = work.plans[work.planIndex];
-      const page = plan.collection === 'targets' ? null : await queryFor(companyId, plan, work.cursor).get();
+      // Skip task scans stored on a refresh that was already queued at rollout.
+      const page = ['serviceStops', 'workOrders'].includes(plan.collection)
+        ? await queryFor(companyId, plan, work.cursor).get() : null;
       const targets = new Map();
       const add = (type, value) => { if (value) targets.set(type + ':' + value, { type, id: value }); };
       if (plan.collection === 'targets') plan.stopIds.forEach(value => add('stop', value));
-      else for (const doc of page.docs) {
+      else for (const doc of page?.docs || []) {
         if (plan.missingDateOnly && millis(doc.data().serviceDate) !== null) continue;
-        if (plan.collection === 'tasks') {
-          const parts = doc.ref.path.split('/');
-          if (parts.length !== 6 || parts[0] !== 'companies' || parts[1] !== companyId) continue;
-          if (parts[2] === 'serviceStops') add('stop', parts[3]);
-          if (parts[2] === 'workOrders') {
-            add('job', parts[3]);
-            const linked = doc.data().serviceStopId;
-            add('stop', typeof linked === 'object' ? linked?.id : linked);
-          }
-        } else add(plan.collection === 'serviceStops' ? 'stop' : 'job', doc.id);
+        add(plan.collection === 'serviceStops' ? 'stop' : 'job', doc.id);
       }
       let catalog;
       const loadBatchContext = () => catalog ||= handlers.loadContext(companyId);
@@ -188,7 +171,7 @@ function createPayrollRefreshQueue(db, handlers, options = {}) {
         const state = nextPlan >= work.plans.length ? (await t.get(controlRef)).data() : null;
         if (nextPlan < work.plans.length) t.set(pageRef(companyId, work.runId, work.page + 1), {
           ...work, page: work.page + 1, planIndex: nextPlan, status: 'queued', leaseId: null, leaseUntil: null, createdAt: now(),
-          cursor: more ? { id: last.id, path: last.ref.path, dateMillis: millis(last.data().serviceDate) } : null,
+          cursor: more ? { id: last.id, dateMillis: millis(last.data().serviceDate) } : null,
         });
         else if (state?.activeRunId === work.runId) {
           // A change arriving during a run becomes one follow-up run. It cannot

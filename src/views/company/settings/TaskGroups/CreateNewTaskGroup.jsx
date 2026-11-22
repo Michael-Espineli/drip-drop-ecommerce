@@ -21,7 +21,6 @@ const CreateNewTaskGroup = () => {
 
   const [taskList, setTaskList] = useState([]);
 
-  const [taskLaborCost, setTaskLaborCost] = useState("0");
 
   const [taskName, setTaskName] = useState();
 
@@ -63,7 +62,6 @@ const CreateNewTaskGroup = () => {
     setDescription("");
     setTaskName("");
     setEstimatedTime("");
-    setTaskLaborCost("");
   }
 
   async function createNewTaskGroup(e) {
@@ -81,7 +79,6 @@ const CreateNewTaskGroup = () => {
       numberOfTasks: taskList.length,
       canDelete: true,
       estimatedMinutes: taskList.reduce((sum, task) => sum + Number(task.estimatedTime || 0), 0),
-      estimatedLaborCents: taskList.reduce((sum, task) => sum + Number(task.contractedRate || 0), 0),
       isActive: true,
       createdAt: serverTimestamp(),
       createdByUserId: auth.currentUser?.uid || "",
@@ -99,7 +96,6 @@ const CreateNewTaskGroup = () => {
           description: task.description,
           typeId: task.typeId,
           type: task.type,
-          contractedRate: task.contractedRate,
           estimatedTime: task.estimatedTime,
         }
       );
@@ -113,8 +109,6 @@ const CreateNewTaskGroup = () => {
 
     let taskId = "com_set_tg_tas_" + uuidv4();
 
-    let labor = parseFloat(taskLaborCost);
-    labor = labor * 100;
     let time = parseFloat(estimatedTime);
 
     let task = {
@@ -123,7 +117,6 @@ const CreateNewTaskGroup = () => {
       description: description,
       typeId: selectedTaskType.id,
       type: canonicalJobTaskType(selectedTaskType.name),
-      contractedRate: labor,
       estimatedTime: time,
     };
     setTaskList((taskList) => [...taskList, task]);
@@ -132,7 +125,6 @@ const CreateNewTaskGroup = () => {
     setDescription("");
     setTaskName("");
     setEstimatedTime("");
-    setTaskLaborCost("");
   }
 
   async function deleteTaskItem(e, task) {
@@ -223,7 +215,6 @@ const CreateNewTaskGroup = () => {
                   <th className="py-3 px-5 border-b border-slate-200">Name</th>
                   <th className="py-3 px-5 border-b border-slate-200">Type</th>
                   <th className="py-3 px-5 border-b border-slate-200">Description</th>
-                  <th className="py-3 px-5 border-b border-slate-200">Labor</th>
                   <th className="py-3 px-5 border-b border-slate-200">Time (Hr)</th>
                   <th className="py-3 px-5 border-b border-slate-200 text-right"></th>
                 </tr>
@@ -242,9 +233,6 @@ const CreateNewTaskGroup = () => {
 
                     <td className="py-3 px-5 text-sm text-slate-600">{task.description}</td>
 
-                    <td className="py-3 px-5 text-sm text-slate-700 whitespace-nowrap">
-                      ${(task.contractedRate / 100).toFixed(2)}
-                    </td>
 
                     <td className="py-3 px-5 text-sm text-slate-700 whitespace-nowrap">
                       {(task.estimatedTime / 60).toFixed(2)}
@@ -336,15 +324,6 @@ const CreateNewTaskGroup = () => {
                 />
               </div>
 
-              <input
-                onChange={(e) => {
-                  setTaskLaborCost(e.target.value);
-                }}
-                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                type="text"
-                placeholder="Labor cost"
-                value={taskLaborCost}
-              />
 
               <input
                 onChange={(e) => {

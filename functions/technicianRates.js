@@ -17,7 +17,7 @@ function createTechnicianRates(db,now=()=>new Date()) {
     const input=drafts[index],sourceId=id(input.existingId || input.id),previous=rates.find(v=>v.id===sourceId),rateId='comp_tech_rate_'+stable(String(d.requestId)+'_'+index);
     ids.push(rateId);if(rates.some(v=>v.id===rateId)) continue;
     const technicianId=id(input.technicianId),payTypeId=id(input.payTypeId || input.workTypeId),amount=Number(input.amountCents);
-    if(!technicianId || !Number.isInteger(amount) || amount<0 || !['serviceStop','serviceStopTask','technicianHourly'].includes(input.payBasis) || !['flatPerStop','flatPerTask','hourly','perBodyOfWater','perServiceLocation','percentage','manual'].includes(input.rateType)) throw new HttpsError('invalid-argument','Choose a technician, valid pay basis, rate type, and non-negative amount.');
+    if(!technicianId || !Number.isInteger(amount) || amount<0 || !['serviceStop','technicianHourly'].includes(input.payBasis) || !['flatPerStop','hourly','perBodyOfWater','perServiceLocation','percentage','manual'].includes(input.rateType)) throw new HttpsError('invalid-argument','Choose a technician, valid pay basis, rate type, and non-negative amount.');
     const scheduleKey=technicianId+'_'+input.payBasis+'_'+payTypeId;
     if(keys.has(scheduleKey))throw new HttpsError('invalid-argument','Submit one change per technician, pay item, and basis at a time.');keys.add(scheduleKey);
     if((input.payBasis==='technicianHourly')!==(input.rateType==='hourly'))throw new HttpsError('invalid-argument','Hourly rates require the hourly pay basis.');

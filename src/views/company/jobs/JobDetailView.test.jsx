@@ -115,13 +115,13 @@ const openWorkOffer = async ({ canIncentivize = true, services = [] } = {}) => {
   return { dialog: await screen.findByRole("dialog", { name: "Create Work Offer" }), offerCall };
 };
 
-test("work offers search technician names and use the selected plan tasks' pay without extra setup", async () => {
+test("work offers keep selected tasks as scope and preview technician pay by visit", async () => {
   const { dialog, offerCall } = await openWorkOffer();
   expect(within(dialog).getByRole("checkbox", { name: /Override pay for this offer/ })).not.toBeChecked();
   expect(within(dialog).queryByLabelText("Visit pay type override")).not.toBeInTheDocument();
   const pay = within(dialog).getByRole("region", { name: "Technician pay" });
-  expect(pay).toHaveTextContent("Pump repair");
-  expect(pay).toHaveTextContent("Custom pay: $25.00");
+  expect(pay).toHaveTextContent("Uses the job visit pay type.");
+  expect(pay).not.toHaveTextContent("Custom pay: $25.00");
   expect(pay).not.toHaveTextContent("Unrelated first pay item");
   fireEvent.change(within(dialog).getByRole("combobox", { name: "Technician" }), { target: { value: "Zoe" } });
   expect(await screen.findByText("Zoe Baker")).toBeInTheDocument();
@@ -1167,7 +1167,7 @@ test('plan metadata automatically saves with the selected job and removes the ex
   fireEvent.change(screen.getByRole('combobox', { name: 'Recommendation Rank' }), { target: { value: '3' } });
   await waitFor(() => expect(savedPlanWrites()).toHaveLength(1));
   expect(savedPlanWrites()[0].data).toEqual(expect.objectContaining({ title: 'Updated inspection', description: 'Updated scope', planTier: 3, totalAmountCents: 5000 }));
-  expect(mockJob).toEqual(expect.objectContaining({ activePlanId: 'plan-A', activePlanTier: 3, rate: 5000, laborCost: 1500, estimateTotalCents: 5000 }));
+  expect(mockJob).toEqual(expect.objectContaining({ activePlanId: 'plan-A', activePlanTier: 3, rate: 5000, laborCost: 0, estimateTotalCents: 5000 }));
   await screen.findByText('All changes saved');
   expect(savedPlanWrites()).toHaveLength(1);
   expect(mockBatchWrites.some((write) => write.ref.endsWith('/plans/plan-B'))).toBe(false);
@@ -1182,13 +1182,14 @@ test('task actions float outside the services table and saving a task updates th
   fireEvent.click(within(menu).getByRole('menuitem', { name: 'Edit', exact: true }));
   const dialog = await screen.findByRole('dialog', { name: 'Edit Task' });
   fireEvent.change(within(dialog).getByRole('textbox', { name: 'Description', exact: true }), { target: { value: 'Inspect and test pump' } });
-  fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'Contracted task pay', exact: true }), { target: { value: '30' } });
+  expect(within(dialog).queryByRole('spinbutton', { name: 'Contracted task pay', exact: true })).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole('spinbutton', { name: 'Customer task price', exact: true })).not.toBeInTheDocument();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save Task', exact: true }));
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit Task' })).not.toBeInTheDocument());
   await waitFor(() => expect(savedPlanWrites().some((write) => write.data.tasks[0]?.name === 'Inspect and test pump')).toBe(true));
   expect(mockJob.taskCount).toBe(1);
-  expect(mockJob.laborCost).toBe(3000);
-  expect(savedPlanWrites().at(-1).data.laborCostCents).toBe(3000);
+  expect(mockJob.laborCost).toBe(0);
+  expect(savedPlanWrites().at(-1).data.laborCostCents).toBe(0);
 });
 
 test('switching plans flushes pending edits without a discard confirmation', async () => {

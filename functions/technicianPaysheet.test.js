@@ -29,17 +29,17 @@ test('inactive access and absent membership fail without financial queries', asy
   await assert.rejects(read(req()), /Active company access/);
   assert.ok(!db.readLog.some(log => log.path.includes('technicianPayLineItems')));
 });
-test('included tasks remain visible, ordinary zero lines disappear, and missing work is flagged', async () => {
+test('tasks remain visible without payroll gaps and missing visit pay is flagged', async () => {
   const { read } = fixture({ [c + '/serviceStops/one']: stop(), [p + 'base']: line(), [p + 'zero']: line({ totalAmountCents: 0 }),
     [c + '/serviceStops/one/tasks/included']: { status: 'Finished', name: 'Water test', payrollMode: 'included' },
     [c + '/serviceStops/one/tasks/missing']: { status: 'Finished', name: 'Filter clean', payrollMode: 'custom', manualPayOverrideCents: 2500 },
     [c + '/serviceStops/two']: stop({ customerName: 'Missing stop' }),
   });
   const result = await read(req()), stops = result.days[0].routes[0].stops;
-  assert.equal(result.lineItems.length, 1); assert.equal(result.summary.earnedCents, 5000); assert.equal(result.summary.reviewCount, 2);
+  assert.equal(result.lineItems.length, 1); assert.equal(result.summary.earnedCents, 5000); assert.equal(result.summary.reviewCount, 1);
   assert.equal(result.summary.completedStops, 2); assert.equal(result.summary.completedTasks, 2);
-  assert.equal(stops.find(s => s.id === 'one').tasks.find(t => t.id === 'included').coverageLabel, 'Included in stop pay');
-  assert.equal(stops.find(s => s.id === 'one').tasks.find(t => t.id === 'missing').coverageLabel, 'Pay needs review');
+  assert.equal(stops.find(s => s.id === 'one').tasks.find(t => t.id === 'included').coverageLabel, 'Completed task');
+  assert.equal(stops.find(s => s.id === 'one').tasks.find(t => t.id === 'missing').coverageLabel, 'Completed task');
 });
 test('zero custom pay and unpaid work are explained without creating earnings; missing rates stay pending', async () => {
   const { read } = fixture({ [c + '/serviceStops/one']: stop({ payrollMode: 'custom', manualPayOverrideCents: 0 }),

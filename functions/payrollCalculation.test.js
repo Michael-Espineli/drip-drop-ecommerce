@@ -6,10 +6,10 @@ const vm = require('node:vm');
 const server = require('./payrollCalculation');
 const source = fs.readFileSync(path.join(__dirname, '../src/utils/payroll/payCalculation.js'), 'utf8');
 const browser = vm.runInNewContext(source.replaceAll('export const ', 'const ') + '\n({ calculatePayLines, reconcilePayLines, jobPayFields })');
-const type = { id: 'repair', name: 'Repair', category: 'repair', defaultRateType: 'flatPerTask', defaultStackBehavior: 'stackable' };
+const type = { id: 'repair', name: 'Repair', category: 'repair', defaultRateType: 'flatPerStop', defaultStackBehavior: 'stackable' };
 const stop = { id: 'stop', companyId: 'company', jobId: 'job', operationStatus: 'Finished', techId: 'tech-A', payTypeId: 'repair', typeId: 'repair', serviceDate: new Date('2026-10-20'), duration: 90, estimatedMinutes: 90, serviceLocationId: 'site' };
 const task = { id: 'task', jobTaskId: 'job-task', name: 'Repair', status: 'Finished', payTypeId: 'repair', actualTime: 90, estimatedTime: 90, contractedRate: 3000 };
-const rate = (worker = 'tech-A', value = 5000, extra = {}) => ({ id: `rate-${worker}`, companyId: 'company', technicianId: worker, payTypeId: 'repair', rateType: 'flatPerTask', payBasis: 'serviceStopTask', amountCents: value, effectiveStartDate: new Date('2026-01-01'), status: 'active', ...extra });
+const rate = (worker = 'tech-A', value = 5000, extra = {}) => ({ id: `rate-${worker}`, companyId: 'company', technicianId: worker, payTypeId: 'repair', rateType: 'flatPerStop', payBasis: 'serviceStop', amountCents: value, effectiveStartDate: new Date('2026-01-01'), status: 'active', ...extra });
 const input = (extra = {}) => ({ companyId: 'company', serviceStop: stop, tasks: [task], workTypes: [type], rates: [rate(), rate('tech-B', 8000)], settings: {}, ...extra });
 const sum = (lines) => lines.reduce((total, line) => total + line.totalAmountCents, 0);
 const calculate = (extra) => server.calculatePayLines(input(extra));
@@ -28,10 +28,10 @@ test('the same repair pays once and resolves the assigned technician rate', () =
   assert.equal(sum(calculate()), 5000);
   assert.equal(calculate().length, 1);
   assert.equal(sum(calculate({ serviceStop: { ...stop, techId: 'tech-B' } })), 8000);
-  assert.equal(sum(calculate({ tasks: [{ ...task, workerId: 'tech-B' }] })), 13000);
+  assert.equal(sum(calculate({ tasks: [{ ...task, workerId: 'tech-B' }] })), 5000);
 });
 
-test('identical linked task copies pay once in actual earnings and planning previews', () => {
+test('linked task copies leave the visit earning unchanged', () => {
   for (const mode of ['actual', 'preview']) {
     const original = { ...task, id: 'original' }, duplicate = { ...task, id: 'duplicate' };
     const a = calculate({ tasks: [original, duplicate], mode });
@@ -43,7 +43,7 @@ test('identical linked task copies pay once in actual earnings and planning prev
   }
 });
 
-test('duplicate collapse retains the recorded source and computes a percentage bonus once', () => {
+test('visit payroll keeps its identity and computes a percentage bonus once', () => {
   const original = { ...task, id: 'z-original' };
   const agreement = { offerId: 'offer', claimId: 'claim', workerId: 'tech-A', paySource: 'Technician Rate',
     rates: [rate()], workTypes: [type], settings: { routePaySource: 'completedTasks' },
@@ -60,14 +60,14 @@ test('duplicate collapse retains the recorded source and computes a percentage b
   assert.deepEqual(result.conflicts, []);
 });
 
-test('distinct tasks, workers and intentionally different pay calculations are not collapsed', () => {
+test('distinct checklist tasks and workers do not change visit pay', () => {
   const settings = { routePaySource: 'completedTasks' };
-  assert.equal(sum(calculate({ settings, tasks: [task, { ...task, id: 'other', jobTaskId: 'other-job-task' }] })), 10000);
-  assert.equal(sum(calculate({ settings, tasks: [task, { ...task, id: 'other-worker', workerId: 'tech-B' }] })), 13000);
+  assert.equal(sum(calculate({ settings, tasks: [task, { ...task, id: 'other', jobTaskId: 'other-job-task' }] })), 5000);
+  assert.equal(sum(calculate({ settings, tasks: [task, { ...task, id: 'other-worker', workerId: 'tech-B' }] })), 5000);
   const custom = value => ({ ...task, id: String(value), payrollMode: 'custom', manualPayOverrideCents: value });
   assert.equal(sum(calculate({ settings, tasks: [custom(2000), custom(3000)] })), 5000);
   const standalone = { ...task, jobTaskId: '' };
-  assert.equal(sum(calculate({ settings, tasks: [standalone, { ...standalone, id: 'another-task' }] })), 10000);
+  assert.equal(sum(calculate({ settings, tasks: [standalone, { ...standalone, id: 'another-task' }] })), 5000);
 });
 
 test('custom amount replaces automatic stop/task pay and intentional zero produces no line', () => {
@@ -111,36 +111,37 @@ test('zero task replacements do not suppress positive stop pay, and unpaid offer
 
 test('missing pay items, missing workers and missing rates survive as review records', () => {
   for (const extra of [{ rates: [], settings: { taskPaySource: 'technicianRate' } }, { workTypes: [] }, { serviceStop: { ...stop, techId: '' } },
-    { tasks: [{ ...task, payTypeId: '' }], settings: { routePaySource: 'completedTasks' } }]) {
+    { serviceStop: { ...stop, payTypeId: '', typeId: '' }, settings: { routePaySource: 'completedTasks' } }]) {
     const lines = calculate(extra);
     assert.ok(lines.length); assert.ok(lines.every((line) => line.calculationStatus === 'needsReview'));
   }
   assert.deepEqual(calculate({ serviceStop: { ...stop, payrollMode: 'unpaid' }, tasks: [{ ...task, payrollMode: 'included' }] }), []);
 });
 
-test('task pay can use legacy per-task rates saved with the visit basis', () => {
-  const legacyTaskRate = rate('tech-A', 5000, { id: 'legacy-task', payBasis: 'serviceStop' });
+test('a flat-per-task rate never becomes a visit rate', () => {
+  const legacyTaskRate = rate('tech-A', 5000, { id: 'legacy-task', payBasis: 'serviceStop', rateType: 'flatPerTask' });
   const visitRate = { ...legacyTaskRate, id: 'visit', rateType: 'flatPerStop', amountCents: 8000 };
-  const exactTaskRate = rate('tech-A', 6000, { id: 'exact-task' });
+  const exactTaskRate = rate('tech-A', 6000, { id: 'exact-task', payBasis: 'serviceStopTask', rateType: 'flatPerTask' });
   const setup = input({ workTypes: [{ ...type, category: 'serviceCall' }], tasks: [{ ...task, contractedRate: 0 }],
     settings: { routePaySource: 'completedTasks', taskPaySource: 'technicianRate' } });
   for (const engine of [server, browser]) for (const mode of ['actual', 'preview']) {
     const run = rates => engine.calculatePayLines({ ...setup, rates, mode })[0];
-    assert.equal(run([legacyTaskRate, visitRate]).rateId, 'legacy-task');
-    assert.equal(run([legacyTaskRate, exactTaskRate]).rateId, 'exact-task');
-    assert.equal(run([visitRate]).calculationStatus, 'needsReview');
+    assert.equal(run([legacyTaskRate, visitRate]).rateId, 'visit');
+    assert.equal(run([legacyTaskRate, exactTaskRate]).calculationStatus, 'needsReview');
+    assert.equal(run([{ ...exactTaskRate, rateType: 'flatPerStop' }]).calculationStatus, 'needsReview');
+    assert.equal(run([visitRate]).calculationStatus, 'calculated');
     assert.equal(run([{ ...legacyTaskRate, isActive: false }]).calculationStatus, 'needsReview');
   }
 });
 
-test('unscheduled completed tasks use their own work date for rate selection', () => {
+test('unscheduled tasks earn no pay at any effective date', () => {
   const previous = rate('tech-A', 5000, { effectiveEndDate: '2026-10-20T23:59:59.999Z', status: 'expired' });
   const current = rate('tech-A', 7000, { effectiveStartDate: '2026-10-21T00:00:00Z' });
   const setup = input({ jobTaskSource: true, serviceStop: { id: 'job', jobId: 'job' }, date: '2026-10-23',
     tasks: [{ ...task, workerId: 'tech-A', completedAt: '2026-10-20T22:00:00Z' }], rates: [current, previous] });
   for (const engine of [server, browser]) {
-    assert.equal(sum(engine.calculatePayLines(setup)), 5000);
-    assert.equal(sum(engine.calculatePayLines({ ...setup, mode: 'preview' })), 7000);
+    assert.equal(sum(engine.calculatePayLines(setup)), 0);
+    assert.equal(sum(engine.calculatePayLines({ ...setup, mode: 'preview' })), 0);
   }
 });
 
@@ -157,7 +158,7 @@ test('explicit zero task pay creates no line and does not displace the visit pay
   assert.deepEqual(calculate({ settings: { routePaySource: 'completedTasks' }, rates: [rate('tech-A', 0)] }), []);
   // The old default zero budget is not an explicit override of an active rate.
   assert.equal(sum(calculate({ tasks: [{ ...task, contractedRate: 0 }], settings: { routePaySource: 'completedTasks' } })), 5000);
-  assert.equal(calculate({ ...taskOnly, tasks: [{ ...task, contractedRate: undefined }] })[0].calculationStatus, 'needsReview');
+  assert.deepEqual(calculate({ ...taskOnly, tasks: [{ ...task, contractedRate: undefined }] }), []);
   assert.equal(calculate({ rates: [], settings: { routePaySource: 'completedTasks', taskPaySource: 'technicianRate' }, tasks: [{ ...task, contractedRate: 0 }] })[0].calculationStatus, 'needsReview');
 });
 
@@ -180,8 +181,8 @@ test('hourly previews and completion agree and use the correct time source', () 
   assert.equal(calculate({ ...extra, serviceStop: { ...stop, duration: 0 } })[0].calculationStatus, 'needsReview');
 });
 
-test('pay quantity, body count and explicit percentage base are calculated without guessing', () => {
-  assert.equal(sum(calculate({ tasks: [{ ...task, payQuantity: 3 }], settings: { routePaySource: 'completedTasks' } })), 15000);
+test('task quantity is ignored and visit scope and percentage base are explicit', () => {
+  assert.equal(sum(calculate({ tasks: [{ ...task, payQuantity: 3 }], settings: { routePaySource: 'completedTasks' } })), 5000);
   const body = { tasks: [], rates: [rate('tech-A', 2000, { rateType: 'perBodyOfWater', payBasis: 'serviceStop' })] };
   assert.equal(sum(calculate({ ...body, serviceStop: { ...stop, bodyOfWaterIds: ['pool', 'spa', 'fountain'] } })), 6000);
   assert.equal(calculate(body)[0].calculationStatus, 'needsReview');
@@ -190,12 +191,12 @@ test('pay quantity, body count and explicit percentage base are calculated witho
   assert.equal(sum(calculate({ ...percent, serviceStop: { ...stop, payrollBaseAmountCents: 20000 } })), 2000);
 });
 
-test('explicit stacking, exclusive and replacement rules control additional work', () => {
-  assert.equal(sum(calculate({ tasks: [{ ...task, payrollStackBehavior: 'stackable' }] })), 10000);
+test('legacy task stacking rules leave the visit payment unchanged', () => {
+  assert.equal(sum(calculate({ tasks: [{ ...task, payrollStackBehavior: 'stackable' }] })), 5000);
   const two = [{ ...task, id: 'one', payTypeId: 'repair' }, { ...task, id: 'two', payTypeId: 'extra' }];
   const extraType = { ...type, id: 'extra', defaultStackBehavior: 'replacesBase' };
   const rates = [rate(), rate('tech-A', 3000, { id: 'extra-rate', payTypeId: 'extra' })];
-  assert.equal(sum(calculate({ tasks: two, workTypes: [type, extraType], rates })), 8000);
+  assert.equal(sum(calculate({ tasks: two, workTypes: [type, extraType], rates })), 5000);
   assert.equal(sum(calculate({ tasks: two, workTypes: [{ ...type, defaultStackBehavior: 'exclusive' }, extraType], rates })), 5000);
 });
 
@@ -216,17 +217,17 @@ test('browser and server multiply the resolved location BOWs, preserving explici
   }
 });
 
-test('a single-body task never inherits its visit count or its other body IDs', () => {
+test('explicit visit body counts win over operational task scope', () => {
   const fixture = input({ serviceStop: { ...stop, bodyOfWaterCount: 4, bodyOfWaterIds: ['one', 'two', 'three', 'four'] },
     settings: { routePaySource: 'completedTasks' }, rates: [rate('tech-A', 2000, { rateType: 'perBodyOfWater' })],
     bodyOfWaterIdsByServiceLocation: { site: ['one', 'two', 'three', 'four'], other: ['pond', 'fountain'] } });
   for (const engine of [server, browser]) {
     for (const scope of [{ bodyOfWaterId: 'one' }, { bodyOfWaterIds: ['one'] }, { bodyOfWaterCount: 1 }]) {
       const lines = engine.calculatePayLines({ ...fixture, tasks: [{ ...task, ...scope }] });
-      assert.equal(lines[0].quantity, 1); assert.equal(sum(lines), 2000);
+      assert.equal(lines[0].quantity, 4); assert.equal(sum(lines), 8000);
     }
     const otherSite = engine.calculatePayLines({ ...fixture, tasks: [{ ...task, serviceLocationId: 'other' }] });
-    assert.equal(otherSite[0].quantity, 2); assert.equal(sum(otherSite), 4000);
+    assert.equal(otherSite[0].quantity, 4); assert.equal(sum(otherSite), 8000);
     assert.equal(sum(engine.calculatePayLines({ ...fixture, tasks: [task] })), 8000);
   }
 });
@@ -244,7 +245,7 @@ test('empty resolved locations remain reviewable and legacy BOW links count dist
   }
 });
 
-test('per-location task scope and native endTime completion dates are respected', () => {
+test('per-location visit scope and native endTime completion dates are respected', () => {
   const ended = new Date('2026-10-22T20:00:00Z');
   const fixture = input({ serviceStop: { ...stop, serviceLocationCount: 3, endTime: ended }, tasks: [],
     rates: [rate('tech-A', 2000, { rateType: 'perServiceLocation', payBasis: 'serviceStop' })] });
@@ -253,14 +254,14 @@ test('per-location task scope and native endTime completion dates are respected'
     assert.equal(visit.totalAmountCents, 6000); assert.equal(visit.completedDate.getTime(), ended.getTime());
     const taskLine = engine.calculatePayLines({ ...fixture, settings: { routePaySource: 'completedTasks' },
       rates: [rate('tech-A', 2000, { rateType: 'perServiceLocation' })], tasks: [{ ...task, serviceLocationId: 'site' }] })[0];
-    assert.equal(taskLine.quantity, 1); assert.equal(taskLine.totalAmountCents, 2000);
+    assert.equal(taskLine.quantity, 3); assert.equal(taskLine.totalAmountCents, 6000);
   }
 });
 
-test('completed job tasks earn pay without a stop; scheduled partial tasks do not require closing the visit', () => {
+test('completed tasks never trigger standalone or unfinished visit pay', () => {
   const direct = calculate({ jobTaskSource: true, serviceStop: { ...stop, id: 'job_job', techId: '' }, tasks: [{ ...task, workerId: 'tech-A' }] });
-  assert.equal(sum(direct), 5000); assert.equal(direct[0].serviceStopId, null); assert.equal(direct[0].payrollSource, 'jobTask');
-  assert.equal(sum(calculate({ serviceStop: { ...stop, operationStatus: 'In Progress' } })), 5000);
+  assert.deepEqual(direct, []);
+  assert.equal(sum(calculate({ serviceStop: { ...stop, operationStatus: 'In Progress' } })), 0);
   assert.deepEqual(calculate({ serviceStop: { ...stop, operationStatus: 'In Progress' }, tasks: [{ ...task, status: 'Draft' }] }), []);
 });
 
@@ -295,19 +296,19 @@ test('approved, paid and statement-linked pay stays locked and conflicting repla
 });
 
 
-test('a locked visit payment does not hide another technician performing a matching task', () => {
+test('a locked visit payment does not create a second payment for a task worker', () => {
   const type = { id: 'route', name: 'Route', category: 'route' };
   const rates = ['tech-A','tech-B'].map((technicianId) => ({ id: technicianId, technicianId, payTypeId: 'route', payBasis: 'serviceStop', rateType: 'flatPerStop', amountCents: 5000 }));
   rates.push({ id: 'b-task', technicianId: 'tech-B', payTypeId: 'route', payBasis: 'serviceStopTask', rateType: 'flatPerTask', amountCents: 2000 });
   const initial = calculate({ workTypes: [type], rates, serviceStop: { ...stop, payTypeId: 'route' }, tasks: [] });
   const generated = calculate({ workTypes: [type], rates, serviceStop: { ...stop, payTypeId: 'route' }, tasks: [{ ...task, payTypeId: 'route', workerId: 'tech-B' }] });
   const result = server.reconcilePayLines({ generated, existing: [{ ...initial[0], calculationStatus: 'approved' }] });
-  assert.equal(result.writes.length, 1); assert.equal(result.writes[0].technicianId, 'tech-B'); assert.equal(result.writes[0].totalAmountCents, 2000);
+  assert.deepEqual(result, { writes: [], conflicts: [] });
 });
 
 
-test('an hourly service pay item uses the technician hourly rate for its linked tasks', () => {
-  const output = calculate({ mode: 'preview', jobTaskSource: true, workTypes: [{ ...type, defaultRateType: 'hourly' }], rates: [{ technicianId: 'tech-A', payBasis: 'technicianHourly', rateType: 'hourly', amountCents: 3000 }], tasks: [{ ...task, workerId: 'tech-A', estimatedTime: 90 }] });
+test('an hourly pay item uses the visit’s estimated duration', () => {
+  const output = calculate({ mode: 'preview', workTypes: [{ ...type, defaultRateType: 'hourly' }], rates: [{ technicianId: 'tech-A', payBasis: 'technicianHourly', rateType: 'hourly', amountCents: 3000 }], tasks: [{ ...task, workerId: 'tech-A', estimatedTime: 90 }] });
   assert.equal(sum(output), 4500); assert.equal(output[0].calculationStatus, 'calculated');
 });
 
@@ -317,35 +318,35 @@ test('restoring automatic pay ignores a leftover legacy override amount', () => 
 });
 
 
-test('a custom visit payment includes its technician work and preserves another technician earnings', () => {
+test('a custom visit payment ignores other workers’ checklist assignments', () => {
   const output = calculate({ serviceStop: { ...stop, manualPayOverrideCents: 9000 }, tasks: [task, { ...task, id: 'other', jobTaskId: 'other', workerId: 'tech-B' }] });
-  assert.deepEqual(output.map((line) => [line.technicianId, line.totalAmountCents]).sort(), [['tech-A', 9000], ['tech-B', 8000]]);
+  assert.deepEqual(output.map((line) => [line.technicianId, line.totalAmountCents]).sort(), [['tech-A', 9000]]);
   const locked = { ...output[0], calculationStatus: 'approved' };
   const reconciled = server.reconcilePayLines({ generated: output, existing: [locked] });
-  assert.equal(reconciled.writes.length, 1); assert.equal(reconciled.writes[0].technicianId, 'tech-B');
+  assert.deepEqual(reconciled, { writes: [], conflicts: [] });
 });
 
-test('stop pay prefers its own rate and additional task pay remains a separate component', () => {
-  const rates = [rate('tech-A', 5000, { id: 'stop-rate', payBasis: 'serviceStop', rateType: 'flatPerStop' }), rate('tech-A', 1500)];
+test('visit pay ignores legacy additional task policies', () => {
+  const rates = [rate('tech-A', 5000, { id: 'stop-rate', payBasis: 'serviceStop', rateType: 'flatPerStop' }), rate('tech-A', 1500, { payBasis: 'serviceStopTask', rateType: 'flatPerTask' })];
   const ordinary = { ...task, payTypeId: '', contractedRate: 0, payrollMode: 'included' };
   const extra = { ...task, id: 'extra', jobTaskId: 'extra', contractedRate: 0, payrollStackBehavior: 'stackable' };
   const base = calculate({ rates, tasks: [ordinary] });
   assert.deepEqual(base.map(line => [line.source, line.totalAmountCents]), [['serviceStop', 5000]]);
   const lines = calculate({ rates, tasks: [ordinary, extra] });
-  assert.deepEqual(lines.map(line => [line.source, line.totalAmountCents]), [['serviceStop', 5000], ['serviceStopTask', 1500]]);
+  assert.deepEqual(lines.map(line => [line.source, line.totalAmountCents]), [['serviceStop', 5000]]);
   for (const manualPayOverrideCents of [0, 1200]) {
     const custom = { ...extra, payrollMode: 'custom', manualPayOverrideCents };
-    assert.equal(sum(calculate({ rates, tasks: [ordinary, custom] })), 5000 + manualPayOverrideCents);
-    assert.equal(sum(calculate({ rates, serviceStop: { ...stop, payrollMode: 'custom', manualPayOverrideCents: 5000 }, tasks: [ordinary, custom] })), 5000 + manualPayOverrideCents);
+    assert.equal(sum(calculate({ rates, tasks: [ordinary, custom] })), 5000);
+    assert.equal(sum(calculate({ rates, serviceStop: { ...stop, payrollMode: 'custom', manualPayOverrideCents: 5000 }, tasks: [ordinary, custom] })), 5000);
   }
-  assert.equal(sum(calculate({ rates, serviceStop: { ...stop, payrollStackBehavior: 'exclusive' }, tasks: [ordinary, extra] })), 6500);
+  assert.equal(sum(calculate({ rates, serviceStop: { ...stop, payrollStackBehavior: 'exclusive' }, tasks: [ordinary, extra] })), 5000);
   const approvedBase = { ...base[0], calculationStatus: 'approved' };
   const added = server.reconcilePayLines({ generated: lines, existing: [approvedBase] });
   assert.deepEqual(added.conflicts, []);
-  assert.deepEqual(added.writes.map(line => line.totalAmountCents), [1500]);
+  assert.deepEqual(added.writes, []);
   const removed = server.reconcilePayLines({ generated: base, existing: [approvedBase, ...added.writes] });
   assert.deepEqual(removed.conflicts, []);
-  assert.deepEqual(removed.writes.map(line => line.calculationStatus), ['voided']);
+  assert.deepEqual(removed.writes, []);
 });
 
 test('reconciliation refuses generated zero earnings from every source while preserving review issues and real adjustments', () => {
@@ -355,7 +356,8 @@ test('reconciliation refuses generated zero earnings from every source while pre
         const line = { id: 'zero', source, serviceStopId: 'stop', technicianId: 'tech-A', totalAmountCents, calculationStatus: 'calculated' };
         assert.equal(engine.reconcilePayLines({ generated: [line] }).writes.length, 0, source);
         const review = engine.reconcilePayLines({ generated: [{ ...line, calculationStatus: 'needsReview', notes: 'Missing rate' }] });
-        assert.equal(review.writes.length, 1); assert.equal(review.writes[0].calculationStatus, 'needsReview');
+        assert.equal(review.writes.length, source === 'serviceStopTask' ? 0 : 1);
+        if (review.writes.length) assert.equal(review.writes[0].calculationStatus, 'needsReview');
       }
     }
     for (const totalAmountCents of [-500, 500]) {

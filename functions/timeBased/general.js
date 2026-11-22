@@ -9,7 +9,6 @@ const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
 const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
-const { jobPayFields } = require("../payrollCalculation");
 const { addCalendarDays, calendarDate, dateKey, finished, started } = require("../routeState");
 const { weeklyServiceDates } = require("../recurringSchedule");
 const { DEFAULT_RECURRING_TASK_GROUP_ID, loadTaskGroupItems } = require("../taskGroupStorage");
@@ -1042,8 +1041,6 @@ function buildServiceStopTask({ task, serviceStop, rssData, serviceStopTaskId })
     name: String(task.name || "").trim(),
     type: task.type,
     status: task.status || "Not Finished",
-    contractedRate: Number(task.contractedRate || 0),
-    ...jobPayFields(task),
     estimatedTime: Number(task.estimatedTime || 0),
 
     customerApproval: false,

@@ -6,7 +6,7 @@ const { createPayrollApproval } = require("./payrollApproval");
 
 const company = "companies/company", pay = company + "/technicianPayLineItems/";
 const start = Date.UTC(2026, 9, 1), end = Date.UTC(2026, 10, 1);
-const row = extra => ({ companyId: "company", technicianId: "tech", source: "serviceStopTask", totalAmountCents: 5000,
+const row = extra => ({ companyId: "company", technicianId: "tech", source: "serviceStop", totalAmountCents: 5000,
   calculationStatus: "calculated", completedDate: new Date(start), ...extra });
 const request = (extra = {}, uid = "owner") => ({ auth: uid ? { uid } : null,
   data: { companyId: "company", startDateMillis: start, endDateExclusiveMillis: end, ...extra } });
@@ -52,11 +52,12 @@ test("review and protected earnings remain intact, while calculated zero tasks c
     statement: { payStatementId: "statement" }, export: { exportBatchId: "export" }, noAmount: { totalAmountCents: null },
     invalid: { totalAmountCents: "invalid" } };
   const records = Object.fromEntries(Object.entries(protectedRows).map(([id, fields]) => [pay + id, row(fields)]));
-  const { db, approve } = fixture({ ...records, [pay + "positive"]: row(), [pay + "zero"]: row({ totalAmountCents: 0, adminReviewNotes: "Existing note" }),
+  const { db, approve } = fixture({ ...records, [pay + "positive"]: row(), [pay + "retired-task"]: row({ source: "serviceStopTask" }), [pay + "zero"]: row({ source: "serviceStopTask", totalAmountCents: 0, adminReviewNotes: "Existing note" }),
     [pay + "base"]: row({ source: "serviceStop", totalAmountCents: 0 }), [pay + "deduction"]: row({ source: "manualAdjustment", totalAmountCents: -500 }) });
   const result = await approve(request());
   assert.deepEqual(result.approvedLineItemIds.sort(), ["base", "deduction", "positive"]);
-  assert.deepEqual(result.clearedLineItemIds, ["zero"]); assert.equal(result.needsReviewCount, 1);
+  assert.deepEqual(result.clearedLineItemIds, ["zero"]); assert.equal(result.needsReviewCount, 2);
+  assert.equal(db.records.get(pay + "retired-task").calculationStatus, "calculated");
   for (const [path, line] of Object.entries(records)) assert.deepEqual(db.records.get(path), line);
   const cleared = db.records.get(pay + "zero");
   assert.equal(cleared.calculationStatus, "voided"); assert.equal(cleared.voidReason, "adminVoided");

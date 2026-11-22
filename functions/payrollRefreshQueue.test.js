@@ -25,6 +25,18 @@ test('the debounce collects separate changes and concurrent deliveries start one
   assert.equal(waits, 1);
   assert.equal(pages.length, 1);
   assert.deepEqual(pages[0].scopes.map(s => s.technicianId).sort(), ['a', 'b']);
+  assert.ok(pages[0].plans.every(plan => plan.collection === 'serviceStops'));
+});
+
+test('a stored task page is skipped while the rest of its refresh continues', async () => {
+  const db = new MemoryFirestore({});
+  const queue = createPayrollRefreshQueue(db, {}, { debounceMs: 0 });
+  const path = root + 'batch_existing_0';
+  db.set(path, { kind: 'page', status: 'queued', runId: 'existing', page: 0, planIndex: 0,
+    plans: [{ collection: 'tasks', technicianId: 'a' }, { collection: 'serviceStops', technicianId: 'a' }], scopes: [] });
+  await queue.process(makeEvent(db, path));
+  assert.equal(db.records.get(path).processedCount, 0);
+  assert.equal(db.records.get(root + 'batch_existing_1').planIndex, 1);
 });
 
 test('partial failure retries with backoff, and a crashed page recovers after its lease', async () => {

@@ -239,6 +239,7 @@ test("inspection retains the draft when another reviewer has already resolved th
 
 test("inspection recalculates stop pay and shows the confirmed amount when review resolves", async () => {
   const item = mockLines.find(line => line.id === "missing-setup");
+  Object.assign(item, { source: "serviceStop", payrollSource: "serviceStop", serviceStopTaskId: null, jobTaskId: null, sourceTaskId: null });
   item.serviceStopId = "stop";
   const recalculated = { ...item, totalAmountCents: 4250, rateAmountCents: 4250, rateType: "flatPerTask", calculationStatus: "calculated" };
   getDocFromServer.mockResolvedValueOnce({ data: () => item }).mockResolvedValueOnce({ data: () => recalculated });
@@ -259,6 +260,7 @@ test("inspection recalculates stop pay and shows the confirmed amount when revie
 
 test("approval from inspection checks the current pay amount before writing", async () => {
   const item = mockLines.find(line => line.id === "payable");
+  Object.assign(item, { source: "serviceStop", payrollSource: "serviceStop", serviceStopTaskId: null, jobTaskId: null, sourceTaskId: null });
   const update = jest.fn();
   runTransaction.mockImplementationOnce((_, action) => action({
     get: async () => ({ data: () => ({ ...item, totalAmountCents: 5500 }) }), update,

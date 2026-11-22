@@ -61,8 +61,7 @@ export default function DripDropWorkflowArchitectureDocsPage() {
             ],
             formulas: [
                 'plannedServiceStopLaborCents = sum(plannedServiceStops.plannedLaborCostCents)',
-                'plannedTaskLaborCents = sum(jobTasks.contractedRate)',
-                'plannedTotalLaborCents = plannedServiceStopLaborCents + plannedTaskLaborCents'
+                'plannedTotalLaborCents = planned service and visit labor cost'
             ]
         },
         {
@@ -200,11 +199,10 @@ export default function DripDropWorkflowArchitectureDocsPage() {
         },
         {
             title: '12. Money Rules',
-            content: `All durable job/material/payroll money values should be stored as cents.`,
+            content: `Job pricing, material costs, and payroll amounts use cents. Tasks describe the work and track completion. Service stops and hourly records determine technician earnings.`,
             fields: [
                 'job.rate: Int // cents',
                 'job.laborCost: Int // cents',
-                'JobTask.contractedRate: Int // cents',
                 'ShoppingListItem.plannedUnitCostCents: Int?',
                 'ShoppingListItem.plannedUnitPriceCents: Int?',
                 'ShoppingListItem.plannedTotalCostCents: Int?',

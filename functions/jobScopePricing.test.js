@@ -14,5 +14,5 @@ test('server and browser use the same pricing rules for extra work, zero prices,
     assert.deepEqual(server.jobLaborTotals(fixture), JSON.parse(JSON.stringify(browser.jobLaborTotals(fixture))));
     assert.deepEqual(server.completeJobLaborLines(fixture), JSON.parse(JSON.stringify(browser.completeJobLaborLines(fixture))));
   }
-  assert.equal(server.jobLaborTotals(scope).priceCents, 15000);
+  assert.equal(server.jobLaborTotals(scope).priceCents, 10000);
 });

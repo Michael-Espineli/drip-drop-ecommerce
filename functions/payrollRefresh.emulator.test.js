@@ -8,18 +8,18 @@ const app = enabled ? admin.initializeApp({ projectId: 'demo-payroll-readfix' },
 const db = app?.firestore();
 after(async () => { if (app) await app.delete(); });
 
-test('real Firestore queries preserve date cursors and independently assigned task scope', { skip: !enabled }, async () => {
+test('rate refresh preserves date cursors and visits only the assigned technician’s stops', { skip: !enabled }, async () => {
   const companyId = 'test-' + Date.now(), company = db.collection('companies').doc(companyId);
   const foreign = db.collection('companies').doc(companyId + '-other');
   const at = new Date('2026-10-24'), marker = new Date('2026-10-25');
   const batch = db.batch();
   batch.set(company.collection('paySettings').doc('main'), { taskPaySource: 'technicianRate', routePaySource: 'completedTasks' });
   batch.set(company.collection('companyPayTypes').doc('filter'), { name: 'Filter', isActive: true });
-  batch.set(company.collection('technicianRates').doc('rate'), { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask',
-    rateType: 'flatPerTask', amountCents: 6000, status: 'active', effectiveStartDate: at });
+  batch.set(company.collection('technicianRates').doc('rate'), { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStop',
+    rateType: 'flatPerStop', amountCents: 6000, status: 'active', effectiveStartDate: at });
   for (let i = 0; i < 43; i++) {
     const stop = company.collection('serviceStops').doc('visit-' + String(i).padStart(2, '0'));
-    batch.set(stop, { operationStatus: 'Finished', techId: 'a', serviceDate: at, payrollLastProcessedAt: marker });
+    batch.set(stop, { operationStatus: 'Finished', techId: 'a', payTypeId: 'filter', serviceDate: at, payrollLastProcessedAt: marker });
     batch.set(stop.collection('tasks').doc('task'), { status: 'Finished', workerId: 'a', payTypeId: 'filter' });
   }
   const independent = company.collection('serviceStops').doc('independent');
@@ -42,9 +42,10 @@ test('real Firestore queries preserve date cursors and independently assigned ta
     await workflow.processRefresh(await event(page.docs[0].ref));
   }
   const earnings = await company.collection('technicianPayLineItems').get();
-  assert.equal(earnings.size, 44);
+  assert.equal(earnings.size, 43);
   assert.ok(earnings.docs.every(row => row.data().totalAmountCents === 6000));
   assert.equal((await company.collection('serviceStops').doc('visit-42').get()).data().payrollReconcileStatus, 'current');
+  assert.equal((await independent.get()).data().payrollReconcileStatus, undefined);
   assert.equal((await foreign.collection('serviceStops').doc('visit').get()).data().payrollReconcileStatus, undefined);
   assert.equal((await company.collection('payrollReconcileWork').doc('pending_refresh').get()).data().activeRunId, null);
 });

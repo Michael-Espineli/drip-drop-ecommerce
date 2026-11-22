@@ -17,10 +17,10 @@ jest.mock("firebase/firestore", () => ({
   getDoc: jest.fn(), getDocs: jest.fn(),
 }));
 
-const taskType = { id: "filter", name: "Filter cleaning", category: "serviceCall", defaultRateType: "flatPerTask" };
+const taskType = { id: "filter", name: "Filter cleaning", category: "serviceCall", defaultRateType: "flatPerStop" };
 const hourlyType = { id: "diagnostic", name: "Hourly diagnostic", category: "estimate", defaultRateType: "hourly" };
 const document = (record) => ({ id: record.id, data: () => record });
-const taskRate = { technicianId: "tech", payTypeId: taskType.id, payBasis: "serviceStopTask", rateType: "flatPerTask" };
+const taskRate = { technicianId: "tech", payTypeId: taskType.id, payBasis: "serviceStop", rateType: "flatPerStop" };
 let rates;
 
 beforeEach(() => {
@@ -49,7 +49,7 @@ const technicianTaskCell = () => {
   return within(within(technicianRow).getAllByRole("cell")[payTypeColumn.cellIndex]);
 };
 
-test("the setup matrix saves a per-task rate effective today even when a rate is already scheduled", async () => {
+test("the setup matrix saves a visit rate effective today even when a rate is already scheduled", async () => {
   rates = [{ ...taskRate, id: "future", status: "scheduled", amountCents: 5700, effectiveStartDate: new Date("2099-11-21T12:00:00Z") }];
   technicianWorkflow.mockImplementationOnce(async () => {
     rates.push({ ...taskRate, id: "active", status: "active", amountCents: 4500, effectiveStartDate: new Date("2020-11-20T12:00:00Z") });
@@ -65,7 +65,7 @@ test("the setup matrix saves a per-task rate effective today even when a rate is
   fireEvent.click(screen.getByRole("button", { name: "Save Matrix" }));
   await waitFor(() => expect(technicianWorkflow).toHaveBeenCalledWith("manageTechnicianRates", expect.objectContaining({
     companyId: "company", rates: [expect.objectContaining({ technicianId: "tech", payTypeId: "filter",
-      payBasis: "serviceStopTask", rateType: "flatPerTask", amountCents: 4500, existingId: undefined, effectiveToday: true })],
+      payBasis: "serviceStop", rateType: "flatPerStop", amountCents: 4500, existingId: undefined, effectiveToday: true })],
   })));
   expect(await technicianTaskCell().findByText("Active")).toBeInTheDocument();
   expect(technicianTaskCell().getByText("$45.00")).toBeInTheDocument();

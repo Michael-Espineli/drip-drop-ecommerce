@@ -78,3 +78,26 @@ test('concurrent Firestore corrections reach one intended total without zero adj
   assert.equal((await original.get()).data().calculationStatus, 'paid');
   for (const request of [unchanged, first, second, decrease]) assert.equal((await f.company.collection('payChangeRequests').doc(request.requestId).get()).data().status, 'Approved');
 });
+
+test('task writes retire legacy drafts without generating visit pay or duplicating approved job-task history', { skip: !enabled }, async () => {
+  const f = await fixture('retired-task');
+  const earnings = f.company.collection('technicianPayLineItems');
+  await f.stop.set({ jobId: 'job' }, { merge: true });
+  const task = f.stop.collection('tasks').doc('extra');
+  await task.set({ status: 'Finished', jobTaskId: 'canonical', contractedRate: 5000 });
+  await earnings.doc('draft').set({ source: 'serviceStopTask', serviceStopId: f.stop.id, serviceStopTaskId: task.id,
+    calculationStatus: 'calculated', totalAmountCents: 5000 });
+  await f.payroll.onStopTaskWrite({
+    params: { companyId: f.companyId, serviceStopId: f.stop.id },
+    data: { before: { exists: false }, after: await task.get() },
+  });
+  const afterTaskWrite = await earnings.get();
+  assert.equal(afterTaskWrite.size, 1);
+  assert.equal(afterTaskWrite.docs[0].data().voidReason, 'taskPayRetired');
+  await earnings.doc('legacy-approved').set({ payrollSource: 'jobTask', jobId: 'job', jobTaskId: 'canonical',
+    calculationStatus: 'approved', totalAmountCents: 5000 });
+  const result = await f.payroll.reconcileStop(f.companyId, f.stop.id);
+  assert.deepEqual(result.conflictLineItemIds, ['legacy-approved']);
+  assert.equal((await earnings.get()).size, 2);
+  assert.equal((await earnings.doc('legacy-approved').get()).data().calculationStatus, 'approved');
+});

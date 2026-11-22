@@ -12,11 +12,11 @@ const payPath = `${companyPath}/technicianPayLineItems/`;
 function fixture(extra = {}) {
   const db = new MemoryFirestore({
     [companyPath]: { ownerId: "owner" },
-    [`${companyPath}/paySettings/main`]: { taskPaySource: "technicianRate" },
-    [`${companyPath}/companyPayTypes/filter`]: { name: "Filter clean", category: "repair", defaultRateType: "flatPerTask", isActive: true },
+    [`${companyPath}/paySettings/main`]: { routePaySource: "serviceStop" },
+    [`${companyPath}/companyPayTypes/filter`]: { name: "Filter clean", category: "repair", defaultRateType: "flatPerStop", isActive: true },
     [`${companyPath}/companyWorkTypes/filter`]: { name: "Outdated filter", category: "route", isActive: true },
-    [`${companyPath}/technicianRates/a`]: { technicianId: "a", payTypeId: "filter", payBasis: "serviceStopTask", rateType: "flatPerTask", amountCents: 5000, status: "active" },
-    [`${companyPath}/technicianRates/b`]: { technicianId: "b", payTypeId: "filter", payBasis: "serviceStopTask", rateType: "flatPerTask", amountCents: 8000, status: "active" },
+    [`${companyPath}/technicianRates/a`]: { technicianId: "a", payTypeId: "filter", payBasis: "serviceStop", rateType: "flatPerStop", amountCents: 5000, status: "active" },
+    [`${companyPath}/technicianRates/b`]: { technicianId: "b", payTypeId: "filter", payBasis: "serviceStop", rateType: "flatPerStop", amountCents: 8000, status: "active" },
     [`${companyPath}/companyUsers/a`]: { userId: "a", userName: "Alex" },
     [`${companyPath}/companyUsers/b`]: { userId: "b", userName: "Blair" },
     [stopPath]: { operationStatus: "Finished", techId: "a", typeId: "filter", jobId: "job", serviceDate: new Date("2026-10-23") },
@@ -35,7 +35,7 @@ test('date-only technician rate saves cover morning visits and same-day correcti
   const { db, workflow } = fixture({
     [companyPath]: { ownerId: 'owner', timeZone: 'America/Los_Angeles' },
     [stopPath]: { operationStatus: 'Finished', techId: 'a', typeId: 'filter', serviceDate: new Date('2026-11-21T16:00:00Z') },
-    [ratePath]: { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask', rateType: 'flatPerTask',
+    [ratePath]: { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStop', rateType: 'flatPerStop',
       amountCents: 5000, status: 'active', effectiveStartDate: new Date('2026-11-21T20:00:00Z') },
   });
   await workflow.reconcileStop('company', 'stop');
@@ -43,8 +43,8 @@ test('date-only technician rate saves cover morning visits and same-day correcti
   const save = createTechnicianRates(db, () => new Date('2026-11-21T18:00:00Z'));
   const update = async (requestId, technicianId, amountCents, existingId) => save({ auth: { uid: 'owner' }, data: {
     companyId: 'company', requestId, timeZone: 'UTC',
-    rates: [{ existingId, technicianId, amountCents, payTypeId: 'filter', payBasis: 'serviceStopTask',
-      rateType: 'flatPerTask', effectiveStartDay: '2026-11-21' }],
+    rates: [{ existingId, technicianId, amountCents, payTypeId: 'filter', payBasis: 'serviceStop',
+      rateType: 'flatPerStop', effectiveStartDay: '2026-11-21' }],
   } });
   const before = db.records.get(ratePath);
   const corrected = await update('correct-morning-rate', 'a', 5500, 'a');
@@ -68,7 +68,7 @@ test('date-only technician rate saves cover morning visits and same-day correcti
 
 test('matrix edits start on the current company day and preserve later scheduled changes', async () => {
   const path = `${companyPath}/technicianRates/`;
-  const terms = { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask', rateType: 'flatPerTask' };
+  const terms = { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStop', rateType: 'flatPerStop' };
   const clock = new Date('2026-11-21T17:00:00Z');
   const { db } = fixture({
     [companyPath]: { ownerId: 'owner', timeZone: 'America/Los_Angeles' },
@@ -89,7 +89,7 @@ test('matrix edits start on the current company day and preserve later scheduled
   assert.equal(change.effectiveStartDate.toISOString(), '2026-11-21T08:00:00.000Z');
   assert.equal(change.effectiveEndDate.toISOString(), '2026-11-22T07:59:59.999Z');
   const rates = [...db.records].filter(([key]) => key.startsWith(path)).map(([, rate]) => rate);
-  const amountAt = date => selectPayRate({ companyId: 'company', technicianId: 'a', workTypeId: 'filter', basis: 'serviceStopTask', rates, date }).amountCents;
+  const amountAt = date => selectPayRate({ companyId: 'company', technicianId: 'a', workTypeId: 'filter', basis: 'serviceStop', rates, date }).amountCents;
   assert.equal(amountAt('2026-11-21T07:59:59.999Z'), 5000);
   assert.equal(amountAt('2026-11-21T20:00:00Z'), 6000);
   assert.equal(amountAt('2026-11-22T08:00:00Z'), 7000);
@@ -98,7 +98,7 @@ test('matrix edits start on the current company day and preserve later scheduled
 
 test('editing a scheduled rate moves its effective date without a gap or two scheduled versions', async () => {
   const path = `${companyPath}/technicianRates/`;
-  const terms = { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask', rateType: 'flatPerTask' };
+  const terms = { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStop', rateType: 'flatPerStop' };
   for (const [chosenDay, cutoff] of [['2026-11-21', '2026-11-21T08:00:00Z'], ['2026-11-24', '2026-11-24T08:00:00Z']]) {
     const { db } = fixture({
       [companyPath]: { ownerId: 'owner', timeZone: 'America/Los_Angeles' },
@@ -112,7 +112,7 @@ test('editing a scheduled rate moves its effective date without a gap or two sch
       { ...terms, existingId: 'scheduled', amountCents: 6000, effectiveStartDay: chosenDay },
     ] } });
     const rates = [...db.records].filter(([key]) => key.startsWith(path)).map(([, rate]) => rate);
-    const amountAt = date => selectPayRate({ companyId: 'company', technicianId: 'a', workTypeId: 'filter', basis: 'serviceStopTask', rates, date }).amountCents;
+    const amountAt = date => selectPayRate({ companyId: 'company', technicianId: 'a', workTypeId: 'filter', basis: 'serviceStop', rates, date }).amountCents;
     assert.equal(amountAt(new Date(new Date(cutoff).getTime() - 1)), 5000);
     assert.equal(amountAt(cutoff), 6000);
     assert.equal(amountAt('2026-11-25T08:00:00Z'), 6000);
@@ -205,20 +205,20 @@ test('clearance rejects protected or changed amounts atomically and rolls back o
   assert.equal(db.records.get(payPath + 'zero').calculationStatus, 'needsReview');
 });
 
-test('cleared missing-setup tasks stay out of review on retries; later positive pay requires an adjustment', async () => {
+test('cleared missing-setup tasks stay out of review on retries; a later valid visit rate pays independently', async () => {
   const { db, workflow } = fixture({ [companyPath + '/paySettings/main']: { routePaySource: 'completedTasks', taskPaySource: 'technicianRate' },
+    [payPath + 'old-task']: zeroLine({ id: 'old-task' }),
     [companyPath + '/companyPayTypes/filter']: { name: 'Filter clean', isActive: false } });
-  await workflow.reconcileStop('company', 'stop');
-  const line = active(db)[0];
+  const line = db.records.get(payPath + "old-task");
   await workflow.clearZeroDollarTasks(clearRequest('owner', [line.id]));
   await workflow.onPayLineWrite(event(db, payPath + line.id, line, { companyId: 'company' }));
   await workflow.reconcileStop('company', 'stop');
-  assert.equal(active(db).length, 0); assert.equal(db.records.get(stopPath).payrollNeedsReviewCount, 0);
-  assert.equal(db.records.get(stopPath).estimatedPayNeedsReview, false);
-  assert.equal(db.records.get(stopPath).payrollReconcileStatus, 'current');
+  assert.equal(active(db).length, 1); assert.equal(db.records.get(stopPath).payrollNeedsReviewCount, 1);
+  assert.equal(db.records.get(stopPath).estimatedPayNeedsReview, true);
+  assert.equal(db.records.get(stopPath).payrollReconcileStatus, 'needsReview');
   db.set(companyPath + '/companyPayTypes/filter', { isActive: true }, { merge: true });
   await workflow.reconcileStop('company', 'stop');
-  assert.equal(active(db).length, 0); assert.equal(db.records.get(stopPath).payrollReconcileStatus, 'adjustmentRequired');
+  assert.equal(active(db)[0].totalAmountCents, 5000); assert.equal(db.records.get(stopPath).payrollReconcileStatus, 'current');
 });
 
 test('explicit zero task policy retires an old unapproved placeholder without changing base pay', async () => {
@@ -239,9 +239,10 @@ test('approved zero tasks and legacy task identities clear durably with the firs
   const first = db.records.get(payPath + 'legacy');
   await workflow.reconcileStop('company', 'stop');
   await workflow.reconcileStop('company', 'stop');
-  assert.equal(active(db).length, 0);
-  assert.equal(db.records.get(stopPath).estimatedPayNeedsReview, false);
-  assert.equal(db.records.get(stopPath).payrollNeedsReviewCount, 0);
+  assert.equal(active(db).length, 1);
+  assert.equal(active(db)[0].source, "serviceStop");
+  assert.equal(db.records.get(stopPath).estimatedPayNeedsReview, true);
+  assert.equal(db.records.get(stopPath).payrollNeedsReviewCount, 1);
   assert.deepEqual(db.records.get(payPath + 'legacy'), first);
 });
 
@@ -304,22 +305,22 @@ test('iOS endTime, web manual, bulk, and explicit refresh paths all pay rate tim
   }
 });
 
-test('task-triggered partial work uses its own BOW before the location and the whole stop', async () => {
+test('partial task completion leaves pay to the completed visit', async () => {
   const { db, workflow } = bodyFixture({
     [stopPath]: { operationStatus: 'In Progress', techId: 'a', typeId: 'filter', serviceLocationId: 'site', bodyOfWaterCount: 3 },
     [`${companyPath}/technicianRates/task`]: { technicianId: 'a', payTypeId: 'filter', payBasis: 'serviceStopTask', rateType: 'perBodyOfWater', amountCents: 1000, status: 'active' },
     [`${stopPath}/tasks/task`]: { status: 'Finished', payTypeId: 'filter', bodyOfWaterId: 'pool', payrollStackBehavior: 'stackable' },
   });
   await workflow.onStopTaskWrite(event(db, `${stopPath}/tasks/task`, { status: 'Scheduled' }, { companyId: 'company', serviceStopId: 'stop' }));
-  assert.equal(active(db).length, 1); assert.equal(active(db)[0].totalAmountCents, 1000);
+  assert.equal(active(db).length, 0);
   db.set(stopPath, { operationStatus: 'Finished' }, { merge: true });
   await workflow.reconcileStop('company', 'stop');
   assert.deepEqual(active(db).map(line => [line.source, line.quantity, line.totalAmountCents]).sort(), [
-    ['serviceStop', 3, 7500], ['serviceStopTask', 1, 1000],
+    ['serviceStop', 3, 7500],
   ]);
 });
 
-test('direct job tasks resolve BOWs from their own site or the parent job site', async () => {
+test('direct job tasks do not create location-based earnings', async () => {
   const jobPath = `${companyPath}/workOrders/direct`;
   const { db, workflow } = bodyFixture({
     [jobPath]: { serviceLocationId: 'site' },
@@ -329,9 +330,7 @@ test('direct job tasks resolve BOWs from their own site or the parent job site',
     [`${jobPath}/tasks/other`]: { status: 'Finished', workerId: 'a', payTypeId: 'filter', serviceLocationId: 'other' },
   });
   await workflow.reconcileJob('company', 'direct');
-  assert.deepEqual(active(db).map(line => [line.jobTaskId, line.quantity, line.totalAmountCents]).sort(), [
-    ['all', 3, 3000], ['one', 1, 1000], ['other', 1, 1000],
-  ]);
+  assert.deepEqual(active(db), []);
 });
 
 test('missing BOW setup heals on explicit refresh and protected pay requires adjustment', async () => {
@@ -414,23 +413,23 @@ test("missing and inactive pay setup stays visible, heals on correction, and hon
   await workflow.reconcileStop("company", "new-stop"); assert.equal(active(db).length, 1);
 });
 
-test("unscheduled job completion creates payroll and moving that task into a visit does not pay twice", async () => {
+test("unscheduled job completion earns nothing and moving the task into a visit pays the visit once", async () => {
   const jobPath = `${companyPath}/workOrders/job`, taskPath = `${jobPath}/tasks/task`;
   const { db, workflow } = fixture({ [jobPath]: { internalId: "J1" }, [taskPath]: { status: "Finished", workerId: "a", payTypeId: "filter" } });
-  await workflow.reconcileJob("company", "job"); assert.equal(active(db).length, 1);
-  assert.equal(active(db)[0].payrollSource, "jobTask");
+  await workflow.reconcileJob("company", "job"); assert.equal(active(db).length, 0);
   db.set(taskPath, { serviceStopId: { id: "stop" } }, { merge: true });
   await workflow.reconcileStop("company", "stop"); await workflow.reconcileJob("company", "job");
   assert.equal(active(db).length, 1); assert.equal(active(db)[0].serviceStopId, "stop");
 });
 
-test("task edits propagate pay choices to scheduled copies, and removed links retire their old copy", async () => {
+test("task edits omit old pay fields on scheduled copies, and removed links retire their old copy", async () => {
   const jobPath = `${companyPath}/workOrders/job`, taskPath = `${jobPath}/tasks/task`;
   const original = { status: "Finished", serviceStopId: { id: "stop" }, payTypeId: "filter" };
   const { db, workflow } = fixture({ [jobPath]: {}, [taskPath]: { ...original, payrollMode: "custom", manualPayOverrideCents: 9000 } });
   await workflow.onJobTaskWrite(event(db, taskPath, original, { companyId: "company", jobId: "job", taskId: "task" }));
-  assert.equal(db.records.get(`${stopPath}/tasks/task`).manualPayOverrideCents, 9000);
-  assert.equal(active(db).reduce((sum, line) => sum + line.totalAmountCents, 0), 9000);
+  assert.equal(db.records.get(`${stopPath}/tasks/task`).manualPayOverrideCents, undefined);
+  assert.equal(active(db).length, 0);
+  await workflow.reconcileStop("company", "stop");
   const before = db.records.get(taskPath); db.records.delete(taskPath);
   await workflow.onJobTaskWrite(event(db, taskPath, before, { companyId: "company", jobId: "job", taskId: "task" }));
   assert.equal(db.records.get(`${stopPath}/tasks/task`).status, "Deleted");
@@ -529,7 +528,7 @@ test('twelve related rate events share one refresh and catalog reads stay bounde
   assert.equal([...db.records.values()].filter(v => v.kind === 'page').length, pages.length);
 });
 
-test('date-scoped rate pages include independently assigned tasks and exclude other companies', async () => {
+test('date-scoped rate pages pay by visit assignment and exclude other companies', async () => {
   const { db, workflow } = fixture();
   for (let i = 0; i < 43; i++) db.set(`${companyPath}/serviceStops/dated-${String(i).padStart(2, '0')}`, {
     operationStatus: 'Finished', techId: 'a', typeId: 'filter', serviceDate: new Date('2026-10-24'), payrollLastProcessedAt: new Date(),
@@ -549,7 +548,7 @@ test('date-scoped rate pages include independently assigned tasks and exclude ot
   assert.equal(db.records.get(`${companyPath}/serviceStops/dated-42`).estimatedPayCents, 6000);
   assert.equal(db.records.get(`${companyPath}/serviceStops/older`).estimatedPayCents, undefined);
   assert.equal(db.records.get(`${companyPath}/serviceStops/other-worker`).estimatedPayCents, undefined);
-  assert.equal(active(db).find(line => line.serviceStopId === 'independent' && line.technicianId === 'a').totalAmountCents, 6000);
+  assert.equal(active(db).some(line => line.serviceStopId === 'independent' && line.technicianId === 'a'), false);
   assert.equal(db.records.get(`${companyPath}/serviceStops/legacy-worker`).estimatedPayCents, 6000);
   assert.equal(db.readLog.some(read => read.document && read.path.startsWith('companies/another-company/')), false);
   assert.equal(db.records.get(ratePath).amountCents, 6000);
@@ -619,7 +618,7 @@ test("visit reassignment preserves the workers who already performed completed t
   await workflow.onStopWrite(event(db, stopPath, before, { companyId: "company", serviceStopId: "stop" }));
   assert.equal(db.records.get(`${stopPath}/tasks/task`).workerId, "a"); assert.equal(db.records.get(jobTaskPath).workerId, "a");
   assert.equal(db.records.get(`${stopPath}/tasks/separate`).workerId, "a");
-  assert.deepEqual(active(db).map((line) => [line.technicianId, line.totalAmountCents]).sort(), [["a", 5000], ["a", 5000], ["b", 8000]]);
+  assert.deepEqual(active(db).map((line) => [line.technicianId, line.totalAmountCents]).sort(), [["b", 8000]]);
 });
 
 
@@ -637,7 +636,7 @@ test("a job task assigned independently remains with its technician during later
 
 test("out-of-order visit assignment events converge on the current technician", async () => {
   const { db, workflow } = fixture({ [`${stopPath}/tasks/task`]: { status: "Draft", workerId: "a", payTypeId: "filter", jobTaskId: "task" },
-    [`${companyPath}/technicianRates/c`]: { technicianId: "c", payTypeId: "filter", payBasis: "serviceStopTask", rateType: "flatPerTask", amountCents: 9000 } });
+    [`${companyPath}/technicianRates/c`]: { technicianId: "c", payTypeId: "filter", payBasis: "serviceStop", rateType: "flatPerStop", amountCents: 9000 } });
   const a = db.records.get(stopPath); db.set(stopPath, { techId: "b" }, { merge: true });
   const first = event(db, stopPath, a, { companyId: "company", serviceStopId: "stop" });
   const b = db.records.get(stopPath); db.set(stopPath, { techId: "c" }, { merge: true });

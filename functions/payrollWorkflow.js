@@ -1,5 +1,6 @@
-const { calculatePayLines, reconcilePayLines, canClearZeroTask } = require("./payrollCalculation");
+const { calculatePayLines, reconcilePayLines, isTaskPayLine, canClearZeroTask } = require("./payrollCalculation");
 const { createPayrollRefreshQueue, rateScopes, matchesScopes } = require("./payrollRefreshQueue");
+const { operationalTask } = require("./taskFields");
 const { loadPayrollBodyOfWaterScope } = require("./payrollBodyOfWaterScope");
 
 const data = (snap) => snap.exists ? { ...snap.data(), id: snap.id } : null;
@@ -94,7 +95,7 @@ function createPayrollWorkflow(db, options = {}) {
       return { clearedLineItemIds: ids, updates: updates.map(({ voidedAt, ...line }) => ({ ...line, voidedAtMillis: voidedAt.getTime() })) };
     });
   }
-  async function acceptedAgreement(transaction, companyRef, record, cache, source = "stop", jobId = "", parentStopId = "") {
+  async function acceptedAgreement(transaction, companyRef, record, cache) {
     if (!record) return record;
     const reference = record.payrollAgreement;
     const offerId = record.workOfferId || reference?.offerId;
@@ -103,20 +104,20 @@ function createPayrollWorkflow(db, options = {}) {
     if (!cache.has(offerId)) cache.set(offerId, transaction.get(companyRef.collection("workOffers").doc(offerId)));
     const snap = await cache.get(offerId), offer = snap.exists ? snap.data() : null;
     const claimId = record.workOfferClaimId || reference?.claimId;
-    const claim = (offer?.claims || []).find(v => v.id === claimId || !claimId && v.workerId === (record.workerId || record.techId));
+    const claim = (offer?.claims || []).find(v => v.id === claimId || !claimId && v.workerId === (record.techId || record.technicianId));
     if (!claim || !["Accepted", "Scheduled", "In Progress", "Completed"].includes(claim.status)) return unagreed;
-    const taskId = source === "job" ? record.id : id(record.jobTaskId || record.workOrderTaskId);
-    if (source === "job" && (id(offer.jobId) !== jobId || !(claim.taskIds || []).includes(taskId))) return unagreed;
-    if (source === "stopTask" && !(claim.taskIds || []).includes(taskId) && !(claim.agreement.stopTasks || []).some(v=>v.stopId===parentStopId && v.taskId===record.id)) return unagreed;
-    if (source === "stop" && !(claim.stopIds || []).includes(record.id) && claim.serviceStopId !== record.id) return unagreed;
+    if (!(claim.stopIds || []).includes(record.id) && claim.serviceStopId !== record.id) return unagreed;
     const terms = { ...claim.agreement, claimId: claim.id, completionReady: claim.status === "Completed", incentiveReady: claim.status === "Completed", incentivePaymentStopId:claim.stopIds?.[0] || claim.serviceStopId || null };
-    if(source === "stop") terms.rateDate = offer.scopeSnapshot?.stops?.find(v=>v.id===record.id)?.serviceDate || terms.rateDate;
+    terms.rateDate = offer.scopeSnapshot?.stops?.find(v=>v.id===record.id)?.serviceDate || terms.rateDate;
     const originalScope = terms.scopeStopIds || claim.stopIds || [];
+    if (terms.paySource === "Task Contracted Rates") {
+      terms.fixedAmountCents = Number(terms.baseCents || 0);
+    }
     const flat = Number(terms.incentive?.amountCents || 0);
     terms.flatIncentiveClaimCents = originalScope.length ? (claim.stopIds || []).reduce((sum,value)=>{const index=originalScope.indexOf(value);return sum+(index<0?0:Math.floor(flat/originalScope.length)+(index<flat%originalScope.length?1:0));},0) : flat;
 
     const scope = terms.scopeStopIds || claim.stopIds;
-    if (source === "stop" && scope.length) {
+    if (scope?.length) {
       const index = scope.indexOf(record.id), count = scope.length;
       const portion = value => Math.floor(value / count) + (index >= 0 && index < value % count ? 1 : 0);
       terms.fixedAmountCents = portion(terms.fixedAmountCents || 0);
@@ -170,12 +171,12 @@ function createPayrollWorkflow(db, options = {}) {
     return db.runTransaction(async (transaction) => {
       const stopSnap = await transaction.get(stopRef);
       let stop = data(stopSnap);
+      if (!matchesScopes(stop || { id: stopId }, scopes)) return { skippedUnchangedScope: true };
       const paySnap = await transaction.get(companyRef.collection("technicianPayLineItems").where("serviceStopId", "==", stopId));
       if (ratesChanged && stop && ["finished", "completed", "complete", "done"].includes(String(stop.status || stop.operationStatus || "").toLowerCase()) && !stop.payrollLastProcessedAt && paySnap.empty) {
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], skippedHistoricalWork: true };
       }
       const tasksSnap = await transaction.get(stopRef.collection("tasks"));
-      if (!matchesScopes(stop, rows(tasksSnap), scopes)) return { skippedUnchangedScope: true };
       const ctx = await context(transaction, companyRef, loadBatchContext ? await loadBatchContext() : null);
       if (ctx.settings.payrollEnabled === false || ctx.settings.companyPayrollEnabled === false || ctx.settings.payrollDisabled === true) {
         if (stop && !simulation) saveSummary(transaction, stopRef, stop, { estimatedPayCents: 0, estimatedPayLines: [], estimatedPayNeedsReview: false, payrollReconcileStatus: "disabled" });
@@ -185,8 +186,7 @@ function createPayrollWorkflow(db, options = {}) {
       const agreementCache = new Map();
       if (simulation && stop) stop = { ...stop, ...simulation.stop };
       stop = await acceptedAgreement(transaction, companyRef, stop, agreementCache);
-      const tasks = await Promise.all(rows(tasksSnap).map(task => acceptedAgreement(transaction, companyRef,
-        { ...task, ...simulation?.tasks.get(task.id) }, agreementCache, "stopTask", id(stop?.jobId), stopId)));
+      const tasks = rows(tasksSnap).map(task => ({ ...task, ...simulation?.tasks.get(task.id) }));
       const jobId = id(stop?.jobId);
       const jobPaySnap = jobId ? await transaction.get(companyRef.collection("technicianPayLineItems").where("jobId", "==", jobId)) : null;
       if (stop) {
@@ -198,9 +198,18 @@ function createPayrollWorkflow(db, options = {}) {
       const offerPaySnaps = await Promise.all([...agreementCache.keys()].map(value=>transaction.get(companyRef.collection("technicianPayLineItems").where("workOfferId","==",value))));
       const generated = calculatePayLines({...input, payHistory:offerPaySnaps.flatMap(rows)});
       const components = new Set(generated.map((line) => line.payrollComponentId));
+      const jobLines = jobPaySnap ? rows(jobPaySnap) : [];
       const existing = new Map(rows(paySnap).map((line) => [line.id, line]));
-      if (jobPaySnap) rows(jobPaySnap).filter((line) => components.has(line.payrollComponentId)).forEach((line) => existing.set(line.id, line));
-      const result = reconcilePayLines({ generated, existing: [...existing.values()], preserveCalculated: ratesChanged && ctx.settings.recalculateUnapprovedPayWhenRatesChange === false });
+      jobLines.filter((line) => components.has(line.payrollComponentId)).forEach((line) => existing.set(line.id, line));
+      const linkedTaskIds = new Set(tasks.map((task) => id(task.jobTaskId || task.workOrderTaskId)).filter(Boolean));
+      const relatedTaskHistory = jobLines.filter((line) => !line.serviceStopId && isTaskPayLine(line)
+        && (linkedTaskIds.has(id(line.jobTaskId || line.sourceTaskId))
+          || (stop?.workOfferId && line.workOfferId === stop.workOfferId
+            && (!line.workOfferClaimId || line.workOfferClaimId === stop.workOfferClaimId))));
+      const result = reconcilePayLines({
+        generated, existing: [...existing.values()], relatedTaskHistory,
+        preserveCalculated: ratesChanged && ctx.settings.recalculateUnapprovedPayWhenRatesChange === false,
+      });
       if (!simulation) apply(transaction, companyRef, result, [...existing.values()]);
       const resultingLines = currentLines([...existing.values()], result.writes);
       const needsReview = resultingLines.filter((line) => line.calculationStatus === "needsReview").length;
@@ -219,6 +228,7 @@ function createPayrollWorkflow(db, options = {}) {
     }, simulation ? { readOnly: true } : undefined);
   }
   async function reconcileJob(companyId, jobId, { ratesChanged = false, scopes, loadBatchContext } = {}) {
+    if (scopes?.length && !scopes.some(scope => scope.kind === "company")) return { skippedUnchangedScope: true };
     const companyRef = company(companyId);
     const jobRef = companyRef.collection("workOrders").doc(jobId);
     return db.runTransaction(async (transaction) => {
@@ -228,29 +238,19 @@ function createPayrollWorkflow(db, options = {}) {
       if (ratesChanged && job && !job.payrollLastProcessedAt && paySnap.empty) {
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], skippedHistoricalWork: true };
       }
-      const tasksSnap = await transaction.get(jobRef.collection("tasks"));
-      const jobTasks = rows(tasksSnap).filter(task => !id(task.serviceStopId));
-      // Unscheduled tasks can have different work dates from the job itself.
-      if (!matchesScopes({ ...job, serviceDate: null }, jobTasks, scopes)) return { skippedUnchangedScope: true };
       const ctx = await context(transaction, companyRef, loadBatchContext ? await loadBatchContext() : null);
       if (ctx.settings.payrollEnabled === false || ctx.settings.companyPayrollEnabled === false || ctx.settings.payrollDisabled === true) {
         if (job) saveSummary(transaction, jobRef, job, { payrollReconcileStatus: "disabled" });
         return { generatedLineItemCount: 0, savedLineItemCount: 0, needsReviewCount: 0, conflictLineItemIds: [], payrollDisabled: true };
       }
-      const agreementCache = new Map();
-      const tasks = await Promise.all(jobTasks.map(task => acceptedAgreement(transaction, companyRef, task, agreementCache, "job", jobId)));
-      const bodyOfWaterIdsByServiceLocation = await loadPayrollBodyOfWaterScope(transaction, companyRef, [job, ...tasks], ctx.rates);
-      const offerPaySnaps = await Promise.all([...agreementCache.keys()].map(value=>transaction.get(companyRef.collection("technicianPayLineItems").where("workOfferId","==",value))));
-      const generated = job ? calculatePayLines({ ...ctx, companyId, bodyOfWaterIdsByServiceLocation, jobTaskSource: true, payHistory:offerPaySnaps.flatMap(rows),
-        serviceStop: { ...job, id: `job_${jobId}`, jobId, jobName: job.internalId, type: "Job task", techId: "" }, tasks }) : [];
-      const components = new Set(generated.map((line) => line.payrollComponentId));
-      const existing = rows(paySnap).filter((line) => line.payrollSource === "jobTask" || line.payrollSource === "workOfferIncentive" && !line.serviceStopId || components.has(line.payrollComponentId));
-      const result = reconcilePayLines({ generated, existing, voidReason: "taskReopened", preserveCalculated: ratesChanged && ctx.settings.recalculateUnapprovedPayWhenRatesChange === false });
+      const existing = rows(paySnap).filter((line) => !line.serviceStopId &&
+        (isTaskPayLine(line) || line.payrollSource === "workOfferIncentive"));
+      const result = reconcilePayLines({ existing, voidReason: "taskPayRetired" });
       apply(transaction, companyRef, result, existing);
       const needsReview = currentLines(existing, result.writes).filter((line) => line.calculationStatus === "needsReview").length;
       if (job) saveSummary(transaction, jobRef, job, { payrollReconcileStatus: result.conflicts.length ? "adjustmentRequired" : needsReview ? "needsReview" : "current",
         payrollReconcileConflictIds: result.conflicts, payrollNeedsReviewCount: needsReview });
-      return { generatedLineItemCount: generated.length, savedLineItemCount: result.writes.length, needsReviewCount: needsReview, conflictLineItemIds: result.conflicts };
+      return { generatedLineItemCount: 0, savedLineItemCount: result.writes.length, needsReviewCount: needsReview, conflictLineItemIds: result.conflicts };
     });
   }
   async function syncJobTask(companyId, jobId, taskId, task, detached = false) {
@@ -265,7 +265,7 @@ function createPayrollWorkflow(db, options = {}) {
       const matches = new Map([...a.docs, ...b.docs].map((doc) => [doc.id, doc]));
       matches.forEach((doc) => {
         const existing = doc.data();
-        const updates = detached ? { status: "Deleted", payrollSourceDetached: true } : Object.fromEntries(payKeys.filter((key) => !["serviceStopId", "jobId", "jobTaskId", "workOrderTaskId", "workerId", "workerName", "workerType", "operationStatus", "serviceDate"].includes(key) && task[key] !== undefined).map((key) => [key, task[key]]));
+        const updates = detached ? { status: "Deleted", payrollSourceDetached: true } : operationalTask(Object.fromEntries(payKeys.filter((key) => !["serviceStopId", "jobId", "jobTaskId", "workOrderTaskId", "workerId", "workerName", "workerType", "operationStatus", "serviceDate"].includes(key) && task[key] !== undefined).map((key) => [key, task[key]])));
         if (!detached && task.workerId) Object.assign(updates, { workerId: task.workerId, workerName: task.workerName || "", workerType: task.workerType || existing.workerType || "Not Assigned",
           workerAssignmentMode: task.workerAssignmentMode === "task" || task.workerId !== id(stop.data().techId || stop.data().technicianId) ? "task" : "stop" });
         if (changed(existing, { ...existing, ...updates })) transaction.set(doc.ref, updates, { merge: true });
@@ -311,10 +311,14 @@ function createPayrollWorkflow(db, options = {}) {
     const before = event.data?.before?.exists ? event.data.before.data() : null;
     const after = event.data?.after?.exists ? event.data.after.data() : null;
     if (!changed(before, after)) return;
-    if (after?.manualFinishSource === BULK_FINISH_SOURCE) {
-      return refreshQueue.enqueue(event.params.companyId, event.id, [{ kind: "stop", stopId: event.params.serviceStopId }]);
-    }
-    await reconcileStop(event.params.companyId, event.params.serviceStopId);
+    const { companyId, serviceStopId } = event.params;
+    const companyRef = company(companyId);
+    // Checklist updates can retire a legacy earning but never calculate a visit payment.
+    await db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(companyRef.collection("technicianPayLineItems").where("serviceStopId", "==", serviceStopId));
+      const existing = rows(snapshot).filter(isTaskPayLine);
+      if (existing.length) apply(transaction, companyRef, reconcilePayLines({ existing, voidReason: "taskPayRetired" }), existing);
+    });
   }
   async function onJobTaskWrite(event) {
     const before = event.data?.before?.exists ? event.data.before.data() : null;
@@ -324,7 +328,6 @@ function createPayrollWorkflow(db, options = {}) {
     if (before && id(before.serviceStopId) !== id(after?.serviceStopId)) await syncJobTask(companyId, jobId, taskId, before, true);
     await syncJobTask(companyId, jobId, taskId, after);
     await reconcileJob(companyId, jobId);
-    for (const stopId of new Set([id(before?.serviceStopId), id(after?.serviceStopId)].filter(Boolean))) await reconcileStop(companyId, stopId);
   }
   const processRefresh = refreshQueue.process;
   async function onRateWrite(event) {
@@ -340,7 +343,7 @@ function createPayrollWorkflow(db, options = {}) {
     const wide = event.data?.after?.ref?.path?.endsWith("settings/companyWide");
     const keys = wide ? ["payrollEnabled", "companyPayrollEnabled", "payrollDisabled"] : event.params.payTypeId
       ? ["name", "isActive", "active", "archived", "category", "defaultRateType", "defaultStackBehavior"]
-      : ["payrollEnabled", "payMode", "routePaySource", "taskPaySource", "hourlyPaySource", "defaultStackBehavior", "recalculateUnapprovedPayWhenRatesChange"];
+      : ["payrollEnabled", "payMode", "routePaySource", "hourlyPaySource", "defaultStackBehavior", "recalculateUnapprovedPayWhenRatesChange"];
     if (JSON.stringify(keys.map((key) => before?.[key] ?? null)) !== JSON.stringify(keys.map((key) => after?.[key] ?? null))) await refreshQueue.enqueue(event.params.companyId, event.id, [{ kind: "company" }]);
   }
   async function refreshRequestedStop(request) {
@@ -378,11 +381,8 @@ function createPayrollWorkflow(db, options = {}) {
   }
   async function onPayLineWrite(event) {
     const before=event.data?.before?.data(),after=event.data?.after?.data();
-    if (after?.zeroDollarTaskCleared && !before?.zeroDollarTaskCleared) {
-      if (after.serviceStopId) await reconcileStop(event.params.companyId, after.serviceStopId);
-      if (after.jobId) await reconcileJob(event.params.companyId, id(after.jobId));
-    }
-    if ((after || before)?.payrollSource === "workOfferIncentive") return;
+    const line = after || before;
+    if (!line || isTaskPayLine(line) || line.payrollSource === "workOfferIncentive") return;
     const sig=v=>JSON.stringify([v?.workOfferId,v?.workOfferClaimId,v?.technicianId,v?.totalAmountCents,v?.calculationStatus]);
     if (sig(before)===sig(after)) return;
     for(const offerId of new Set([before?.workOfferId,after?.workOfferId].filter(Boolean))) await reconcileOffer(event.params.companyId,offerId);

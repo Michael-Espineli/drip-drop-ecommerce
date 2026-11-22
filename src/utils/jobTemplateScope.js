@@ -4,7 +4,7 @@ import { jobScopeItemRequiresBodyOfWater, jobScopeItemRequiresEquipment } from "
 import { itemPhotoFieldsFromSource } from "./itemPhotos";
 import { canonicalShoppingListStatus, SHOPPING_LIST_STATUS } from "./shoppingListStatus";
 import { jobPayFields } from "./payroll/payCalculation";
-import { taskCustomerPriceCents, visitCustomerPriceCents } from "./jobScopePricing";
+import { isTaskChargeLine, visitCustomerPriceCents } from "./jobScopePricing";
 import { getJobMaterialVendorItemId } from "./productCatalog";
 
 const idValue = (value) => typeof value === "object" ? value?.id || value?.value || "" : String(value || "");
@@ -57,11 +57,9 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
       ...shoppingItems.filter((item) => item.linkedTaskId === id || item.linkedTaskIds.includes(id)).map((item) => item.id),
     ])];
     return {
-      ...fields(task, ["name", "description", "contractedRate", "billingLaborPriceCents", "estimatedTime", "customerApproval", "dataBaseItemId", "genericItemId", "quantity", "requiresEquipment", "requiresBodyOfWater"]),
-      ...jobPayFields(task),
+      ...fields(task, ["name", "description", "estimatedTime", "customerApproval", "dataBaseItemId", "genericItemId", "quantity", "requiresEquipment", "requiresBodyOfWater"]),
       ...base, ...context(task), id, sourceTemplateTaskId: task.id,
       name: task.name || task.description || "Task", type: canonicalJobTaskType(task.type || ""),
-      billingLaborPriceCents: taskCustomerPriceCents(task),
       status: "Draft", actualTime: 0, workerId: "", workerName: "", workerType: "Not Assigned",
       laborContractId: "", serviceStopId: { id: "", internalId: "" },
       shoppingListItemId: shoppingListItemIds[0] || "", shoppingListItemIds, sortOrder: index,
@@ -74,7 +72,7 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
     billingLaborPriceCents: visitCustomerPriceCents(stop),
     taskIds: remap(stop.taskTemplateIds?.length ? stop.taskTemplateIds : stop.taskIds, taskIds), sortOrder: index,
   }));
-  const laborLineItems = ordered(scope.laborLineItems).map((line, index) => {
+  const laborLineItems = ordered(scope.laborLineItems).filter((line) => !isTaskChargeLine(line)).map((line, index) => {
     const id = newId("comp_job_labor_line");
     const quantity = Math.max(number(line.quantity || line.defaultQuantity || 1), 1);
     const totalPriceCents = number(line.totalPriceCents ?? line.totalAmountCents ?? line.amount ?? (number(line.unitPriceCents) * quantity));
@@ -85,17 +83,15 @@ export function copyJobTemplateScope({ template, scope, job, companyId, planId, 
       ...base, ...context(line), id, laborLineId: id, completionStatus: null, completedAt: null, completedByUserId: null, sourceTemplateLaborLineId: line.id,
       quantity, totalPriceCents, unitPriceCents: number(line.unitPriceCents ?? Math.round(totalPriceCents / quantity)),
       internalCostCents: number(line.internalCostCents ?? line.unitCostCents ?? line.cost),
-      generatedFromTaskId: taskIds.get(line.generatedFromTaskId) || "",
       generatedFromPlannedStopId: stopIds.get(line.generatedFromPlannedStopId) || "",
       taskIds: mappedTaskIds, laborLineTaskIds: mappedTaskIds,
       plannedServiceStopIds: mappedStopIds, laborLinePlannedServiceStopIds: mappedStopIds, sortOrder: index,
     };
   });
   const explicitPrice = laborLineItems.reduce((sum, line) => sum + line.totalPriceCents, 0)
-    + tasks.reduce((sum, task) => sum + taskCustomerPriceCents(task), 0)
     + plannedServiceStops.reduce((sum, stop) => sum + visitCustomerPriceCents(stop), 0)
     + shoppingItems.reduce((sum, item) => sum + number(item.plannedTotalPriceCents ?? number(item.plannedUnitPriceCents ?? item.price) * number(item.quantity)), 0);
-  if (!laborLineItems.length && !explicitPrice && number(template.defaultRateCents) > 0) {
+  if (!scope.tasks.length && !scope.laborLineItems.length && !explicitPrice && number(template.defaultRateCents) > 0) {
     const id = newId("comp_job_labor_line");
     laborLineItems.push({
       ...base, id, laborLineId: id, name: template.name || "Template service", description: template.description || "",
@@ -149,24 +145,23 @@ export function combineJobTemplateScope(existing, incoming, mode) {
     laborLineItems: existing.laborLineItems.filter((line) => ids(line.taskIds?.length ? line.taskIds : line.laborLineTaskIds).some((id) => protectedTaskIds.has(id)) || ids(line.plannedServiceStopIds?.length ? line.plannedServiceStopIds : line.laborLinePlannedServiceStopIds).some((id) => protectedStopIds.has(id))),
     shoppingItems: existing.shoppingItems.filter((item) => hasPurchasedMaterial(item) || protectedTaskIds.has(idValue(item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.taskId))),
   };
-  // The plan invoice uses explicit service lines when present. Keep legacy task/visit pricing visible when combining scopes.
   const withServiceLines = (scope, name) => {
     if (scope.laborLineItems.length) return scope;
-    const price = scope.tasks.reduce((sum, task) => sum + taskCustomerPriceCents(task), 0)
-      + scope.plannedServiceStops.reduce((sum, stop) => sum + visitCustomerPriceCents(stop), 0);
+    const price = scope.plannedServiceStops.reduce((sum, stop) => sum + visitCustomerPriceCents(stop), 0);
     if (!price) return scope;
     const id = `comp_job_labor_line_${uuidv4()}`;
     const taskIds = scope.tasks.map((task) => task.id);
     const plannedServiceStopIds = scope.plannedServiceStops.map((stop) => stop.id);
     return { ...scope, laborLineItems: [{
       id, laborLineId: id, name, quantity: 1, unitPriceCents: price, totalPriceCents: price,
-      internalCostCents: scope.tasks.reduce((sum, task) => sum + number(task.contractedRate), 0)
-        + scope.plannedServiceStops.reduce((sum, stop) => sum + number(stop.plannedLaborCostCents), 0),
+      internalCostCents: scope.plannedServiceStops.reduce((sum, stop) => sum + number(stop.plannedLaborCostCents), 0),
       taskIds, laborLineTaskIds: taskIds, plannedServiceStopIds, laborLinePlannedServiceStopIds: plannedServiceStopIds, sortOrder: 0,
     }] };
   };
-  const hasServiceLines = keep.laborLineItems.length || incoming.laborLineItems.length;
-  const keptScope = hasServiceLines ? withServiceLines(keep, "Existing planned services") : keep;
+  const retained = { ...keep, laborLineItems: keep.laborLineItems.filter((line) => !isTaskChargeLine(line)) };
+  incoming = { ...incoming, laborLineItems: incoming.laborLineItems.filter((line) => !isTaskChargeLine(line)) };
+  const hasServiceLines = retained.laborLineItems.length || incoming.laborLineItems.length;
+  const keptScope = hasServiceLines ? withServiceLines(retained, "Existing planned services") : retained;
   const addedScope = hasServiceLines ? withServiceLines(incoming, "Template services") : incoming;
   return Object.fromEntries(Object.keys(incoming).map((key) => {
     const offset = Math.max(-1, ...keptScope[key].map((item) => number(item.sortOrder))) + 1;

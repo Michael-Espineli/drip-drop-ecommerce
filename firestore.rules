@@ -850,13 +850,11 @@ service cloud.firestore {
             && inheritsTemplateStopPay(data))
         )) || canManagePay();
       }
-      function sameTemplateTaskPay(data, source) {
-        return data.get("contractedRate", 0) == source.get("contractedRate", 0)
-          && data.get("manualPayOverrideCents", null) == source.get("manualPayOverrideCents", null)
-          && data.get("payTypeId", "") == source.get("payTypeId", "")
-          && data.get("payrollMode", "automatic") == source.get("payrollMode", "automatic")
-          && data.get("payrollStackBehavior", null) == source.get("payrollStackBehavior", null)
-          && data.get("payQuantity", 1) == source.get("payQuantity", 1);
+      function hasNoTaskPay(data) {
+        return data.get("contractedRate", 0) in [0, "0", "", null]
+          && data.get("manualPayOverrideCents", null) == null
+          && data.get("billingLaborPriceCents", 0) in [0, "", null]
+          && !data.keys().hasAny(["payrollAgreement"]);
       }
       function validInitialTaskWorker(data, jobId) {
         let workerId = data.get("workerId", "");
@@ -877,12 +875,9 @@ service cloud.firestore {
           && !data.keys().hasAny(["payrollAgreement", "workOfferId", "workOfferClaimId", "claimedWorkOfferId"])
           && validInitialTaskWorker(data, jobId)
           && data.get("sourceTemplateId", "") == templateId
-          && (
-            ((templateId == "" || templateId == null) && data.get("contractedRate", 0) in [0, "0", "", null]
-              && data.get("manualPayOverrideCents", null) == null)
-            || (taskTemplateId is string && taskTemplateId != "" && get(taskSource) != null
-              && sameTemplateTaskPay(data, get(taskSource).data))
-          );
+          && hasNoTaskPay(data)
+          && (templateId in ["", null] ||
+            (taskTemplateId is string && taskTemplateId != "" && get(taskSource) != null));
       }
       function validInitialJobTask(jobId) {
         return jobId is string && jobId != "" && get(jobPath(jobId)) == null && getAfter(jobPath(jobId)) != null
@@ -893,10 +888,9 @@ service cloud.firestore {
         return getAfter(stop) != null && validInitialJobTask(getAfter(stop).data.get("jobId", ""));
       }
       function validTaskPayCreate() {
-        return (request.resource.data.get("manualPayOverrideCents", null) == null
-          && request.resource.data.get("contractedRate", 0) in [0, "0", "", null]
+        return hasNoTaskPay(request.resource.data)
           && !request.resource.data.keys().hasAny(["payrollAgreement", "workOfferId", "workOfferClaimId", "claimedWorkOfferId"])
-          && (request.resource.data.get("workerId", "") == "" || permitted("24") || permitted("244"))) || canManagePay();
+          && (request.resource.data.get("workerId", "") == "" || permitted("24") || permitted("244") || canManagePay());
       }
       function preservesPayTerms() {
         return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
@@ -917,13 +911,32 @@ service cloud.firestore {
         allow write: if false;
       }
       match /technicianRates/{rateId} {
+        function isSupportedRate(rate) {
+          return rate.get("payBasis", "serviceStop") in ["serviceStop", "technicianHourly"] &&
+            rate.get("rateType", "flatPerStop") != "flatPerTask";
+        }
         allow read: if hasCompanyAccess(companyId) && (resource.data.technicianId == request.auth.uid || canReadPay());
-        allow write: if canManagePay();
+        allow create: if canManagePay() && isSupportedRate(request.resource.data);
+        allow update: if canManagePay() && (isSupportedRate(request.resource.data) ||
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(["payBasis", "rateType", "amountCents", "technicianId", "payTypeId", "workTypeId"]));
+        allow delete: if canManagePay();
       }
       match /technicianPayLineItems/{lineId} {
+        function isTaskEarning(line) {
+          return line.get("payrollSource", "") != "workOfferIncentive" &&
+            (line.get("source", "") == "serviceStopTask" || line.get("payrollSource", "") == "jobTask" ||
+              line.get("serviceStopTaskId", "") != "" && line.get("serviceStopTaskId", null) != null ||
+              line.get("jobTaskId", "") != "" && line.get("jobTaskId", null) != null ||
+              line.get("sourceTaskId", "") != "" && line.get("sourceTaskId", null) != null);
+        }
         allow read: if hasCompanyAccess(companyId) && (resource.data.technicianId == request.auth.uid || canReadPay());
-        allow create, delete: if canManagePay();
-        allow update: if canManagePay();
+        allow create: if canManagePay() && !isTaskEarning(request.resource.data);
+        allow delete: if canManagePay();
+        allow update: if canManagePay() &&
+          ((!isTaskEarning(resource.data) && !isTaskEarning(request.resource.data)) ||
+            isTaskEarning(resource.data) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["approvedAt", "paidAt", "payStatementId", "exportBatchId", "calculationStatus"]) ||
+            request.resource.data.get("calculationStatus", "") == "voided" ||
+            isTaskEarning(resource.data) && resource.data.get("calculationStatus", "") in ["approved", "paid", "adjusted"]);
       }
       match /technicianPayStatements/{statementId} {
         allow read: if hasCompanyAccess(companyId) && (resource.data.technicianId == request.auth.uid || canReadPay());

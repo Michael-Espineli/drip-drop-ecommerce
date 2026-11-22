@@ -213,17 +213,14 @@ function createTechnicianPaysheet(db, now = () => new Date()) {
         if (key && stop.jobId) tasksSeen.add(stop.jobId + ':' + key);
         const values = lines.filter(line => line.payrollSource !== 'payCorrection' && !assigned.has(line.id) && (line.serviceStopTaskId === task.id && line.serviceStopId === stop.id || key && line.jobTaskId === key && line.jobId === stop.jobId));
         claim(values);
-        return { id: task.id, title: task.name || 'Completed task', coverageLabel: coverage(task, values, base, { ...stop, hourlyCovered }), lines: values.map(lineDTO) };
+        return { id: task.id, title: task.name || 'Completed task', coverageLabel: values.length ? coverage(task, values, base, { ...stop, hourlyCovered }) : 'Completed task', lines: values.map(lineDTO) };
       });
       const remainder = stopLines.filter(line => !assigned.has(line.id)); claim(remainder);
       const stopCoverage = ownSource(stop) ? coverage(stop, base) : 'Assigned task work';
       const ownStop = ownSource(stop) && done(stop) && inPeriod(completion(stop), start, end);
-      // A stop paid exclusively through its tasks is still accounted for.
-      const taskOnly = settings.routePaySource === 'completedTasks' || settings.payMode === 'hourlyOnly' && settings.hourlyPaySource === 'taskActualTime';
       const routeHourly = route && lines.some(line => line.activeRouteId === route.id && line.rateType === 'hourly' && !review(line) && cents(line.totalAmountCents) > 0);
       const label = selectedStatement ? 'Statement work' : stopCoverage !== 'Pay needs review' ? stopCoverage
         : routeHourly ? 'Included in route hourly pay'
-        : taskOnly && tasks.length && tasks.every(task => task.coverageLabel !== 'Pay needs review') ? 'Pay shown in tasks'
         : settings.routePaySource === 'none' && settings.payMode !== 'hourlyOnly' ? 'No additional stop pay' : stopCoverage;
       const stopAmount = [...remainder.map(lineDTO), ...tasks.flatMap(task => task.lines)].filter(line => !line.needsReview).reduce((total, line) => total + line.totalAmountCents, 0);
       group.stops.push({ id: stop.id, title: stop.customerName || stopLines[0]?.customerName || stop.type || 'Completed stop',
@@ -239,7 +236,7 @@ function createTechnicianPaysheet(db, now = () => new Date()) {
       if (parts[2] !== 'workOrders' || task.serviceStopId || tasksSeen.has(parts[3] + ':' + task.id)) continue;
       const values = lines.filter(line => line.jobId === parts[3] && line.jobTaskId === task.id); claim(values);
       dayRoute(dateKey(completion(task), zone), null).stops.push({ id: 'job-task:' + task.id, title: task.name || 'Completed job task', subtitle: 'Job task · outside a route',
-        coverageLabel: coverage(task, values), ownPayNeedsReview: coverage(task, values) === 'Pay needs review',
+        coverageLabel: values.length ? coverage(task, values) : 'Completed task', ownPayNeedsReview: values.some(review),
         amountCents: sum(values.filter(line => !review(line) || isPaid(line))), ownStop: false, order: 999, lines: values.map(lineDTO), tasks: [] });
     }
     for (const line of lines.filter(line => !assigned.has(line.id))) {

@@ -35,7 +35,6 @@ import { appConfirm } from '../../../utils/appDialog';
 import { canonicalJobTaskType, jobTaskTypeOptionsFromDocs, taskTypeRequiresInstallItem } from '../../../utils/jobTaskTypes';
 import { buildTaskProductOptions, findTaskProduct } from '../../../utils/jobPlanProducts';
 import { jobPayFields } from '../../../utils/payroll/payCalculation';
-import JobPayrollFields from '../jobs/JobPayrollFields';
 import useServicePayrollData from '../../../hooks/useServicePayrollData';
 import useJobProductCatalog from '../../../hooks/useJobProductCatalog';
 import ServiceTaskProductFields from '../jobs/ServiceTaskProductFields';
@@ -114,13 +113,10 @@ const applyInheritedPayItem = (task, item, previousItem) => {
 };
 
 const emptyTaskTemplate = () => ({
-  ...jobPayFields({ payrollMode: "included" }),
   id: `service_task_template_${uuidv4()}`,
   name: '',
   type: 'General',
   description: '',
-  laborCost: '',
-  billingLaborPrice: '',
   customerApprovalRequired: false,
 });
 
@@ -142,7 +138,6 @@ const templateCentsToInput = (template = {}, ...fields) => {
 };
 
 const templateToForm = (template = {}) => ({
-  ...jobPayFields(template),
   genericItemId: template.genericItemId || "", dataBaseItemId: template.dataBaseItemId || template.dbItemId || "",
   productQuantity: String(template.productQuantity || 1),
   id: template.id || template.templateId || `service_task_template_${uuidv4()}`,
@@ -155,21 +150,6 @@ const templateToForm = (template = {}) => ({
     template.minutes ??
     template.durationMinutes ??
     ''
-  ),
-  laborCost: templateCentsToInput(
-    template,
-    'laborCostCents',
-    'contractRateCents',
-    'contractedRateCents',
-    'contractedRate',
-    'costCents'
-  ),
-  billingLaborPrice: templateCentsToInput(
-    template,
-    'billingLaborPriceCents',
-    'unitAmountCents',
-    'priceCents',
-    'rateCents'
   ),
   customerApprovalRequired: Boolean(template.customerApprovalRequired || template.customerApproval),
   isTaskGroup: Boolean(template.isTaskGroup || template.taskGroupId),
@@ -187,7 +167,6 @@ const normalizeTaskTemplatesForSave = (templates = []) => (
 
       return {
         id: template.id || `service_task_template_${uuidv4()}`,
-        ...jobPayFields(template),
         genericItemId: template.genericItemId || "", dataBaseItemId: template.dataBaseItemId || "",
         productQuantity: Math.max(Number(template.productQuantity || 1), 0.01),
         name,
@@ -196,8 +175,6 @@ const normalizeTaskTemplatesForSave = (templates = []) => (
         taskType: template.type || 'General',
         description: String(template.description || '').trim(),
         estimatedMinutes: Number.isFinite(estimatedMinutes) ? Math.max(estimatedMinutes, 0) : 0,
-        laborCostCents: dollarsToCents(template.laborCost),
-        billingLaborPriceCents: dollarsToCents(template.billingLaborPrice),
         customerApprovalRequired: Boolean(template.customerApprovalRequired),
         isTaskGroup: Boolean(template.isTaskGroup || template.taskGroupId),
         taskGroupId: template.taskGroupId || '',
@@ -212,11 +189,9 @@ const taskTemplateTotals = (templates = []) => (
   templates.reduce(
     (totals, template) => {
       totals.minutes += Number(template.estimatedMinutes || template.estimatedTime || 0) || 0;
-      totals.laborCostCents += Number(template.laborCostCents || template.contractedRate || 0) || 0;
-      totals.billingLaborPriceCents += Number(template.billingLaborPriceCents || 0) || 0;
       return totals;
     },
-    { minutes: 0, laborCostCents: 0, billingLaborPriceCents: 0 }
+    { minutes: 0 }
   )
 );
 
@@ -238,22 +213,6 @@ const taskGroupTaskToTemplateForm = (task = {}, taskGroup = {}) => {
     type: canonicalJobTaskType(rawType) || 'General',
     description: String(task.description || '').trim(),
     estimatedMinutes: Number.isFinite(estimatedMinutes) ? String(Math.max(estimatedMinutes, 0)) : '',
-    laborCost: templateCentsToInput(
-      task,
-      'contractedRate',
-      'contractRateCents',
-      'contractedRateCents',
-      'laborCostCents',
-      'laborCost',
-      'rate'
-    ),
-    billingLaborPrice: templateCentsToInput(
-      task,
-      'billingLaborPriceCents',
-      'billingLaborCents',
-      'unitAmountCents',
-      'priceCents'
-    ),
     customerApprovalRequired: Boolean(task.customerApprovalRequired || task.customerApproval),
     isTaskGroup: true,
     taskGroupId: taskGroup.id || '',
@@ -1030,7 +989,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
   const renderTaskTemplateSummary = (template, index) => {
     const title = template.name.trim() || `Task ${index + 1}`;
     const product = taskTypeRequiresInstallItem(template.type) && findTaskProduct(template, taskProductOptions);
-    const payType = servicePayrollData.payTypes.find((type) => type.id === (template.payTypeId || form.payTypeId));
 
     return (
       <div key={template.id} className="flex items-start justify-between gap-3 rounded-md border border-slate-200 bg-white p-3">
@@ -1040,11 +998,7 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
           {template.description && <p className="whitespace-pre-wrap">{template.description}</p>}
           {template.taskGroupName && <p className="font-semibold text-blue-700">{template.taskGroupName}</p>}
           {product && <p>{product.label} · Qty {template.productQuantity || '1'}</p>}
-          {template.billingLaborPrice && <p>Customer task price {formatCurrency(dollarsToCents(template.billingLaborPrice))}</p>}
           {template.customerApprovalRequired && <p>Customer approval required</p>}
-          {template.payrollMode === 'automatic' && <p>Technician rate{payType ? ` · ${payType.name}` : ''} · Qty {template.payQuantity ?? 1}</p>}
-          {template.payrollMode === 'custom' && template.manualPayOverrideCents != null && <p>Fixed task pay {formatCurrency(template.manualPayOverrideCents)}</p>}
-          {!['included', 'unpaid'].includes(template.payrollMode) && template.laborCost && <p>Contracted task pay {formatCurrency(dollarsToCents(template.laborCost))}</p>}
         </div>
         <button
           type="button"
@@ -1150,17 +1104,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                 onInvalid={(event) => { event.currentTarget.open = true; }}>
                 <summary aria-label="Advanced task settings" className="cursor-pointer py-1 text-sm font-semibold text-slate-700">Advanced</summary>
                 <div className="mt-3 space-y-3">
-                  <label className="block text-sm font-semibold text-slate-700">
-                    Customer task price
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={template.billingLaborPrice}
-                      onChange={(event) => updateTaskTemplate(template.id, 'billingLaborPrice', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
-                  </label>
                   <label className="flex min-h-[38px] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
                     <input
                       type="checkbox"
@@ -1170,21 +1113,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                     />
                     Customer approval
                   </label>
-                  <JobPayrollFields value={taskWithEstimatedMinutes(template)} payTypes={servicePayrollData.payTypes} previewData={servicePayrollData} previewPrice={form.unitAmount}
-                    singleColumn
-                    inheritedPayTypeId={form.payTypeId}
-                    taskCostField={<label className="block text-sm font-semibold text-slate-700">
-                      Contracted task pay
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={template.laborCost}
-                        onChange={(event) => updateTaskTemplate(template.id, 'laborCost', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      />
-                    </label>}
-                    onChange={(field, value) => updateTaskTemplate(template.id, field, value)} />
                 </div>
               </details>
               <div className="flex flex-wrap justify-end gap-2">
@@ -1869,14 +1797,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                   <dd className="font-semibold text-slate-900">{minutesToLabel(totals.minutes)}</dd>
                 </div>
                 <div className="flex justify-between gap-4">
-                  <dt className="text-slate-500">Task Labor Cost</dt>
-                  <dd className="font-semibold text-slate-900">{formatCurrency(totals.laborCostCents)}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-slate-500">Task Billing</dt>
-                  <dd className="font-semibold text-slate-900">{formatCurrency(totals.billingLaborPriceCents)}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
                   <dt className="text-slate-500">Source</dt>
                   <dd className="font-semibold text-slate-900">{sourceTypeLabels[selectedCatalogItem.sourceType] || labelize(selectedCatalogItem.sourceType)}</dd>
                 </div>
@@ -1901,8 +1821,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                       <th className="px-4 py-3">Task</th>
                       <th className="px-4 py-3">Type</th>
                       <th className="px-4 py-3 text-right">Time</th>
-                      <th className="px-4 py-3 text-right">Cost</th>
-                      <th className="px-4 py-3 text-right">Billing</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -1914,12 +1832,6 @@ const SalesCatalogItems = ({ editorOnly = false, editorItem = null, onSaved, onC
                         </td>
                         <td className="px-4 py-3 text-slate-600">{template.type || template.taskType || 'General'}</td>
                         <td className="px-4 py-3 text-right text-slate-600">{minutesToLabel(template.estimatedMinutes || template.estimatedTime)}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-slate-900">
-                          {formatCurrency(template.laborCostCents || template.contractedRate || 0)}
-                        </td>
-                        <td className="px-4 py-3 text-right font-semibold text-slate-900">
-                          {formatCurrency(template.billingLaborPriceCents || 0)}
-                        </td>
                       </tr>
                     ))}
                   </tbody>

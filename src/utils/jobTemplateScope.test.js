@@ -28,12 +28,12 @@ test("copying the same template twice produces independent IDs", () => {
   expect(copyJobTemplateScope(args).tasks[0].id).not.toBe(copyJobTemplateScope(args).tasks[0].id);
 });
 
-test("a template's fallback price becomes an additive billable service", () => {
-  const copied = copyJobTemplateScope({ template: { ...template, defaultRateCents: 15000, defaultLaborCostCents: 4000 }, scope: { ...empty(), tasks: [{ id: "task-template", name: "Repair" }] }, job, companyId: "company-1", planId: "plan-1" });
-  expect(copied.laborLineItems[0]).toEqual(expect.objectContaining({ totalPriceCents: 15000, internalCostCents: 4000, taskIds: [copied.tasks[0].id] }));
+test("an unscoped template service price becomes an additive billable service", () => {
+  const copied = copyJobTemplateScope({ template: { ...template, defaultRateCents: 15000, defaultLaborCostCents: 4000 }, scope: empty(), job, companyId: "company-1", planId: "plan-1" });
+  expect(copied.laborLineItems[0]).toEqual(expect.objectContaining({ totalPriceCents: 15000, internalCostCents: 4000, taskIds: [] }));
 });
 
-test("add preserves existing scope, appends in order, and keeps legacy task prices alongside service lines", () => {
+test("add preserves existing scope, appends in order, and drops legacy task pricing", () => {
   const existing = {
     ...empty(),
     tasks: [{ id: "old-task", billingLaborPriceCents: 1200, sortOrder: 8 }],
@@ -43,8 +43,8 @@ test("add preserves existing scope, appends in order, and keeps legacy task pric
   const combined = combineJobTemplateScope(existing, incoming, "add");
   expect(combined.tasks.map((task) => task.id)).toEqual(["old-task", "new-task"]);
   expect(combined.tasks[1].sortOrder).toBe(9);
-  expect(combined.laborLineItems[0]).toMatchObject({ internalCostCents: 3500, totalPriceCents: 1200 });
-  expect(combined.laborLineItems.reduce((sum, line) => sum + line.totalPriceCents, 0)).toBe(3200);
+  expect(combined.plannedServiceStops[0]).toMatchObject({ plannedLaborCostCents: 3500, billingLaborPriceCents: 0 });
+  expect(combined.laborLineItems.reduce((sum, line) => sum + line.totalPriceCents, 0)).toBe(2000);
 });
 
 test("overwrite replaces drafts and retains actual work, purchased products, and their linked scope", () => {
@@ -70,20 +70,24 @@ test("explicit zero services do not restore an older template headline price", (
   expect(copied.laborLineItems[0].totalPriceCents).toBe(0);
 });
 
-test("generated task billing links are remapped so later task edits stay billable", () => {
+test("generated task pricing is discarded while operational tasks are copied", () => {
   const scope = { ...empty(), tasks: [{ id: "task", billingLaborPriceCents: 5000 }], laborLineItems: [{ id: "derived", totalPriceCents: 5000, taskIds: ["task"], generatedFromTaskId: "task", taxable: true }] };
   const copied = copyJobTemplateScope({ template, scope, job, companyId: "company-1", planId: "plan-1" });
-  expect(copied.laborLineItems[0].generatedFromTaskId).toBe(copied.tasks[0].id);
-  expect(copied.laborLineItems[0].taxable).toBe(true);
+  expect(copied.laborLineItems).toEqual([]);
+  expect(copied.tasks).toHaveLength(1);
+  expect(copied.tasks[0]).not.toHaveProperty("billingLaborPriceCents");
 });
 
 
-test("template copies keep payroll choices and custom zero amounts while clearing assignments", () => {
+test("template copies retain visit pay and clear task finance and assignment fields", () => {
   const scope = source();
   Object.assign(scope.tasks[0], { payTypeId: "filter", payTypeName: "Filter clean", payrollMode: "custom", manualPayOverrideCents: 0, manualPayOverrideNotes: "Included contract", payrollStackBehavior: "exclusive", payQuantity: 2, workerId: "old-tech" });
   Object.assign(scope.plannedServiceStops[0], { serviceStopTypeId: "visit-pay", payrollMode: "included", billingLaborPriceCents: 7000 });
   const copy = copyJobTemplateScope({ template, scope, job, companyId: "company", planId: "plan" });
-  expect(copy.tasks[0]).toEqual(expect.objectContaining({ payTypeId: "filter", payrollMode: "custom", manualPayOverrideCents: 0, payrollStackBehavior: "exclusive", payQuantity: 2, workerId: "" }));
+  expect(copy.tasks[0].workerId).toBe("");
+  for (const field of ["payTypeId", "payrollMode", "manualPayOverrideCents", "payrollStackBehavior", "payQuantity"]) {
+    expect(copy.tasks[0]).not.toHaveProperty(field);
+  }
   expect(copy.plannedServiceStops[0]).toEqual(expect.objectContaining({ payTypeId: "visit-pay", payrollMode: "included", billingLaborPriceCents: 7000 }));
 });
 

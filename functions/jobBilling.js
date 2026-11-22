@@ -4,6 +4,7 @@ const {billingActor}=require('./billingAccess');
 const {documentId,fail}=require('./companyActor');
 const {hash,key,money,pricing}=require('./billingMath');
 const {assertApprovedJobPartsCovered}=require('./jobMaterialInvoice');
+const {isTaskChargeLine,hasDraftTaskCharges,draftTaskChargeMessage}=require('./jobScopePricing');
 const {dayStart,addInterval}=require('./billingCalendar');
 
 function createJobBilling(db,now=()=>new Date()){
@@ -31,6 +32,7 @@ function createJobBilling(db,now=()=>new Date()){
       const revision=Boolean(data.replaceClosedInvoiceId);
       if(current&&!revision){
         if(['void','voided','uncollectible','canceled','cancelled'].includes(key(current.data().status)))fail('failed-precondition','This job invoice is closed. A reviewed reissue requires a new accepted estimate revision and a reason.');
+        if(hasDraftTaskCharges(current.data()))fail('failed-precondition',draftTaskChargeMessage);
         tx.set(jobRef,{salesInvoiceId:current.id,invoiceRef:current.id,invoiceType:'salesInvoice'},{merge:true});
         return {...current.data(),id:current.id};
       }
@@ -39,11 +41,26 @@ function createJobBilling(db,now=()=>new Date()){
       const source={...savedSource,...(acceptedPlan?{lineItems:acceptedPlan.lineItems,totalAmountCents:acceptedPlan.totalAmountCents}:{} )};
       if(agreement&&!['accepted','active'].includes(key(source.status)))fail('failed-precondition','Accept the estimate before creating its invoice.');
       const savedLines=Array.isArray(source.lineItems)&&source.lineItems.length?source.lineItems:source.acceptedEstimateLineItems??source.estimateLineItems;
-      const lines=(Array.isArray(savedLines)&&savedLines.length?savedLines:draft.lineItems||[]).map((line,index)=>{
+      const sourceLines=Array.isArray(savedLines)&&savedLines.length?savedLines:draft.lineItems||[];
+      const savedAmount=Number(source.totalAmountCents??source.acceptedEstimateTotalCents??source.estimateTotalCents??source.rateAmountCents??source.rate??job.rate??0);
+      if(!savedLines?.length && !agreement && !contract && savedAmount>0){
+        const tasks=await tx.get(jobRef.collection('tasks'));
+        if(tasks.docs.some(doc=>{
+          const task=doc.data();
+          return [task.billingLaborPriceCents,task.customerLaborPriceCents,task.billingLaborRateCents,
+            task.laborBillingRateCents,task.billableLaborCents,task.contractedRate].some(value=>Number(value)>0);
+        })) fail('failed-precondition','Save a revised estimate with priced services, visits, or products before invoicing this job.');
+      }
+      const hasTaskCharges=sourceLines.some(isTaskChargeLine);
+      if(hasTaskCharges && (agreement || contract || Array.isArray(job.acceptedEstimateLineItems) && job.acceptedEstimateLineItems.length ||
+          Number(source.taxAmountCents || 0) || Number(source.discountAmountCents || 0)))
+        fail('failed-precondition','This estimate includes legacy task charges. Save and accept a revised estimate before invoicing.');
+      const lines=sourceLines.filter(line=>!isTaskChargeLine(line)).map((line,index)=>{
         const quantity=Number(line.quantity??1),total=Number(line.totalAmountCents??line.amount??line.price??line.unitAmountCents??0);
         return {...line,id:line.id||`line_${index}`,name:line.name||line.title||`Line ${index+1}`,quantity,unitAmountCents:Number(line.unitAmountCents??(quantity?Math.round(total/quantity):0)),totalAmountCents:total};
       });
-      const amount=Number(source.totalAmountCents??source.acceptedEstimateTotalCents??source.estimateTotalCents??source.rateAmountCents??source.rate??job.rate??0);
+      const amount=hasTaskCharges ? lines.reduce((sum,line)=>sum+line.totalAmountCents,0) : savedAmount;
+      if(hasTaskCharges && !amount)fail('failed-precondition','Add a priced service, visit, or product before invoicing this job.');
       const price=pricing({...source,lineItems:lines,amountCents:money(amount,'Saved job price'),currency:source.currency||'usd'});
       await assertApprovedJobPartsCovered(tx,db,{companyId,jobId,lines:price.lines});
       const snapshotHash=hash({agreementId,contractId,revision:source.revisionNumber||0,price});

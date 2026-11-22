@@ -607,7 +607,7 @@ const DEFAULT_COMPANY_PAY_TYPES = [
     bucketLabel: "Jobs",
     stopPayBucketId: "job",
     stopPayBucketLabel: "Jobs",
-    defaultRateType: "flatPerTask",
+    defaultRateType: "flatPerStop",
     defaultStackBehavior: "stackable",
   },
   {
@@ -620,7 +620,7 @@ const DEFAULT_COMPANY_PAY_TYPES = [
     bucketLabel: "Jobs",
     stopPayBucketId: "job",
     stopPayBucketLabel: "Jobs",
-    defaultRateType: "flatPerTask",
+    defaultRateType: "flatPerStop",
     defaultStackBehavior: "stackable",
   },
   {
@@ -2315,7 +2315,6 @@ exports.createFirstRecurringServiceStop2 = recurringCallable("create", async (da
         name: String(task.name || "").trim(),
         description: String(task.description || "").trim(),
         type: task.type,
-        contractedRate: Number(task.contractedRate || 0),
         estimatedTime: Number(task.estimatedTime || 0),
         status: "Accepted",
         isTaskGroup: true,
@@ -2453,7 +2452,6 @@ exports.createFirstRecurringServiceStop2 = recurringCallable("create", async (da
           name: String(task.name || "").trim(),
           type: task.type,
           status: task.status || "Not Finished",
-          contractedRate: Number(task.contractedRate || 0),
           estimatedTime: Number(task.estimatedTime || 0),
 
           customerApproval: false,
@@ -3220,8 +3218,8 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       companyId: companyId,
       payrollEnabled: true,
       payMode: "productionOnly",
-      routePaySource: "serviceStopAndCompletedTasks",
-      taskPaySource: "technicianRateThenTaskContractedRate",
+      routePaySource: "serviceStop",
+      taskPaySource: "none",
       hourlyPaySource: "none",
       allowMultipleWorkTypesPerStop: false,
       defaultStackBehavior: "stackable",
@@ -3312,7 +3310,6 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         description: "Brush pool surface",
         typeId: "univ_tt_XN5ZMDfEiqGfFiCYoZWr",
         type: "Clean",
-        contractedRate: 0,
         estimatedTime: 0,
       }
       ,
@@ -3322,7 +3319,6 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         description: "Skim pool surface",
         typeId: "univ_tt_XN5ZMDfEiqGfFiCYoZWr",
         type: "Clean",
-        contractedRate: 0,
         estimatedTime: 0,
       }
       ,
@@ -3332,7 +3328,6 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         description: "Vacuum pool surface",
         typeId: "univ_tt_XN5ZMDfEiqGfFiCYoZWr",
         type: "Clean",
-        contractedRate: 0,
         estimatedTime: 0,
       }
       ,
@@ -3342,7 +3337,6 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         description: "Empty skimmer and pump baskets",
         typeId: "univ_tt_XN5ZMDfEiqGfFiCYoZWr",
         type: "Clean",
-        contractedRate: 0,
         estimatedTime: 0,
       }
       ,
@@ -3352,7 +3346,6 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         description: "Check equipment",
         typeId: "univ_tt_XN5ZMDfEiqGfFiCYoZWr",
         type: "Clean",
-        contractedRate: 0,
         estimatedTime: 0,
       }
     ]

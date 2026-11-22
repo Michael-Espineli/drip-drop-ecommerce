@@ -164,7 +164,7 @@ const RecurringServiceStopDetails = () => {
     name: "",
     description: "",
     type: "",
-    contractedRate: "",
+
     estimatedTime: "",
     status: "Not Finished",
     equipmentId: "",
@@ -1043,7 +1043,7 @@ const RecurringServiceStopDetails = () => {
       name: "",
       description: "",
       type: "",
-      contractedRate: "",
+
       estimatedTime: "",
       status: "Not Finished",
       equipmentId: "",
@@ -1299,7 +1299,7 @@ const RecurringServiceStopDetails = () => {
         name: newTask.name.trim(),
         description: newTask.description.trim(),
         type: newTaskType,
-        contractedRate: Number(newTask.contractedRate || 0),
+
         estimatedTime: Number(newTask.estimatedTime || 0),
         status: newTask.status || "Not Finished",
         equipmentId: needsExistingEquipment ? newTask.equipmentId || "" : "",
@@ -1343,7 +1343,7 @@ const RecurringServiceStopDetails = () => {
             name: newTask.name.trim(),
             type: newTaskType,
             status: newTask.status || "Not Finished",
-            contractedRate: Number(newTask.contractedRate || 0),
+
             estimatedTime: Number(newTask.estimatedTime || 0),
             customerApproval: false,
             actualTime: 0,
@@ -1867,20 +1867,6 @@ const RecurringServiceStopDetails = () => {
                       </select>
                     </div>
 
-                    <div>
-                      <label className="mb-1 block text-sm font-semibold text-slate-600">
-                        Contracted Rate (cents)
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={newTask.contractedRate}
-                        onChange={(e) => handleNewTaskChange("contractedRate", e.target.value)}
-                        className="w-full rounded-md border border-slate-300 px-3 py-2"
-                        placeholder="2500"
-                      />
-                    </div>
-
                     {newTaskNeedsBodyOfWater && (
                       <div>
                         <label className="mb-1 block text-sm font-semibold text-slate-600">
@@ -2008,9 +1994,6 @@ const RecurringServiceStopDetails = () => {
                           Type
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600">
-                          Contracted Rate
-                        </th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-600">
                           Estimated Time
                         </th>
                         <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-600">
@@ -2031,9 +2014,6 @@ const RecurringServiceStopDetails = () => {
                             </td>
                             <td className="whitespace-nowrap px-3 py-2 text-sm text-slate-700">
                               {task.type || "—"}
-                            </td>
-                            <td className="whitespace-nowrap px-3 py-2 text-sm text-slate-700">
-                              {formatCurrencyFromCents(task.contractedRate)}
                             </td>
                             <td className="whitespace-nowrap px-3 py-2 text-sm text-slate-700">
                               {formatMinutes(task.estimatedTime)}

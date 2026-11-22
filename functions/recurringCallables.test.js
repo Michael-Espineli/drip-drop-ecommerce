@@ -98,8 +98,8 @@ test('actual rolling worker keeps the biweekly anchor and a repeat dispatch adds
   const count = visits.length;
   const taskCopies = () => [...memory.records].filter(([path]) => path.startsWith(c + '/serviceStops/') && path.includes('/tasks/')).map(([, value]) => value);
   assert.equal(taskCopies().length, count * 2);
-  assert.ok(taskCopies().filter(task => task.name === 'Checklist').every(task => task.payrollMode === 'included'));
-  assert.ok(taskCopies().filter(task => task.name === 'Extra').every(task => task.payrollMode === 'custom' && task.manualPayOverrideCents === 1500 && task.payrollStackBehavior === 'stackable' && task.payQuantity === 2));
+  assert.deepEqual([...new Set(taskCopies().map(task => task.name))].sort(), ['Checklist', 'Extra']);
+  assert.ok(taskCopies().every(task => task.payrollMode === undefined && task.manualPayOverrideCents === undefined && task.contractedRate === undefined));
   await timed.processRecurringServiceStopTask.run(payload);
   assert.equal([...memory.records].filter(([path, value]) => path.startsWith(c + '/serviceStops/') && value.recurringServiceStopId === 'rss' && value.serviceDate).length, count);
   assert.equal(taskCopies().length, count * 2);

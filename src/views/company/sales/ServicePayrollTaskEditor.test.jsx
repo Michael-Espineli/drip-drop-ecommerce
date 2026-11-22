@@ -6,8 +6,8 @@ import ServicePayrollCostPreview from "./ServicePayrollCostPreview";
 const mockData = {
   companyId: "company", loading: false, error: "", settings: { taskPaySource: "technicianRate" },
   companyUsers: [{ userId: "a", name: "Alex" }, { userId: "b", name: "Blair" }],
-  payTypes: [{ id: "clean", name: "Filter clean", category: "maintenance", defaultRateType: "flatPerTask", description: "Clean and inspect", defaultEstimatedMinutes: 30 }],
-  rates: [2000, 4000].map((amountCents, index) => ({ id: `rate-${index}`, technicianId: index ? "b" : "a", payTypeId: "clean", payBasis: "serviceStopTask", rateType: "flatPerTask", amountCents, status: "Active" })),
+  payTypes: [{ id: "clean", name: "Filter clean", category: "maintenance", defaultRateType: "flatPerStop", description: "Clean and inspect", defaultEstimatedMinutes: 30 }],
+  rates: [2000, 4000].map((amountCents, index) => ({ id: `rate-${index}`, technicianId: index ? "b" : "a", payTypeId: "clean", payBasis: "serviceStop", rateType: "flatPerStop", amountCents, status: "Active" })),
 };
 jest.mock("../../../hooks/useServicePayrollData", () => () => mockData);
 
@@ -32,24 +32,10 @@ test("pay item selection fills task details, previews the range, and applies int
   expect(screen.getByLabelText("Estimated minutes")).toHaveValue(30);
   expect(screen.getByLabelText("Task notes")).toHaveValue("Clean and inspect");
   expect(JSON.parse(screen.getByTestId("form").textContent)).toEqual(expect.objectContaining({ unitCost: "40.00", unitAmount: "100.00" }));
-  expect(screen.getByLabelText("Task pay")).toHaveValue("none");
+  expect(screen.queryByLabelText("Task pay")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Contracted task pay")).not.toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Task technician pay preview" })).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("Task pay"), { target: { value: "additional" } });
-  fireEvent.change(screen.getByLabelText("Pay calculation"), { target: { value: "custom" } });
-  fireEvent.change(screen.getByLabelText("Fixed pay amount"), { target: { value: "15" } });
-  expect(within(screen.getByRole("region", { name: "Task technician pay preview" })).getByText("$15.00 – $15.00")).toBeInTheDocument();
-  const taskCost = screen.getByRole("group", { name: "Contracted task pay and payroll estimate" });
-  expect(within(taskCost).getByLabelText("Contracted task pay")).toHaveValue(null);
-  expect(within(taskCost).queryByRole('button', { name: 'Use high estimate for task cost' })).not.toBeInTheDocument();
-  expect(within(taskCost).getByLabelText("Contracted task pay")).toHaveValue(null);
-  expect(within(serviceCost).getByLabelText("Internal Cost")).toHaveValue(40);
-  fireEvent.change(screen.getByLabelText("Task pay"), { target: { value: "none" } });
-  expect(screen.queryByLabelText("Contracted task pay")).not.toBeInTheDocument();
-  expect(screen.queryByRole("region", { name: "Task technician pay preview" })).not.toBeInTheDocument();
-  expect(JSON.parse(screen.getByTestId("form").textContent).taskTemplates[0].laborCost).toBe("");
-  fireEvent.change(screen.getByLabelText("Task pay"), { target: { value: "additional" } });
-  expect(screen.getByLabelText("Contracted task pay")).toHaveValue(null);
+  expect(within(preview).getByText("$20.00 – $40.00")).toBeInTheDocument();
 });
 
 test("an unavailable saved service pay type remains visible for correction", () => {
@@ -76,7 +62,7 @@ test("the inline service creator suggests 2x internal cost and applies customer 
 });
 
 test("incomplete rates remain visible and cannot be used as a complete internal-cost estimate", () => {
-  render(<ServicePayrollCostPreview data={{ ...mockData, rates: mockData.rates.slice(0, 1) }} tasks={[{ payTypeId: "clean" }]} onUseHighCost={jest.fn()} />);
+  render(<ServicePayrollCostPreview data={{ ...mockData, rates: mockData.rates.slice(0, 1) }} inheritedPayTypeId="clean" onUseHighCost={jest.fn()} />);
   expect(screen.getByText(/1 technician estimate needs review/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Use high estimate for internal cost" })).toBeDisabled();
 });
